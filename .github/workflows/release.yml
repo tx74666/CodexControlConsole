@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example v0.1.0
+        required: true
+        default: v0.1.0
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.version || github.ref_name }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = "v0.1.0"
+          }
+          if (-not $tag.StartsWith("v")) {
+            $tag = "v$tag"
+          }
+          $version = $tag.Substring(1)
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Build Windows desktop ZIP
+        shell: pwsh
+        run: ./tools/package-desktop.ps1 -Version $env:RELEASE_VERSION -OutputDir dist
+
+      - name: Build Android APK
+        run: gradle -p android --no-daemon :app:assembleDebug -PVERSION_NAME="$RELEASE_VERSION"
+
+      - name: Collect Android APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk dist/CodexControlConsole-android.apk
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Codex Control Console ${{ env.RELEASE_TAG }}
+          files: |
+            dist/CodexControlConsole-windows.zip
+            dist/CodexControlConsole-android.apk
+          body: |
+            ## Downloads
+            - Windows desktop: CodexControlConsole-windows.zip
+            - Android companion: CodexControlConsole-android.apk
+
+            The Android companion connects to a PC running Codex Control Console in LAN mode.

@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Control Console</title>
+  <link rel="shortcut icon" href="favicon.ico?v=codex-clear-4">
+  <link rel="icon" type="image/x-icon" sizes="any" href="favicon.ico?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="256x256" href="codex-resource-icon-256.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="128x128" href="codex-resource-icon-128.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="64x64" href="codex-resource-icon-64.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="48x48" href="codex-resource-icon-48.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="32x32" href="codex-resource-icon-32.png?v=codex-clear-4">
+  <link rel="manifest" href="site.webmanifest?v=codex-clear-4">
+  <script>
+    (() => {
+      const moduleHrefs = {
+        manager: "manager.html",
+        workspace: "workspace.html",
+        blender: "blender.html",
+        unity: "unity.html",
+        randomrealm: "randomrealm.html",
+        music: "music.html",
+        wallpaper: "index.html"
+      };
+      const page = window.location.pathname.split("/").pop() || "index.html";
+      const lastModule = window.localStorage.getItem("codexControl.lastModule.v1") || "";
+      let deletedModules = [];
+      try {
+        deletedModules = JSON.parse(window.localStorage.getItem("codexControl.moduleDeleted.v1") || "[]");
+      } catch {
+        deletedModules = [];
+      }
+      const href = moduleHrefs[lastModule];
+      if (page === "index.html" && href && href !== page && !deletedModules.includes(lastModule)) {
+        window.history.replaceState({ moduleId: lastModule }, "", href + window.location.search + window.location.hash);
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css?v=control-console-217">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1 id="moduleTitle" data-i18n="wallpaperPageTitle">桌布</h1>
+        <div class="module-bar">
+          <nav class="module-nav" data-module-nav aria-label="Console modules"></nav>
+        </div>
+      </div>
+      <div class="top-actions" aria-label="Console status">
+        <button id="languageToggle" class="status-button" type="button">EN</button>
+        <button id="themeToggle" class="status-button" type="button">暗色</button>
+        <div class="time-stack">
+          <div id="moduleArchive" class="module-archive">
+            <button id="moduleArchiveDrop" class="archive-drop" type="button" aria-expanded="false" data-i18n-aria="archiveToggleTitle">
+              <svg class="archive-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 6h18"></path>
+                <path d="M8 6V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2v2"></path>
+                <path d="M19 6v14c0 1.1-.9 2-2 2H7c-1.1 0-2-.9-2-2V6"></path>
+                <path d="M10 11v6"></path>
+                <path d="M14 11v6"></path>
+              </svg>
+            </button>
+            <div id="moduleArchiveDrawer" class="archive-drawer">
+              <div id="moduleArchiveList" class="archive-list"></div>
+            </div>
+          </div>
+          <div class="status-card time-card" aria-label="Local time">
+            <strong id="localTime">--:--</strong>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section class="manager-workspace" data-module-panel="manager" aria-labelledby="managerTitle" hidden>
+      <article class="panel manager-main-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label" data-i18n="managerSectionLabel">管理</div>
+            <h2 id="managerTitle" data-i18n="managerTitle">布局管理</h2>
+          </div>
+          <span class="workspace-pill" data-i18n="managerStatus">记忆中</span>
+        </div>
+
+        <div class="manager-grid">
+          <div class="tool-slot">
+            <span data-i18n="managerTabOrderLabel">Tab 顺序</span>
+            <strong id="managerVisibleTabs">--</strong>
+          </div>
+          <div class="tool-slot">
+            <span data-i18n="managerArchiveLabel">Archive</span>
+            <strong id="managerArchivedTabs">--</strong>
+          </div>
+          <div class="tool-slot wide">
+            <span data-i18n="managerDesktopLayoutLabel">Windows 布局</span>
+            <strong data-i18n="managerDesktopLayoutValue">待接入桌面图标快照</strong>
+          </div>
+        </div>
+      </article>
+
+      <section class="candidate-strip manager-strip" aria-labelledby="managerLayoutTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label">Layout</div>
+            <h2 id="managerLayoutTitle" data-i18n="managerCurrentLayoutTitle">当前控制台布局</h2>
+          </div>
+          <span data-i18n="managerStatus">记忆中</span>
+        </div>
+        <div class="quick-slot-row">
+          <button class="quick-slot-card" type="button">
+            <strong data-i18n="managerLayoutSlotOne">当前 Tab 排列</strong>
+            <span id="managerLayoutOrder">Console / Music / Wallpaper</span>
+          </button>
+          <button class="quick-slot-card" type="button">
+            <strong data-i18n="managerLayoutSlotTwo">收纳箱</strong>
+            <span data-i18n="archiveTitle">Archive</span>
+          </button>
+          <button class="quick-slot-card" type="button">
+            <strong data-i18n="managerLayoutSlotThree">桌面快照</strong>
+            <span data-i18n="managerDesktopLayoutValue">待接入桌面图标快照</span>
+          </button>
+        </div>
+        <p class="manager-hint" data-i18n="managerLayoutHint">拖动 tab 改变顺序，拖到 Archive 只会收纳，不会删除。</p>
+      </section>
+    </section>
+
+    <section class="workspace-grid" data-module-panel="workspace" aria-labelledby="workspaceTitle" hidden>
+      <article class="panel workspace-main-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Console</div>
+            <h2 id="workspaceTitle" data-i18n="workspaceTitle">当前工作</h2>
+          </div>
+          <span class="workspace-pill" data-i18n="workspaceStatus">准备中</span>
+        </div>
+
+        <div class="workspace-focus">
+          <div>
+            <span data-i18n="activeProjectLabel">项目</span>
+            <strong data-i18n="activeProjectValue">随机领域 / Blender Assets</strong>
+          </div>
+          <div>
+            <span data-i18n="nextToolLabel">下一工具</span>
+            <strong data-i18n="blenderExportTitle">Blender 导出工具</strong>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel blender-tool-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Blender</div>
+            <h2 data-i18n="blenderExportTitle">Blender 导出工具</h2>
+          </div>
+          <span class="workspace-pill" data-i18n="reservedStatus">已预留</span>
+        </div>
+
+        <div class="tool-actions">
+          <label class="download-toggle">
+            <input id="downloadIntakeToggle" type="checkbox">
+            <span data-i18n="downloadIntakeLabel">读取 Downloads</span>
+          </label>
+          <button id="openDownloads" class="ghost-button" type="button" data-i18n="openDownloads">打开 Downloads</button>
+          <button id="refreshMaterialCandidates" class="ghost-button" type="button" data-i18n="scanDownloads">扫描下载</button>
+          <button id="importMaterial" class="ghost-button primary-action" type="button" data-i18n="importMaterial">导入材质</button>
+        </div>
+
+        <div id="renderTextureDropzone" class="workzone-dropzone" tabindex="0">
+          <strong data-i18n="renderTextureZoneTitle">Render Textures</strong>
+          <span data-i18n="renderTextureZoneBody">把导出的贴图、截图或 zip 拖到这里，会自动装进英文文件夹。</span>
+          <small id="renderTextureZoneStatus" data-i18n="renderTextureReady">等待拖入文件。</small>
+        </div>
+
+        <div class="tool-slot-grid">
+          <div class="tool-slot">
+            <span data-i18n="sourceFolderLabel">来源</span>
+            <strong id="materialSourcePath">Downloads</strong>
+          </div>
+          <div class="tool-slot">
+            <span data-i18n="targetFolderLabel">目标</span>
+            <strong id="materialTargetPath">Textures</strong>
+          </div>
+          <div class="tool-slot wide">
+            <span data-i18n="latestMaterialLabel">最新候选</span>
+            <strong id="latestMaterialName" data-i18n="noMaterialCandidate">未发现</strong>
+          </div>
+        </div>
+
+        <div id="materialCandidates" class="material-candidates"></div>
+        <p id="materialImportStatus" class="tool-status" data-i18n="materialReady">准备导入</p>
+      </article>
+
+      <section class="candidate-strip workspace-strip" aria-labelledby="quickSlotsTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label">Slots</div>
+            <h2 id="quickSlotsTitle" data-i18n="quickSlotsTitle">快捷区</h2>
+          </div>
+          <span>3</span>
+        </div>
+        <div class="quick-slot-row">
+          <button class="quick-slot-card" type="button">
+            <strong>Unity</strong>
+            <span>RandomRealm2</span>
+          </button>
+          <button class="quick-slot-card" type="button">
+            <strong>Blender</strong>
+            <span>ArtAsset</span>
+          </button>
+          <button class="quick-slot-card" type="button">
+            <strong>Textures</strong>
+            <span>D:\ArtAsset</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label" data-i18n="workspaceTodoLabel">Todo</div>
+            <h2 id="workspaceTodoTitle" data-i18n="workspaceTodoTitle">待办清单</h2>
+          </div>
+          <span id="workspaceTodoCount">0/0</span>
+        </div>
+        <div class="todo-composer">
+          <select id="workspaceTodoCategory" aria-label="Todo category" data-i18n-aria="workspaceTodoCategoryLabel"></select>
+          <input id="workspaceTodoInput" type="text" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
+          <button id="addWorkspaceTodo" class="ghost-button primary-action" type="button" data-i18n="addWorkspaceTodo">加入</button>
+        </div>
+        <div id="workspaceTodoList" class="workspace-todo-list"></div>
+      </section>
+    </section>
+
+    <section class="randomrealm-workspace" data-module-panel="randomrealm" aria-label="RandomRealm" hidden>
+      <article class="panel randomrealm-main-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label" data-i18n="randomRealmSectionLabel">随机领域</div>
+            <h2 id="randomRealmTitle" data-i18n="randomRealmTitle">随机领域管理</h2>
+          </div>
+          <span class="workspace-pill" data-i18n="randomRealmStatus">Active</span>
+        </div>
+
+        <div class="randomrealm-focus">
+          <div>
+            <span data-i18n="randomRealmProjectLabel">Project</span>
+            <strong>RandomRealm2</strong>
+          </div>
+          <div>
+            <span data-i18n="randomRealmUnityLabel">Unity Project</span>
+            <strong>D:\Unity Projects\RandomRealm2</strong>
+          </div>
+          <div>
+            <span data-i18n="randomRealmBuilderLabel">Builder System</span>
+            <strong>Building / Builder</strong>
+          </div>
+          <div>
+            <span data-i18n="randomRealmPipelineLabel">Asset Pipeline</span>
+            <strong>Downloads -> Blender -> Unity Temp</strong>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel randomrealm-release-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Release</div>
+            <h2 data-i18n="randomRealmReleaseTitle">发布控制</h2>
+          </div>
+          <span id="randomRealmReleaseStatusText" class="workspace-pill" data-i18n="randomRealmOpenReady">就绪</span>
+        </div>
+
+        <p class="randomrealm-note" data-i18n="randomRealmReleaseBody">Steamworks、发布包、宣传素材和工程入口。</p>
+
+        <div class="randomrealm-release-actions">
+          <button id="openSteamworks" class="ghost-button primary-action" type="button" data-i18n="randomRealmSteamworks">Steamworks 后台</button>
+          <button id="openSteamPublishFolder" class="ghost-button" type="button" data-i18n="randomRealmPublishFolder">Publish 文件夹</button>
+          <button id="openRandomRealmPromo" class="ghost-button" type="button" data-i18n="randomRealmPromoFolder">宣传素材</button>
+          <button id="openRandomRealmProject" class="ghost-button" type="button" data-i18n="randomRealmProjectFolder">Unity 工程</button>
+        </div>
+      </article>
+
+      <article class="panel randomrealm-surface-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Scene</div>
+            <h2 data-i18n="randomRealmSurfaceTitle">Ground and Scene</h2>
+          </div>
+          <span class="workspace-pill" data-i18n="randomRealmSurfaceStatus">Reserved</span>
+        </div>
+
+        <p class="randomrealm-note" data-i18n="randomRealmSurfaceBody">Reserved for ground pages, building placement, scene checks, and export actions.</p>
+
+        <div class="tool-slot-grid">
+          <div class="tool-slot">
+            <span data-i18n="randomRealmGroundLabel">Ground Page</span>
+            <strong>Ground / Surface</strong>
+          </div>
+          <div class="tool-slot">
+            <span data-i18n="randomRealmBuilderLabel">Builder System</span>
+            <strong>Buildings</strong>
+          </div>
+          <div class="tool-slot">
+            <span data-i18n="randomRealmPipelineLabel">Asset Pipeline</span>
+            <strong>Textures</strong>
+          </div>
+          <div class="tool-slot">
+            <span data-i18n="randomRealmCommunityLabel">Community</span>
+            <strong>Planning</strong>
+          </div>
+        </div>
+      </article>
+
+      <section class="candidate-strip randomrealm-strip" aria-labelledby="randomRealmSlotsTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label" data-i18n="randomRealmSectionLabel">随机领域</div>
+            <h2 id="randomRealmSlotsTitle" data-i18n="randomRealmSlotsTitle">随机领域区块</h2>
+          </div>
+          <span>4</span>
+        </div>
+        <div class="quick-slot-row">
+          <button class="quick-slot-card" type="button">
+            <strong data-i18n="randomRealmSlotBuilder">Builder / Buildings</strong>
+            <span data-i18n="randomRealmSlotBuilderBody">Buildings, pieces, placement rules</span>
+          </button>
+          <button class="quick-slot-card" type="button">
+            <strong data-i18n="randomRealmSlotGround">Ground / Scene</strong>
+            <span data-i18n="randomRealmSlotGroundBody">Ground pages and scene hierarchy</span>
+          </button>
+          <button class="quick-slot-card" type="button">
+            <strong data-i18n="randomRealmSlotAssets">Assets / Materials</strong>
+            <span data-i18n="randomRealmSlotAssetsBody">Blender, Textures, Unity</span>
+          </button>
+          <button class="quick-slot-card" type="button">
+            <strong data-i18n="randomRealmSlotCommunity">Community</strong>
+            <span data-i18n="randomRealmSlotCommunityBody">Community growth and release rhythm</span>
+          </button>
+        </div>
+      </section>
+    </section>
+
+    <section class="blender-workspace" data-module-panel="blender" aria-label="Blender" hidden>
+      <article class="panel randomrealm-art-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label" data-i18n="blenderSectionLabel">Blender</div>
+            <h2 data-i18n="randomRealmArtTitle">Art Supporter</h2>
+          </div>
+        </div>
+
+        <div class="codex-art-grid">
+          <div class="project-row wide">
+            <label class="codex-art-field project-select-field">
+              <span data-i18n="randomRealmBlenderProjectLabel">Blender Project</span>
+              <select id="randomRealmBlenderProject"></select>
+              <small id="randomRealmProjectPath" class="field-path"></small>
+            </label>
+            <label class="codex-art-field project-search-field">
+              <span data-i18n="randomRealmProjectSearchLabel">Project Search</span>
+              <input id="randomRealmProjectSearch" type="search" data-i18n-placeholder="randomRealmProjectSearchPlaceholder">
+            </label>
+          </div>
+          <label class="codex-art-field">
+            <span data-i18n="randomRealmArtTypeLabel">Art Type</span>
+            <select id="randomRealmArtType"></select>
+          </label>
+          <label class="codex-art-field object-picker-field wide">
+            <div class="field-inline-head">
+              <span data-i18n="randomRealmCodexObjectLabel">Current Object</span>
+              <button id="randomRealmSyncLiveSelection" class="inline-field-action" type="button" data-i18n="randomRealmSyncLiveSelection">Sync Selected</button>
+            </div>
+            <div class="object-picker">
+              <input id="randomRealmObjectSearch" type="search" autocomplete="off" data-i18n-placeholder="randomRealmObjectSearchPlaceholder">
+              <select id="randomRealmBlenderObject" class="blender-object-list" size="7" aria-label="Blender objects" hidden></select>
+            </div>
+          </label>
+          <label class="codex-art-field wide">
+            <div class="field-inline-head">
+              <span data-i18n="randomRealmUsedTexturesLabel">Used Textures</span>
+            </div>
+            <div id="randomRealmMaterialTabs" class="blender-material-tabs"></div>
+            <div id="randomRealmUsedTextures" class="blender-texture-list"></div>
+            <div class="blender-texture-add-row">
+              <select id="randomRealmTextureKind" aria-label="Texture kind">
+                <option value="base-color">Base Color</option>
+                <option value="normal">Normal</option>
+                <option value="roughness">Roughness</option>
+                <option value="ambient-occlusion">Ambient Occlusion</option>
+                <option value="metallic">Metallic</option>
+                <option value="height">Height</option>
+                <option value="alpha">Alpha</option>
+                <option value="emission">Emission</option>
+              </select>
+              <a class="texture-tool-link" href="https://wizard.texturewiz.com/" target="_blank" rel="noreferrer">TextureWiz</a>
+              <button id="randomRealmStageBlankTexture" class="ghost-button texture-blank-button" type="button" data-i18n="randomRealmStageBlankTexture">+ Map</button>
+            </div>
+          </label>
+          <div class="texture-package-panel wide">
+            <div class="texture-package-slot">
+              <span data-i18n="randomRealmOldTextureLabel">Old</span>
+              <strong id="randomRealmOldTextureName" data-i18n="randomRealmTextureNotSelected">Not selected</strong>
+              <small id="randomRealmOldTextureSize" class="texture-size" data-i18n="randomRealmTextureDimensionsUnknown">Unknown size</small>
+              <div class="texture-preview-box">
+                <img id="randomRealmOldTexturePreview" alt="" hidden>
+                <small id="randomRealmOldTexturePreviewEmpty" data-i18n="randomRealmTexturePreviewEmpty">No preview</small>
+              </div>
+            </div>
+            <div id="randomRealmNewTextureDrop" class="texture-package-slot texture-drop-slot" role="button" tabindex="0">
+              <span data-i18n="randomRealmNewTextureLabel">New</span>
+              <strong id="randomRealmNewTextureName" data-i18n="randomRealmDropNewTexture">Drop texture here</strong>
+              <small id="randomRealmNewTextureSize" class="texture-size" data-i18n="randomRealmTextureDimensionsUnknown">Unknown size</small>
+              <button id="randomRealmClearNewTexture" class="texture-package-clear" type="button" aria-label="Clear new texture" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3 6h18"></path>
+                  <path d="M8 6V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2v2"></path>
+                  <path d="M19 6v14c0 1.1-.9 2-2 2H7c-1.1 0-2-.9-2-2V6"></path>
+                  <path d="M10 11v6"></path>
+                  <path d="M14 11v6"></path>
+                </svg>
+              </button>
+              <div class="texture-preview-box">
+                <img id="randomRealmNewTexturePreview" alt="" hidden>
+                <small id="randomRealmNewTexturePreviewEmpty" data-i18n="randomRealmTexturePreviewEmpty">No preview</small>
+              </div>
+              <div id="randomRealmStagedTextureList" class="texture-staged-list" hidden></div>
+            </div>
+          </div>
+          <p id="randomRealmArtStatus" class="tool-status wide" data-i18n="randomRealmArtReady">Ready</p>
+        </div>
+      </article>
+
+      <article id="blenderPromptPanel" class="panel blender-prompt-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label" data-i18n="blenderSectionLabel">Blender</div>
+            <h2 data-i18n="blenderPromptTitle">Prompt Builder</h2>
+          </div>
+          <div class="panel-actions">
+            <button id="generateBlenderPrompt" class="ghost-button primary-action" type="button" data-i18n="blenderPromptGenerate">Generate Prompt</button>
+            <button id="copyBlenderPrompt" class="ghost-button" type="button" data-i18n="blenderPromptCopy">Copy</button>
+            <button id="clearBlenderPrompt" class="ghost-button" type="button" data-i18n="blenderPromptClear" title="Ctrl+Alt+Backspace">Clear</button>
+          </div>
+        </div>
+
+        <div class="blender-prompt-grid">
+          <label class="codex-art-field">
+            <span data-i18n="blenderPromptFormatLabel">Format</span>
+            <textarea id="blenderPromptFormat" rows="4" data-i18n-placeholder="blenderPromptFormatPlaceholder"></textarea>
+          </label>
+          <label class="codex-art-field">
+            <span data-i18n="blenderPromptImageLabel">Image Requirements</span>
+            <textarea id="blenderPromptImage" rows="4" data-i18n-placeholder="blenderPromptImagePlaceholder"></textarea>
+          </label>
+          <label class="codex-art-field">
+            <span data-i18n="blenderPromptResolutionLabel">Resolution</span>
+            <div class="resolution-control">
+              <select id="blenderPromptResolution">
+                <option value="1k">1K</option>
+                <option value="2k">2K</option>
+                <option value="custom">Custom</option>
+              </select>
+              <div id="blenderPromptCustomResolution" class="resolution-custom-grid" hidden>
+                <input id="blenderPromptCustomWidth" type="number" min="1" step="1" inputmode="numeric" data-i18n-placeholder="blenderPromptCustomWidthPlaceholder">
+                <input id="blenderPromptCustomLength" type="number" min="1" step="1" inputmode="numeric" data-i18n-placeholder="blenderPromptCustomLengthPlaceholder">
+              </div>
+            </div>
+          </label>
+          <label class="codex-art-field">
+            <span data-i18n="blenderPromptStyleLabel">Style</span>
+            <textarea id="blenderPromptStyle" rows="3" data-i18n-placeholder="blenderPromptStylePlaceholder"></textarea>
+          </label>
+          <label class="codex-art-field">
+            <span data-i18n="blenderPromptBasicsLabel">Base Info</span>
+            <textarea id="blenderPromptBasics" rows="3" data-i18n-placeholder="blenderPromptBasicsPlaceholder"></textarea>
+          </label>
+          <label class="codex-art-field wide">
+            <span data-i18n="blenderPromptOutputLabel">Generated Prompt</span>
+            <textarea id="blenderPromptOutput" class="prompt-output" rows="10" readonly></textarea>
+          </label>
+          <p id="blenderPromptStatus" class="tool-status wide" data-i18n="randomRealmArtReady">Ready</p>
+        </div>
+      </article>
+    </section>
+
+    <section class="unity-workspace" data-module-panel="unity" aria-labelledby="unityTitle" hidden>
+      <article class="panel unity-main-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label" data-i18n="unitySectionLabel">Unity</div>
+            <h2 id="unityTitle" data-i18n="unityControlTitle">Unity Control</h2>
+          </div>
+          <span id="unityStatusText" class="workspace-pill" data-i18n="randomRealmOpenReady">Ready</span>
+        </div>
+
+        <p class="randomrealm-note" data-i18n="unityControlBody">RandomRealm2 project entry points, promo assets, and Unity-side pre-release checks.</p>
+
+        <div class="randomrealm-focus">
+          <div>
+            <span data-i18n="randomRealmProjectLabel">Project</span>
+            <strong>RandomRealm2</strong>
+          </div>
+          <div>
+            <span data-i18n="randomRealmUnityLabel">Unity Project</span>
+            <strong>D:\Unity Projects\RandomRealm2</strong>
+          </div>
+          <div>
+            <span data-i18n="randomRealmBuilderLabel">Builder System</span>
+            <strong>Building / Builder</strong>
+          </div>
+          <div>
+            <span data-i18n="randomRealmPipelineLabel">Asset Pipeline</span>
+            <strong>Blender -> Unity Temp</strong>
+          </div>
+        </div>
+
+        <div class="randomrealm-release-actions">
+          <button id="openUnityProjectFolder" class="ghost-button primary-action" type="button" data-i18n="randomRealmProjectFolder">Unity Project</button>
+          <button id="openUnityPromoFolder" class="ghost-button" type="button" data-i18n="randomRealmPromoFolder">Promo Assets</button>
+        </div>
+        <div class="unity-bridge-panel">
+          <div class="tool-slot">
+            <span data-i18n="unityBridgeLabel">Bridge</span>
+            <strong id="unityBridgeStatus" data-i18n="unityBridgeReady">Ready</strong>
+          </div>
+          <div class="tool-slot">
+            <span data-i18n="unityBridgeTempLabel">Temp</span>
+            <strong id="unityBridgeTempPath">Assets/~Temp/BlenderBridge</strong>
+          </div>
+          <p class="randomrealm-note" data-i18n="unityBridgeBody">Blender exports into Unity temp; the RandomRealm importer consumes that temp output and categorizes it into Builder assets.</p>
+        </div>
+      </article>
+    </section>
+
+    <section class="wallpaper-workspace" data-module-panel="wallpaper" aria-labelledby="wallpaperTitle" hidden>
+      <article class="panel wallpaper-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label" data-i18n="wallpaperSectionLabel">预览</div>
+            <h2 id="wallpaperTitle" class="visually-hidden" data-i18n="wallpaperTitle">预览</h2>
+          </div>
+          <div class="panel-actions">
+            <button id="addWallpaper" class="ghost-button" type="button" data-i18n="add">+ 加入</button>
+          </div>
+        </div>
+
+        <div id="wallpaperPreview" class="wallpaper-preview" tabindex="0" aria-label="Wallpaper preview">
+          <div class="preview-empty">
+            <strong data-i18n="emptyTitle">等待候选图片</strong>
+            <span data-i18n="emptyBody">把 jpg、png、bmp、webp 放进 wallpapers 文件夹，这里会自动出现。</span>
+          </div>
+        </div>
+
+        <div class="wallpaper-meta">
+          <div>
+            <span data-i18n="selectedLabel">当前候选</span>
+            <strong id="selectedWallpaperName">未选择</strong>
+          </div>
+          <div>
+            <span data-i18n="sizeLabel">大小</span>
+            <strong id="selectedWallpaperSize">--</strong>
+          </div>
+          <p id="statusText" data-i18n="readyStatus">就绪</p>
+        </div>
+      </article>
+
+      <section class="candidate-strip" aria-labelledby="candidateTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label" data-i18n="candidatesSectionLabel">图库</div>
+            <h2 id="candidateTitle" data-i18n="candidatesTitle">桌布候选</h2>
+          </div>
+          <span id="wallpaperCount">0 张</span>
+        </div>
+        <div id="wallpaperDock" class="wallpaper-dock"></div>
+      </section>
+    </section>
+
+    <section class="music-workspace standalone" data-module-panel="music" aria-labelledby="musicTitle" hidden>
+      <article class="panel music-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Music</div>
+            <h2 id="musicTitle" data-i18n="musicTitle">音乐播放器</h2>
+          </div>
+          <div class="panel-actions">
+            <div class="music-add-menu-wrap">
+              <button id="addMusic" class="ghost-button" type="button" data-i18n="add" aria-haspopup="dialog" aria-expanded="false">+ 加入</button>
+              <div id="musicAddMenu" class="music-add-menu" role="dialog" aria-label="Add music" hidden>
+                <p class="music-add-menu-title" data-i18n="musicAddMenuQuestion">加入音乐</p>
+                <button id="musicAddCookieButton" class="music-cookie-file-button music-add-cookie-button" type="button" data-cookie-label="true">cookies OK</button>
+                <form id="musicAddUrlForm" class="music-add-inline-form" hidden>
+                  <input id="musicAddUrlInput" class="music-link-input" type="text" inputmode="url" data-i18n-placeholder="musicLinkPlaceholder" aria-label="YouTube URL">
+                  <button class="music-link-submit" type="submit" data-i18n="musicLinkDownload">下载</button>
+                </form>
+                <div class="music-add-secondary-actions">
+                  <button id="addMusicByFile" type="button" data-i18n="musicAddViaFile">MP3 文件</button>
+                  <button id="addMusicByLibrary" type="button" data-i18n="musicAddViaLibrary">Playlist / 其他</button>
+                </div>
+                <form id="musicAddLibraryForm" class="music-add-inline-form" hidden>
+                  <input id="musicAddLibraryInput" class="music-link-input" type="text" inputmode="url" data-i18n-placeholder="musicPlaylistPlaceholder" aria-label="Playlist URL">
+                  <button class="music-link-submit" type="submit" data-i18n="musicLinkDownload">下载</button>
+                </form>
+                <span id="musicAddStatus" class="music-link-status"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="music-player">
+          <div class="music-now">
+            <div class="track-art" aria-hidden="true">♫</div>
+            <div>
+              <span data-i18n="nowPlayingLabel">当前播放</span>
+              <strong id="currentTrackName">未选择</strong>
+              <p id="currentTrackMeta" data-i18n="musicEmptyBody">加入 mp3、wav、m4a、flac、ogg、opus。</p>
+            </div>
+          </div>
+
+          <div class="music-controls" aria-label="Music controls">
+            <button id="previousTrack" class="icon-button" type="button" data-i18n-aria="previousTrack"><span class="skip-icon skip-previous" aria-hidden="true"></span></button>
+            <button id="playPauseTrack" class="play-button" type="button" data-i18n-aria="playTrack">▶</button>
+            <button id="nextTrack" class="icon-button" type="button" data-i18n-aria="nextTrack"><span class="skip-icon skip-next" aria-hidden="true"></span></button>
+            <button id="playbackModeToggle" class="mode-button" type="button" aria-label="Playback mode">
+              <span class="mode-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+
+          <div class="music-progress">
+            <span id="trackCurrentTime">0:00</span>
+            <input id="trackSeek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Track progress">
+            <span id="trackDuration">0:00</span>
+          </div>
+
+          <label class="volume-control">
+            <span data-i18n="volumeLabel">音量</span>
+            <input id="trackVolume" type="range" min="0" max="1" step="0.01" value="0.8">
+          </label>
+        </div>
+
+      </article>
+
+      <section class="candidate-strip music-strip" aria-labelledby="musicListTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label">Tracks</div>
+            <h2 id="musicListTitle" data-i18n="musicListTitle">本地音乐</h2>
+          </div>
+          <span id="musicCount">0 首</span>
+        </div>
+        <div id="musicDock" class="music-dock"></div>
+      </section>
+
+      <section id="musicLibrarySection" class="candidate-strip music-strip" aria-labelledby="musicLibraryTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label">Tracks</div>
+            <h2 id="musicLibraryTitle" data-i18n="musicLibraryTitle">Library</h2>
+          </div>
+          <span id="musicLibraryCount">0 首</span>
+        </div>
+        <div id="musicLibraryDock" class="music-dock"></div>
+      </section>
+    </section>
+
+  </main>
+
+  <input id="wallpaperFileInput" class="visually-hidden" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp" multiple>
+  <input id="musicFileInput" class="visually-hidden" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus" multiple>
+  <input id="musicCookieFileInput" class="visually-hidden" type="file" accept=".txt,text/plain">
+  <input id="workzoneFileInput" class="visually-hidden" type="file" accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp" multiple>
+  <input id="randomRealmTextureFileInput" class="visually-hidden" type="file" multiple accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp">
+  <audio id="audioPlayer" preload="metadata"></audio>
+
+  <script src="app.js?v=control-console-217"></script>
+</body>
+</html>

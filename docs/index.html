@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Control Console Downloads</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1927;
+      --panel: #162437;
+      --line: #2b405a;
+      --text: #edf5ff;
+      --muted: #a8bad0;
+      --blue: #77b4ff;
+      --green: #37c995;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    main {
+      width: min(1080px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 48px 0;
+    }
+    .hero {
+      min-height: 62vh;
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 44px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(40px, 8vw, 86px);
+      line-height: 0.92;
+      letter-spacing: 0;
+    }
+    .logo {
+      width: 86px;
+      height: 86px;
+      margin-bottom: 24px;
+      border-radius: 18px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
+    }
+    p {
+      max-width: 640px;
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 17px;
+    }
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 28px;
+    }
+    a.button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 46px;
+      padding: 0 18px;
+      border: 1px solid rgba(119, 180, 255, 0.52);
+      border-radius: 8px;
+      background: rgba(119, 180, 255, 0.16);
+      color: var(--text);
+      text-decoration: none;
+      font-weight: 700;
+    }
+    a.button.android {
+      border-color: rgba(55, 201, 149, 0.52);
+      background: rgba(55, 201, 149, 0.14);
+    }
+    .device {
+      aspect-ratio: 9 / 16;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      padding: 18px;
+      background: #0a111b;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34);
+    }
+    .screen {
+      height: 100%;
+      border-radius: 18px;
+      overflow: hidden;
+      background: var(--panel);
+      display: grid;
+      grid-template-rows: 48px 1fr;
+    }
+    .topbar {
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--blue);
+    }
+    .tiles {
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, 1fr);
+      align-content: start;
+    }
+    .tile {
+      min-height: 78px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #122033;
+    }
+    .tile:nth-child(2) { background: #17314a; }
+    .tile:nth-child(3) { grid-column: span 2; background: #132b2d; }
+    section {
+      padding: 30px 0 0;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+    code {
+      color: var(--blue);
+      background: rgba(119, 180, 255, 0.12);
+      border: 1px solid rgba(119, 180, 255, 0.24);
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
+    @media (max-width: 820px) {
+      .hero {
+        grid-template-columns: 1fr;
+        min-height: auto;
+        padding-bottom: 34px;
+      }
+      .device {
+        width: min(280px, 82vw);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="hero">
+      <div>
+        <img class="logo" src="assets/codex-resource-icon-256.png" alt="">
+        <h1>Codex Control Console</h1>
+        <p>Download the Windows desktop console and the Android companion. The Android app connects to a PC running the console in LAN mode.</p>
+        <div class="buttons">
+          <a class="button" id="desktopDownload" href="#">Download desktop ZIP</a>
+          <a class="button android" id="androidDownload" href="#">Download Android APK</a>
+        </div>
+      </div>
+      <div class="device" aria-hidden="true">
+        <div class="screen">
+          <div class="topbar"><span class="dot"></span>Control Console</div>
+          <div class="tiles">
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+            <div class="tile"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <section>
+      <h2>Android connection</h2>
+      <p>On the PC, start <code>Start-ControlConsole-LAN.vbs</code>, then enter <code>http://YOUR-PC-LAN-IP:8898/index.html</code> in the Android app.</p>
+    </section>
+  </main>
+  <script>
+    const fallbackOwner = "tx74666";
+    const fallbackRepo = "codex-control-console";
+    const hostParts = location.hostname.split(".");
+    const owner = hostParts.length > 2 && hostParts[1] === "github" ? hostParts[0] : fallbackOwner;
+    const repo = location.pathname.split("/").filter(Boolean)[0] || fallbackRepo;
+    const base = `https://github.com/${owner}/${repo}/releases/latest/download`;
+    document.getElementById("desktopDownload").href = `${base}/CodexControlConsole-windows.zip`;
+    document.getElementById("androidDownload").href = `${base}/CodexControlConsole-android.apk`;
+  </script>
+</body>
+</html>

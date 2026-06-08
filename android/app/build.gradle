@@ -1,0 +1,21 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.codex.controlconsole"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.codex.controlconsole"
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName project.findProperty("VERSION_NAME") ?: "0.1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

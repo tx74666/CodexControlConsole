@@ -1,0 +1,34 @@
+{
+  "name": "Codex Control Console",
+  "short_name": "Control Console",
+  "icons": [
+    {
+      "src": "codex-resource-icon-32.png?v=codex-clear-4",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "codex-resource-icon-48.png?v=codex-clear-4",
+      "sizes": "48x48",
+      "type": "image/png"
+    },
+    {
+      "src": "codex-resource-icon-64.png?v=codex-clear-4",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "codex-resource-icon-128.png?v=codex-clear-4",
+      "sizes": "128x128",
+      "type": "image/png"
+    },
+    {
+      "src": "codex-resource-icon-256.png?v=codex-clear-4",
+      "sizes": "256x256",
+      "type": "image/png"
+    }
+  ],
+  "theme_color": "#6558ff",
+  "background_color": "#edf3ef",
+  "display": "standalone"
+}

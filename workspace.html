@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Control Console - Console</title>
+  <link rel="shortcut icon" href="favicon.ico?v=codex-clear-4">
+  <link rel="icon" type="image/x-icon" sizes="any" href="favicon.ico?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="256x256" href="codex-resource-icon-256.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="128x128" href="codex-resource-icon-128.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="64x64" href="codex-resource-icon-64.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="48x48" href="codex-resource-icon-48.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="32x32" href="codex-resource-icon-32.png?v=codex-clear-4">
+  <link rel="manifest" href="site.webmanifest?v=codex-clear-4">
+  <link rel="stylesheet" href="styles.css?v=control-console-217">
+</head>
+<body>
+  <main class="app-shell workspace-shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1 data-i18n="workspacePageTitle">Console</h1>
+        <nav class="module-nav" data-module-nav aria-label="Console modules"></nav>
+      </div>
+      <div class="top-actions" aria-label="Console status">
+        <button id="languageToggle" class="status-button" type="button">EN</button>
+        <button id="themeToggle" class="status-button" type="button">暗色</button>
+        <div class="status-card time-card" aria-label="Local time">
+          <strong id="localTime">--:--</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="workspace-grid" aria-labelledby="workspaceTitle">
+      <article class="panel workspace-main-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Console</div>
+            <h2 id="workspaceTitle" data-i18n="workspaceTitle">当前工作</h2>
+          </div>
+          <span class="workspace-pill" data-i18n="workspaceStatus">准备中</span>
+        </div>
+
+        <div class="workspace-focus">
+          <div>
+            <span data-i18n="activeProjectLabel">项目</span>
+            <strong data-i18n="activeProjectValue">随机领域 / Blender Assets</strong>
+          </div>
+          <div>
+            <span data-i18n="nextToolLabel">下一工具</span>
+            <strong data-i18n="blenderExportTitle">Blender 导出工具</strong>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel blender-tool-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Blender</div>
+            <h2 data-i18n="blenderExportTitle">Blender 导出工具</h2>
+          </div>
+          <span class="workspace-pill" data-i18n="reservedStatus">已预留</span>
+        </div>
+
+        <div class="tool-actions">
+          <button id="openDownloads" class="ghost-button" type="button" data-i18n="openDownloads">打开 Downloads</button>
+          <button id="refreshMaterialCandidates" class="ghost-button" type="button" data-i18n="scanDownloads">扫描下载</button>
+          <button id="importMaterial" class="ghost-button primary-action" type="button" data-i18n="importMaterial">导入材质</button>
+        </div>
+
+        <div class="tool-slot-grid">
+          <div class="tool-slot">
+            <span data-i18n="sourceFolderLabel">来源</span>
+            <strong id="materialSourcePath">Downloads</strong>
+          </div>
+          <div class="tool-slot">
+            <span data-i18n="targetFolderLabel">目标</span>
+            <strong id="materialTargetPath">Textures</strong>
+          </div>
+          <div class="tool-slot wide">
+            <span data-i18n="latestMaterialLabel">最新候选</span>
+            <strong id="latestMaterialName" data-i18n="noMaterialCandidate">未发现</strong>
+          </div>
+        </div>
+
+        <div id="materialCandidates" class="material-candidates"></div>
+        <p id="materialImportStatus" class="tool-status" data-i18n="materialReady">准备导入</p>
+      </article>
+
+      <section class="candidate-strip workspace-strip" aria-labelledby="quickSlotsTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label">Slots</div>
+            <h2 id="quickSlotsTitle" data-i18n="quickSlotsTitle">快捷区</h2>
+          </div>
+          <span>3</span>
+        </div>
+        <div class="quick-slot-row">
+          <button class="quick-slot-card" type="button">
+            <strong>Unity</strong>
+            <span>RandomRealm2</span>
+          </button>
+          <button class="quick-slot-card" type="button">
+            <strong>Blender</strong>
+            <span>ArtAsset</span>
+          </button>
+          <button class="quick-slot-card" type="button">
+            <strong>Textures</strong>
+            <span>D:\ArtAsset</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label" data-i18n="workspaceTodoLabel">Todo</div>
+            <h2 id="workspaceTodoTitle" data-i18n="workspaceTodoTitle">待办清单</h2>
+          </div>
+          <span id="workspaceTodoCount">0/0</span>
+        </div>
+        <div class="todo-composer">
+          <select id="workspaceTodoCategory" aria-label="Todo category" data-i18n-aria="workspaceTodoCategoryLabel"></select>
+          <input id="workspaceTodoInput" type="text" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
+          <button id="addWorkspaceTodo" class="ghost-button primary-action" type="button" data-i18n="addWorkspaceTodo">加入</button>
+        </div>
+        <div id="workspaceTodoList" class="workspace-todo-list"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="app.js?v=control-console-217"></script>
+</body>
+</html>

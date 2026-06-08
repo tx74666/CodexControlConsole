@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Control Console - Music</title>
+  <link rel="shortcut icon" href="favicon.ico?v=codex-clear-4">
+  <link rel="icon" type="image/x-icon" sizes="any" href="favicon.ico?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="256x256" href="codex-resource-icon-256.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="128x128" href="codex-resource-icon-128.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="64x64" href="codex-resource-icon-64.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="48x48" href="codex-resource-icon-48.png?v=codex-clear-4">
+  <link rel="icon" type="image/png" sizes="32x32" href="codex-resource-icon-32.png?v=codex-clear-4">
+  <link rel="manifest" href="site.webmanifest?v=codex-clear-4">
+  <link rel="stylesheet" href="styles.css?v=control-console-217">
+</head>
+<body>
+  <main class="app-shell music-shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1 data-i18n="musicPageTitle">音乐</h1>
+        <nav class="module-nav" data-module-nav aria-label="Console modules"></nav>
+      </div>
+      <div class="top-actions" aria-label="Console status">
+        <button id="languageToggle" class="status-button" type="button">EN</button>
+        <button id="themeToggle" class="status-button" type="button">暗色</button>
+        <div class="status-card time-card" aria-label="Local time">
+          <strong id="localTime">--:--</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="music-workspace standalone" aria-labelledby="musicTitle">
+      <article class="panel music-panel">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Music</div>
+            <h2 id="musicTitle" data-i18n="musicTitle">音乐播放器</h2>
+          </div>
+          <div class="panel-actions">
+            <div class="music-add-menu-wrap">
+              <button id="addMusic" class="ghost-button" type="button" data-i18n="add" aria-haspopup="dialog" aria-expanded="false">+ 加入</button>
+              <div id="musicAddMenu" class="music-add-menu" role="dialog" aria-label="Add music" hidden>
+                <p class="music-add-menu-title" data-i18n="musicAddMenuQuestion">加入音乐</p>
+                <button id="musicAddCookieButton" class="music-cookie-file-button music-add-cookie-button" type="button" data-cookie-label="true">cookies OK</button>
+                <form id="musicAddUrlForm" class="music-add-inline-form" hidden>
+                  <input id="musicAddUrlInput" class="music-link-input" type="text" inputmode="url" data-i18n-placeholder="musicLinkPlaceholder" aria-label="YouTube URL">
+                  <button class="music-link-submit" type="submit" data-i18n="musicLinkDownload">下载</button>
+                </form>
+                <div class="music-add-secondary-actions">
+                  <button id="addMusicByFile" type="button" data-i18n="musicAddViaFile">MP3 文件</button>
+                  <button id="addMusicByLibrary" type="button" data-i18n="musicAddViaLibrary">Playlist / 其他</button>
+                </div>
+                <form id="musicAddLibraryForm" class="music-add-inline-form" hidden>
+                  <input id="musicAddLibraryInput" class="music-link-input" type="text" inputmode="url" data-i18n-placeholder="musicPlaylistPlaceholder" aria-label="Playlist URL">
+                  <button class="music-link-submit" type="submit" data-i18n="musicLinkDownload">下载</button>
+                </form>
+                <span id="musicAddStatus" class="music-link-status"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="music-player">
+          <div class="music-now">
+            <div class="track-art" aria-hidden="true">♫</div>
+            <div>
+              <span data-i18n="nowPlayingLabel">当前播放</span>
+              <strong id="currentTrackName">未选择</strong>
+              <p id="currentTrackMeta" data-i18n="musicEmptyBody">加入 mp3、wav、m4a、flac、ogg、opus。</p>
+            </div>
+          </div>
+
+          <div class="music-controls" aria-label="Music controls">
+            <button id="previousTrack" class="icon-button" type="button" data-i18n-aria="previousTrack"><span class="skip-icon skip-previous" aria-hidden="true"></span></button>
+            <button id="playPauseTrack" class="play-button" type="button" data-i18n-aria="playTrack">▶</button>
+            <button id="nextTrack" class="icon-button" type="button" data-i18n-aria="nextTrack"><span class="skip-icon skip-next" aria-hidden="true"></span></button>
+            <button id="playbackModeToggle" class="mode-button" type="button" aria-label="Playback mode">
+              <span class="mode-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+
+          <div class="music-progress">
+            <span id="trackCurrentTime">0:00</span>
+            <input id="trackSeek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Track progress">
+            <span id="trackDuration">0:00</span>
+          </div>
+
+          <label class="volume-control">
+            <span data-i18n="volumeLabel">音量</span>
+            <input id="trackVolume" type="range" min="0" max="1" step="0.01" value="0.8">
+          </label>
+        </div>
+
+      </article>
+
+      <section class="candidate-strip music-strip" aria-labelledby="musicListTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label">Tracks</div>
+            <h2 id="musicListTitle" data-i18n="musicListTitle">本地音乐</h2>
+          </div>
+          <span id="musicCount">0 首</span>
+        </div>
+        <div id="musicDock" class="music-dock"></div>
+      </section>
+
+      <section id="musicLibrarySection" class="candidate-strip music-strip" aria-labelledby="musicLibraryTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label">Tracks</div>
+            <h2 id="musicLibraryTitle" data-i18n="musicLibraryTitle">Library</h2>
+          </div>
+          <span id="musicLibraryCount">0 首</span>
+        </div>
+        <div id="musicLibraryDock" class="music-dock"></div>
+      </section>
+    </section>
+  </main>
+
+  <input id="musicFileInput" class="visually-hidden" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus" multiple>
+  <input id="musicCookieFileInput" class="visually-hidden" type="file" accept=".txt,text/plain">
+  <audio id="audioPlayer" preload="metadata"></audio>
+
+  <script src="app.js?v=control-console-217"></script>
+</body>
+</html>

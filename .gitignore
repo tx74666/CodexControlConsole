@@ -1,0 +1,42 @@
+# Local runtime state
+cache/
+__pycache__/
+*.pyc
+
+# Local media libraries and private downloads
+music/
+wallpapers/*
+!wallpapers/README.txt
+!wallpapers/SOURCES.md
+*.mp3
+*.wav
+*.m4a
+*.aac
+*.flac
+*.ogg
+*.opus
+
+# Release/build output
+dist/
+release/
+*.zip
+*.apk
+*.aab
+
+# Android/Gradle output
+android/.gradle/
+android/build/
+android/app/build/
+
+# Local browser/test artifacts
+chrome-*-profile*/
+*-profile*/
+*.log
+*.tmp
+
+# OS/editor noise
+desktop.ini
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
