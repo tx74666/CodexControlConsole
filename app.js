@@ -5210,6 +5210,14 @@ function normalizeRandomRealmTextureMatchText(value) {
   return ` ${String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
 }
 
+function randomRealmTokenSet(value) {
+  return new Set(String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean));
+}
+
 function inferRandomRealmTextureKindFromName(value) {
   const name = normalizeRandomRealmTextureMatchText(value);
   const compact = String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -5222,6 +5230,74 @@ function inferRandomRealmTextureKindFromName(value) {
   if (/\b(emission|emissive|emit|emission map)\b/.test(name) || /(emissionmap|emissivemap|emitmap)/.test(compact)) return "emission";
   if (/\b(base color|basecolor|albedo|diffuse|diff|color|col|color map)\b/.test(name) || /(basecolormap|albedomap|diffusemap|colormap)/.test(compact)) return "base-color";
   return "";
+}
+
+function randomRealmMaterialAliasTokens(materialName) {
+  const tokens = randomRealmTokenSet(`${materialName || ""} ${randomRealmMaterialReadableName(materialName)}`);
+  const aliases = new Set(tokens);
+  if (tokens.has("interior")) {
+    aliases.add("inner");
+    aliases.add("inside");
+    aliases.add("int");
+  }
+  if (tokens.has("exterior")) {
+    aliases.add("outside");
+    aliases.add("ext");
+  }
+  return aliases;
+}
+
+function randomRealmInferMaterialFromTextureName(object, texture) {
+  const materials = uniqueRandomRealmMaterials(object);
+  if (!materials.length) return "";
+  if (materials.length === 1) return materials[0];
+
+  const textureText = `${texture?.name || ""} ${texture?.file || ""} ${texture?.path || ""} ${texture?.sourcePackage || ""}`;
+  const textureTokens = randomRealmTokenSet(textureText);
+  const textureCompact = String(textureText || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!textureTokens.size && !textureCompact) return "";
+
+  const materialEntries = materials.map(material => ({
+    material,
+    tokens: Array.from(randomRealmMaterialAliasTokens(material))
+      .filter(token => token.length >= 3 && !["mat", "pbr", "map", "image", "texture"].includes(token))
+  }));
+  const tokenCounts = new Map();
+  for (const entry of materialEntries) {
+    for (const token of new Set(entry.tokens)) {
+      tokenCounts.set(token, (tokenCounts.get(token) || 0) + 1);
+    }
+  }
+
+  let best = null;
+  let bestScore = 0;
+  let tied = false;
+  for (const entry of materialEntries) {
+    const uniqueTokens = entry.tokens.filter(token => tokenCounts.get(token) === 1);
+    let uniqueHits = 0;
+    for (const token of uniqueTokens) {
+      if (textureTokens.has(token) || (token.length >= 4 && textureCompact.includes(token))) {
+        uniqueHits += 1;
+      }
+    }
+    if (!uniqueHits) continue;
+
+    let sharedHits = 0;
+    for (const token of new Set(entry.tokens)) {
+      if (textureTokens.has(token) || (token.length >= 4 && textureCompact.includes(token))) {
+        sharedHits += 1;
+      }
+    }
+    const score = uniqueHits * 100 + sharedHits;
+    if (score > bestScore) {
+      best = entry.material;
+      bestScore = score;
+      tied = false;
+    } else if (score === bestScore) {
+      tied = true;
+    }
+  }
+  return tied ? "" : (best || "");
 }
 
 function randomRealmTextureKindFromExisting(texture) {
@@ -5241,10 +5317,11 @@ function randomRealmTextureKindFromExisting(texture) {
     .find(([, label]) => label === role)?.[0] || "";
 }
 
-function randomRealmStagedTextureWithKind(texture) {
+function randomRealmStagedTextureWithKind(texture, object = selectedRandomRealmObject()) {
   return {
     ...texture,
-    inferredKind: inferRandomRealmTextureKindFromName(`${texture?.name || ""} ${texture?.path || ""}`)
+    inferredKind: inferRandomRealmTextureKindFromName(`${texture?.name || ""} ${texture?.path || ""}`),
+    inferredMaterial: texture?.material || randomRealmInferMaterialFromTextureName(object, texture)
   };
 }
 
@@ -5254,7 +5331,13 @@ function selectRandomRealmStagedTextureForKind(kind = els.randomRealmTextureKind
     return false;
   }
   const wantedKind = kind || "base-color";
-  randomRealmNewTexture = randomRealmStagedTextures.find(texture => texture.inferredKind === wantedKind)
+  const wantedMaterial = randomRealmSelectedOldTexture?.material
+    || (randomRealmSelectedMaterial && randomRealmSelectedMaterial !== "all" ? randomRealmSelectedMaterial : "");
+  randomRealmNewTexture = randomRealmStagedTextures.find(texture =>
+    texture.inferredKind === wantedKind &&
+    (!wantedMaterial || texture.inferredMaterial === wantedMaterial || texture.material === wantedMaterial)
+  )
+    || randomRealmStagedTextures.find(texture => texture.inferredKind === wantedKind)
     || randomRealmStagedTextures.find(texture => !texture.inferredKind)
     || randomRealmStagedTextures[0];
   return Boolean(randomRealmNewTexture);
@@ -5272,8 +5355,9 @@ function randomRealmTextureIdentity(texture) {
 }
 
 function addRandomRealmStagedTextures(files, preferredKind = "") {
+  const object = selectedRandomRealmObject();
   const rawIncoming = (Array.isArray(files) ? files : [])
-    .map(randomRealmStagedTextureWithKind)
+    .map(texture => randomRealmStagedTextureWithKind(texture, object))
     .filter(texture => texture.path);
   if (!rawIncoming.length) return 0;
 
@@ -5286,23 +5370,45 @@ function addRandomRealmStagedTextures(files, preferredKind = "") {
       ? { ...texture, inferredKind: nextKind }
       : texture
   ));
+  const inferredIncomingMaterials = new Set(normalizedIncoming.map(texture => texture.inferredMaterial || texture.material || "").filter(Boolean));
+  const sharedIncomingMaterial = inferredIncomingMaterials.size === 1 ? Array.from(inferredIncomingMaterials)[0] : "";
+  const materializedIncoming = sharedIncomingMaterial
+    ? normalizedIncoming.map(texture => (
+      texture.inferredMaterial || texture.material
+        ? texture
+        : { ...texture, inferredMaterial: sharedIncomingMaterial }
+    ))
+    : normalizedIncoming;
   const byKind = new Map();
-  for (const texture of normalizedIncoming) {
-    byKind.set(texture.inferredKind || `unknown:${texture.path}`, texture);
+  for (const texture of materializedIncoming) {
+    const key = texture.inferredKind
+      ? `${texture.inferredMaterial || texture.material || ""}\u0001${texture.inferredKind}`
+      : `unknown:${texture.path}`;
+    byKind.set(key, texture);
   }
   const incoming = Array.from(byKind.values());
   if (!incoming.length) return 0;
-  const incomingKinds = new Set(incoming.map(texture => texture.inferredKind).filter(Boolean));
+  const incomingTargets = new Set(incoming
+    .filter(texture => texture.inferredKind)
+    .map(texture => `${texture.inferredMaterial || texture.material || ""}\u0001${texture.inferredKind}`));
   const incomingPaths = new Set(incoming.map(texture => texture.path));
   randomRealmStagedTextures = randomRealmStagedTextures.filter(texture => (
     !incomingPaths.has(texture.path) &&
-    (!texture.inferredKind || !incomingKinds.has(texture.inferredKind))
+    (!texture.inferredKind || !incomingTargets.has(`${texture.inferredMaterial || texture.material || ""}\u0001${texture.inferredKind}`))
   ));
   const byPath = new Map(randomRealmStagedTextures.map(texture => [texture.path, texture]));
   for (const texture of incoming) {
     byPath.set(texture.path, texture);
   }
   randomRealmStagedTextures = Array.from(byPath.values());
+  const incomingMaterials = new Set(incoming.map(texture => texture.inferredMaterial || texture.material || "").filter(Boolean));
+  if (incomingMaterials.size === 1) {
+    const [material] = Array.from(incomingMaterials);
+    if (material && uniqueRandomRealmMaterials(object).includes(material)) {
+      randomRealmSelectedMaterial = material;
+      randomRealmSelectedOldTexture = null;
+    }
+  }
   if ((oldTextureKind || singleKind || preferredKind) && els.randomRealmTextureKind) {
     els.randomRealmTextureKind.value = nextKind;
   }
@@ -5346,10 +5452,11 @@ function randomRealmMaterialForNewMap(object) {
   return randomRealmSelectedOldTexture?.material || randomRealmMaterialForAdd(object);
 }
 
-function findRandomRealmOldTextureForKind(object, kind, materialName = "") {
+function findRandomRealmOldTextureForKind(object, kind, materialName = "", options = {}) {
   if (randomRealmAddMapMode) return null;
   const textures = Array.isArray(object?.textures) ? object.textures : [];
   const material = materialName || randomRealmSelectedOldTexture?.material || randomRealmMaterialForAdd(object);
+  const strictMaterial = Boolean(options.strictMaterial);
   if (
     randomRealmSelectedOldTexture &&
     randomRealmTextureMatchesKind(randomRealmSelectedOldTexture, kind) &&
@@ -5357,9 +5464,9 @@ function findRandomRealmOldTextureForKind(object, kind, materialName = "") {
   ) {
     return randomRealmSelectedOldTexture;
   }
-  return textures.find(texture => texture.material === material && randomRealmTextureMatchesKind(texture, kind))
-    || textures.find(texture => randomRealmTextureMatchesKind(texture, kind))
-    || null;
+  const exact = textures.find(texture => texture.material === material && randomRealmTextureMatchesKind(texture, kind));
+  if (exact || strictMaterial) return exact || null;
+  return textures.find(texture => randomRealmTextureMatchesKind(texture, kind)) || null;
 }
 
 function randomRealmStagedTextureKind(texture) {
@@ -5372,8 +5479,11 @@ function randomRealmTexturePackageDrafts(object = selectedRandomRealmObject()) {
   return randomRealmStagedTextures
     .map((texture, index) => {
       const kind = randomRealmStagedTextureKind(texture);
-      const targetMaterial = texture.material || material;
-      const oldTexture = findRandomRealmOldTextureForKind(object, kind, targetMaterial);
+      const targetMaterial = texture.material
+        || texture.inferredMaterial
+        || randomRealmInferMaterialFromTextureName(object, texture)
+        || material;
+      const oldTexture = findRandomRealmOldTextureForKind(object, kind, targetMaterial, { strictMaterial: Boolean(targetMaterial) });
       return {
         index,
         texture,
