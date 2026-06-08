@@ -9,7 +9,7 @@ GitHub Releases are expected to provide:
 - `CodexControlConsole-windows.zip` for Windows desktop
 - `CodexControlConsole-android.apk` for the Android companion
 
-The static download page lives in `docs/index.html` and is ready for GitHub Pages.
+The static download page lives in `docs/index.html`. The Pages workflow publishes it from the `main` branch.
 
 ## Windows Desktop
 
