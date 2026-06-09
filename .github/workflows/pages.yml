@@ -25,4 +25,5 @@ jobs:
         run: test -f docs/index.html
 
       - name: Print release download page
-        run: echo "Downloads: https://github.com/${{ github.repository }}/releases/latest"
+        run: |
+          echo "Downloads: https://github.com/${{ github.repository }}/releases/latest"
