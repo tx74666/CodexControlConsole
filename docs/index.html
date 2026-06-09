@@ -78,6 +78,10 @@
       border-color: rgba(55, 201, 149, 0.52);
       background: rgba(55, 201, 149, 0.14);
     }
+    a.button.lite {
+      border-color: rgba(168, 186, 208, 0.48);
+      background: rgba(168, 186, 208, 0.12);
+    }
     .device {
       aspect-ratio: 9 / 16;
       border: 1px solid var(--line);
@@ -157,9 +161,10 @@
       <div>
         <img class="logo" src="assets/codex-resource-icon-256.png" alt="">
         <h1>Codex Control Console</h1>
-        <p>Download the Windows desktop console and the Android companion. The Android app connects to a PC running the console in LAN mode.</p>
+        <p>Download the full developer console, the simple Wallpaper + Music desktop console, or the Android companion. The Android app connects to a PC running the console in LAN mode.</p>
         <div class="buttons">
-          <a class="button" id="desktopDownload" href="#">Download desktop ZIP</a>
+          <a class="button" id="developerDownload" href="#">Download developer ZIP</a>
+          <a class="button lite" id="liteDownload" href="#">Download lite ZIP</a>
           <a class="button android" id="androidDownload" href="#">Download Android APK</a>
         </div>
       </div>
@@ -188,7 +193,8 @@
     const owner = hostParts.length > 2 && hostParts[1] === "github" ? hostParts[0] : fallbackOwner;
     const repo = location.pathname.split("/").filter(Boolean)[0] || fallbackRepo;
     const base = `https://github.com/${owner}/${repo}/releases/latest/download`;
-    document.getElementById("desktopDownload").href = `${base}/CodexControlConsole-windows.zip`;
+    document.getElementById("developerDownload").href = `${base}/CodexControlConsole-developer-windows.zip`;
+    document.getElementById("liteDownload").href = `${base}/CodexControlConsole-lite-windows.zip`;
     document.getElementById("androidDownload").href = `${base}/CodexControlConsole-android.apk`;
   </script>
 </body>

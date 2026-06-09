@@ -32,6 +32,21 @@ const modules = [
   { id: "wallpaper", labelKey: "wallpaperNav", titleKey: "wallpaperPageTitle", href: "index.html" }
 ];
 
+const editionModules = {
+  developer: modules.map(item => item.id),
+  lite: ["wallpaper", "music"]
+};
+const moduleMap = new Map(modules.map(item => [item.id, item]));
+const initialEditionParams = new URLSearchParams(window.location.search);
+const initialEditionQuery = initialEditionParams.get("edition");
+const hasEditionQuery = initialEditionParams.has("edition");
+
+function normalizeEdition(value) {
+  return String(value || "").trim().toLowerCase() === "lite" ? "lite" : "developer";
+}
+
+let consoleEdition = normalizeEdition(hasEditionQuery ? initialEditionQuery : "developer");
+
 const playbackModes = ["repeatAll", "repeatOne"];
 const defaultRandomRealmArtTypes = ["MESH", "CURVE", "LIGHT", "CAMERA", "VOLUME", "FONT", "EMPTY"];
 const randomRealmArtTypeLabels = {
@@ -1041,17 +1056,52 @@ function currentPageName() {
   return window.location.pathname.split("/").pop() || "index.html";
 }
 
-function moduleIdFromPage(pageName) {
-  const item = modules.find(module => module.href === pageName);
-  return item ? item.id : "wallpaper";
+function moduleUrl(href) {
+  const params = new URLSearchParams(window.location.search);
+  if (consoleEdition === "lite") {
+    params.set("edition", "lite");
+  }
+  const search = params.toString();
+  return `${href}${search ? `?${search}` : ""}${window.location.hash}`;
 }
 
-function isModuleId(id) {
+function editionModuleIds() {
+  return editionModules[consoleEdition] || editionModules.developer;
+}
+
+function editionModuleSet() {
+  return new Set(editionModuleIds());
+}
+
+function availableModules() {
+  return editionModuleIds()
+    .map(id => moduleMap.get(id))
+    .filter(Boolean);
+}
+
+function firstAvailableModule() {
+  return availableModules()[0] || modules[0];
+}
+
+function isKnownModuleId(id) {
   return modules.some(item => item.id === id);
 }
 
+function isModuleAvailable(id) {
+  return editionModuleSet().has(id);
+}
+
+function moduleIdFromPage(pageName) {
+  const item = modules.find(module => module.href === pageName);
+  return item && isModuleAvailable(item.id) ? item.id : firstAvailableModule().id;
+}
+
+function isModuleId(id) {
+  return isKnownModuleId(id) && isModuleAvailable(id);
+}
+
 function moduleById(id) {
-  return modules.find(item => item.id === id) || modules[0];
+  return isModuleAvailable(id) ? moduleMap.get(id) || firstAvailableModule() : firstAvailableModule();
 }
 
 function canActivateModuleInPlace(id) {
@@ -1098,7 +1148,7 @@ function restoreInitialModuleUrl() {
   if (!shouldRestoreLastModuleOnLoad) return;
   const current = moduleById(activeModuleId);
   if (currentPageName() !== current.href) {
-    history.replaceState({ moduleId: current.id }, "", current.href);
+    history.replaceState({ moduleId: current.id }, "", moduleUrl(current.href));
   }
 }
 
@@ -1126,7 +1176,7 @@ function activateModule(id, push = false, options = {}) {
   document.title = `Codex Control Console - ${text(next.titleKey)}`;
 
   if (push && currentPageName() !== next.href) {
-    history.pushState({ moduleId: next.id }, "", next.href);
+    history.pushState({ moduleId: next.id }, "", moduleUrl(next.href));
   }
 
   renderModuleNavs();
@@ -1145,7 +1195,8 @@ function moduleOrder() {
   } catch {
     saved = [];
   }
-  const validIds = new Set(modules.map(item => item.id));
+  const currentModules = availableModules();
+  const validIds = editionModuleSet();
   const deleted = new Set(deletedModuleIds());
   const ordered = [];
   for (const id of saved) {
@@ -1153,14 +1204,14 @@ function moduleOrder() {
       ordered.push(id);
     }
   }
-  for (const item of modules) {
+  for (const item of currentModules) {
     if (deleted.has(item.id)) continue;
     if (!ordered.includes(item.id)) {
       if (item.id === "manager") {
         ordered.unshift(item.id);
       } else {
-        const moduleIndex = modules.findIndex(module => module.id === item.id);
-        const previousVisible = modules
+        const moduleIndex = currentModules.findIndex(module => module.id === item.id);
+        const previousVisible = currentModules
           .slice(0, moduleIndex)
           .map(module => module.id)
           .reverse()
@@ -1173,48 +1224,51 @@ function moduleOrder() {
       }
     }
   }
-  const fallback = modules.find(item => !deleted.has(item.id)) || modules[0];
+  const fallback = currentModules.find(item => !deleted.has(item.id)) || firstAvailableModule();
   return ordered.length ? ordered : [fallback.id];
 }
 
 function saveModuleOrder(order) {
-  const validIds = new Set(modules.map(item => item.id));
+  const validIds = editionModuleSet();
   const deleted = new Set(deletedModuleIds());
   localStorage.setItem(storageKeys.moduleOrder, JSON.stringify(order.filter(id => validIds.has(id) && !deleted.has(id))));
 }
 
 function archivedModuleIds() {
+  if (consoleEdition === "lite") return [];
   let saved = [];
   try {
     saved = JSON.parse(localStorage.getItem(storageKeys.moduleArchive) || "[]");
   } catch {
     saved = [];
   }
-  const validIds = new Set(modules.map(item => item.id));
+  const validIds = editionModuleSet();
   const deleted = new Set(deletedModuleIds());
   return saved.filter(id => validIds.has(id) && !deleted.has(id));
 }
 
 function deepArchivedModuleIds() {
+  if (consoleEdition === "lite") return [];
   let saved = [];
   try {
     saved = JSON.parse(localStorage.getItem(storageKeys.moduleDeepArchive) || "[]");
   } catch {
     saved = [];
   }
-  const validIds = new Set(modules.map(item => item.id));
+  const validIds = editionModuleSet();
   const deleted = new Set(deletedModuleIds());
   return saved.filter(id => validIds.has(id) && !deleted.has(id));
 }
 
 function deletedModuleIds() {
+  if (consoleEdition === "lite") return [];
   let saved = [];
   try {
     saved = JSON.parse(localStorage.getItem(storageKeys.moduleDeleted) || "[]");
   } catch {
     saved = [];
   }
-  const validIds = new Set(modules.map(item => item.id));
+  const validIds = editionModuleSet();
   return saved.filter(id => validIds.has(id));
 }
 
@@ -1223,27 +1277,31 @@ function allArchivedModuleIds() {
 }
 
 function saveArchivedModuleIds(ids) {
-  const validIds = new Set(modules.map(item => item.id));
+  if (consoleEdition === "lite") return;
+  const validIds = editionModuleSet();
   const deepSet = new Set(deepArchivedModuleIds());
   const deleted = new Set(deletedModuleIds());
   localStorage.setItem(storageKeys.moduleArchive, JSON.stringify(ids.filter(id => validIds.has(id) && !deepSet.has(id) && !deleted.has(id))));
 }
 
 function saveDeepArchivedModuleIds(ids) {
-  const validIds = new Set(modules.map(item => item.id));
+  if (consoleEdition === "lite") return;
+  const validIds = editionModuleSet();
   const deleted = new Set(deletedModuleIds());
   localStorage.setItem(storageKeys.moduleDeepArchive, JSON.stringify(ids.filter(id => validIds.has(id) && !deleted.has(id))));
 }
 
 function saveDeletedModuleIds(ids) {
-  const validIds = new Set(modules.map(item => item.id));
+  if (consoleEdition === "lite") return;
+  const validIds = editionModuleSet();
   localStorage.setItem(storageKeys.moduleDeleted, JSON.stringify(ids.filter(id => validIds.has(id))));
 }
 
 function visibleModuleOrder() {
   const unavailable = new Set([...allArchivedModuleIds(), ...deletedModuleIds()]);
   const visible = moduleOrder().filter(id => !unavailable.has(id));
-  const fallback = modules.find(item => !unavailable.has(item.id)) || modules.find(item => !deletedModuleIds().includes(item.id)) || modules[0];
+  const currentModules = availableModules();
+  const fallback = currentModules.find(item => !unavailable.has(item.id)) || currentModules.find(item => !deletedModuleIds().includes(item.id)) || firstAvailableModule();
   return visible.length ? visible : [fallback.id];
 }
 
@@ -2247,6 +2305,51 @@ function applyTheme() {
   document.documentElement.dataset.theme = theme;
   if (els.themeToggle) {
     els.themeToggle.textContent = text(themeLabelKey(nextTheme(theme)));
+  }
+}
+
+function applyConsoleEdition(nextEdition, options = {}) {
+  const previousEdition = consoleEdition;
+  consoleEdition = normalizeEdition(nextEdition);
+  document.documentElement.dataset.edition = consoleEdition;
+  if (document.body) {
+    document.body.dataset.consoleEdition = consoleEdition;
+  }
+
+  if (!isModuleAvailable(activeModuleId)) {
+    activeModuleId = firstAvailableModule().id;
+  }
+
+  const active = moduleById(activeModuleId);
+  for (const panel of document.querySelectorAll("[data-module-panel]")) {
+    const moduleId = panel.dataset.modulePanel;
+    panel.hidden = !isModuleAvailable(moduleId) || moduleId !== active.id;
+  }
+
+  if (currentPageName() !== active.href) {
+    history.replaceState({ moduleId: active.id }, "", moduleUrl(active.href));
+  }
+
+  if (previousEdition !== consoleEdition || options.forceRender) {
+    renderModuleNavs();
+  }
+
+  if (options.activate !== false) {
+    activateModule(active.id, false);
+  }
+}
+
+async function loadConsoleConfig() {
+  if (hasEditionQuery) return;
+  try {
+    const response = await fetch("/api/console/config");
+    if (!response.ok) return;
+    const payload = await response.json();
+    if (payload?.edition) {
+      applyConsoleEdition(payload.edition);
+    }
+  } catch {
+    // Static file previews default to the developer edition.
   }
 }
 
@@ -8060,7 +8163,9 @@ if (hasMusic) {
   els.trackVolume.value = String(initialVolume);
 }
 
+applyConsoleEdition(consoleEdition, { activate: false, forceRender: true });
 applyLanguage();
+loadConsoleConfig();
 restoreInitialModuleUrl();
 if (hasWallpaper) loadWallpapers();
 if (hasMusic) loadMusic();

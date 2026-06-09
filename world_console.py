@@ -116,6 +116,68 @@ CONSOLE_MODULE_HREFS = {
     "music": "music.html",
     "wallpaper": "index.html",
 }
+CONSOLE_EDITION_MODULES = {
+    "developer": tuple(CONSOLE_MODULE_HREFS.keys()),
+    "lite": ("wallpaper", "music"),
+}
+CONSOLE_PAGE_PATHS = {"", "/", *{f"/{href}" for href in CONSOLE_MODULE_HREFS.values()}}
+
+
+def sanitize_console_edition(value):
+    clean = str(value or "").strip().lower()
+    return clean if clean in CONSOLE_EDITION_MODULES else "developer"
+
+
+CONSOLE_CONFIG = {
+    "edition": sanitize_console_edition(os.environ.get("CODEX_CONTROL_EDITION")),
+}
+
+
+def current_console_edition():
+    return sanitize_console_edition(CONSOLE_CONFIG.get("edition"))
+
+
+def console_module_ids(edition=None):
+    return CONSOLE_EDITION_MODULES.get(sanitize_console_edition(edition or current_console_edition()), CONSOLE_EDITION_MODULES["developer"])
+
+
+def console_module_allowed(module_id, edition=None):
+    return str(module_id or "") in set(console_module_ids(edition))
+
+
+def console_module_id_from_href(href):
+    clean = str(href or "").strip().lstrip("/")
+    for module_id, module_href in CONSOLE_MODULE_HREFS.items():
+        if module_href == clean:
+            return module_id
+    return "wallpaper"
+
+
+def console_edition_payload():
+    edition = current_console_edition()
+    module_ids = list(console_module_ids(edition))
+    return {
+        "edition": edition,
+        "modules": module_ids,
+        "hrefs": {module_id: CONSOLE_MODULE_HREFS[module_id] for module_id in module_ids if module_id in CONSOLE_MODULE_HREFS},
+    }
+
+
+def console_edition_query(edition=None):
+    return "?edition=lite" if sanitize_console_edition(edition or current_console_edition()) == "lite" else ""
+
+
+def console_lite_redirect_path(parsed):
+    if current_console_edition() != "lite":
+        return ""
+    query = urllib.parse.parse_qs(parsed.query)
+    page = parsed.path or "/index.html"
+    module_id = console_module_id_from_href(page)
+    if console_module_allowed(module_id, "lite") and query.get("edition", [""])[0] == "lite":
+        return ""
+    href = CONSOLE_MODULE_HREFS[module_id] if console_module_allowed(module_id, "lite") else CONSOLE_MODULE_HREFS["wallpaper"]
+    return f"/{href}?edition=lite"
+
 MAX_WALLPAPER_UPLOAD_BYTES = 80 * 1024 * 1024
 MAX_MUSIC_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_WORKZONE_UPLOAD_BYTES = 512 * 1024 * 1024
@@ -456,6 +518,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/console/state":
             self.send_json({"state": read_console_state()})
             return
+        if parsed.path == "/api/console/config":
+            self.send_json(console_edition_payload())
+            return
         if parsed.path == "/api/workspace/github-downloads":
             self.send_json(github_downloads_state())
             return
@@ -475,7 +540,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/music/"):
             self.send_music_file_response(parsed.path[len("/music/"):])
             return
-        if parsed.path in ("", "/", "/index.html", "/music.html", "/workspace.html", "/manager.html", "/blender.html", "/unity.html", "/steamwork.html", "/randomrealm.html"):
+        if parsed.path in CONSOLE_PAGE_PATHS:
+            redirect_path = console_lite_redirect_path(parsed)
+            if redirect_path:
+                self.send_redirect(redirect_path)
+                return
             self.send_file_response(APP_DIR / "index.html", "text/html; charset=utf-8")
             return
         super().do_GET()
@@ -629,6 +698,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def send_redirect(self, location, status=302):
+        self.send_response(status)
+        self.send_header("Location", location)
+        self.end_headers()
 
     def send_file_response(self, path, content_type, filename=None):
         try:
@@ -3640,7 +3714,7 @@ def upload_music(files):
 
 def sanitize_console_module_id(value):
     clean = str(value or "").strip().lower()
-    return clean if clean in CONSOLE_MODULE_HREFS else "wallpaper"
+    return clean if clean in CONSOLE_MODULE_HREFS and console_module_allowed(clean) else "wallpaper"
 
 
 def read_console_state():
@@ -3674,7 +3748,10 @@ def console_start_url(port):
     href = read_console_state().get("href") or "index.html"
     if href not in CONSOLE_MODULE_HREFS.values():
         href = "index.html"
-    return f"http://127.0.0.1:{port}/{href}"
+    module_id = console_module_id_from_href(href)
+    if not console_module_allowed(module_id):
+        href = CONSOLE_MODULE_HREFS["wallpaper"]
+    return f"http://127.0.0.1:{port}/{href}{console_edition_query()}"
 
 
 def sanitize_string_map(value):
@@ -5236,8 +5313,10 @@ def main():
     parser = argparse.ArgumentParser(description="Codex Control Console")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--edition", choices=tuple(CONSOLE_EDITION_MODULES.keys()), default=current_console_edition())
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
+    CONSOLE_CONFIG["edition"] = sanitize_console_edition(args.edition)
 
     local_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
     existing_port = running_console_port(args.port) if local_host == "127.0.0.1" else None

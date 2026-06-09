@@ -159,6 +159,10 @@ button {
   justify-content: flex-end;
 }
 
+body[data-console-edition="lite"] .module-archive {
+  display: none;
+}
+
 .archive-drop {
   position: relative;
   width: 38px;

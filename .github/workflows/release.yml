@@ -70,10 +70,14 @@ jobs:
           name: Codex Control Console ${{ env.RELEASE_TAG }}
           files: |
             dist/CodexControlConsole-windows.zip
+            dist/CodexControlConsole-developer-windows.zip
+            dist/CodexControlConsole-lite-windows.zip
             dist/CodexControlConsole-android.apk
           body: |
             ## Downloads
-            - Windows desktop: CodexControlConsole-windows.zip
+            - Windows developer desktop: CodexControlConsole-developer-windows.zip
+            - Windows lite desktop: CodexControlConsole-lite-windows.zip
+            - Windows desktop compatibility package: CodexControlConsole-windows.zip
             - Android companion: CodexControlConsole-android.apk
 
             The Android companion connects to a PC running Codex Control Console in LAN mode.

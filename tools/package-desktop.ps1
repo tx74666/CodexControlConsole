@@ -1,6 +1,8 @@
 param(
   [string]$Version = "0.1.0",
-  [string]$OutputDir = "dist"
+  [string]$OutputDir = "dist",
+  [ValidateSet("all", "developer", "lite")]
+  [string]$Edition = "all"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,23 +12,8 @@ if (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
   $OutputDir = Join-Path $ProjectRoot $OutputDir
 }
 $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
-$PackageName = "CodexControlConsole-$Version-windows"
-$StageDir = Join-Path $OutputDir $PackageName
-$ZipPath = Join-Path $OutputDir "CodexControlConsole-windows.zip"
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-
-if (-not $StageDir.StartsWith($OutputDir, [System.StringComparison]::OrdinalIgnoreCase)) {
-  throw "Refusing to stage outside the output directory."
-}
-if (Test-Path -LiteralPath $StageDir) {
-  Remove-Item -LiteralPath $StageDir -Recurse -Force
-}
-if (Test-Path -LiteralPath $ZipPath) {
-  Remove-Item -LiteralPath $ZipPath -Force
-}
-
-New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 
 $Items = @(
   "README.md",
@@ -54,6 +41,10 @@ $Items = @(
   "Start-ControlConsole.vbs",
   "Start-ControlConsole-LAN.cmd",
   "Start-ControlConsole-LAN.vbs",
+  "Start-ControlConsole-Lite.cmd",
+  "Start-ControlConsole-Lite.vbs",
+  "Start-ControlConsole-LAN-Lite.cmd",
+  "Start-ControlConsole-LAN-Lite.vbs",
   "Start-WorldConsole.cmd",
   "Start-WorldConsole.vbs",
   "tools/NativeFileDrag.exe",
@@ -63,11 +54,16 @@ $Items = @(
   "wallpapers/SOURCES.md"
 )
 
-foreach ($Item in $Items) {
+function Copy-StageItem {
+  param(
+    [string]$Item,
+    [string]$StageDir
+  )
+
   $Source = Join-Path $ProjectRoot $Item
   if (-not (Test-Path -LiteralPath $Source)) {
     Write-Warning "Skipping missing file: $Item"
-    continue
+    return
   }
   $Target = Join-Path $StageDir $Item
   $TargetParent = Split-Path -Parent $Target
@@ -75,15 +71,67 @@ foreach ($Item in $Items) {
   Copy-Item -LiteralPath $Source -Destination $Target -Force
 }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "cache") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "music") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "wallpapers") | Out-Null
+function New-DesktopPackage {
+  param(
+    [ValidateSet("developer", "lite")]
+    [string]$PackageEdition
+  )
 
-@"
+  $IsLite = $PackageEdition -eq "lite"
+  $PackageName = if ($IsLite) { "CodexControlConsole-$Version-lite-windows" } else { "CodexControlConsole-$Version-windows" }
+  $StageDir = Join-Path $OutputDir $PackageName
+  $ZipPath = Join-Path $OutputDir ($(if ($IsLite) { "CodexControlConsole-lite-windows.zip" } else { "CodexControlConsole-windows.zip" }))
+  $AliasZipPath = if ($IsLite) { $null } else { Join-Path $OutputDir "CodexControlConsole-developer-windows.zip" }
+
+  if (-not $StageDir.StartsWith($OutputDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to stage outside the output directory."
+  }
+  if (Test-Path -LiteralPath $StageDir) {
+    Remove-Item -LiteralPath $StageDir -Recurse -Force
+  }
+  if (Test-Path -LiteralPath $ZipPath) {
+    Remove-Item -LiteralPath $ZipPath -Force
+  }
+  if ($AliasZipPath -and (Test-Path -LiteralPath $AliasZipPath)) {
+    Remove-Item -LiteralPath $AliasZipPath -Force
+  }
+
+  New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
+
+  foreach ($Item in $Items) {
+    Copy-StageItem -Item $Item -StageDir $StageDir
+  }
+
+  if ($IsLite) {
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot "Start-ControlConsole-Lite.cmd") -Destination (Join-Path $StageDir "Start-ControlConsole.cmd") -Force
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot "Start-ControlConsole-Lite.vbs") -Destination (Join-Path $StageDir "Start-ControlConsole.vbs") -Force
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot "Start-ControlConsole-LAN-Lite.cmd") -Destination (Join-Path $StageDir "Start-ControlConsole-LAN.cmd") -Force
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot "Start-ControlConsole-LAN-Lite.vbs") -Destination (Join-Path $StageDir "Start-ControlConsole-LAN.vbs") -Force
+  }
+
+  New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "cache") | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "music") | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "wallpapers") | Out-Null
+
+  @"
 This folder is intentionally empty in the public release.
 
 Put your local music files here or set CODEX_CONTROL_MUSIC_DIR to another folder.
 "@ | Set-Content -LiteralPath (Join-Path $StageDir "music\README.txt") -Encoding UTF8
 
-Compress-Archive -Path (Join-Path $StageDir "*") -DestinationPath $ZipPath -Force
-Write-Host "Desktop package: $ZipPath"
+  $EditionLabel = if ($IsLite) { "Lite edition: Wallpaper and Music only." } else { "Developer edition: all console modules enabled." }
+  $EditionLabel | Set-Content -LiteralPath (Join-Path $StageDir "EDITION.txt") -Encoding UTF8
+
+  Compress-Archive -Path (Join-Path $StageDir "*") -DestinationPath $ZipPath -Force
+  Write-Host "Desktop package: $ZipPath"
+
+  if ($AliasZipPath) {
+    Copy-Item -LiteralPath $ZipPath -Destination $AliasZipPath -Force
+    Write-Host "Desktop package alias: $AliasZipPath"
+  }
+}
+
+$EditionsToBuild = if ($Edition -eq "all") { @("developer", "lite") } else { @($Edition) }
+foreach ($PackageEdition in $EditionsToBuild) {
+  New-DesktopPackage -PackageEdition $PackageEdition
+}

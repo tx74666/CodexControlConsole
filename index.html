@@ -24,6 +24,13 @@
         music: "music.html",
         wallpaper: "index.html"
       };
+      const editionModules = {
+        developer: Object.keys(moduleHrefs),
+        lite: ["wallpaper", "music"]
+      };
+      const params = new URLSearchParams(window.location.search);
+      const edition = params.get("edition") === "lite" ? "lite" : "developer";
+      const allowedModules = new Set(editionModules[edition] || editionModules.developer);
       const page = window.location.pathname.split("/").pop() || "index.html";
       const lastModule = window.localStorage.getItem("codexControl.lastModule.v1") || "";
       let deletedModules = [];
@@ -33,7 +40,7 @@
         deletedModules = [];
       }
       const href = moduleHrefs[lastModule];
-      if (page === "index.html" && href && href !== page && !deletedModules.includes(lastModule)) {
+      if (page === "index.html" && href && href !== page && allowedModules.has(lastModule) && !deletedModules.includes(lastModule)) {
         window.history.replaceState({ moduleId: lastModule }, "", href + window.location.search + window.location.hash);
       }
     })();
