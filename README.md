@@ -4,12 +4,13 @@ Codex Control Console is a local Windows control surface for wallpaper, workspac
 
 ## Downloads
 
-GitHub Releases are expected to provide:
+The current public release is available on GitHub:
 
-- `CodexControlConsole-windows.zip` for Windows desktop
-- `CodexControlConsole-android.apk` for the Android companion
+- Release page: <https://github.com/tx74666/CodexControlConsole/releases/tag/v0.1.0>
+- Windows desktop ZIP: <https://github.com/tx74666/CodexControlConsole/releases/download/v0.1.0/CodexControlConsole-windows.zip>
+- Android companion APK: <https://github.com/tx74666/CodexControlConsole/releases/download/v0.1.0/CodexControlConsole-android.apk>
 
-The static download page lives in `docs/index.html`. The Pages workflow publishes it from the `main` branch.
+The static download page source lives in `docs/index.html`. GitHub Pages can be enabled later from repository settings; the release downloads above work without Pages.
 
 ## Windows Desktop
 
