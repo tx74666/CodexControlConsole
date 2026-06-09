@@ -82,6 +82,24 @@
       border-color: rgba(168, 186, 208, 0.48);
       background: rgba(168, 186, 208, 0.12);
     }
+    .quick-start {
+      margin: 18px 0 0;
+      padding: 0;
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      list-style-position: inside;
+      font-size: 15px;
+      line-height: 1.5;
+    }
+    .quick-start strong {
+      color: var(--text);
+    }
+    .hint {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 14px;
+    }
     .device {
       aspect-ratio: 9 / 16;
       border: 1px solid var(--line);
@@ -161,12 +179,18 @@
       <div>
         <img class="logo" src="assets/codex-resource-icon-256.png" alt="">
         <h1>Codex Control Console</h1>
-        <p>Download the full developer console, the simple Wallpaper + Music desktop console, or the Android companion. The Android app connects to a PC running the console in LAN mode.</p>
+        <p>Pick Lite for Wallpaper + Music. Pick Developer if you need Blender, Unity, Steamwork, RandomRealm, and workspace tools.</p>
         <div class="buttons">
-          <a class="button" id="developerDownload" href="#">Download developer ZIP</a>
-          <a class="button lite" id="liteDownload" href="#">Download lite ZIP</a>
-          <a class="button android" id="androidDownload" href="#">Download Android APK</a>
+          <a class="button lite" id="liteDownload" href="https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-lite-windows.zip">Download lite ZIP</a>
+          <a class="button" id="developerDownload" href="https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-developer-windows.zip">Download developer ZIP</a>
+          <a class="button android" id="androidDownload" href="https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-android.apk">Download Android APK</a>
         </div>
+        <ol class="quick-start">
+          <li><strong>Download</strong> a Windows ZIP.</li>
+          <li><strong>Unzip</strong> it anywhere.</li>
+          <li><strong>Open</strong> <code>Start-ControlConsole.vbs</code>.</li>
+        </ol>
+        <div class="hint">For Android, run <code>Start-ControlConsole-LAN.vbs</code> on the PC first.</div>
       </div>
       <div class="device" aria-hidden="true">
         <div class="screen">

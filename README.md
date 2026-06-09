@@ -1,56 +1,49 @@
 # Codex Control Console
 
-Codex Control Console is a local Windows control surface for wallpaper, music, and optional developer workflows such as Blender, Unity, Steamwork, RandomRealm, and workspace utilities.
+A small Windows control console for wallpaper, music, and optional developer tools.
 
-## Downloads
+## Download
 
-The current public release is available on GitHub:
+Most people should use the Lite desktop build:
 
-- Release page: <https://github.com/tx74666/CodexControlConsole/releases/latest>
-- Windows developer ZIP: <https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-developer-windows.zip>
-- Windows lite ZIP: <https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-lite-windows.zip>
-- Android companion APK: <https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-android.apk>
+| Need | Download |
+| --- | --- |
+| Wallpaper + Music only | [CodexControlConsole-lite-windows.zip](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-lite-windows.zip) |
+| Full developer tools | [CodexControlConsole-developer-windows.zip](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-developer-windows.zip) |
+| Android companion | [CodexControlConsole-android.apk](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-android.apk) |
 
-The static download page source lives in `docs/index.html`. GitHub Pages can be enabled later from repository settings; the release downloads above work without Pages.
+Latest release: [github.com/tx74666/CodexControlConsole/releases/latest](https://github.com/tx74666/CodexControlConsole/releases/latest)
 
-Choose the developer ZIP for the full local toolset. Choose the lite ZIP for a simple Wallpaper + Music console.
+## Start On Windows
 
-## Windows Desktop
+1. Download one of the ZIP files above.
+2. Unzip it anywhere you like.
+3. Double-click `Start-ControlConsole.vbs`.
 
-Requirements:
+Lite opens with only Wallpaper and Music. Developer opens with Manager, Console, Blender, Unity, Steamwork, RandomRealm, Music, and Wallpaper.
 
-- Windows 10 or Windows 11
-- Python 3.11 or newer
-- Microsoft Edge or Google Chrome
+## Android
 
-Install:
-
-1. Download and unzip `CodexControlConsole-developer-windows.zip` or `CodexControlConsole-lite-windows.zip`.
-2. Double-click `Start-ControlConsole.vbs`.
-3. The console opens at `http://127.0.0.1:8898/index.html`.
-
-Developer mode enables Manager, Console, Blender, Unity, Steamwork, RandomRealm, Music, and Wallpaper. Lite mode shows only Wallpaper and Music.
-
-For Android access on the same trusted network, start `Start-ControlConsole-LAN.vbs` instead. Then connect from Android to:
+1. On the PC, start `Start-ControlConsole-LAN.vbs`.
+2. Install `CodexControlConsole-android.apk`.
+3. In Android, enter:
 
 ```text
 http://YOUR-PC-LAN-IP:8898/index.html
 ```
 
-LAN mode exposes the console to other devices on the network. Use it only on a trusted network.
+Use LAN mode only on a trusted network.
 
-## Android Companion
+## Requirements
 
-Install `CodexControlConsole-android.apk`, open it, and enter the PC LAN URL shown above. The Android app is a WebView companion for the PC console; the PC desktop service must be running for it to control local resources.
+- Windows 10 or Windows 11
+- Python 3.11 or newer
+- Microsoft Edge or Google Chrome
 
-## Release
-
-The release workflow builds both assets when a `v*` tag is pushed or when the workflow is run manually.
-
-To build the Windows ZIP locally:
+## Build Locally
 
 ```powershell
-.\tools\package-desktop.ps1 -Version 0.2.0 -OutputDir dist
+.\tools\package-desktop.ps1 -Version 0.2.1 -OutputDir dist
 ```
 
-The package script builds `CodexControlConsole-windows.zip`, `CodexControlConsole-developer-windows.zip`, and `CodexControlConsole-lite-windows.zip`. It intentionally excludes runtime cache, cookies, downloaded music, and local browser profiles.
+The package script builds the developer ZIP, the lite ZIP, and the compatibility Windows ZIP. Runtime cache, cookies, downloaded music, and local browser profiles are not included.

@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v0.1.0
+        description: Release version, for example v0.2.1
         required: true
-        default: v0.1.0
+        default: v0.2.1
   push:
     tags:
       - "v*"
@@ -27,7 +27,7 @@ jobs:
         run: |
           $tag = "${{ github.event.inputs.version || github.ref_name }}"
           if ([string]::IsNullOrWhiteSpace($tag)) {
-            $tag = "v0.1.0"
+            $tag = "v0.2.1"
           }
           if (-not $tag.StartsWith("v")) {
             $tag = "v$tag"
@@ -74,10 +74,20 @@ jobs:
             dist/CodexControlConsole-lite-windows.zip
             dist/CodexControlConsole-android.apk
           body: |
-            ## Downloads
-            - Windows developer desktop: CodexControlConsole-developer-windows.zip
-            - Windows lite desktop: CodexControlConsole-lite-windows.zip
-            - Windows desktop compatibility package: CodexControlConsole-windows.zip
-            - Android companion: CodexControlConsole-android.apk
+            ## Start Here
 
-            The Android companion connects to a PC running Codex Control Console in LAN mode.
+            Most people should download **CodexControlConsole-lite-windows.zip**.
+
+            | Need | Download |
+            | --- | --- |
+            | Wallpaper + Music only | CodexControlConsole-lite-windows.zip |
+            | Full developer tools | CodexControlConsole-developer-windows.zip |
+            | Android companion | CodexControlConsole-android.apk |
+
+            ## Windows
+
+            1. Download a ZIP.
+            2. Unzip it anywhere.
+            3. Double-click `Start-ControlConsole.vbs`.
+
+            For Android, run `Start-ControlConsole-LAN.vbs` on the PC first, then open the APK and enter the PC LAN URL.
