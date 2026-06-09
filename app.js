@@ -26,6 +26,7 @@ const modules = [
   { id: "workspace", labelKey: "workspaceNav", titleKey: "workspacePageTitle", href: "workspace.html" },
   { id: "blender", labelKey: "blenderNav", titleKey: "blenderPageTitle", href: "blender.html" },
   { id: "unity", labelKey: "unityNav", titleKey: "unityPageTitle", href: "unity.html" },
+  { id: "steamwork", labelKey: "steamworkNav", titleKey: "steamworkPageTitle", href: "steamwork.html" },
   { id: "randomrealm", labelKey: "randomRealmNav", titleKey: "randomRealmPageTitle", href: "randomrealm.html" },
   { id: "music", labelKey: "musicNav", titleKey: "musicPageTitle", href: "music.html" },
   { id: "wallpaper", labelKey: "wallpaperNav", titleKey: "wallpaperPageTitle", href: "index.html" }
@@ -80,6 +81,7 @@ const i18n = {
     workspacePageTitle: "Console",
     blenderPageTitle: "Blender",
     unityPageTitle: "Unity",
+    steamworkPageTitle: "Steamwork",
     randomRealmPageTitle: "随机领域",
     wallpaperPageTitle: "桌布",
     managerNav: "管理",
@@ -87,6 +89,7 @@ const i18n = {
     workspaceNav: "Console",
     blenderNav: "Blender",
     unityNav: "Unity",
+    steamworkNav: "Steamwork",
     randomRealmNav: "随机领域",
     musicPageTitle: "音乐",
     wallpaperNav: "桌布",
@@ -114,6 +117,23 @@ const i18n = {
     unityBridgeTempLabel: "临时导入",
     unityBridgeReady: "等待 Blender 发送",
     unityBridgeBody: "Blender 导出到 Unity temp 后，RandomRealm 导入器再把 temp 内容归类到 Builder 生成资产、Prefab 和清单里。",
+    steamworkTitle: "Steamwork",
+    steamworkReady: "\u5c31\u7eea",
+    steamworkBody: "\u7ba1\u7406 Steamworks\u3001\u53d1\u5e03\u5de5\u5177\u3001GameContent \u548c\u5ba3\u4f20\u66f4\u65b0\u7d20\u6750\u3002",
+    steamworkDashboard: "Steamworks \u540e\u53f0",
+    steamworkPublishRoot: "Publish \u6839\u76ee\u5f55",
+    steamworkGameContent: "GameContent",
+    steamworkPublishTool: "Publish Tool",
+    steamworkGameContentLabel: "GameContent",
+    steamworkGameContentTitle: "\u5bfc\u5165\u6e38\u620f\u5185\u5bb9",
+    steamworkGameContentReady: "\u628a\u6784\u5efa\u6587\u4ef6\u62d6\u5230\u8fd9\u91cc\u3002",
+    steamworkPublishToolLabel: "Publish Tool",
+    steamworkPublishToolTitle: "\u5bfc\u5165\u53d1\u5e03\u5de5\u5177",
+    steamworkPublishToolReady: "\u628a\u53d1\u5e03\u5de5\u5177\u6587\u4ef6\u62d6\u5230\u8fd9\u91cc\u3002",
+    steamworkImportDragging: "\u677e\u624b\u540e\u5bfc\u5165\u3002",
+    steamworkImporting: (count, target) => `\u6b63\u5728\u5bfc\u5165 ${count} \u4e2a\u6587\u4ef6\u5230 ${target}\u3002`,
+    steamworkImported: (count, target) => `\u5df2\u5bfc\u5165 ${count} \u4e2a\u6587\u4ef6\u5230 ${target}\u3002`,
+    steamworkImportFailed: message => `Steamwork \u5bfc\u5165\u5931\u8d25\uff1a${message}`,
     activeProjectValue: "随机领域 / Blender Assets",
     timeLabel: "Time",
     wallpaperSectionLabel: "预览",
@@ -247,6 +267,18 @@ const i18n = {
     randomRealmLiveProjectMismatch: "当前 Blender 打开的不是这个项目",
     randomRealmLiveObjectMissing: name => `Blender 选中的物体不在当前列表：${name}`,
     randomRealmUsedTexturesLabel: "用到的贴图",
+    randomRealmTextureManagerTitle: "\u8d34\u56fe\u7ba1\u7406\u5668",
+    randomRealmTextureManagerCount: (visible, total) => `${visible}/${total} \u5f20`,
+    randomRealmTextureInspectorLabel: "\u9009\u4e2d\u8d34\u56fe",
+    randomRealmTextureDetailMaterial: "\u6750\u8d28",
+    randomRealmTextureDetailRole: "\u7c7b\u578b",
+    randomRealmTextureDetailNode: "\u8282\u70b9",
+    randomRealmTextureDetailState: "\u72b6\u6001",
+    randomRealmTextureDetailFile: "\u6587\u4ef6",
+    randomRealmTextureDetailPath: "\u8def\u5f84",
+    randomRealmTextureStateReady: "\u53ef\u7528",
+    randomRealmTextureStateMissing: "\u7f3a\u5931",
+    randomRealmTextureStatePending: "\u5f85\u5e94\u7528",
     randomRealmTexturesRefreshed: (name, count) => `已刷新 ${name}：${count} 张贴图`,
     randomRealmAllMaterials: "All",
     randomRealmOldTextureLabel: "Old",
@@ -330,6 +362,17 @@ const i18n = {
     workspaceTodoPlaceholder: "写一个新的待办",
     workspaceTodoCategoryLabel: "待办分类",
     addWorkspaceTodo: "加入",
+    githubDownloadsTitle: "GitHub 下载",
+    githubDownloadsStatus: "待连接",
+    githubDownloadsReady: "已定位",
+    githubDownloadsMissing: "未连接",
+    githubDownloadsResolving: "正在定位 GitHub Releases...",
+    githubDownloadsBody: "打开 World Console 的 GitHub Releases 下载页。",
+    githubDownloadsLink: "Release 页面",
+    openGithubDownloads: "打开下载页",
+    githubDownloadsFound: url => `下载页：${url}`,
+    githubDownloadsNotConfigured: "还没有连接 GitHub 仓库。给 WorldConsole 添加 origin 以后，这里会自动定位到 Releases。",
+    githubDownloadsOpenFailed: message => `打开 GitHub 下载页失败：${message}`,
     todoGroupPieces: "Pieces / 部件",
     todoGroupTextures: "Blend -> Unity 贴图",
     todoGroupStory: "Story / 故事",
@@ -379,6 +422,7 @@ const i18n = {
     workspacePageTitle: "Console",
     blenderPageTitle: "Blender",
     unityPageTitle: "Unity",
+    steamworkPageTitle: "Steamwork",
     randomRealmPageTitle: "RandomRealm",
     wallpaperPageTitle: "Wallpaper",
     managerNav: "Manager",
@@ -386,6 +430,7 @@ const i18n = {
     workspaceNav: "Console",
     blenderNav: "Blender",
     unityNav: "Unity",
+    steamworkNav: "Steamwork",
     randomRealmNav: "RandomRealm",
     musicPageTitle: "Music",
     wallpaperNav: "Wallpaper",
@@ -413,6 +458,23 @@ const i18n = {
     unityBridgeTempLabel: "Temp Import",
     unityBridgeReady: "Waiting for Blender",
     unityBridgeBody: "Blender exports into Unity temp; the RandomRealm importer consumes that temp output and categorizes it into Builder assets, prefabs, and inventory.",
+    steamworkTitle: "Steamwork",
+    steamworkReady: "Ready",
+    steamworkBody: "Manage Steamworks, publish tools, GameContent, and promo/update assets.",
+    steamworkDashboard: "Steamworks",
+    steamworkPublishRoot: "Publish Root",
+    steamworkGameContent: "GameContent",
+    steamworkPublishTool: "Publish Tool",
+    steamworkGameContentLabel: "GameContent",
+    steamworkGameContentTitle: "Import game content",
+    steamworkGameContentReady: "Drop build files here.",
+    steamworkPublishToolLabel: "Publish Tool",
+    steamworkPublishToolTitle: "Import publish tools",
+    steamworkPublishToolReady: "Drop publish tool files here.",
+    steamworkImportDragging: "Release to import.",
+    steamworkImporting: (count, target) => `Importing ${count} file${count === 1 ? "" : "s"} to ${target}.`,
+    steamworkImported: (count, target) => `Imported ${count} file${count === 1 ? "" : "s"} to ${target}.`,
+    steamworkImportFailed: message => `Steamwork import failed: ${message}`,
     activeProjectValue: "RandomRealm / Blender Assets",
     timeLabel: "Time",
     wallpaperSectionLabel: "Preview",
@@ -546,6 +608,18 @@ const i18n = {
     randomRealmLiveProjectMismatch: "The open Blender file is not this project",
     randomRealmLiveObjectMissing: name => `Selected Blender object is not in this list: ${name}`,
     randomRealmUsedTexturesLabel: "Used Textures",
+    randomRealmTextureManagerTitle: "Texture Manager",
+    randomRealmTextureManagerCount: (visible, total) => `${visible}/${total}`,
+    randomRealmTextureInspectorLabel: "Selected Texture",
+    randomRealmTextureDetailMaterial: "Material",
+    randomRealmTextureDetailRole: "Role",
+    randomRealmTextureDetailNode: "Node",
+    randomRealmTextureDetailState: "State",
+    randomRealmTextureDetailFile: "File",
+    randomRealmTextureDetailPath: "Path",
+    randomRealmTextureStateReady: "Ready",
+    randomRealmTextureStateMissing: "Missing",
+    randomRealmTextureStatePending: "Pending",
     randomRealmTexturesRefreshed: (name, count) => `Refreshed ${name}: ${count} texture${count === 1 ? "" : "s"}`,
     randomRealmAllMaterials: "All",
     randomRealmOldTextureLabel: "Old",
@@ -629,6 +703,17 @@ const i18n = {
     workspaceTodoPlaceholder: "Add a task",
     workspaceTodoCategoryLabel: "Todo category",
     addWorkspaceTodo: "Add",
+    githubDownloadsTitle: "GitHub Downloads",
+    githubDownloadsStatus: "Not linked",
+    githubDownloadsReady: "Ready",
+    githubDownloadsMissing: "Not linked",
+    githubDownloadsResolving: "Finding GitHub Releases...",
+    githubDownloadsBody: "Open the World Console GitHub Releases download page.",
+    githubDownloadsLink: "Release page",
+    openGithubDownloads: "Open downloads",
+    githubDownloadsFound: url => `Downloads: ${url}`,
+    githubDownloadsNotConfigured: "No GitHub repository is linked yet. Add an origin remote to WorldConsole and this shortcut will target Releases automatically.",
+    githubDownloadsOpenFailed: message => `Could not open GitHub downloads: ${message}`,
     todoGroupPieces: "Pieces",
     todoGroupTextures: "Blend -> Unity Textures",
     todoGroupStory: "Story",
@@ -785,6 +870,10 @@ const els = {
   latestMaterialName: document.getElementById("latestMaterialName"),
   materialCandidates: document.getElementById("materialCandidates"),
   materialImportStatus: document.getElementById("materialImportStatus"),
+  githubDownloadsStatus: document.getElementById("githubDownloadsStatus"),
+  openGithubDownloads: document.getElementById("openGithubDownloads"),
+  githubDownloadsLink: document.getElementById("githubDownloadsLink"),
+  githubDownloadsMeta: document.getElementById("githubDownloadsMeta"),
   workspaceTodoCategory: document.getElementById("workspaceTodoCategory"),
   workspaceTodoInput: document.getElementById("workspaceTodoInput"),
   addWorkspaceTodo: document.getElementById("addWorkspaceTodo"),
@@ -795,6 +884,17 @@ const els = {
   openSteamPublishFolder: document.getElementById("openSteamPublishFolder"),
   openRandomRealmProject: document.getElementById("openRandomRealmProject"),
   openRandomRealmPromo: document.getElementById("openRandomRealmPromo"),
+  steamworkStatusText: document.getElementById("steamworkStatusText"),
+  openSteamworkDashboard: document.getElementById("openSteamworkDashboard"),
+  openSteamworkPublishFolder: document.getElementById("openSteamworkPublishFolder"),
+  openSteamworkGameContent: document.getElementById("openSteamworkGameContent"),
+  openSteamworkPublishTool: document.getElementById("openSteamworkPublishTool"),
+  steamworkGameContentDropzone: document.getElementById("steamworkGameContentDropzone"),
+  steamworkPublishToolDropzone: document.getElementById("steamworkPublishToolDropzone"),
+  steamworkGameContentStatus: document.getElementById("steamworkGameContentStatus"),
+  steamworkPublishToolStatus: document.getElementById("steamworkPublishToolStatus"),
+  steamworkGameContentFileInput: document.getElementById("steamworkGameContentFileInput"),
+  steamworkPublishToolFileInput: document.getElementById("steamworkPublishToolFileInput"),
   unityStatusText: document.getElementById("unityStatusText"),
   unityBridgeStatus: document.getElementById("unityBridgeStatus"),
   openUnityProjectFolder: document.getElementById("openUnityProjectFolder"),
@@ -807,12 +907,19 @@ const els = {
   randomRealmSyncLiveSelection: document.getElementById("randomRealmSyncLiveSelection"),
   randomRealmBlenderObject: document.getElementById("randomRealmBlenderObject"),
   randomRealmMaterialTabs: document.getElementById("randomRealmMaterialTabs"),
+  randomRealmTextureManagerCount: document.getElementById("randomRealmTextureManagerCount"),
   randomRealmUsedTextures: document.getElementById("randomRealmUsedTextures"),
   randomRealmTextureKind: document.getElementById("randomRealmTextureKind"),
   randomRealmOldTextureName: document.getElementById("randomRealmOldTextureName"),
   randomRealmOldTextureSize: document.getElementById("randomRealmOldTextureSize"),
   randomRealmOldTexturePreview: document.getElementById("randomRealmOldTexturePreview"),
   randomRealmOldTexturePreviewEmpty: document.getElementById("randomRealmOldTexturePreviewEmpty"),
+  randomRealmTextureInspectorMaterial: document.getElementById("randomRealmTextureInspectorMaterial"),
+  randomRealmTextureInspectorRole: document.getElementById("randomRealmTextureInspectorRole"),
+  randomRealmTextureInspectorNode: document.getElementById("randomRealmTextureInspectorNode"),
+  randomRealmTextureInspectorState: document.getElementById("randomRealmTextureInspectorState"),
+  randomRealmTextureInspectorFile: document.getElementById("randomRealmTextureInspectorFile"),
+  randomRealmTextureInspectorPath: document.getElementById("randomRealmTextureInspectorPath"),
   randomRealmNewTextureDrop: document.getElementById("randomRealmNewTextureDrop"),
   randomRealmNewTextureName: document.getElementById("randomRealmNewTextureName"),
   randomRealmNewTextureSize: document.getElementById("randomRealmNewTextureSize"),
@@ -882,6 +989,7 @@ let selectedMaterialPath = "";
 let materialNotice = "";
 let renderTextureNotice = "";
 let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) === "true";
+let githubDownloadsInfo = null;
 let workspaceTodoGroups = loadWorkspaceTodos();
 let randomRealmArtContext = loadRandomRealmArtContext();
 let blenderPromptConfig = loadBlenderPromptConfig();
@@ -908,7 +1016,9 @@ const shouldRestoreLastModuleOnLoad = currentPageName() === "index.html" && last
 let activeModuleId = initialModuleId();
 const hasWallpaper = Boolean(els.wallpaperDock);
 const hasMusic = Boolean(els.musicDock);
-const hasWorkspace = Boolean(els.materialCandidates);
+const hasWorkspace = Boolean(els.workspaceTodoList || els.materialCandidates);
+const hasMaterialWorkspace = Boolean(els.materialCandidates);
+const hasSteamwork = Boolean(els.steamworkStatusText);
 const musicTierGroups = [
   { id: "first", labelKey: "musicTierFirst" },
   { id: "second", labelKey: "musicTierSecond" },
@@ -2163,9 +2273,12 @@ function applyLanguage() {
     renderMusic();
     renderMusicLibraries();
   }
-  if (hasWorkspace) {
+  if (hasMaterialWorkspace) {
     renderDownloadIntake();
     renderMaterialImport();
+  }
+  if (hasWorkspace) {
+    renderGithubDownloads();
     renderWorkspaceTodos();
   }
   if (hasRandomRealmArtTools()) {
@@ -4297,7 +4410,7 @@ function setRenderTextureStatus(message) {
 }
 
 function renderDownloadIntake() {
-  if (!hasWorkspace) return;
+  if (!hasMaterialWorkspace) return;
   if (els.downloadIntakeToggle) {
     els.downloadIntakeToggle.checked = downloadIntakeEnabled;
   }
@@ -4312,23 +4425,27 @@ function renderDownloadIntake() {
 }
 
 function renderMaterialImport(payload = {}) {
-  if (!hasWorkspace) return;
+  if (!hasMaterialWorkspace || !els.materialCandidates) return;
   renderDownloadIntake();
 
-  if (payload.source) {
+  if (payload.source && els.materialSourcePath) {
     els.materialSourcePath.textContent = payload.source;
   }
-  if (payload.target) {
+  if (payload.target && els.materialTargetPath) {
     els.materialTargetPath.textContent = payload.target;
   }
 
   const selected = selectedMaterialCandidate();
   els.materialCandidates.innerHTML = "";
-  els.importMaterial.disabled = !selected;
+  if (els.importMaterial) {
+    els.importMaterial.disabled = !selected;
+  }
 
   if (!materialCandidates.length) {
     selectedMaterialPath = "";
-    els.latestMaterialName.textContent = text("noMaterialCandidate");
+    if (els.latestMaterialName) {
+      els.latestMaterialName.textContent = text("noMaterialCandidate");
+    }
     const empty = document.createElement("div");
     empty.className = "dock-empty material-empty";
     empty.innerHTML = `<strong>${text("noMaterialCandidate")}</strong><span>${text("materialEmpty")}</span>`;
@@ -4341,7 +4458,9 @@ function renderMaterialImport(payload = {}) {
     selectedMaterialPath = selected.path;
   }
 
-  els.latestMaterialName.textContent = selected ? selected.name : text("noMaterialCandidate");
+  if (els.latestMaterialName) {
+    els.latestMaterialName.textContent = selected ? selected.name : text("noMaterialCandidate");
+  }
 
   for (const item of materialCandidates.slice(0, 8)) {
     const card = document.createElement("button");
@@ -4459,6 +4578,61 @@ function loadWorkspaceTodos() {
 
 function saveWorkspaceTodos() {
   localStorage.setItem(storageKeys.workspaceTodos, JSON.stringify(workspaceTodoGroups));
+}
+
+function renderGithubDownloads() {
+  if (!els.githubDownloadsMeta && !els.githubDownloadsLink && !els.githubDownloadsStatus) return;
+  const url = githubDownloadsInfo?.url || "";
+  const configured = Boolean(githubDownloadsInfo?.configured && url);
+  if (els.githubDownloadsStatus) {
+    els.githubDownloadsStatus.textContent = text(configured ? "githubDownloadsReady" : "githubDownloadsMissing");
+  }
+  if (els.githubDownloadsMeta) {
+    els.githubDownloadsMeta.textContent = configured
+      ? text("githubDownloadsFound", url)
+      : text("githubDownloadsNotConfigured");
+  }
+  if (els.githubDownloadsLink) {
+    els.githubDownloadsLink.href = configured ? url : "#";
+    els.githubDownloadsLink.setAttribute("aria-disabled", configured ? "false" : "true");
+    els.githubDownloadsLink.classList.toggle("disabled", !configured);
+  }
+  if (els.openGithubDownloads) {
+    els.openGithubDownloads.disabled = !configured;
+  }
+}
+
+async function loadGithubDownloadsInfo() {
+  if (!hasWorkspace || !els.githubDownloadsMeta) return;
+  els.githubDownloadsMeta.textContent = text("githubDownloadsResolving");
+  try {
+    const response = await fetch("/api/workspace/github-downloads", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    githubDownloadsInfo = payload;
+  } catch (error) {
+    githubDownloadsInfo = { configured: false, url: "", error: error.message };
+  }
+  renderGithubDownloads();
+}
+
+async function openGithubDownloads() {
+  if (!hasWorkspace || !els.openGithubDownloads) return;
+  els.openGithubDownloads.disabled = true;
+  try {
+    const result = await postJson("/api/workspace/open-github-downloads");
+    githubDownloadsInfo = result;
+    renderGithubDownloads();
+  } catch (error) {
+    if (els.githubDownloadsMeta) {
+      els.githubDownloadsMeta.textContent = text("githubDownloadsOpenFailed", error.message);
+    }
+    renderGithubDownloads();
+  } finally {
+    if (els.openGithubDownloads && githubDownloadsInfo?.configured) {
+      els.openGithubDownloads.disabled = false;
+    }
+  }
 }
 
 function parseLegacyCustomResolution(value) {
@@ -5094,7 +5268,7 @@ function bindRandomRealmNativeTextureDrag(imageEl, texture) {
 function renderRandomRealmTexturePreview(imageEl, emptyEl, texture) {
   if (!imageEl || !emptyEl) return;
   const path = texture?.path || "";
-  const canPreview = Boolean(path && isRandomRealmPreviewableTexture(path));
+  const canPreview = Boolean(path && texture?.exists !== false && isRandomRealmPreviewableTexture(path));
   if (canPreview) {
     preloadRandomRealmTextureDragFile(texture);
     imageEl.onerror = () => {
@@ -5699,6 +5873,67 @@ function renderRandomRealmTextureSize(node, texture) {
   node.title = value;
 }
 
+function randomRealmTextureStateLabel(texture) {
+  if (!texture) return "--";
+  if (texture.pendingSlot) return text("randomRealmTextureStatePending");
+  return texture.exists ? text("randomRealmTextureStateReady") : text("randomRealmTextureStateMissing");
+}
+
+function setRandomRealmInspectorValue(node, value) {
+  if (!node) return;
+  const textValue = value || "--";
+  node.textContent = textValue;
+  node.title = textValue === "--" ? "" : textValue;
+}
+
+function renderRandomRealmTextureInspector(texture) {
+  if (els.randomRealmOldTextureName) {
+    els.randomRealmOldTextureName.textContent = texture
+      ? randomRealmTextureDisplayName(texture, 52)
+      : randomRealmAddMapMode
+        ? text("randomRealmNewTextureSlot")
+        : text("randomRealmTextureNotSelected");
+    els.randomRealmOldTextureName.title = texture?.path || "";
+  }
+  renderRandomRealmTextureSize(els.randomRealmOldTextureSize, texture);
+  renderRandomRealmTexturePreview(
+    els.randomRealmOldTexturePreview,
+    els.randomRealmOldTexturePreviewEmpty,
+    texture
+  );
+  setRandomRealmInspectorValue(els.randomRealmTextureInspectorMaterial, texture ? randomRealmMaterialReadableName(texture.material || "") : "");
+  setRandomRealmInspectorValue(els.randomRealmTextureInspectorRole, texture ? randomRealmTextureRole(texture) : "");
+  setRandomRealmInspectorValue(els.randomRealmTextureInspectorNode, texture ? randomRealmTextureNodeLabel(texture, 80) : "");
+  setRandomRealmInspectorValue(els.randomRealmTextureInspectorState, texture ? randomRealmTextureStateLabel(texture) : "");
+  setRandomRealmInspectorValue(els.randomRealmTextureInspectorFile, texture ? randomRealmTextureFilename(texture) : "");
+  setRandomRealmInspectorValue(els.randomRealmTextureInspectorPath, texture?.path || "");
+}
+
+function createRandomRealmTextureThumbnail(texture) {
+  const thumb = document.createElement("div");
+  thumb.className = "texture-card-thumb";
+  const path = texture?.path || "";
+  if (path && texture?.exists !== false && isRandomRealmPreviewableTexture(path)) {
+    const image = document.createElement("img");
+    image.alt = "";
+    image.loading = "lazy";
+    image.draggable = false;
+    image.src = randomRealmTextureDragUrl(texture);
+    image.onerror = () => {
+      image.remove();
+      const fallback = document.createElement("span");
+      fallback.textContent = randomRealmTextureRole(texture);
+      thumb.appendChild(fallback);
+    };
+    thumb.appendChild(image);
+  } else {
+    const fallback = document.createElement("span");
+    fallback.textContent = randomRealmTextureRole(texture);
+    thumb.appendChild(fallback);
+  }
+  return thumb;
+}
+
 function randomRealmTextureDimensionWarning(oldTexture, newTexture) {
   const oldDimensions = randomRealmTextureDimensions(oldTexture);
   const newDimensions = randomRealmTextureDimensions(newTexture);
@@ -5803,6 +6038,10 @@ function renderRandomRealmUsedTextures() {
   const allTextures = Array.isArray(object?.textures) ? object.textures : [];
   const textures = filteredRandomRealmTextures(object);
   const stagedDrafts = randomRealmTexturePackageDrafts(object);
+  if (els.randomRealmTextureManagerCount) {
+    els.randomRealmTextureManagerCount.textContent = text("randomRealmTextureManagerCount", textures.length, allTextures.length);
+    els.randomRealmTextureManagerCount.title = selectedMaterial === "all" ? "" : selectedMaterial;
+  }
   els.randomRealmUsedTextures.innerHTML = "";
   if (!textures.length) {
     const empty = document.createElement("div");
@@ -5880,18 +6119,21 @@ function renderRandomRealmUsedTextures() {
           selectTexture();
         }
       });
+      card.appendChild(createRandomRealmTextureThumbnail(texture));
+      const body = document.createElement("div");
+      body.className = "texture-card-body";
       const name = document.createElement("strong");
       name.textContent = randomRealmTextureDisplayName(texture);
-      card.appendChild(name);
+      body.appendChild(name);
       const meta = document.createElement("span");
       meta.textContent = [
         randomRealmMaterialDisplayName(texture.material || "", 42),
         randomRealmTextureCardFileLabel(texture),
         randomRealmTextureNodeLabel(texture),
         formatRandomRealmTextureDimensions(texture),
-        texture.pendingSlot ? "Pending" : texture.exists ? "OK" : "Missing"
+        randomRealmTextureStateLabel(texture)
       ].filter(Boolean).join(" - ");
-      card.appendChild(meta);
+      body.appendChild(meta);
       if (stagedDraft) {
         const staged = document.createElement("div");
         staged.className = `texture-inline-staged ${stagedDraft.texture.packageStatus === "packed" ? "packed" : ""}`;
@@ -5905,8 +6147,9 @@ function renderRandomRealmUsedTextures() {
         stagedStatus.className = "texture-inline-staged-status";
         stagedStatus.textContent = stagedDraft.texture.packageStatus === "packed" ? "Apply pending" : "Auto pack";
         staged.append(stagedLabel, stagedName, stagedStatus);
-        card.appendChild(staged);
+        body.appendChild(staged);
       }
+      card.appendChild(body);
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "texture-remove-button";
@@ -5926,14 +6169,7 @@ function renderRandomRealmUsedTextures() {
     }
   }
 
-  if (els.randomRealmOldTextureName) {
-    els.randomRealmOldTextureName.textContent = randomRealmSelectedOldTexture
-      ? randomRealmTextureDisplayName(randomRealmSelectedOldTexture, 52)
-      : randomRealmAddMapMode
-        ? text("randomRealmNewTextureSlot")
-        : text("randomRealmTextureNotSelected");
-    els.randomRealmOldTextureName.title = randomRealmSelectedOldTexture?.path || "";
-  }
+  renderRandomRealmTextureInspector(randomRealmSelectedOldTexture);
   if (els.randomRealmNewTextureName) {
     els.randomRealmNewTextureName.textContent = randomRealmNewTexture ? middleEllipsis(randomRealmNewTexture.name, 52) : text("randomRealmDropNewTexture");
     els.randomRealmNewTextureName.title = randomRealmNewTexture?.path || "";
@@ -5944,13 +6180,7 @@ function renderRandomRealmUsedTextures() {
   if (els.randomRealmClearNewTexture) {
     els.randomRealmClearNewTexture.hidden = !randomRealmNewTexture;
   }
-  renderRandomRealmTextureSize(els.randomRealmOldTextureSize, randomRealmSelectedOldTexture);
   renderRandomRealmTextureSize(els.randomRealmNewTextureSize, randomRealmNewTexture);
-  renderRandomRealmTexturePreview(
-    els.randomRealmOldTexturePreview,
-    els.randomRealmOldTexturePreviewEmpty,
-    randomRealmSelectedOldTexture
-  );
   renderRandomRealmTexturePreview(
     els.randomRealmNewTexturePreview,
     els.randomRealmNewTexturePreviewEmpty,
@@ -7176,7 +7406,7 @@ async function loadMusic() {
 }
 
 async function loadMaterialCandidates() {
-  if (!hasWorkspace) return;
+  if (!hasMaterialWorkspace) return;
   if (!downloadIntakeEnabled) {
     materialCandidates = [];
     selectedMaterialPath = "";
@@ -7202,6 +7432,7 @@ async function loadMaterialCandidates() {
 }
 
 async function importMaterialCandidate(path = selectedMaterialCandidate()?.path) {
+  if (!hasMaterialWorkspace) return;
   if (!path) return;
   const candidate = materialCandidates.find(item => item.path === path) || selectedMaterialCandidate();
   materialNotice = text("materialImporting", candidate ? candidate.name : path);
@@ -7220,7 +7451,7 @@ async function importMaterialCandidate(path = selectedMaterialCandidate()?.path)
 }
 
 async function openDownloadsFolder() {
-  if (!hasWorkspace) return;
+  if (!hasMaterialWorkspace) return;
   if (els.openDownloads) els.openDownloads.disabled = true;
   try {
     const result = await postJson("/api/workspace/open-downloads");
@@ -7245,10 +7476,27 @@ function setRandomRealmReleaseStatus(message) {
   }
 }
 
+function setSteamworkStatus(message) {
+  if (els.steamworkStatusText) {
+    els.steamworkStatusText.textContent = message || text("steamworkReady");
+  }
+}
+
+function setSteamworkDropzoneStatus(kind, message) {
+  const node = kind === "publishTool" ? els.steamworkPublishToolStatus : els.steamworkGameContentStatus;
+  if (node) {
+    node.textContent = message || text(kind === "publishTool" ? "steamworkPublishToolReady" : "steamworkGameContentReady");
+  }
+}
+
 function randomRealmResourceButtons() {
   return [
     els.openSteamworks,
     els.openSteamPublishFolder,
+    els.openSteamworkDashboard,
+    els.openSteamworkPublishFolder,
+    els.openSteamworkGameContent,
+    els.openSteamworkPublishTool,
     els.openRandomRealmProject,
     els.openRandomRealmPromo,
     els.openUnityProjectFolder,
@@ -7260,20 +7508,96 @@ async function openRandomRealmResource(id, labelKey) {
   const label = text(labelKey);
   const buttons = randomRealmResourceButtons();
   setRandomRealmReleaseStatus(text("randomRealmOpening", label));
+  setSteamworkStatus(text("randomRealmOpening", label));
   for (const button of buttons) button.disabled = true;
 
   try {
     await postJson("/api/randomrealm/open-resource", { id });
     setRandomRealmReleaseStatus(text("randomRealmOpened", label));
+    setSteamworkStatus(text("randomRealmOpened", label));
   } catch (error) {
     setRandomRealmReleaseStatus(text("randomRealmOpenFailed", error.message));
+    setSteamworkStatus(text("randomRealmOpenFailed", error.message));
   } finally {
     for (const button of buttons) button.disabled = false;
   }
 }
 
+function steamworkTargetLabel(kind) {
+  return kind === "publishTool" ? text("steamworkPublishTool") : text("steamworkGameContent");
+}
+
+async function uploadSteamworkFiles(kind, files) {
+  if (!hasSteamwork) return;
+  const selectedFiles = Array.from(files || []);
+  if (!selectedFiles.length) return;
+  const target = steamworkTargetLabel(kind);
+  const formData = new FormData();
+  for (const file of selectedFiles) {
+    formData.append("files", file, file.name);
+  }
+
+  const dropzone = kind === "publishTool" ? els.steamworkPublishToolDropzone : els.steamworkGameContentDropzone;
+  const endpoint = kind === "publishTool" ? "/api/steamwork/publish-tool/upload" : "/api/steamwork/gamecontent/upload";
+  const importing = text("steamworkImporting", selectedFiles.length, target);
+  setSteamworkStatus(importing);
+  setSteamworkDropzoneStatus(kind, importing);
+  dropzone?.classList.add("busy");
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      body: formData
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    const count = Array.isArray(result.files) ? result.files.length : selectedFiles.length;
+    const imported = text("steamworkImported", count, result.targetName || target);
+    setSteamworkStatus(imported);
+    setSteamworkDropzoneStatus(kind, imported);
+  } catch (error) {
+    const message = text("steamworkImportFailed", error.message);
+    setSteamworkStatus(message);
+    setSteamworkDropzoneStatus(kind, message);
+  } finally {
+    dropzone?.classList.remove("busy", "drag-over");
+    if (kind === "publishTool" && els.steamworkPublishToolFileInput) {
+      els.steamworkPublishToolFileInput.value = "";
+    }
+    if (kind !== "publishTool" && els.steamworkGameContentFileInput) {
+      els.steamworkGameContentFileInput.value = "";
+    }
+  }
+}
+
+function bindSteamworkDropzone(kind, dropzone, input) {
+  if (!hasSteamwork || !dropzone) return;
+  dropzone.addEventListener("click", () => input?.click());
+  dropzone.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      input?.click();
+    }
+  });
+  dropzone.addEventListener("dragover", event => {
+    event.preventDefault();
+    dropzone.classList.add("drag-over");
+    setSteamworkDropzoneStatus(kind, text("steamworkImportDragging"));
+  });
+  dropzone.addEventListener("dragleave", event => {
+    if (!dropzone.contains(event.relatedTarget)) {
+      dropzone.classList.remove("drag-over");
+      setSteamworkDropzoneStatus(kind);
+    }
+  });
+  dropzone.addEventListener("drop", event => {
+    event.preventDefault();
+    dropzone.classList.remove("drag-over");
+    uploadSteamworkFiles(kind, event.dataTransfer.files);
+  });
+}
+
 async function uploadRenderTextureFiles(files) {
-  if (!hasWorkspace) return;
+  if (!hasMaterialWorkspace) return;
   const selectedFiles = Array.from(files || []);
   if (!selectedFiles.length) return;
   if (!downloadIntakeEnabled) {
@@ -7381,6 +7705,26 @@ if (hasMusic && els.musicAddCookieButton) {
 if (hasMusic && els.musicCookieFileInput) {
   els.musicCookieFileInput.addEventListener("change", event => uploadMusicCookieFile(event.target.files));
 }
+if (hasSteamwork && els.openSteamworkDashboard) {
+  els.openSteamworkDashboard.addEventListener("click", () => openRandomRealmResource("steamworks", "steamworkDashboard"));
+}
+if (hasSteamwork && els.openSteamworkPublishFolder) {
+  els.openSteamworkPublishFolder.addEventListener("click", () => openRandomRealmResource("publishFolder", "steamworkPublishRoot"));
+}
+if (hasSteamwork && els.openSteamworkGameContent) {
+  els.openSteamworkGameContent.addEventListener("click", () => openRandomRealmResource("gameContentFolder", "steamworkGameContent"));
+}
+if (hasSteamwork && els.openSteamworkPublishTool) {
+  els.openSteamworkPublishTool.addEventListener("click", () => openRandomRealmResource("publishToolFolder", "steamworkPublishTool"));
+}
+if (hasSteamwork && els.steamworkGameContentFileInput) {
+  els.steamworkGameContentFileInput.addEventListener("change", event => uploadSteamworkFiles("gameContent", event.target.files));
+}
+if (hasSteamwork && els.steamworkPublishToolFileInput) {
+  els.steamworkPublishToolFileInput.addEventListener("change", event => uploadSteamworkFiles("publishTool", event.target.files));
+}
+bindSteamworkDropzone("gameContent", els.steamworkGameContentDropzone, els.steamworkGameContentFileInput);
+bindSteamworkDropzone("publishTool", els.steamworkPublishToolDropzone, els.steamworkPublishToolFileInput);
 if (hasMusic) els.musicDock.addEventListener("dragover", handleLocalMusicDragOver);
 if (hasMusic) els.musicDock.addEventListener("dragleave", handleLocalMusicDragLeave);
 if (hasMusic) els.musicDock.addEventListener("drop", handleLocalMusicDrop);
@@ -7602,7 +7946,7 @@ if (els.randomRealmNewTextureDrop) {
     uploadRandomRealmNewTexture(event.dataTransfer.files);
   });
 }
-if (hasWorkspace && els.downloadIntakeToggle) els.downloadIntakeToggle.addEventListener("change", () => {
+if (hasMaterialWorkspace && els.downloadIntakeToggle) els.downloadIntakeToggle.addEventListener("change", () => {
   downloadIntakeEnabled = els.downloadIntakeToggle.checked;
   localStorage.setItem(storageKeys.downloadIntake, String(downloadIntakeEnabled));
   if (downloadIntakeEnabled) {
@@ -7615,10 +7959,10 @@ if (hasWorkspace && els.downloadIntakeToggle) els.downloadIntakeToggle.addEventL
     renderMaterialImport();
   }
 });
-if (hasWorkspace && els.openDownloads) els.openDownloads.addEventListener("click", openDownloadsFolder);
-if (hasWorkspace) els.refreshMaterialCandidates.addEventListener("click", loadMaterialCandidates);
-if (hasWorkspace) els.importMaterial.addEventListener("click", () => importMaterialCandidate());
-if (hasWorkspace && els.renderTextureDropzone) {
+if (hasMaterialWorkspace && els.openDownloads) els.openDownloads.addEventListener("click", openDownloadsFolder);
+if (hasMaterialWorkspace && els.refreshMaterialCandidates) els.refreshMaterialCandidates.addEventListener("click", loadMaterialCandidates);
+if (hasMaterialWorkspace && els.importMaterial) els.importMaterial.addEventListener("click", () => importMaterialCandidate());
+if (hasMaterialWorkspace && els.renderTextureDropzone) {
   els.renderTextureDropzone.addEventListener("click", () => {
     if (downloadIntakeEnabled && els.workzoneFileInput) els.workzoneFileInput.click();
   });
@@ -7649,8 +7993,18 @@ if (hasWorkspace && els.renderTextureDropzone) {
     uploadRenderTextureFiles(event.dataTransfer.files);
   });
 }
-if (hasWorkspace && els.workzoneFileInput) {
+if (hasMaterialWorkspace && els.workzoneFileInput) {
   els.workzoneFileInput.addEventListener("change", event => uploadRenderTextureFiles(event.target.files));
+}
+if (hasWorkspace && els.openGithubDownloads) {
+  els.openGithubDownloads.addEventListener("click", openGithubDownloads);
+}
+if (hasWorkspace && els.githubDownloadsLink) {
+  els.githubDownloadsLink.addEventListener("click", event => {
+    if (!githubDownloadsInfo?.configured) {
+      event.preventDefault();
+    }
+  });
 }
 if (hasWorkspace && els.addWorkspaceTodo) {
   els.addWorkspaceTodo.addEventListener("click", addWorkspaceTodo);
@@ -7710,9 +8064,10 @@ applyLanguage();
 restoreInitialModuleUrl();
 if (hasWallpaper) loadWallpapers();
 if (hasMusic) loadMusic();
-if (hasWorkspace && downloadIntakeEnabled) {
+if (hasWorkspace) loadGithubDownloadsInfo();
+if (hasMaterialWorkspace && downloadIntakeEnabled) {
   loadMaterialCandidates();
-} else if (hasWorkspace) {
+} else if (hasMaterialWorkspace) {
   renderDownloadIntake();
 }
 renderRandomRealmArtContext();

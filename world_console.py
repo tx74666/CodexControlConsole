@@ -72,6 +72,8 @@ BLENDER_MUTATION_API_PATHS = {
     "/api/randomrealm/blender/replace-texture",
 }
 RANDOMREALM_PUBLISH_DIR = Path(os.environ.get("CODEX_CONTROL_RANDOMREALM_PUBLISH_DIR", r"D:\Steamwork"))
+STEAMWORK_GAMECONTENT_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_GAMECONTENT_DIR", str(RANDOMREALM_PUBLISH_DIR / "GameContent")))
+STEAMWORK_PUBLISH_TOOL_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_PUBLISH_TOOL_DIR", str(RANDOMREALM_PUBLISH_DIR / "PublishTool")))
 RANDOMREALM_PROMO_DIR = Path(os.environ.get("CODEX_CONTROL_RANDOMREALM_PROMO_DIR", str(RANDOMREALM_PROJECT_DIR / "Screenshots")))
 DEFAULT_BLENDER_PROJECT_ROOTS = [
     Path(r"D:\Blender\Projects"),
@@ -91,6 +93,8 @@ BLENDER_PROJECT_FILES = [
     if item.strip()
 ]
 STEAMWORKS_URL = os.environ.get("CODEX_CONTROL_STEAMWORKS_URL", "https://partner.steamgames.com/")
+WORLD_CONSOLE_DIR = Path(os.environ.get("CODEX_CONTROL_WORLD_CONSOLE_DIR", str(APP_DIR.parent / "WorldConsole")))
+WORLD_CONSOLE_RELEASES_URL = os.environ.get("CODEX_WORLD_CONSOLE_RELEASES_URL", "").strip()
 ORIGINAL_WALLPAPER_RECORD = APP_DIR / "cache" / "original_wallpaper.json"
 WALLPAPER_ORDER_FILE = APP_DIR / "cache" / "wallpaper_order.json"
 STARTUP_SCRIPT_NAME = "Codex-Control-Hotkey.vbs"
@@ -107,6 +111,7 @@ CONSOLE_MODULE_HREFS = {
     "workspace": "workspace.html",
     "blender": "blender.html",
     "unity": "unity.html",
+    "steamwork": "steamwork.html",
     "randomrealm": "randomrealm.html",
     "music": "music.html",
     "wallpaper": "index.html",
@@ -114,6 +119,7 @@ CONSOLE_MODULE_HREFS = {
 MAX_WALLPAPER_UPLOAD_BYTES = 80 * 1024 * 1024
 MAX_MUSIC_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_WORKZONE_UPLOAD_BYTES = 512 * 1024 * 1024
+MAX_STEAMWORK_UPLOAD_BYTES = 1024 * 1024 * 1024
 MAX_COOKIE_UPLOAD_BYTES = 5 * 1024 * 1024
 GOOGLE_TRANSLATE_ENDPOINT = "https://translation.googleapis.com/language/translate/v2"
 TRANSLATION_TARGET = "zh-TW"
@@ -450,6 +456,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/console/state":
             self.send_json({"state": read_console_state()})
             return
+        if parsed.path == "/api/workspace/github-downloads":
+            self.send_json(github_downloads_state())
+            return
         if parsed.path == "/api/randomrealm/unity/bridge-status":
             self.send_json(randomrealm_unity_bridge_status())
             return
@@ -466,7 +475,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/music/"):
             self.send_music_file_response(parsed.path[len("/music/"):])
             return
-        if parsed.path in ("", "/", "/index.html", "/music.html", "/workspace.html", "/manager.html", "/blender.html", "/unity.html", "/randomrealm.html"):
+        if parsed.path in ("", "/", "/index.html", "/music.html", "/workspace.html", "/manager.html", "/blender.html", "/unity.html", "/steamwork.html", "/randomrealm.html"):
             self.send_file_response(APP_DIR / "index.html", "text/html; charset=utf-8")
             return
         super().do_GET()
@@ -488,6 +497,12 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/randomrealm/blender/upload-texture":
                 self.send_json(upload_blender_replacement_texture(self.read_multipart_files(MAX_WORKZONE_UPLOAD_BYTES)))
+                return
+            if parsed.path == "/api/steamwork/gamecontent/upload":
+                self.send_json(import_steamwork_files("gameContent", self.read_multipart_files(MAX_STEAMWORK_UPLOAD_BYTES)))
+                return
+            if parsed.path == "/api/steamwork/publish-tool/upload":
+                self.send_json(import_steamwork_files("publishTool", self.read_multipart_files(MAX_STEAMWORK_UPLOAD_BYTES)))
                 return
 
             payload = self.read_json_body()
@@ -526,6 +541,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/workspace/open-downloads":
                 self.send_json(open_downloads_folder())
+                return
+            if parsed.path == "/api/workspace/open-github-downloads":
+                self.send_json(open_github_downloads())
                 return
             if parsed.path == "/api/randomrealm/open-resource":
                 self.send_json(open_randomrealm_resource(payload.get("id", "")))
@@ -1062,10 +1080,83 @@ def open_url_resource(url):
     return {"ok": True, "url": clean_url}
 
 
+def github_releases_url_from_remote(remote_url):
+    raw = str(remote_url or "").strip()
+    if not raw:
+        return ""
+    raw = raw.removesuffix(".git").rstrip("/")
+    match = re.search(r"github\.com[:/]([^/\s:]+)/([^/\s]+)$", raw, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    owner, repo = match.group(1), match.group(2)
+    if not owner or not repo:
+        return ""
+    return f"https://github.com/{owner}/{repo}/releases"
+
+
+def world_console_git_remote():
+    if not WORLD_CONSOLE_DIR.exists():
+        return ""
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-c",
+                f"safe.directory={WORLD_CONSOLE_DIR.as_posix()}",
+                "remote",
+                "get-url",
+                "origin",
+            ],
+            cwd=str(WORLD_CONSOLE_DIR),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=4,
+            **hidden_subprocess_kwargs(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
+def github_downloads_state():
+    if WORLD_CONSOLE_RELEASES_URL:
+        return {
+            "ok": True,
+            "configured": True,
+            "source": "env",
+            "url": WORLD_CONSOLE_RELEASES_URL,
+            "project": str(WORLD_CONSOLE_DIR),
+        }
+
+    remote = world_console_git_remote()
+    releases_url = github_releases_url_from_remote(remote)
+    return {
+        "ok": True,
+        "configured": bool(releases_url),
+        "source": "git-remote" if releases_url else "",
+        "remote": remote,
+        "url": releases_url,
+        "project": str(WORLD_CONSOLE_DIR),
+    }
+
+
+def open_github_downloads():
+    state = github_downloads_state()
+    if not state.get("configured") or not state.get("url"):
+        raise ValueError("WorldConsole GitHub Releases URL is not configured yet")
+    open_url_resource(state["url"])
+    return state
+
+
 def open_randomrealm_resource(resource_id):
     resources = {
         "steamworks": ("url", STEAMWORKS_URL),
         "publishFolder": ("folder", RANDOMREALM_PUBLISH_DIR),
+        "gameContentFolder": ("folder", STEAMWORK_GAMECONTENT_DIR),
+        "publishToolFolder": ("folder", STEAMWORK_PUBLISH_TOOL_DIR),
         "projectFolder": ("folder", RANDOMREALM_PROJECT_DIR),
         "promoFolder": ("folder", RANDOMREALM_PROMO_DIR),
     }
@@ -1075,6 +1166,8 @@ def open_randomrealm_resource(resource_id):
     kind, target = resource
     if kind == "url":
         return open_url_resource(target)
+    if resource_id in {"gameContentFolder", "publishToolFolder"}:
+        Path(target).mkdir(parents=True, exist_ok=True)
     return open_folder_resource(target)
 
 
@@ -4588,6 +4681,67 @@ def import_render_textures_upload(files):
     except Exception:
         shutil.rmtree(destination, ignore_errors=True)
         raise
+
+
+def steamwork_upload_target(target_key):
+    targets = {
+        "gameContent": ("GameContent", STEAMWORK_GAMECONTENT_DIR),
+        "publishTool": ("Publish Tool", STEAMWORK_PUBLISH_TOOL_DIR),
+    }
+    target = targets.get(str(target_key or ""))
+    if not target:
+        raise ValueError("unknown Steamwork import target")
+    return target
+
+
+def unique_steamwork_file_path(root, filename):
+    raw_name = Path(str(filename or "").replace("\\", "/")).name
+    suffix = Path(raw_name).suffix.lower()
+    stem = slugify_english_name(Path(raw_name).stem, "steamwork-file")
+    candidate = (root / f"{stem}{suffix}").resolve()
+    index = 2
+    while candidate.exists():
+        candidate = (root / f"{stem}-{index}{suffix}").resolve()
+        index += 1
+    if not is_path_inside(candidate, root):
+        raise ValueError("target file is outside the Steamwork folder")
+    return candidate
+
+
+def import_steamwork_files(target_key, files):
+    if not files:
+        raise ValueError("no files were uploaded")
+
+    target_name, root = steamwork_upload_target(target_key)
+    root.mkdir(parents=True, exist_ok=True)
+    copied = []
+
+    for item in files:
+        filename = str(item.get("filename", ""))
+        data = item.get("data", b"")
+        if not filename or not data:
+            continue
+        target = unique_steamwork_file_path(root, filename)
+        target.write_bytes(data)
+        copied.append(target)
+
+    if not copied:
+        raise ValueError("no files were imported")
+
+    return {
+        "ok": True,
+        "target": target_key,
+        "targetName": target_name,
+        "destination": str(root),
+        "files": [
+            {
+                "name": path.name,
+                "path": str(path),
+                "size": path.stat().st_size,
+            }
+            for path in copied
+        ],
+    }
 
 
 def start_hotkey_listener():

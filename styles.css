@@ -497,6 +497,11 @@ h2 {
   gap: 12px;
 }
 
+.console-minimal-grid {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+}
+
 .randomrealm-workspace {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
@@ -563,6 +568,48 @@ h2 {
   color: var(--green);
   font-size: 12px;
   font-weight: 750;
+}
+
+.github-download-panel {
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.github-download-copy {
+  max-width: 760px;
+  margin: 0;
+  color: var(--soft);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.github-download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.github-download-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.github-download-link.disabled {
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.github-download-meta {
+  min-height: 22px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .workspace-focus {
@@ -884,18 +931,109 @@ h2 {
   font-weight: 750;
 }
 
+.texture-manager-field {
+  align-content: start;
+}
+
+.texture-manager-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.texture-manager-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.texture-inspector-panel {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--meta-bg);
+}
+
+.texture-inspector-panel > span,
+.texture-detail-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.texture-inspector-panel > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.texture-inspector-preview {
+  min-height: 248px;
+}
+
+.texture-detail-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.texture-detail-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.texture-detail-grid > div.wide {
+  grid-column: 1 / -1;
+}
+
+.texture-detail-grid strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.texture-detail-grid > div.wide strong {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .blender-texture-list {
-  min-height: 72px;
+  min-height: 96px;
   display: grid;
   gap: 8px;
+  align-content: start;
+}
+
+.texture-manager-list {
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
 }
 
 .blender-texture-card {
   position: relative;
   min-width: 0;
   display: grid;
-  gap: 4px;
-  padding: 9px 42px 9px 10px;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 82px;
+  padding: 8px 42px 8px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--card-bg);
@@ -916,6 +1054,39 @@ h2 {
 
 .blender-texture-card.has-staged-texture {
   border-color: rgba(116, 180, 255, 0.62);
+}
+
+.texture-card-thumb {
+  width: 64px;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--solid-popover-bg);
+}
+
+.texture-card-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.texture-card-thumb span {
+  padding: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.texture-card-body {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
 }
 
 .texture-inline-staged {
@@ -1074,6 +1245,18 @@ h2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   align-items: stretch;
+}
+
+.texture-replace-panel {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.texture-replace-panel .texture-preview-box {
+  min-height: 248px;
+}
+
+.texture-old-slot {
+  user-select: text;
 }
 
 .texture-package-slot {
@@ -1273,6 +1456,80 @@ h2 {
 .texture-drop-slot.drag-over {
   border-color: var(--green);
   background: rgba(15, 154, 113, 0.08);
+}
+
+.steamwork-workspace {
+  display: grid;
+  gap: 12px;
+}
+
+.steamwork-main-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.steamwork-target-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.steamwork-dropzone {
+  min-width: 0;
+  min-height: 180px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--meta-bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
+}
+
+.steamwork-dropzone:hover,
+.steamwork-dropzone:focus-visible,
+.steamwork-dropzone.drag-over {
+  border-color: var(--line-strong);
+  background: rgba(62, 126, 199, 0.08);
+  color: var(--green);
+  outline: none;
+}
+
+.steamwork-dropzone.busy {
+  cursor: wait;
+}
+
+.steamwork-dropzone span,
+.steamwork-dropzone small,
+.steamwork-dropzone em {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.steamwork-dropzone span {
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.steamwork-dropzone strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamwork-dropzone em {
+  min-width: 0;
+  overflow: hidden;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-slot-grid {
@@ -3105,6 +3362,7 @@ body.music-track-dragging .delete-track-button {
   .randomrealm-workspace,
   .blender-workspace,
   .unity-workspace,
+  .steamwork-workspace,
   .randomrealm-focus,
   .randomrealm-release-actions,
   .manager-workspace,
@@ -3113,7 +3371,9 @@ body.music-track-dragging .delete-track-button {
   .codex-art-grid,
   .project-row,
   .blender-prompt-grid,
+  .texture-manager-layout,
   .texture-package-panel,
+  .steamwork-target-grid,
   .todo-composer,
   .workspace-todo-list,
   .material-candidates {
@@ -3145,6 +3405,14 @@ body.music-track-dragging .delete-track-button {
   .music-add-menu {
     left: 0;
     right: auto;
+  }
+
+  .texture-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .texture-inspector-preview {
+    min-height: 210px;
   }
 }
 
