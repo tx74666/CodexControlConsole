@@ -1,4 +1,4 @@
-# Codex Control Console
+# Codex Console
 
 A small Windows control console for wallpaper, music, and optional developer tools.
 

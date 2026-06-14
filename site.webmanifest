@@ -1,6 +1,6 @@
 {
-  "name": "Codex Control Console",
-  "short_name": "Control Console",
+  "name": "Codex Console",
+  "short_name": "Codex Console",
   "icons": [
     {
       "src": "codex-resource-icon-32.png?v=codex-clear-4",

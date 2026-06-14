@@ -27,13 +27,13 @@
   --secondary-button-bg: rgba(28, 70, 50, 0.08);
   --floating-button-bg: #fbfffc;
   --preview-height: clamp(280px, calc(100vh - 420px), 500px);
-  --slider-track-bg: rgba(62, 126, 199, 0.22);
+  --slider-track-bg: rgba(15, 143, 98, 0.18);
   --slider-track-border: var(--line);
   --slider-track-size: auto;
   --slider-track-animation: none;
-  --slider-thumb-bg: var(--blue);
+  --slider-thumb-bg: var(--green);
   --slider-thumb-border: var(--panel);
-  --slider-thumb-shadow: 0 3px 10px rgba(62, 126, 199, 0.22);
+  --slider-thumb-shadow: 0 3px 10px rgba(15, 143, 98, 0.2);
   --slider-focus-border: var(--line-strong);
 }
 
@@ -577,7 +577,7 @@ h2 {
 .github-download-panel {
   min-height: 0;
   display: grid;
-  gap: 12px;
+  gap: 10px;
   align-content: start;
 }
 
@@ -590,16 +590,16 @@ h2 {
 }
 
 .github-download-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
-  align-items: center;
 }
 
 .github-download-link {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-height: 36px;
   text-decoration: none;
 }
 
@@ -676,6 +676,10 @@ h2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.steamwork-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .randomrealm-release-actions .ghost-button {
@@ -1472,68 +1476,77 @@ h2 {
   gap: 14px;
 }
 
-.steamwork-target-grid {
-  min-width: 0;
+.steamwork-tips {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-}
-
-.steamwork-dropzone {
-  min-width: 0;
-  min-height: 180px;
-  display: grid;
-  align-content: center;
-  gap: 8px;
-  padding: 16px;
-  border: 1px dashed var(--line);
+  padding: 12px 14px;
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--meta-bg);
-  color: var(--text);
-  cursor: pointer;
-  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
 }
 
-.steamwork-dropzone:hover,
-.steamwork-dropzone:focus-visible,
-.steamwork-dropzone.drag-over {
-  border-color: var(--line-strong);
-  background: rgba(62, 126, 199, 0.08);
+.steamwork-tips > span {
   color: var(--green);
-  outline: none;
-}
-
-.steamwork-dropzone.busy {
-  cursor: wait;
-}
-
-.steamwork-dropzone span,
-.steamwork-dropzone small,
-.steamwork-dropzone em {
-  color: var(--muted);
   font-size: 12px;
-}
-
-.steamwork-dropzone span {
   font-weight: 800;
   text-transform: uppercase;
 }
 
-.steamwork-dropzone strong {
+.steamwork-table-wrap {
   min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-size: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-x: auto;
 }
 
-.steamwork-dropzone em {
-  min-width: 0;
-  overflow: hidden;
-  font-style: normal;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.steamwork-tip-table {
+  width: 100%;
+  min-width: 620px;
+  border: 1px solid var(--line);
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.steamwork-tip-table th,
+.steamwork-tip-table td {
+  padding: 8px 10px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.steamwork-tip-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.steamwork-tip-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.steamwork-tip-table th:last-child,
+.steamwork-tip-table td:last-child {
+  border-right: 0;
+}
+
+.steamwork-tip-table td:first-child {
+  width: 120px;
+  color: var(--green);
+  font-weight: 800;
+}
+
+.steamwork-tip-table.compact {
+  min-width: 520px;
+}
+
+.steamwork-tip-table.compact td:first-child {
+  width: 180px;
+  color: var(--muted);
 }
 
 .tool-slot-grid {
@@ -1741,6 +1754,10 @@ h2 {
   grid-template-columns: minmax(160px, 0.42fr) minmax(0, 1fr) auto;
   gap: 8px;
   margin-top: 12px;
+}
+
+.todo-composer-actions {
+  margin-top: 8px;
 }
 
 .todo-composer select,
@@ -3377,7 +3394,6 @@ body.music-track-dragging .delete-track-button {
   .blender-prompt-grid,
   .texture-manager-layout,
   .texture-package-panel,
-  .steamwork-target-grid,
   .todo-composer,
   .workspace-todo-list,
   .material-candidates {

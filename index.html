@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Codex Control Console</title>
+  <title>Codex Console</title>
   <link rel="shortcut icon" href="favicon.ico?v=codex-clear-4">
   <link rel="icon" type="image/x-icon" sizes="any" href="favicon.ico?v=codex-clear-4">
   <link rel="icon" type="image/png" sizes="256x256" href="codex-resource-icon-256.png?v=codex-clear-4">
@@ -140,18 +140,12 @@
             <div class="section-label">GitHub</div>
             <h2 id="workspaceTitle" data-i18n="githubDownloadsTitle">GitHub 下载</h2>
           </div>
-          <span id="githubDownloadsStatus" class="workspace-pill" data-i18n="githubDownloadsStatus">待连接</span>
         </div>
-
-        <p class="github-download-copy" data-i18n="githubDownloadsBody">
-          打开 World Console 的 GitHub Releases 下载页。
-        </p>
 
         <div class="github-download-actions">
-          <button id="openGithubDownloads" class="ghost-button primary-action" type="button" data-i18n="openGithubDownloads">打开下载页</button>
-          <a id="githubDownloadsLink" class="ghost-button github-download-link" href="#" target="_blank" rel="noreferrer" data-i18n="githubDownloadsLink">Release 页面</a>
+          <a class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases" target="_blank" rel="noreferrer">Codex Console</a>
+          <a class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases" target="_blank" rel="noreferrer">Codex World</a>
         </div>
-        <p id="githubDownloadsMeta" class="github-download-meta" data-i18n="githubDownloadsResolving">正在定位 GitHub Releases...</p>
       </article>
 
       <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
@@ -166,6 +160,9 @@
           <select id="workspaceTodoCategory" aria-label="Todo category" data-i18n-aria="workspaceTodoCategoryLabel"></select>
           <input id="workspaceTodoInput" type="text" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
           <button id="addWorkspaceTodo" class="ghost-button primary-action" type="button" data-i18n="addWorkspaceTodo">加入</button>
+        </div>
+        <div class="todo-composer-actions">
+          <button id="resetWorkspaceTodo" class="ghost-button" type="button" data-i18n="resetWorkspaceTodo">重置为新任务清单</button>
         </div>
         <div id="workspaceTodoList" class="workspace-todo-list"></div>
       </section>
@@ -513,25 +510,71 @@
 
         <p class="randomrealm-note" data-i18n="steamworkBody">Publish builds, promo resources, and update material staging.</p>
 
-        <div class="randomrealm-release-actions">
+        <div class="randomrealm-release-actions steamwork-actions">
           <button id="openSteamworkDashboard" class="ghost-button primary-action" type="button" data-i18n="steamworkDashboard">Steamworks</button>
-          <button id="openSteamworkPublishFolder" class="ghost-button" type="button" data-i18n="steamworkPublishRoot">Publish Root</button>
-          <button id="openSteamworkGameContent" class="ghost-button" type="button" data-i18n="steamworkGameContent">GameContent</button>
-          <button id="openSteamworkPublishTool" class="ghost-button" type="button" data-i18n="steamworkPublishTool">Publish Tool</button>
+          <button id="openSteamworkGameContent" class="ghost-button" type="button" data-i18n="steamworkGameContent">ContentBuilder content</button>
+          <button id="openSteamworkPublishTool" class="ghost-button" type="button" data-i18n="steamworkPublishTool">SteamPipeGUI</button>
         </div>
 
-        <div class="steamwork-target-grid">
-          <div id="steamworkGameContentDropzone" class="steamwork-dropzone" tabindex="0" role="button">
-            <span data-i18n="steamworkGameContentLabel">GameContent</span>
-            <strong data-i18n="steamworkGameContentTitle">Import game content</strong>
-            <small id="steamworkGameContentStatus" data-i18n="steamworkGameContentReady">Drop build files here.</small>
-            <em>D:\Steamwork\GameContent</em>
+        <div class="steamwork-tips" aria-label="Steamwork publish tips">
+          <span data-i18n="steamworkTipsLabel">Tips</span>
+          <div class="steamwork-table-wrap">
+            <table class="steamwork-tip-table">
+              <thead>
+                <tr>
+                  <th data-i18n="steamworkStepColumn">Step</th>
+                  <th data-i18n="steamworkActionColumn">Action</th>
+                  <th data-i18n="steamworkNoteColumn">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td data-i18n="steamworkStepBuild">1. Build</td>
+                  <td data-i18n="steamworkTipBuild">Build the game first.</td>
+                  <td data-i18n="steamworkBuildNote">PC only.</td>
+                </tr>
+                <tr>
+                  <td data-i18n="steamworkStepUpload">2. Upload</td>
+                  <td data-i18n="steamworkTipPipe">Open SteamPipe Build Uploader, fill fields, then upload.</td>
+                  <td data-i18n="steamworkUploadNote">PC + Mobile confirmation.</td>
+                </tr>
+                <tr>
+                  <td data-i18n="steamworkStepRenewDepot">3. Renew Depot</td>
+                  <td data-i18n="steamworkTipRenewDepot">In Steamworks web, renew/update the depot and set the generated build live.</td>
+                  <td data-i18n="steamworkRenewDepotNote">PC + Mobile confirmation.</td>
+                </tr>
+                <tr>
+                  <td data-i18n="steamworkStepPublish">4. Publish</td>
+                  <td data-i18n="steamworkTipPublish">Publish changes and finish Steam Guard / phone confirmation if needed.</td>
+                  <td data-i18n="steamworkPublishNote">Final confirmation.</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div id="steamworkPublishToolDropzone" class="steamwork-dropzone" tabindex="0" role="button">
-            <span data-i18n="steamworkPublishToolLabel">Publish Tool</span>
-            <strong data-i18n="steamworkPublishToolTitle">Import publish tools</strong>
-            <small id="steamworkPublishToolStatus" data-i18n="steamworkPublishToolReady">Drop tool files here.</small>
-            <em>D:\Steamwork\PublishTool</em>
+
+          <div class="steamwork-table-wrap">
+            <table class="steamwork-tip-table compact">
+              <thead>
+                <tr>
+                  <th data-i18n="steamworkFieldColumn">Field</th>
+                  <th data-i18n="steamworkValueColumn">Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>App ID</td>
+                  <td>3983670</td>
+                </tr>
+                <tr>
+                  <td>Depot ID</td>
+                  <td>3983671</td>
+                </tr>
+                <tr>
+                  <td>Steam Login</td>
+                  <td>pixel_roblez <span data-i18n="steamworkPasswordNote">(password not stored)</span></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </article>

@@ -71,9 +71,11 @@ BLENDER_MUTATION_API_PATHS = {
     "/api/randomrealm/blender/remove-texture",
     "/api/randomrealm/blender/replace-texture",
 }
-RANDOMREALM_PUBLISH_DIR = Path(os.environ.get("CODEX_CONTROL_RANDOMREALM_PUBLISH_DIR", r"D:\Steamwork"))
-STEAMWORK_GAMECONTENT_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_GAMECONTENT_DIR", str(RANDOMREALM_PUBLISH_DIR / "GameContent")))
-STEAMWORK_PUBLISH_TOOL_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_PUBLISH_TOOL_DIR", str(RANDOMREALM_PUBLISH_DIR / "PublishTool")))
+STEAMWORK_SDK_TOOLS_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_SDK_TOOLS_DIR", r"D:\Steamwork\Steamwork\sdk\tools"))
+RANDOMREALM_PUBLISH_DIR = Path(os.environ.get("CODEX_CONTROL_RANDOMREALM_PUBLISH_DIR", str(STEAMWORK_SDK_TOOLS_DIR / "ContentBuilder")))
+STEAMWORK_GAMECONTENT_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_GAMECONTENT_DIR", str(RANDOMREALM_PUBLISH_DIR / "content")))
+STEAMWORK_PUBLISH_TOOL_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_PUBLISH_TOOL_DIR", str(STEAMWORK_SDK_TOOLS_DIR / "SteamPipeGUI")))
+STEAMWORK_PUBLISH_TOOL_EXE = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_PUBLISH_TOOL_EXE", str(STEAMWORK_PUBLISH_TOOL_DIR / "SteamPipeGUI.exe")))
 RANDOMREALM_PROMO_DIR = Path(os.environ.get("CODEX_CONTROL_RANDOMREALM_PROMO_DIR", str(RANDOMREALM_PROJECT_DIR / "Screenshots")))
 DEFAULT_BLENDER_PROJECT_ROOTS = [
     Path(r"D:\Blender\Projects"),
@@ -1146,6 +1148,17 @@ def open_folder_resource(path):
     return {"ok": True, "path": str(target)}
 
 
+def open_file_resource(path):
+    target = Path(path).resolve()
+    if not target.exists() or not target.is_file():
+        raise ValueError(f"file was not found: {target}")
+    if sys.platform == "win32":
+        os.startfile(str(target))
+    else:
+        webbrowser.open(target.as_uri())
+    return {"ok": True, "path": str(target)}
+
+
 def open_url_resource(url):
     clean_url = str(url or "").strip()
     if not clean_url:
@@ -1220,7 +1233,7 @@ def github_downloads_state():
 def open_github_downloads():
     state = github_downloads_state()
     if not state.get("configured") or not state.get("url"):
-        raise ValueError("WorldConsole GitHub Releases URL is not configured yet")
+        raise ValueError("Codex World GitHub Releases URL is not configured yet")
     open_url_resource(state["url"])
     return state
 
@@ -1230,7 +1243,7 @@ def open_randomrealm_resource(resource_id):
         "steamworks": ("url", STEAMWORKS_URL),
         "publishFolder": ("folder", RANDOMREALM_PUBLISH_DIR),
         "gameContentFolder": ("folder", STEAMWORK_GAMECONTENT_DIR),
-        "publishToolFolder": ("folder", STEAMWORK_PUBLISH_TOOL_DIR),
+        "publishToolFolder": ("file", STEAMWORK_PUBLISH_TOOL_EXE),
         "projectFolder": ("folder", RANDOMREALM_PROJECT_DIR),
         "promoFolder": ("folder", RANDOMREALM_PROMO_DIR),
     }
@@ -1240,8 +1253,8 @@ def open_randomrealm_resource(resource_id):
     kind, target = resource
     if kind == "url":
         return open_url_resource(target)
-    if resource_id in {"gameContentFolder", "publishToolFolder"}:
-        Path(target).mkdir(parents=True, exist_ok=True)
+    if kind == "file":
+        return open_file_resource(target)
     return open_folder_resource(target)
 
 
@@ -2115,7 +2128,7 @@ def build_blender_texture_package_manifest(
         "dimensions": comparison["new"].get("dimensions"),
         "comparison": comparison,
         "oldTextureExists": comparison["old"].get("exists", False),
-        "notes": "Created by Control Console for Blender plugin/node-render workflow. This package does not modify the Blender file.",
+        "notes": "Created by Codex Console for Blender plugin/node-render workflow. This package does not modify the Blender file.",
     }
 
 
@@ -2173,7 +2186,7 @@ def build_blender_texture_removal_manifest(
             "sameContent": False,
         },
         "oldTextureExists": old_record.get("exists", False),
-        "notes": "Created by Control Console as a deletion instruction. This package does not modify the Blender file by itself.",
+        "notes": "Created by Codex Console as a deletion instruction. This package does not modify the Blender file by itself.",
     }
 
 
@@ -4790,7 +4803,9 @@ def import_steamwork_files(target_key, files):
         raise ValueError("no files were uploaded")
 
     target_name, root = steamwork_upload_target(target_key)
-    root.mkdir(parents=True, exist_ok=True)
+    root = root.resolve()
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"Steamwork target folder was not found: {root}")
     copied = []
 
     for item in files:
@@ -5264,9 +5279,9 @@ def running_console_port(start):
             with urllib.request.urlopen(request, timeout=1.2) as response:
                 body = response.read(4096).decode("utf-8", errors="ignore")
             if (
-                "Codex Control Console" in body
+                "Codex Console" in body
                 or "电脑总控台" in body
-                or "Codex World Console" in body
+                or "Codex World" in body
                 or "World Event Console" in body
             ):
                 return port
@@ -5310,7 +5325,7 @@ def open_console_window(url):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Codex Control Console")
+    parser = argparse.ArgumentParser(description="Codex Console")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--edition", choices=tuple(CONSOLE_EDITION_MODULES.keys()), default=current_console_edition())
@@ -5332,7 +5347,7 @@ def main():
 
     if sys.stdout:
         print()
-        print("Codex Control Console is running.")
+        print("Codex Console is running.")
         print(f"URL: {url}")
         if args.host in ("0.0.0.0", "::"):
             print(f"LAN mode is enabled on port {port}. Use your PC LAN IP from Android.")

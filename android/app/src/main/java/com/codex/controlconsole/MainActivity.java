@@ -36,7 +36,7 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(Color.rgb(15, 25, 39));
 
         TextView title = new TextView(this);
-        title.setText("Codex Control Console");
+        title.setText("Codex Console");
         title.setTextColor(Color.WHITE);
         title.setTextSize(18);
         title.setPadding(28, 24, 28, 12);

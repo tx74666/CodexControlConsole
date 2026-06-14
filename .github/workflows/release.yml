@@ -67,7 +67,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: Codex Control Console ${{ env.RELEASE_TAG }}
+          name: Codex Console ${{ env.RELEASE_TAG }}
           files: |
             dist/CodexControlConsole-windows.zip
             dist/CodexControlConsole-developer-windows.zip
@@ -76,7 +76,7 @@ jobs:
           body: |
             ## Start Here
 
-            Most people should download **CodexControlConsole-lite-windows.zip**.
+            Most people should download **CodexControlConsole-lite-windows.zip** for Codex Console.
 
             | Need | Download |
             | --- | --- |

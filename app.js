@@ -134,17 +134,40 @@ const i18n = {
     unityBridgeBody: "Blender 导出到 Unity temp 后，RandomRealm 导入器再把 temp 内容归类到 Builder 生成资产、Prefab 和清单里。",
     steamworkTitle: "Steamwork",
     steamworkReady: "\u5c31\u7eea",
-    steamworkBody: "\u7ba1\u7406 Steamworks\u3001\u53d1\u5e03\u5de5\u5177\u3001GameContent \u548c\u5ba3\u4f20\u66f4\u65b0\u7d20\u6750\u3002",
+    steamworkBody: "\u7ba1\u7406 Steamworks\u3001SteamPipeGUI\u3001ContentBuilder/content \u548c\u5ba3\u4f20\u66f4\u65b0\u7d20\u6750\u3002",
     steamworkDashboard: "Steamworks \u540e\u53f0",
-    steamworkPublishRoot: "Publish \u6839\u76ee\u5f55",
-    steamworkGameContent: "GameContent",
-    steamworkPublishTool: "Publish Tool",
-    steamworkGameContentLabel: "GameContent",
+    steamworkPublishRoot: "ContentBuilder",
+    steamworkGameContent: "ContentBuilder content",
+    steamworkPublishTool: "SteamPipeGUI",
+    steamworkGameContentLabel: "ContentBuilder content",
     steamworkGameContentTitle: "\u5bfc\u5165\u6e38\u620f\u5185\u5bb9",
-    steamworkGameContentReady: "\u628a\u6784\u5efa\u6587\u4ef6\u62d6\u5230\u8fd9\u91cc\u3002",
-    steamworkPublishToolLabel: "Publish Tool",
-    steamworkPublishToolTitle: "\u5bfc\u5165\u53d1\u5e03\u5de5\u5177",
-    steamworkPublishToolReady: "\u628a\u53d1\u5e03\u5de5\u5177\u6587\u4ef6\u62d6\u5230\u8fd9\u91cc\u3002",
+    steamworkGameContentReady: "\u628a\u6e38\u620f\u6784\u5efa\u6587\u4ef6\u62d6\u5230 ContentBuilder/content\u3002",
+    steamworkPublishToolLabel: "SteamPipeGUI",
+    steamworkPublishToolTitle: "\u5bfc\u5165 SteamPipeGUI \u5de5\u5177",
+    steamworkPublishToolReady: "\u628a SteamPipeGUI \u76f8\u5173\u6587\u4ef6\u62d6\u5230\u8fd9\u91cc\u3002",
+    steamworkTipsLabel: "\u53d1\u5e03\u6d41\u7a0b Tips",
+    steamworkStepColumn: "\u6b65\u9aa4",
+    steamworkActionColumn: "\u64cd\u4f5c",
+    steamworkNoteColumn: "\u63d0\u9192",
+    steamworkFieldColumn: "\u5b57\u6bb5",
+    steamworkValueColumn: "\u503c",
+    steamworkStepBuild: "1. \u6253\u5305",
+    steamworkStepUpload: "2. \u4e0a\u4f20",
+    steamworkStepRenewDepot: "3. Renew Depot",
+    steamworkStepPublish: "4. \u53d1\u5e03",
+    steamworkTipBuild: "\u5148\u5728 Unity / PC \u6253\u5305\u6e38\u620f\u3002",
+    steamworkBuildNote: "\u53ea\u7528 PC\u3002",
+    steamworkTipConfig: "SteamPipeGUI \u5efa\u8bae\u586b\u5199\uff1aApp ID 3983670\uff0cDepot ID 3983671\uff0cBuild Description \u53ef\u7528 1.5.31\u3002",
+    steamworkTipPaths: "\u8def\u5f84\uff1aBuild Path = D:\\Steamwork\\Steamwork\\sdk\\tools\\ContentBuilder\\content\uff0cContentBuilder Path = D:\\Steamwork\\Steamwork\\sdk\\tools\\ContentBuilder\u3002",
+    steamworkTipLogin: "Steam Login = pixel_roblez\uff1b\u5bc6\u7801\u4e0d\u5199\u8fdb Console\u3002",
+    steamworkTipContent: "\u628a\u6253\u5305\u7ed3\u679c\u653e\u5230 ContentBuilder/content\u3002",
+    steamworkTipPipe: "\u6253\u5f00 SteamPipe Build Uploader\uff0c\u586b\u5b57\u6bb5\u540e\u4e0a\u4f20\u3002",
+    steamworkUploadNote: "PC + Mobile \u786e\u8ba4\u3002",
+    steamworkTipRenewDepot: "\u5728\u7f51\u9875\u7248 Steamworks \u91cc Renew / Update Depot\uff0c\u628a\u751f\u6210\u7684 build \u8bbe\u4e3a\u4e0a\u7ebf\u7248\u672c\u3002",
+    steamworkRenewDepotNote: "PC + Mobile \u786e\u8ba4\u3002",
+    steamworkTipPublish: "\u6700\u540e\u786e\u8ba4\u5e76\u53d1\u5e03\u66f4\u6539\uff1b\u53ef\u80fd\u9700\u8981 Steam Guard / \u624b\u673a\u786e\u8ba4\u3002",
+    steamworkPublishNote: "\u6700\u7ec8\u786e\u8ba4\u3002",
+    steamworkPasswordNote: "\uff08\u5bc6\u7801\u4e0d\u5b58 Console\uff09",
     steamworkImportDragging: "\u677e\u624b\u540e\u5bfc\u5165\u3002",
     steamworkImporting: (count, target) => `\u6b63\u5728\u5bfc\u5165 ${count} \u4e2a\u6587\u4ef6\u5230 ${target}\u3002`,
     steamworkImported: (count, target) => `\u5df2\u5bfc\u5165 ${count} \u4e2a\u6587\u4ef6\u5230 ${target}\u3002`,
@@ -377,16 +400,17 @@ const i18n = {
     workspaceTodoPlaceholder: "写一个新的待办",
     workspaceTodoCategoryLabel: "待办分类",
     addWorkspaceTodo: "加入",
+    resetWorkspaceTodo: "重置为新任务清单",
     githubDownloadsTitle: "GitHub 下载",
     githubDownloadsStatus: "待连接",
     githubDownloadsReady: "已定位",
     githubDownloadsMissing: "未连接",
     githubDownloadsResolving: "正在定位 GitHub Releases...",
-    githubDownloadsBody: "打开 World Console 的 GitHub Releases 下载页。",
+    githubDownloadsBody: "打开 Codex World 的 GitHub Releases 下载页。",
     githubDownloadsLink: "Release 页面",
     openGithubDownloads: "打开下载页",
     githubDownloadsFound: url => `下载页：${url}`,
-    githubDownloadsNotConfigured: "还没有连接 GitHub 仓库。给 WorldConsole 添加 origin 以后，这里会自动定位到 Releases。",
+    githubDownloadsNotConfigured: "还没有连接 GitHub 仓库。给 Codex World 添加 origin 以后，这里会自动定位到 Releases。",
     githubDownloadsOpenFailed: message => `打开 GitHub 下载页失败：${message}`,
     todoGroupPieces: "Pieces / 部件",
     todoGroupTextures: "Blend -> Unity 贴图",
@@ -475,17 +499,40 @@ const i18n = {
     unityBridgeBody: "Blender exports into Unity temp; the RandomRealm importer consumes that temp output and categorizes it into Builder assets, prefabs, and inventory.",
     steamworkTitle: "Steamwork",
     steamworkReady: "Ready",
-    steamworkBody: "Manage Steamworks, publish tools, GameContent, and promo/update assets.",
+    steamworkBody: "Manage Steamworks, SteamPipeGUI, ContentBuilder/content, and promo/update assets.",
     steamworkDashboard: "Steamworks",
-    steamworkPublishRoot: "Publish Root",
-    steamworkGameContent: "GameContent",
-    steamworkPublishTool: "Publish Tool",
-    steamworkGameContentLabel: "GameContent",
+    steamworkPublishRoot: "ContentBuilder",
+    steamworkGameContent: "ContentBuilder content",
+    steamworkPublishTool: "SteamPipeGUI",
+    steamworkGameContentLabel: "ContentBuilder content",
     steamworkGameContentTitle: "Import game content",
-    steamworkGameContentReady: "Drop build files here.",
-    steamworkPublishToolLabel: "Publish Tool",
-    steamworkPublishToolTitle: "Import publish tools",
-    steamworkPublishToolReady: "Drop publish tool files here.",
+    steamworkGameContentReady: "Drop game build files into ContentBuilder/content.",
+    steamworkPublishToolLabel: "SteamPipeGUI",
+    steamworkPublishToolTitle: "Import SteamPipeGUI tools",
+    steamworkPublishToolReady: "Drop SteamPipeGUI-related files here.",
+    steamworkTipsLabel: "Publish Tips",
+    steamworkStepColumn: "Step",
+    steamworkActionColumn: "Action",
+    steamworkNoteColumn: "Note",
+    steamworkFieldColumn: "Field",
+    steamworkValueColumn: "Value",
+    steamworkStepBuild: "1. Build",
+    steamworkStepUpload: "2. Upload",
+    steamworkStepRenewDepot: "3. Renew Depot",
+    steamworkStepPublish: "4. Publish",
+    steamworkTipBuild: "Build the game first from Unity / PC.",
+    steamworkBuildNote: "PC only.",
+    steamworkTipConfig: "SteamPipeGUI fields: App ID 3983670, Depot ID 3983671, Build Description can use 1.5.31.",
+    steamworkTipPaths: "Paths: Build Path = D:\\Steamwork\\Steamwork\\sdk\\tools\\ContentBuilder\\content, ContentBuilder Path = D:\\Steamwork\\Steamwork\\sdk\\tools\\ContentBuilder.",
+    steamworkTipLogin: "Steam Login = pixel_roblez. Do not store the password in Console.",
+    steamworkTipContent: "Put the build output into ContentBuilder/content.",
+    steamworkTipPipe: "Open SteamPipe Build Uploader, fill the fields, then upload.",
+    steamworkUploadNote: "PC + Mobile confirmation.",
+    steamworkTipRenewDepot: "In Steamworks web, renew/update the depot and set the generated build live.",
+    steamworkRenewDepotNote: "PC + Mobile confirmation.",
+    steamworkTipPublish: "Confirm and publish changes; Steam Guard / phone confirmation may be required.",
+    steamworkPublishNote: "Final confirmation.",
+    steamworkPasswordNote: "(password not stored)",
     steamworkImportDragging: "Release to import.",
     steamworkImporting: (count, target) => `Importing ${count} file${count === 1 ? "" : "s"} to ${target}.`,
     steamworkImported: (count, target) => `Imported ${count} file${count === 1 ? "" : "s"} to ${target}.`,
@@ -718,16 +765,17 @@ const i18n = {
     workspaceTodoPlaceholder: "Add a task",
     workspaceTodoCategoryLabel: "Todo category",
     addWorkspaceTodo: "Add",
+    resetWorkspaceTodo: "Reset new task set",
     githubDownloadsTitle: "GitHub Downloads",
     githubDownloadsStatus: "Not linked",
     githubDownloadsReady: "Ready",
     githubDownloadsMissing: "Not linked",
     githubDownloadsResolving: "Finding GitHub Releases...",
-    githubDownloadsBody: "Open the World Console GitHub Releases download page.",
+    githubDownloadsBody: "Open the Codex World GitHub Releases download page.",
     githubDownloadsLink: "Release page",
     openGithubDownloads: "Open downloads",
     githubDownloadsFound: url => `Downloads: ${url}`,
-    githubDownloadsNotConfigured: "No GitHub repository is linked yet. Add an origin remote to WorldConsole and this shortcut will target Releases automatically.",
+    githubDownloadsNotConfigured: "No GitHub repository is linked yet. Add an origin remote to Codex World and this shortcut will target Releases automatically.",
     githubDownloadsOpenFailed: message => `Could not open GitHub downloads: ${message}`,
     todoGroupPieces: "Pieces",
     todoGroupTextures: "Blend -> Unity Textures",
@@ -892,6 +940,7 @@ const els = {
   workspaceTodoCategory: document.getElementById("workspaceTodoCategory"),
   workspaceTodoInput: document.getElementById("workspaceTodoInput"),
   addWorkspaceTodo: document.getElementById("addWorkspaceTodo"),
+  resetWorkspaceTodo: document.getElementById("resetWorkspaceTodo"),
   workspaceTodoList: document.getElementById("workspaceTodoList"),
   workspaceTodoCount: document.getElementById("workspaceTodoCount"),
   randomRealmReleaseStatusText: document.getElementById("randomRealmReleaseStatusText"),
@@ -1173,7 +1222,7 @@ function activateModule(id, push = false, options = {}) {
     els.moduleTitle.dataset.i18n = next.titleKey;
   }
 
-  document.title = `Codex Control Console - ${text(next.titleKey)}`;
+  document.title = `Codex Console - ${text(next.titleKey)}`;
 
   if (push && currentPageName() !== next.href) {
     history.pushState({ moduleId: next.id }, "", moduleUrl(next.href));
@@ -4673,10 +4722,17 @@ function normalizeWorkspaceTodoGroups(groups) {
 
 function loadWorkspaceTodos() {
   try {
-    return normalizeWorkspaceTodoGroups(JSON.parse(localStorage.getItem(storageKeys.workspaceTodos) || "[]"));
+    return normalizeWorkspaceTodoGroups(JSON.parse(localStorage.getItem(storageKeys.workspaceTodos) || "[]")).filter(group =>
+      Array.isArray(group.items) && group.items.length > 0
+    );
   } catch {
     return cloneDefaultWorkspaceTodos();
   }
+}
+
+function resetWorkspaceTodoGroups() {
+  workspaceTodoGroups = cloneDefaultWorkspaceTodos();
+  saveWorkspaceTodos();
 }
 
 function saveWorkspaceTodos() {
@@ -6723,6 +6779,18 @@ function workspaceTodoTotals(group = null) {
   return { done, total };
 }
 
+function pruneEmptyWorkspaceTodoGroups() {
+  const next = workspaceTodoGroups.filter(group =>
+    Array.isArray(group.items) &&
+    group.items.length > 0
+  );
+  if (next.length !== workspaceTodoGroups.length) {
+    workspaceTodoGroups = next;
+    return true;
+  }
+  return false;
+}
+
 function renderWorkspaceTodoCategoryOptions(selectedId = "") {
   if (!els.workspaceTodoCategory) return;
   const activeId = selectedId || els.workspaceTodoCategory.value || workspaceTodoGroups[0]?.id || "";
@@ -6740,6 +6808,8 @@ function renderWorkspaceTodoCategoryOptions(selectedId = "") {
 
 function renderWorkspaceTodos() {
   if (!hasWorkspace || !els.workspaceTodoList) return;
+  const pruned = pruneEmptyWorkspaceTodoGroups();
+  if (pruned) saveWorkspaceTodos();
   renderWorkspaceTodoCategoryOptions();
 
   const totals = workspaceTodoTotals();
@@ -6840,6 +6910,7 @@ function deleteWorkspaceTodo(groupId, itemId) {
   const group = workspaceTodoGroups.find(item => item.id === groupId);
   if (!group) return;
   group.items = group.items.filter(item => item.id !== itemId);
+  pruneEmptyWorkspaceTodoGroups();
   saveWorkspaceTodos();
   renderWorkspaceTodos();
 }
@@ -8111,6 +8182,12 @@ if (hasWorkspace && els.githubDownloadsLink) {
 }
 if (hasWorkspace && els.addWorkspaceTodo) {
   els.addWorkspaceTodo.addEventListener("click", addWorkspaceTodo);
+}
+if (hasWorkspace && els.resetWorkspaceTodo) {
+  els.resetWorkspaceTodo.addEventListener("click", () => {
+    resetWorkspaceTodoGroups();
+    renderWorkspaceTodos();
+  });
 }
 if (hasWorkspace && els.workspaceTodoInput) {
   els.workspaceTodoInput.addEventListener("keydown", event => {

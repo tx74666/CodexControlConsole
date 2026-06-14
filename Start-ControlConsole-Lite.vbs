@@ -9,7 +9,7 @@ localAppData = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
 
 pythonw = FindPythonw(localAppData)
 If pythonw = "" Then
-  MsgBox "Python was not found. Install Python 3.11 or newer, then run Start-ControlConsole-Lite again.", vbExclamation, "Codex Control Console"
+  MsgBox "Python was not found. Install Python 3.11 or newer, then run Start-ControlConsole-Lite again.", vbExclamation, "Codex Console"
   WScript.Quit 1
 End If
 
@@ -18,7 +18,7 @@ command = """" & pythonw & """ """ & appDir & "\world_console.py"" --edition lit
 On Error Resume Next
 shell.Run command, 0, False
 If Err.Number <> 0 Then
-  MsgBox "Codex Control Console Lite could not start. Check that Python and the app files are still in this folder.", vbExclamation, "Codex Control Console"
+  MsgBox "Codex Console Lite could not start. Check that Python and the app files are still in this folder.", vbExclamation, "Codex Console"
 End If
 
 Function FindPythonw(localAppData)
