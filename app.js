@@ -1023,6 +1023,8 @@ let pendingDeleteTrackPath = "";
 let userSeeking = false;
 let pendingSeekRatio = null;
 let activeSeekPointerId = null;
+let seekHistoryStartRatio = null;
+let volumeHistoryStart = null;
 let musicTierAssignments = {};
 let musicTierOrder = [];
 let musicTierVisibility = loadMusicTierVisibility();
@@ -1044,6 +1046,7 @@ let lastPersistedModuleId = "";
 let suppressModuleClickUntil = 0;
 let lastModulePointerStart = 0;
 let lastArchivePointerStart = 0;
+let lastWallpaperPointerStart = 0;
 let archiveExpanded = false;
 let archiveView = "main";
 let archiveRightReleaseCount = 0;
@@ -1076,6 +1079,11 @@ let randomRealmLastLiveObject = "";
 let randomRealmLiveSelectedObjects = [];
 const randomRealmPreviewableTextureExtensions = [".png", ".jpg", ".jpeg", ".bmp", ".webp"];
 const randomRealmTextureDragFileCache = new Map();
+const consoleUndoStack = [];
+const consoleRedoStack = [];
+const consoleHistoryLimit = 80;
+const smoothValueAnimations = new Map();
+let consoleHistoryApplying = false;
 const shouldRestoreLastModuleOnLoad = currentPageName() === "index.html" && lastModuleId();
 let activeModuleId = initialModuleId();
 const hasWallpaper = Boolean(els.wallpaperDock);
@@ -1100,6 +1108,92 @@ function disableBrowserWheelZoom() {
 }
 
 disableBrowserWheelZoom();
+
+function historyValueKey(value) {
+  return JSON.stringify(value ?? null);
+}
+
+function historyValuesEqual(first, second) {
+  return historyValueKey(first) === historyValueKey(second);
+}
+
+function pushConsoleHistory(action) {
+  if (consoleHistoryApplying || !action || historyValuesEqual(action.before, action.after) || typeof action.apply !== "function") return;
+  const previous = consoleUndoStack[consoleUndoStack.length - 1];
+  if (previous && previous.type === action.type && historyValuesEqual(previous.before, action.before) && historyValuesEqual(previous.after, action.after)) {
+    return;
+  }
+  consoleUndoStack.push(action);
+  if (consoleUndoStack.length > consoleHistoryLimit) {
+    consoleUndoStack.shift();
+  }
+  consoleRedoStack.length = 0;
+}
+
+function cancelSmoothValueAnimation(key) {
+  const animation = smoothValueAnimations.get(key);
+  if (!animation) return;
+  window.cancelAnimationFrame(animation.frame);
+  smoothValueAnimations.delete(key);
+  animation.cancel?.();
+}
+
+function cancelSmoothValueAnimations() {
+  for (const key of Array.from(smoothValueAnimations.keys())) {
+    cancelSmoothValueAnimation(key);
+  }
+}
+
+function runConsoleHistoryAction(action, value, direction) {
+  cancelSmoothValueAnimations();
+  consoleHistoryApplying = true;
+  try {
+    action.apply(value, direction);
+  } finally {
+    window.requestAnimationFrame(() => {
+      consoleHistoryApplying = false;
+    });
+  }
+}
+
+function undoConsoleAction() {
+  const action = consoleUndoStack.pop();
+  if (!action) return false;
+  consoleRedoStack.push(action);
+  runConsoleHistoryAction(action, action.before, "undo");
+  return true;
+}
+
+function redoConsoleAction() {
+  const action = consoleRedoStack.pop();
+  if (!action) return false;
+  consoleUndoStack.push(action);
+  runConsoleHistoryAction(action, action.after, "redo");
+  return true;
+}
+
+function isTextUndoTarget(target) {
+  const node = target?.closest?.("input, textarea, select, [contenteditable='true'], [contenteditable='']");
+  if (!node) return false;
+  if (node.matches?.("textarea, select, [contenteditable='true'], [contenteditable='']")) return true;
+  const type = String(node.getAttribute("type") || "text").toLowerCase();
+  return !["button", "checkbox", "color", "file", "image", "radio", "range", "reset", "submit"].includes(type);
+}
+
+function handleConsoleUndoRedoKeydown(event) {
+  const key = String(event.key || "").toLowerCase();
+  const isModifier = event.ctrlKey || event.metaKey;
+  if (!isModifier || event.altKey || isTextUndoTarget(event.target)) return false;
+  const wantsUndo = key === "z" && !event.shiftKey;
+  const wantsRedo = key === "y" || key === "z" && event.shiftKey;
+  if (!wantsUndo && !wantsRedo) return false;
+  const handled = wantsRedo ? redoConsoleAction() : undoConsoleAction();
+  if (handled) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  return handled;
+}
 
 function currentPageName() {
   return window.location.pathname.split("/").pop() || "index.html";
@@ -1226,15 +1320,39 @@ function activateModule(id, push = false, options = {}) {
 
   if (push && currentPageName() !== next.href) {
     history.pushState({ moduleId: next.id }, "", moduleUrl(next.href));
+  } else if (options.replaceUrl && currentPageName() !== next.href) {
+    history.replaceState({ moduleId: next.id }, "", moduleUrl(next.href));
   }
 
   renderModuleNavs();
 }
 
+function applyModuleHistory(id) {
+  activateModule(id, false, { allowArchived: true, replaceUrl: true });
+}
+
+function recordModuleChange(beforeId, afterId) {
+  if (!isModuleId(beforeId) || !isModuleId(afterId) || beforeId === afterId) return;
+  pushConsoleHistory({
+    type: "module",
+    before: beforeId,
+    after: afterId,
+    apply: applyModuleHistory
+  });
+}
+
+function activateModuleFromUser(id, push = true, options = {}) {
+  const beforeId = activeModuleId;
+  activateModule(id, push, options);
+  recordModuleChange(beforeId, activeModuleId);
+}
+
 function openArchivedModule(id) {
   if (!allArchivedModuleIds().includes(id)) return;
+  const beforeId = activeModuleId;
   setArchiveExpanded(false);
   activateModule(id, true, { allowArchived: true });
+  recordModuleChange(beforeId, activeModuleId);
 }
 
 function moduleOrder() {
@@ -1454,8 +1572,66 @@ function renderModuleArchive() {
   renderManagerLayout();
 }
 
-function archiveModule(id) {
+function moduleLayoutSnapshot() {
+  return {
+    order: moduleOrder(),
+    archived: archivedModuleIds(),
+    deepArchived: deepArchivedModuleIds(),
+    deleted: deletedModuleIds(),
+    active: activeModuleId
+  };
+}
+
+function applyModuleLayoutHistory(state) {
+  const validIds = editionModuleSet();
+  const deleted = (Array.isArray(state?.deleted) ? state.deleted : []).filter(id => validIds.has(id));
+  const deletedSet = new Set(deleted);
+  const deepArchived = (Array.isArray(state?.deepArchived) ? state.deepArchived : [])
+    .filter(id => validIds.has(id) && !deletedSet.has(id));
+  const deepSet = new Set(deepArchived);
+  const archived = (Array.isArray(state?.archived) ? state.archived : [])
+    .filter(id => validIds.has(id) && !deletedSet.has(id) && !deepSet.has(id));
+  const seen = new Set();
+  const order = (Array.isArray(state?.order) ? state.order : [])
+    .filter(id => {
+      if (!validIds.has(id) || deletedSet.has(id) || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  for (const item of availableModules()) {
+    if (!deletedSet.has(item.id) && !seen.has(item.id)) {
+      order.push(item.id);
+      seen.add(item.id);
+    }
+  }
+
+  saveDeletedModuleIds(deleted);
+  saveDeepArchivedModuleIds(deepArchived);
+  saveArchivedModuleIds(archived);
+  saveModuleOrder(order);
+  archiveView = "main";
+  setArchiveExpanded(false);
+  const active = validIds.has(state?.active) && !deletedSet.has(state.active)
+    ? state.active
+    : visibleModuleOrder()[0];
+  activateModule(active, false, { allowArchived: true, replaceUrl: true });
+  renderModuleNavs();
+  renderModuleArchive();
+}
+
+function recordModuleLayoutChange(beforeState, afterState = moduleLayoutSnapshot()) {
+  if (historyValuesEqual(beforeState, afterState)) return;
+  pushConsoleHistory({
+    type: "module-layout",
+    before: beforeState,
+    after: afterState,
+    apply: applyModuleLayoutHistory
+  });
+}
+
+function archiveModule(id, options = {}) {
   if (deletedModuleIds().includes(id)) return;
+  const beforeState = options.beforeState || moduleLayoutSnapshot();
   const visible = visibleModuleOrder().filter(item => item !== id);
   if (!visible.length) return;
 
@@ -1476,9 +1652,13 @@ function archiveModule(id) {
     renderModuleNavs();
     renderModuleArchive();
   }
+  if (options.record !== false) {
+    recordModuleLayoutChange(beforeState);
+  }
 }
 
-function restoreModule(id) {
+function restoreModule(id, options = {}) {
+  const beforeState = options.beforeState || moduleLayoutSnapshot();
   const archived = archivedModuleIds().filter(item => item !== id);
   const deepArchived = deepArchivedModuleIds().filter(item => item !== id);
   const visible = visibleModuleOrder().filter(item => item !== id);
@@ -1488,10 +1668,14 @@ function restoreModule(id) {
   saveModuleOrder([...visible, id, ...remainingArchived]);
   setArchiveExpanded(false);
   activateModule(id, true);
+  if (options.record !== false) {
+    recordModuleLayoutChange(beforeState);
+  }
 }
 
-function deepArchiveModule(id) {
+function deepArchiveModule(id, options = {}) {
   if (deletedModuleIds().includes(id)) return;
+  const beforeState = options.beforeState || moduleLayoutSnapshot();
   const archived = archivedModuleIds().filter(item => item !== id);
   const deepArchived = deepArchivedModuleIds();
   saveArchivedModuleIds(archived);
@@ -1501,10 +1685,14 @@ function deepArchiveModule(id) {
   archiveView = "main";
   renderModuleNavs();
   renderModuleArchive();
+  if (options.record !== false) {
+    recordModuleLayoutChange(beforeState);
+  }
 }
 
-function permanentlyDeleteModule(id) {
+function permanentlyDeleteModule(id, options = {}) {
   if (!isModuleId(id)) return false;
+  const beforeState = options.beforeState || moduleLayoutSnapshot();
   const deleted = deletedModuleIds();
   if (deleted.includes(id)) return false;
   const remaining = modules.map(item => item.id).filter(item => item !== id && !deleted.includes(item));
@@ -1523,15 +1711,19 @@ function permanentlyDeleteModule(id) {
     renderModuleNavs();
     renderModuleArchive();
   }
+  if (options.record !== false) {
+    recordModuleLayoutChange(beforeState);
+  }
   return true;
 }
 
-function restoreAllArchivedModules() {
+function restoreAllArchivedModules(options = {}) {
   const archived = archivedModuleIds();
   if (!archived.length) {
     setArchiveExpanded(false);
     return;
   }
+  const beforeState = options.beforeState || moduleLayoutSnapshot();
 
   const deepArchived = deepArchivedModuleIds();
   const visible = visibleModuleOrder().filter(id => !archived.includes(id));
@@ -1539,6 +1731,9 @@ function restoreAllArchivedModules() {
   saveModuleOrder([...visible, ...archived, ...deepArchived]);
   setArchiveExpanded(false);
   activateModule(activeModuleId, false);
+  if (options.record !== false) {
+    recordModuleLayoutChange(beforeState);
+  }
 }
 
 function resetArchiveRightRelease() {
@@ -1820,6 +2015,7 @@ function isPointNearModuleNav(nav, clientX, clientY) {
 function createArchiveReturnSession(source, startX, startY) {
   const id = source.dataset.moduleId;
   const sourceDepth = source.dataset.archiveDepth || "main";
+  const beforeState = moduleLayoutSnapshot();
   const nav = document.querySelector("[data-module-nav]");
   const rect = source.getBoundingClientRect();
   const placeholder = document.createElement("span");
@@ -1904,11 +2100,11 @@ function createArchiveReturnSession(source, startX, startY) {
 
     if (!restored && !outsideArchive) {
       if (sourceDepth === "main" && overArchiveDrop) {
-        deepArchiveModule(id);
+        deepArchiveModule(id, { beforeState });
         return true;
       }
       if (sourceDepth === "deep" && overArchiveDrop) {
-        return permanentlyDeleteModule(id);
+        return permanentlyDeleteModule(id, { beforeState });
       }
       return false;
     }
@@ -1921,6 +2117,7 @@ function createArchiveReturnSession(source, startX, startY) {
     saveModuleOrder([...nextOrder, ...remainingArchived]);
     setArchiveExpanded(false);
     activateModule(id, true);
+    recordModuleLayoutChange(beforeState);
     return true;
   };
 
@@ -1994,6 +2191,8 @@ function beginModulePointerDrag(event, nav, link) {
   let dragging = false;
   let dragSession = null;
   let finished = false;
+  let lastClientX = startX;
+  let lastClientY = startY;
 
   link.setPointerCapture(event.pointerId);
 
@@ -2005,23 +2204,32 @@ function beginModulePointerDrag(event, nav, link) {
     link.removeEventListener("pointercancel", up);
     if (!dragging) return;
 
-    const moduleId = draggedModuleId;
-    const shouldArchive = dragSession.isOverArchive();
+    const beforeState = moduleLayoutSnapshot();
+    const moduleId = link.dataset.moduleId || draggedModuleId;
+    const shouldArchive = dragSession.isOverArchive() || isPointInsideArchive(lastClientX, lastClientY);
     clearArchiveDragState();
     draggedModuleId = "";
     suppressModuleClickUntil = Date.now() + 350;
     dragSession.finish({ animate: !shouldArchive }).then(() => {
       if (shouldArchive) {
-        archiveModule(moduleId);
+        archiveModule(moduleId, { beforeState });
       } else {
-        saveVisibleModuleOrder(moduleIdsFromNav(nav));
+        const nextVisibleOrder = moduleIdsFromNav(nav);
+        if (!nextVisibleOrder.includes(moduleId)) {
+          archiveModule(moduleId, { beforeState });
+          return;
+        }
+        saveVisibleModuleOrder(nextVisibleOrder);
         renderModuleNavs();
         renderModuleArchive();
+        recordModuleLayoutChange(beforeState);
       }
     });
   };
 
   const move = moveEvent => {
+    lastClientX = moveEvent.clientX;
+    lastClientY = moveEvent.clientY;
     const dx = moveEvent.clientX - startX;
     const dy = moveEvent.clientY - startY;
     if (!dragging && Math.hypot(dx, dy) < 5) return;
@@ -2037,6 +2245,8 @@ function beginModulePointerDrag(event, nav, link) {
   };
 
   const up = upEvent => {
+    lastClientX = upEvent.clientX;
+    lastClientY = upEvent.clientY;
     if (link.hasPointerCapture(upEvent.pointerId)) {
       link.releasePointerCapture(upEvent.pointerId);
     }
@@ -2056,6 +2266,8 @@ function beginModuleMouseDrag(event, nav, link) {
   let dragging = false;
   let dragSession = null;
   let finished = false;
+  let lastClientX = startX;
+  let lastClientY = startY;
 
   const finish = () => {
     if (finished) return;
@@ -2064,23 +2276,32 @@ function beginModuleMouseDrag(event, nav, link) {
     document.removeEventListener("mouseup", up);
     if (!dragging) return;
 
-    const moduleId = draggedModuleId;
-    const shouldArchive = dragSession.isOverArchive();
+    const beforeState = moduleLayoutSnapshot();
+    const moduleId = link.dataset.moduleId || draggedModuleId;
+    const shouldArchive = dragSession.isOverArchive() || isPointInsideArchive(lastClientX, lastClientY);
     clearArchiveDragState();
     draggedModuleId = "";
     suppressModuleClickUntil = Date.now() + 350;
     dragSession.finish({ animate: !shouldArchive }).then(() => {
       if (shouldArchive) {
-        archiveModule(moduleId);
+        archiveModule(moduleId, { beforeState });
       } else {
-        saveVisibleModuleOrder(moduleIdsFromNav(nav));
+        const nextVisibleOrder = moduleIdsFromNav(nav);
+        if (!nextVisibleOrder.includes(moduleId)) {
+          archiveModule(moduleId, { beforeState });
+          return;
+        }
+        saveVisibleModuleOrder(nextVisibleOrder);
         renderModuleNavs();
         renderModuleArchive();
+        recordModuleLayoutChange(beforeState);
       }
     });
   };
 
   const move = moveEvent => {
+    lastClientX = moveEvent.clientX;
+    lastClientY = moveEvent.clientY;
     const dx = moveEvent.clientX - startX;
     const dy = moveEvent.clientY - startY;
     if (!dragging && Math.hypot(dx, dy) < 5) return;
@@ -2095,7 +2316,11 @@ function beginModuleMouseDrag(event, nav, link) {
     dragSession.move(moveEvent.clientX, moveEvent.clientY);
   };
 
-  const up = () => finish();
+  const up = upEvent => {
+    lastClientX = upEvent.clientX;
+    lastClientY = upEvent.clientY;
+    finish();
+  };
 
   document.addEventListener("mousemove", move);
   document.addEventListener("mouseup", up);
@@ -2214,7 +2439,7 @@ function renderModuleNavs() {
           return;
         }
         event.preventDefault();
-        activateModule(item.id, true);
+        activateModuleFromUser(item.id, true);
       });
       link.addEventListener("dragstart", event => event.preventDefault());
       link.addEventListener("pointerdown", event => beginModulePointerDrag(event, nav, link));
@@ -2357,6 +2582,32 @@ function applyTheme() {
   }
 }
 
+function applyThemeHistory(nextMode) {
+  setTheme(nextMode, { record: false });
+}
+
+function recordThemeChange(beforeMode, afterMode) {
+  const before = normalizeTheme(beforeMode);
+  const after = normalizeTheme(afterMode);
+  if (before === after) return;
+  pushConsoleHistory({
+    type: "theme",
+    before,
+    after,
+    apply: applyThemeHistory
+  });
+}
+
+function setTheme(nextMode, options = {}) {
+  const before = theme;
+  theme = normalizeTheme(nextMode);
+  localStorage.setItem(storageKeys.theme, theme);
+  applyTheme();
+  if (options.record !== false) {
+    recordThemeChange(before, theme);
+  }
+}
+
 function applyConsoleEdition(nextEdition, options = {}) {
   const previousEdition = consoleEdition;
   consoleEdition = normalizeEdition(nextEdition);
@@ -2493,11 +2744,116 @@ function persistWallpaperOrderNow() {
   }).catch(() => {});
 }
 
+function wallpaperOrderSnapshot() {
+  return orderedWallpapers().map(item => item.path);
+}
+
+function wallpaperCardsForAnimation() {
+  if (!els.wallpaperDock) return [];
+  return Array.from(els.wallpaperDock.querySelectorAll(".wallpaper-card:not(.dragging):not(.wallpaper-placeholder)"));
+}
+
+function animateWallpaperReflow(mutate) {
+  const cards = wallpaperCardsForAnimation();
+  const first = new Map(cards.map(card => [card.dataset.wallpaperPath, card.getBoundingClientRect()]));
+  for (const card of cards) {
+    card.getAnimations().forEach(animation => animation.cancel());
+  }
+
+  mutate();
+
+  for (const card of wallpaperCardsForAnimation()) {
+    const before = first.get(card.dataset.wallpaperPath);
+    if (!before) continue;
+    const after = card.getBoundingClientRect();
+    const dx = before.left - after.left;
+    const dy = before.top - after.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+    card.animate(
+      [
+        { transform: `translate(${dx}px, ${dy}px)` },
+        { transform: "translate(0, 0)" }
+      ],
+      {
+        duration: 180,
+        easing: "cubic-bezier(0.25, 0.1, 0.25, 1)"
+      }
+    );
+  }
+}
+
+function cleanWallpaperOrder(order) {
+  const existingPaths = new Set(wallpapers.map(item => item.path));
+  const seen = new Set();
+  const clean = [];
+  for (const path of sanitizeMusicTierOrder(order)) {
+    if (!existingPaths.has(path) || seen.has(path)) continue;
+    seen.add(path);
+    clean.push(path);
+  }
+  for (const item of wallpapers) {
+    if (!seen.has(item.path)) {
+      clean.push(item.path);
+    }
+  }
+  return clean;
+}
+
+function setWallpaperOrder(nextOrder, options = {}) {
+  const cleanOrder = cleanWallpaperOrder(nextOrder);
+  const apply = () => {
+    wallpaperOrder = cleanOrder;
+    if (options.persist !== false) {
+      persistWallpaperOrderNow();
+    } else {
+      saveWallpaperOrderLocal();
+    }
+    renderWallpapers();
+  };
+  if (options.animate === false) {
+    apply();
+  } else {
+    animateWallpaperReflow(apply);
+  }
+}
+
+function orderWithMovedPath(order, path, beforePath = "") {
+  const currentOrder = cleanWallpaperOrder(order).filter(itemPath => itemPath !== path);
+  const insertIndex = beforePath && beforePath !== path ? currentOrder.indexOf(beforePath) : -1;
+  if (insertIndex >= 0) {
+    currentOrder.splice(insertIndex, 0, path);
+  } else {
+    currentOrder.push(path);
+  }
+  return currentOrder;
+}
+
+function recordWallpaperOrderChange(beforeOrder, afterOrder) {
+  if (historyValuesEqual(beforeOrder, afterOrder)) return;
+  pushConsoleHistory({
+    type: "wallpaper-order",
+    before: beforeOrder,
+    after: afterOrder,
+    apply: order => setWallpaperOrder(order, { animate: true })
+  });
+}
+
+function recordWallpaperSelection(beforePath, afterPath) {
+  if (beforePath === afterPath) return;
+  pushConsoleHistory({
+    type: "wallpaper-selection",
+    before: beforePath || "",
+    after: afterPath || "",
+    apply: path => setSelectedWallpaper(path, { record: false })
+  });
+}
+
 function selectedWallpaper() {
   return wallpapers.find(item => item.path === selectedWallpaperPath) || orderedWallpapers()[0] || null;
 }
 
-function setSelectedWallpaper(path) {
+function setSelectedWallpaper(path, options = {}) {
+  const beforePath = selectedWallpaperPath;
   pendingDeletePath = "";
   selectedWallpaperPath = path || "";
   if (selectedWallpaperPath) {
@@ -2506,6 +2862,9 @@ function setSelectedWallpaper(path) {
     localStorage.removeItem(storageKeys.selectedWallpaper);
   }
   renderWallpapers();
+  if (options.record !== false) {
+    recordWallpaperSelection(beforePath, selectedWallpaperPath);
+  }
 }
 
 function requestDeleteWallpaper(item) {
@@ -2520,7 +2879,7 @@ function cancelDeleteWallpaper() {
 }
 
 function wallpaperDropBeforePath(clientX, clientY) {
-  const cards = Array.from(els.wallpaperDock?.querySelectorAll(".wallpaper-card:not(.dragging)") || []);
+  const cards = Array.from(els.wallpaperDock?.querySelectorAll(".wallpaper-card:not(.dragging):not(.wallpaper-placeholder)") || []);
   if (!cards.length) return "";
 
   const rows = [];
@@ -2579,18 +2938,236 @@ function showWallpaperDropMarker(beforePath) {
   }
 }
 
-function reorderWallpaper(path, beforePath = "") {
+function reorderWallpaper(path, beforePath = "", options = {}) {
   if (!path || path === beforePath) return;
-  const currentOrder = orderedWallpapers().map(item => item.path).filter(itemPath => itemPath !== path);
-  const insertIndex = beforePath ? currentOrder.indexOf(beforePath) : -1;
-  if (insertIndex >= 0) {
-    currentOrder.splice(insertIndex, 0, path);
-  } else {
-    currentOrder.push(path);
+  const beforeOrder = options.beforeOrder || wallpaperOrderSnapshot();
+  const nextOrder = orderWithMovedPath(beforeOrder, path, beforePath);
+  if (historyValuesEqual(beforeOrder, nextOrder)) {
+    return;
   }
-  wallpaperOrder = currentOrder;
-  persistWallpaperOrderNow();
-  renderWallpapers();
+  setWallpaperOrder(nextOrder, { animate: options.animate !== false });
+  if (options.record !== false) {
+    recordWallpaperOrderChange(beforeOrder, nextOrder);
+  }
+}
+
+function wallpaperBeforeCardFromPoint(clientX, clientY) {
+  const beforePath = wallpaperDropBeforePath(clientX, clientY);
+  if (!beforePath) return null;
+  return Array.from(els.wallpaperDock?.querySelectorAll(".wallpaper-card:not(.dragging):not(.wallpaper-placeholder)") || [])
+    .find(card => card.dataset.wallpaperPath === beforePath) || null;
+}
+
+function moveWallpaperPlaceholder(placeholder, clientX, clientY) {
+  const before = wallpaperBeforeCardFromPoint(clientX, clientY);
+  if (before === placeholder || before === placeholder.nextElementSibling) return;
+  animateWallpaperReflow(() => {
+    els.wallpaperDock.insertBefore(placeholder, before);
+  });
+}
+
+function wallpaperBeforePathFromPlaceholder(placeholder) {
+  let sibling = placeholder.nextElementSibling;
+  while (sibling) {
+    if (sibling.classList.contains("wallpaper-card") && !sibling.classList.contains("wallpaper-placeholder")) {
+      return sibling.dataset.wallpaperPath || "";
+    }
+    sibling = sibling.nextElementSibling;
+  }
+  return "";
+}
+
+function settleDraggedWallpaperCard(card, placeholder, animate = true) {
+  const startRect = card.getBoundingClientRect();
+  const targetRect = placeholder.getBoundingClientRect();
+  const dock = placeholder.parentNode;
+  let settled = false;
+  let fallbackTimer = null;
+
+  const cleanup = () => {
+    if (settled) return;
+    settled = true;
+    if (fallbackTimer) {
+      window.clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
+    dock.insertBefore(card, placeholder);
+    placeholder.remove();
+    card.getAnimations().forEach(animation => animation.cancel());
+    card.classList.remove("dragging", "wallpaper-floating");
+    card.style.removeProperty("width");
+    card.style.removeProperty("height");
+    card.style.removeProperty("left");
+    card.style.removeProperty("top");
+  };
+
+  if (!animate || Math.abs(startRect.left - targetRect.left) < 1 && Math.abs(startRect.top - targetRect.top) < 1) {
+    cleanup();
+    return Promise.resolve();
+  }
+
+  return new Promise(resolve => {
+    const finishCleanup = () => {
+      cleanup();
+      resolve();
+    };
+    card.style.left = `${startRect.left}px`;
+    card.style.top = `${startRect.top}px`;
+    const animation = card.animate(
+      [
+        { left: `${startRect.left}px`, top: `${startRect.top}px`, transform: "scale(1.02)" },
+        { left: `${targetRect.left}px`, top: `${targetRect.top}px`, transform: "scale(1)" }
+      ],
+      {
+        duration: 240,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+        fill: "forwards"
+      }
+    );
+    fallbackTimer = window.setTimeout(finishCleanup, 320);
+    animation.finished.catch(() => {}).then(finishCleanup);
+  });
+}
+
+function createWallpaperDragSession(card, item, startX, startY) {
+  const rect = card.getBoundingClientRect();
+  const placeholder = document.createElement("div");
+  placeholder.className = "wallpaper-card wallpaper-placeholder";
+  placeholder.style.minHeight = `${rect.height}px`;
+  placeholder.setAttribute("aria-hidden", "true");
+  const offsetX = startX - rect.left;
+  const offsetY = startY - rect.top;
+  const sourceOrder = wallpaperOrderSnapshot();
+  const sourceBeforePath = card.nextElementSibling?.dataset?.wallpaperPath || "";
+  let dragging = false;
+
+  const moveCardToPoint = (clientX, clientY) => {
+    const clamped = clampDragPosition(clientX, clientY, offsetX, offsetY, rect.width, rect.height);
+    card.style.left = `${clamped.left}px`;
+    card.style.top = `${clamped.top}px`;
+  };
+
+  const restorePlaceholderToSource = () => {
+    const sourceBefore = sourceBeforePath
+      ? Array.from(els.wallpaperDock.querySelectorAll(".wallpaper-card:not(.dragging):not(.wallpaper-placeholder)"))
+        .find(node => node.dataset.wallpaperPath === sourceBeforePath)
+      : null;
+    animateWallpaperReflow(() => {
+      els.wallpaperDock.insertBefore(placeholder, sourceBefore);
+    });
+  };
+
+  const finish = shouldCommit => {
+    if (!dragging) return false;
+    suppressWallpaperClickUntil = Date.now() + 240;
+    draggedWallpaperPath = "";
+    document.body.classList.remove("wallpaper-dragging");
+    clearWallpaperDropMarkers();
+
+    if (!shouldCommit) {
+      restorePlaceholderToSource();
+      return settleDraggedWallpaperCard(card, placeholder, true).then(() => false);
+    }
+
+    const beforePath = wallpaperBeforePathFromPlaceholder(placeholder);
+    const nextOrder = orderWithMovedPath(sourceOrder, item.path, beforePath);
+    wallpaperOrder = nextOrder;
+    persistWallpaperOrderNow();
+    return settleDraggedWallpaperCard(card, placeholder, true).then(() => {
+      renderWallpapers();
+      recordWallpaperOrderChange(sourceOrder, nextOrder);
+      return true;
+    });
+  };
+
+  const move = moveEvent => {
+    const dx = moveEvent.clientX - startX;
+    const dy = moveEvent.clientY - startY;
+    if (!dragging && Math.hypot(dx, dy) < 6) return false;
+    if (!dragging) {
+      dragging = true;
+      draggedWallpaperPath = item.path;
+      els.wallpaperDock.insertBefore(placeholder, card);
+      document.body.appendChild(card);
+      card.classList.add("dragging", "wallpaper-floating");
+      card.style.width = `${rect.width}px`;
+      card.style.height = `${rect.height}px`;
+      document.body.classList.add("wallpaper-dragging");
+    }
+    moveEvent.preventDefault();
+    moveCardToPoint(moveEvent.clientX, moveEvent.clientY);
+    const draggedRect = card.getBoundingClientRect();
+    moveWallpaperPlaceholder(placeholder, draggedRect.left + draggedRect.width / 2, draggedRect.top + draggedRect.height / 2);
+    return true;
+  };
+
+  return {
+    finish,
+    isDragging: () => dragging,
+    move
+  };
+}
+
+function beginWallpaperPointerDrag(event, card, item) {
+  if (event.button !== 0 || event.pointerType === "mouse" || event.target?.closest?.(".delete-wallpaper-button, .delete-popover")) return;
+  lastWallpaperPointerStart = Date.now();
+  const dragSession = createWallpaperDragSession(card, item, event.clientX, event.clientY);
+
+  const cleanup = () => {
+    card.removeEventListener("pointermove", move);
+    card.removeEventListener("pointerup", up);
+    card.removeEventListener("pointercancel", cancel);
+  };
+
+  const finish = shouldCommit => {
+    cleanup();
+    dragSession.finish(shouldCommit);
+  };
+
+  const move = moveEvent => {
+    dragSession.move(moveEvent);
+  };
+
+  const up = upEvent => {
+    if (card.hasPointerCapture(upEvent.pointerId)) {
+      try {
+        card.releasePointerCapture(upEvent.pointerId);
+      } catch {}
+    }
+    if (dragSession.isDragging()) upEvent.preventDefault();
+    finish(true);
+  };
+
+  const cancel = () => finish(false);
+
+  card.setPointerCapture(event.pointerId);
+  card.addEventListener("pointermove", move);
+  card.addEventListener("pointerup", up);
+  card.addEventListener("pointercancel", cancel);
+}
+
+function beginWallpaperMouseDrag(event, card, item) {
+  if (event.button !== 0 || Date.now() - lastWallpaperPointerStart < 80 || event.target?.closest?.(".delete-wallpaper-button, .delete-popover")) return;
+  const dragSession = createWallpaperDragSession(card, item, event.clientX, event.clientY);
+
+  const cleanup = () => {
+    document.removeEventListener("mousemove", move);
+    document.removeEventListener("mouseup", up);
+  };
+
+  const finish = shouldCommit => {
+    cleanup();
+    dragSession.finish(shouldCommit);
+  };
+
+  const move = moveEvent => {
+    dragSession.move(moveEvent);
+  };
+
+  const up = () => finish(true);
+
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
 }
 
 function renderWallpapers() {
@@ -2652,44 +3229,16 @@ function renderWallpapers() {
     card.tabIndex = 0;
     card.title = text("cardTitle", item.name);
     card.setAttribute("role", "button");
-    card.draggable = true;
+    card.draggable = false;
+    card.addEventListener("selectstart", event => event.preventDefault());
+    card.addEventListener("pointerdown", event => beginWallpaperPointerDrag(event, card, item));
+    card.addEventListener("mousedown", event => beginWallpaperMouseDrag(event, card, item));
     card.addEventListener("click", () => {
       if (Date.now() < suppressWallpaperClickUntil) return;
       setSelectedWallpaper(item.path);
     });
     card.addEventListener("dblclick", () => applyWallpaper(item));
-    card.addEventListener("dragstart", event => {
-      if (event.target.closest(".delete-wallpaper-button, .delete-popover")) {
-        event.preventDefault();
-        return;
-      }
-      draggedWallpaperPath = item.path;
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("application/x-control-wallpaper", item.path);
-      event.dataTransfer.setData("text/plain", item.name);
-      window.requestAnimationFrame(() => card.classList.add("dragging"));
-    });
-    card.addEventListener("dragend", () => {
-      draggedWallpaperPath = "";
-      suppressWallpaperClickUntil = Date.now() + 180;
-      clearWallpaperDropMarkers();
-      card.classList.remove("dragging");
-    });
-    card.addEventListener("dragover", event => {
-      if (!draggedWallpaperPath) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      showWallpaperDropMarker(wallpaperDropBeforePath(event.clientX, event.clientY));
-    });
-    card.addEventListener("drop", event => {
-      const path = event.dataTransfer.getData("application/x-control-wallpaper") || draggedWallpaperPath;
-      if (!path) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const beforePath = wallpaperDropBeforePath(event.clientX, event.clientY);
-      clearWallpaperDropMarkers();
-      reorderWallpaper(path, beforePath);
-    });
+    card.addEventListener("dragstart", event => event.preventDefault());
     card.addEventListener("keydown", event => {
       if (event.key === "Enter") {
         applyWallpaper(item);
@@ -2708,6 +3257,7 @@ function renderWallpapers() {
     const image = document.createElement("img");
     image.src = item.url;
     image.alt = item.name;
+    image.draggable = false;
     image.loading = "lazy";
     image.decoding = "async";
     image.fetchPriority = item.path === selectedWallpaperPath ? "high" : "low";
@@ -3729,10 +4279,15 @@ function settleDraggedMusicTrack(card, placeholder, animate = true) {
   const targetRect = placeholder.getBoundingClientRect();
   const grid = placeholder.parentNode;
   let settled = false;
+  let fallbackTimer = null;
 
   const cleanup = () => {
     if (settled) return;
     settled = true;
+    if (fallbackTimer) {
+      window.clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
     grid.insertBefore(card, placeholder);
     placeholder.remove();
     grid.classList.remove("drag-has-placeholder");
@@ -3749,29 +4304,35 @@ function settleDraggedMusicTrack(card, placeholder, animate = true) {
     return Promise.resolve();
   }
 
-  card.style.left = `${startRect.left}px`;
-  card.style.top = `${startRect.top}px`;
-  const animation = card.animate(
-    [
+  return new Promise(resolve => {
+    const finishCleanup = () => {
+      cleanup();
+      resolve();
+    };
+    card.style.left = `${startRect.left}px`;
+    card.style.top = `${startRect.top}px`;
+    const animation = card.animate(
+      [
+        {
+          left: `${startRect.left}px`,
+          top: `${startRect.top}px`,
+          transform: "scale(1.02)"
+        },
+        {
+          left: `${targetRect.left}px`,
+          top: `${targetRect.top}px`,
+          transform: "scale(1)"
+        }
+      ],
       {
-        left: `${startRect.left}px`,
-        top: `${startRect.top}px`,
-        transform: "scale(1.02)"
-      },
-      {
-        left: `${targetRect.left}px`,
-        top: `${targetRect.top}px`,
-        transform: "scale(1)"
+        duration: 260,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+        fill: "forwards"
       }
-    ],
-    {
-      duration: 260,
-      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      fill: "forwards"
-    }
-  );
-
-  return animation.finished.catch(() => {}).then(cleanup);
+    );
+    fallbackTimer = window.setTimeout(finishCleanup, 340);
+    animation.finished.catch(() => {}).then(finishCleanup);
+  });
 }
 
 function createMusicTrackDragSession(card, item, startX, startY) {
@@ -3960,11 +4521,67 @@ function reorderTrackWithinTier(path, tierId, beforePath = "") {
   musicTierOrder = musicTierGroups.flatMap(group => tracksByTier[group.id].map(item => item.path));
 }
 
+function cleanMusicArrangementState(state) {
+  const localPaths = new Set(tracks.map(item => item.path));
+  const rawTiers = state?.tiers && typeof state.tiers === "object" && !Array.isArray(state.tiers) ? state.tiers : {};
+  const tiers = Object.fromEntries(
+    Object.entries(rawTiers)
+      .map(([path, tierId]) => [String(path), normalizeMusicTier(String(tierId || ""))])
+      .filter(([path, tierId]) => path && localPaths.has(path) && tierId !== "third")
+  );
+  const seen = new Set();
+  const order = sanitizeMusicTierOrder(state?.order || [])
+    .filter(path => {
+      if (!localPaths.has(path) || seen.has(path)) return false;
+      seen.add(path);
+      return true;
+    });
+  for (const item of tracks) {
+    if (!seen.has(item.path)) {
+      order.push(item.path);
+      seen.add(item.path);
+    }
+  }
+  return { tiers, order };
+}
+
+function musicArrangementSnapshot() {
+  return cleanMusicArrangementState({
+    tiers: { ...musicTierAssignments },
+    order: [...musicTierOrder]
+  });
+}
+
+function applyMusicArrangementHistory(state) {
+  const nextState = cleanMusicArrangementState(state);
+  animateMusicTrackReflow(() => {
+    musicTierAssignments = nextState.tiers;
+    musicTierOrder = nextState.order;
+    persistMusicStateNow();
+    renderMusic();
+  });
+  renderMusicLibraries();
+}
+
+function recordMusicArrangementChange(beforeState, afterState) {
+  const before = cleanMusicArrangementState(beforeState);
+  const after = cleanMusicArrangementState(afterState);
+  if (historyValuesEqual(before, after)) return;
+  pushConsoleHistory({
+    type: "music-arrangement",
+    before,
+    after,
+    apply: applyMusicArrangementHistory
+  });
+}
+
 function moveTrackToTier(path, tierId, beforePath = "") {
   if (!localTrackExists(path)) return;
+  const beforeState = musicArrangementSnapshot();
   assignTrackTier(path, tierId, false);
   reorderTrackWithinTier(path, tierId, beforePath);
   persistMusicStateNow();
+  recordMusicArrangementChange(beforeState, musicArrangementSnapshot());
 }
 
 function setTrackTier(path, tierId, beforePath = "") {
@@ -7393,6 +8010,13 @@ function audioDuration() {
   return Number.isFinite(duration) && duration > 0 ? duration : 0;
 }
 
+function currentAudioSeekRatio() {
+  const duration = audioDuration();
+  if (duration <= 0) return trackSeekRatio();
+  const current = Number.isFinite(els.audioPlayer.currentTime) ? els.audioPlayer.currentTime : 0;
+  return clamp(current / duration, 0, 1);
+}
+
 function trackSeekRatio() {
   return clamp(Number(els.trackSeek.value) || 0, 0, 100) / 100;
 }
@@ -7415,6 +8039,12 @@ function previewTrackSeek(ratio = trackSeekRatio()) {
   const previewTime = duration > 0 ? clamp(ratio, 0, 1) * duration : 0;
   els.trackCurrentTime.textContent = formatDuration(previewTime);
   els.trackDuration.textContent = formatDuration(duration);
+}
+
+function setTrackSeekVisualRatio(ratio) {
+  const cleanRatio = clamp(Number(ratio) || 0, 0, 1);
+  els.trackSeek.value = String(cleanRatio * 100);
+  previewTrackSeek(cleanRatio);
 }
 
 function commitTrackSeek(ratio = trackSeekRatio()) {
@@ -7448,6 +8078,137 @@ function commitTrackSeek(ratio = trackSeekRatio()) {
   els.trackDuration.textContent = formatDuration(duration);
 }
 
+function animateNumberValue(key, from, to, duration, onValue, onFinish) {
+  const start = Number(from) || 0;
+  const end = Number(to) || 0;
+  const distance = end - start;
+  cancelSmoothValueAnimation(key);
+  if (Math.abs(distance) < 0.001 || duration <= 0) {
+    onValue(end);
+    onFinish?.(end);
+    return;
+  }
+
+  const startedAt = window.performance.now();
+  const ease = value => 1 - Math.pow(1 - value, 3);
+  const step = now => {
+    const record = smoothValueAnimations.get(key);
+    if (!record) return;
+    const progress = clamp((now - startedAt) / duration, 0, 1);
+    const nextValue = start + distance * ease(progress);
+    onValue(nextValue);
+    if (progress >= 1) {
+      smoothValueAnimations.delete(key);
+      onFinish?.(end);
+      return;
+    }
+    record.frame = window.requestAnimationFrame(step);
+  };
+  const record = {
+    frame: window.requestAnimationFrame(step),
+    cancel: () => onFinish?.(null)
+  };
+  smoothValueAnimations.set(key, record);
+}
+
+function applyTrackSeekHistory(payload) {
+  const targetPath = payload?.trackPath || "";
+  const targetRatio = clamp(Number(payload?.ratio) || 0, 0, 1);
+  const target = targetPath ? allMusicTracks().find(item => item.path === targetPath) : null;
+  if (target && selectedTrackPath !== target.path) {
+    setSelectedTrack(target.path);
+    const targetUrl = new URL(target.url, window.location.href).href;
+    if (els.audioPlayer.src !== targetUrl) {
+      els.audioPlayer.src = target.url;
+      els.audioPlayer.load();
+    }
+  }
+
+  if (audioDuration() <= 0) {
+    pendingSeekRatio = targetRatio;
+    setTrackSeekVisualRatio(targetRatio);
+    return;
+  }
+
+  const startRatio = currentAudioSeekRatio();
+  animateNumberValue(
+    "seek",
+    startRatio,
+    targetRatio,
+    320,
+    setTrackSeekVisualRatio,
+    value => {
+      if (value == null) return;
+      commitTrackSeek(targetRatio);
+      updateTrackProgress();
+    }
+  );
+}
+
+function recordTrackSeekChange(beforeRatio, afterRatio) {
+  if (beforeRatio == null) return;
+  const before = clamp(Number(beforeRatio) || 0, 0, 1);
+  const after = clamp(Number(afterRatio) || 0, 0, 1);
+  if (Math.abs(before - after) < 0.004) return;
+  pushConsoleHistory({
+    type: "track-seek",
+    before: { trackPath: selectedTrackPath || "", ratio: before },
+    after: { trackPath: selectedTrackPath || "", ratio: after },
+    apply: applyTrackSeekHistory
+  });
+}
+
+function setTrackVolume(value, options = {}) {
+  const nextVolume = clamp(Number(value) || 0, 0, 1);
+  els.audioPlayer.volume = nextVolume;
+  els.trackVolume.value = String(nextVolume);
+  if (options.persist !== false) {
+    localStorage.setItem(storageKeys.volume, String(nextVolume));
+  }
+}
+
+function applyVolumeHistory(value) {
+  const targetVolume = clamp(Number(value) || 0, 0, 1);
+  const startVolume = clamp(Number(els.audioPlayer.volume) || 0, 0, 1);
+  animateNumberValue(
+    "volume",
+    startVolume,
+    targetVolume,
+    240,
+    volume => setTrackVolume(volume),
+    value => {
+      if (value != null) setTrackVolume(targetVolume);
+    }
+  );
+}
+
+function recordVolumeChange(beforeVolume, afterVolume) {
+  const before = clamp(Number(beforeVolume) || 0, 0, 1);
+  const after = clamp(Number(afterVolume) || 0, 0, 1);
+  if (Math.abs(before - after) < 0.006) return;
+  pushConsoleHistory({
+    type: "volume",
+    before,
+    after,
+    apply: applyVolumeHistory
+  });
+}
+
+function beginVolumeGesture() {
+  cancelSmoothValueAnimation("volume");
+  if (volumeHistoryStart == null) {
+    volumeHistoryStart = clamp(Number(els.audioPlayer.volume) || 0, 0, 1);
+  }
+}
+
+function commitVolumeGesture() {
+  if (volumeHistoryStart == null) return;
+  const before = volumeHistoryStart;
+  const after = clamp(Number(els.audioPlayer.volume) || 0, 0, 1);
+  volumeHistoryStart = null;
+  recordVolumeChange(before, after);
+}
+
 function applyPendingTrackSeek() {
   if (userSeeking || pendingSeekRatio == null || audioDuration() <= 0) return false;
   commitTrackSeek(pendingSeekRatio);
@@ -7469,8 +8230,10 @@ function removeTrackSeekWindowListeners() {
 function beginTrackSeek(event) {
   if (event?.button != null && event.button !== 0) return;
   event?.preventDefault?.();
+  cancelSmoothValueAnimation("seek");
   userSeeking = true;
   activeSeekPointerId = event?.pointerId ?? null;
+  seekHistoryStartRatio = currentAudioSeekRatio();
   setPendingTrackSeek(trackSeekRatioFromPointer(event) ?? trackSeekRatio());
   addTrackSeekWindowListeners();
   if (event?.pointerId != null && typeof els.trackSeek.setPointerCapture === "function") {
@@ -7488,12 +8251,16 @@ function moveTrackSeek(event) {
 }
 
 function handleTrackSeekInput(event) {
+  cancelSmoothValueAnimation("seek");
   pendingSeekRatio = trackSeekRatioFromPointer(event) ?? trackSeekRatio();
   if (userSeeking) {
     previewTrackSeek(pendingSeekRatio);
     return;
   }
+  const beforeRatio = seekHistoryStartRatio ?? currentAudioSeekRatio();
   commitTrackSeek(pendingSeekRatio);
+  recordTrackSeekChange(beforeRatio, pendingSeekRatio);
+  seekHistoryStartRatio = null;
   updateTrackProgress();
 }
 
@@ -7515,12 +8282,18 @@ function finishTrackSeek(event) {
     } catch {}
   }
   commitTrackSeek(ratio);
+  recordTrackSeekChange(seekHistoryStartRatio, ratio);
+  seekHistoryStartRatio = null;
   updateTrackProgress();
 }
 
 function updateTrackProgress() {
   const duration = audioDuration();
   const current = Number.isFinite(els.audioPlayer.currentTime) ? els.audioPlayer.currentTime : 0;
+  if (smoothValueAnimations.has("seek")) {
+    previewTrackSeek(trackSeekRatio());
+    return;
+  }
   if (userSeeking) {
     previewTrackSeek(pendingSeekRatio ?? trackSeekRatio());
     return;
@@ -7816,9 +8589,7 @@ if (els.languageToggle) els.languageToggle.addEventListener("click", () => {
   applyLanguage();
 });
 if (els.themeToggle) els.themeToggle.addEventListener("click", () => {
-  theme = nextTheme(theme);
-  localStorage.setItem(storageKeys.theme, theme);
-  applyTheme();
+  setTheme(nextTheme(theme));
 });
 if (els.moduleArchiveDrop) els.moduleArchiveDrop.addEventListener("click", event => {
   event.stopPropagation();
@@ -7839,26 +8610,6 @@ window.addEventListener("popstate", () => {
 if (hasWallpaper) els.addWallpaper.addEventListener("click", openAddWallpaperPicker);
 if (hasWallpaper) els.wallpaperFileInput.addEventListener("change", event => uploadWallpaperFiles(event.target.files));
 if (hasWallpaper) els.wallpaperPreview.addEventListener("dblclick", () => applyWallpaper());
-if (hasWallpaper) els.wallpaperDock.addEventListener("dragover", event => {
-  if (!draggedWallpaperPath) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
-  showWallpaperDropMarker(wallpaperDropBeforePath(event.clientX, event.clientY));
-});
-if (hasWallpaper) els.wallpaperDock.addEventListener("dragleave", event => {
-  if (!els.wallpaperDock.contains(event.relatedTarget)) {
-    clearWallpaperDropMarkers();
-  }
-});
-if (hasWallpaper) els.wallpaperDock.addEventListener("drop", event => {
-  const path = event.dataTransfer.getData("application/x-control-wallpaper") || draggedWallpaperPath;
-  if (!path) return;
-  event.preventDefault();
-  event.stopPropagation();
-  const beforePath = wallpaperDropBeforePath(event.clientX, event.clientY);
-  clearWallpaperDropMarkers();
-  reorderWallpaper(path, beforePath);
-});
 if (hasWallpaper) els.wallpaperPreview.addEventListener("keydown", event => {
   if (event.key === "Enter") {
     applyWallpaper();
@@ -7914,11 +8665,20 @@ if (hasMusic) (els.trackSeekArea || els.trackSeek).addEventListener("pointerdown
 if (hasMusic) els.trackSeek.addEventListener("lostpointercapture", finishTrackSeek);
 if (hasMusic) els.trackSeek.addEventListener("change", finishTrackSeek);
 if (hasMusic) els.trackSeek.addEventListener("input", handleTrackSeekInput);
-if (hasMusic) els.trackVolume.addEventListener("input", () => {
-  const nextVolume = Math.max(0, Math.min(1, Number(els.trackVolume.value) || 0));
-  els.audioPlayer.volume = nextVolume;
-  localStorage.setItem(storageKeys.volume, String(nextVolume));
+if (hasMusic) els.trackVolume.addEventListener("pointerdown", beginVolumeGesture);
+if (hasMusic) els.trackVolume.addEventListener("keydown", event => {
+  if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End" || event.key === "PageUp" || event.key === "PageDown") {
+    beginVolumeGesture();
+  }
 });
+if (hasMusic) els.trackVolume.addEventListener("input", () => {
+  beginVolumeGesture();
+  setTrackVolume(els.trackVolume.value);
+});
+if (hasMusic) els.trackVolume.addEventListener("change", commitVolumeGesture);
+if (hasMusic) els.trackVolume.addEventListener("pointerup", commitVolumeGesture);
+if (hasMusic) els.trackVolume.addEventListener("pointercancel", commitVolumeGesture);
+if (hasMusic) els.trackVolume.addEventListener("blur", commitVolumeGesture);
 if (hasMusic) els.audioPlayer.addEventListener("loadedmetadata", updateTrackProgress);
 if (hasMusic) els.audioPlayer.addEventListener("durationchange", updateTrackProgress);
 if (hasMusic) els.audioPlayer.addEventListener("canplay", updateTrackProgress);
@@ -8220,6 +8980,7 @@ document.addEventListener("click", event => {
 });
 
 document.addEventListener("keydown", event => {
+  if (handleConsoleUndoRedoKeydown(event)) return;
   if (event.key === "Escape" && hasMusic && els.musicAddMenu && !els.musicAddMenu.hidden) {
     setMusicAddMenuOpen(false);
     els.addMusic?.focus();
