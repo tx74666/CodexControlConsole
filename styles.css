@@ -108,7 +108,7 @@ button {
 }
 
 .app-shell {
-  width: min(1352px, 100vw);
+  width: min(1352px, 100%);
   min-width: 520px;
   min-height: 100vh;
   margin: 0 auto;
@@ -679,7 +679,7 @@ h2 {
 }
 
 .steamwork-actions {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .randomrealm-release-actions .ghost-button {
@@ -1479,13 +1479,41 @@ h2 {
 .steamwork-tips {
   display: grid;
   gap: 10px;
-  padding: 12px 14px;
+  padding: 10px 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--meta-bg);
 }
 
-.steamwork-tips > span {
+.steamwork-tips summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.steamwork-tips summary::-webkit-details-marker {
+  display: none;
+}
+
+.steamwork-tips summary::after {
+  content: "+";
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.steamwork-tips[open] summary::after {
+  content: "-";
+}
+
+.steamwork-tips:not([open]) > :not(summary) {
+  display: none;
+}
+
+.steamwork-tips summary span {
   color: var(--green);
   font-size: 12px;
   font-weight: 800;
@@ -1494,6 +1522,7 @@ h2 {
 
 .steamwork-table-wrap {
   min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
 }
 
@@ -1547,6 +1576,1213 @@ h2 {
 .steamwork-tip-table.compact td:first-child {
   width: 180px;
   color: var(--muted);
+}
+
+.steamwork-assets {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--meta-bg);
+}
+
+.steamwork-assets-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.steamwork-assets-head .workspace-pill {
+  max-width: min(100%, 520px);
+  text-align: right;
+  white-space: normal;
+  line-height: 1.35;
+  padding-block: 5px;
+}
+
+.steamwork-assets-head .workspace-pill.steamwork-summary-pill {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  max-width: min(100%, 620px);
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--panel-bg);
+}
+
+.steamwork-summary-chip {
+  min-height: 23px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--button-bg);
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.steamwork-summary-chip.ready {
+  border-color: rgba(15, 154, 113, 0.42);
+  color: var(--green);
+}
+
+.steamwork-summary-chip.review {
+  border-color: rgba(255, 184, 77, 0.4);
+  color: #c9851b;
+}
+
+.steamwork-summary-chip.missing {
+  border-color: rgba(230, 92, 92, 0.4);
+  color: #d75d5d;
+}
+
+.steamwork-summary-chip.optional,
+.steamwork-summary-chip.files {
+  color: var(--muted);
+}
+
+.steamwork-assets-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.steamwork-assets-head > div > span:first-child {
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.steamwork-assets-head h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 17px;
+}
+
+.steamwork-asset-root {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamwork-asset-list {
+  display: grid;
+  gap: 12px;
+}
+
+.steamwork-category-nav {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 8px;
+}
+
+.steamwork-category-jump {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-bg);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.steamwork-category-jump:hover,
+.steamwork-category-jump:focus-visible {
+  border-color: var(--line-strong);
+  outline: none;
+}
+
+.steamwork-category-jump.has-missing {
+  border-color: rgba(230, 92, 92, 0.34);
+}
+
+.steamwork-category-jump.has-review {
+  border-color: rgba(255, 184, 77, 0.34);
+}
+
+.steamwork-category-jump-main {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.steamwork-category-jump strong,
+.steamwork-category-jump-ready {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamwork-category-jump strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.steamwork-category-jump-ready {
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.steamwork-category-jump-tags {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.steamwork-category-jump-tags small {
+  min-height: 17px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--button-bg);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.steamwork-category-jump-tags small.missing {
+  border-color: rgba(230, 92, 92, 0.36);
+  color: #d75d5d;
+}
+
+.steamwork-category-jump-tags small.review {
+  border-color: rgba(255, 184, 77, 0.34);
+  color: #c9851b;
+}
+
+.steamwork-asset-alerts {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(230, 92, 92, 0.28);
+  border-radius: 8px;
+  background: rgba(230, 92, 92, 0.07);
+}
+
+.steamwork-asset-alerts.is-compact {
+  grid-template-columns: minmax(82px, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.steamwork-asset-alerts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.steamwork-asset-alerts.is-compact .steamwork-asset-alerts-head {
+  display: grid;
+  justify-content: start;
+  gap: 1px;
+}
+
+.steamwork-asset-alerts-head strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.steamwork-asset-alerts-head span {
+  color: #d75d5d;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.steamwork-asset-alert-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 8px;
+}
+
+.steamwork-asset-alerts.is-compact .steamwork-asset-alert-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.steamwork-asset-alert {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-bg);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.steamwork-asset-alerts.is-compact .steamwork-asset-alert {
+  min-height: 48px;
+  padding-block: 7px;
+}
+
+.steamwork-asset-alerts.is-compact .steamwork-alert-target {
+  display: none;
+}
+
+.steamwork-asset-alert:hover,
+.steamwork-asset-alert:focus-visible {
+  border-color: rgba(230, 92, 92, 0.46);
+  outline: none;
+}
+
+.steamwork-alert-status {
+  min-width: 52px;
+  min-height: 22px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 7px;
+  border: 1px solid rgba(230, 92, 92, 0.42);
+  border-radius: 999px;
+  background: rgba(230, 92, 92, 0.12);
+  color: #d75d5d;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.steamwork-asset-alert.status-review .steamwork-alert-status {
+  border-color: rgba(255, 184, 77, 0.42);
+  background: rgba(255, 184, 77, 0.12);
+  color: #c9851b;
+}
+
+.steamwork-alert-body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.steamwork-alert-body strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamwork-alert-body strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.steamwork-alert-tags {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.steamwork-alert-tags small {
+  min-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--button-bg);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.steamwork-alert-tags small.steamwork-alert-tag-action {
+  border-color: rgba(230, 92, 92, 0.36);
+  background: rgba(230, 92, 92, 0.1);
+  color: #d75d5d;
+}
+
+.steamwork-asset-alert.status-review .steamwork-alert-tags small.steamwork-alert-tag-action {
+  border-color: rgba(255, 184, 77, 0.34);
+  background: rgba(255, 184, 77, 0.1);
+  color: #c9851b;
+}
+
+.steamwork-alert-tags small.steamwork-alert-tag-spec {
+  color: var(--soft);
+}
+
+.steamwork-alert-tags small.steamwork-alert-tag-category {
+  color: var(--muted);
+}
+
+.steamwork-alert-target {
+  min-width: 0;
+  color: var(--soft) !important;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.steamwork-asset-category {
+  display: grid;
+  gap: 8px;
+}
+
+.steamwork-category-head {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-bg);
+  border-radius: 7px 7px 0 0;
+}
+
+.steamwork-category-head h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.steamwork-category-stats {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.steamwork-category-chip {
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--button-bg);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.steamwork-category-chip.ready {
+  border-color: rgba(15, 154, 113, 0.34);
+  color: var(--green);
+}
+
+.steamwork-category-chip.review {
+  border-color: rgba(255, 184, 77, 0.34);
+  color: #c9851b;
+}
+
+.steamwork-category-chip.missing {
+  border-color: rgba(230, 92, 92, 0.36);
+  color: #d75d5d;
+}
+
+.steamwork-category-body {
+  display: grid;
+  gap: 6px;
+}
+
+.steamwork-category-columns {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 1.4fr) 92px minmax(150px, 0.62fr) minmax(220px, 1fr) minmax(180px, 0.86fr) 24px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.steamwork-asset-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
+
+.steamwork-asset-card::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: rgba(15, 154, 113, 0.38);
+  pointer-events: none;
+}
+
+.steamwork-asset-card[open] {
+  border-color: var(--line-strong);
+}
+
+.steamwork-asset-card.status-ready::before {
+  background: rgba(15, 154, 113, 0.48);
+}
+
+.steamwork-asset-card.status-optional {
+  border-color: rgba(111, 130, 145, 0.28);
+}
+
+.steamwork-asset-card.status-optional::before {
+  background: rgba(111, 130, 145, 0.36);
+}
+
+.steamwork-asset-card.status-optional > .steamwork-asset-summary {
+  background: rgba(111, 130, 145, 0.035);
+}
+
+.steamwork-asset-card.status-missing {
+  border-color: rgba(230, 92, 92, 0.34);
+}
+
+.steamwork-asset-card.status-missing::before {
+  background: rgba(230, 92, 92, 0.58);
+}
+
+.steamwork-asset-card.status-missing[open] {
+  border-color: rgba(230, 92, 92, 0.58);
+}
+
+.steamwork-asset-card.status-missing > .steamwork-asset-summary {
+  background: rgba(230, 92, 92, 0.045);
+}
+
+.steamwork-asset-card.status-review {
+  border-color: rgba(255, 184, 77, 0.34);
+}
+
+.steamwork-asset-card.status-review::before {
+  background: rgba(255, 184, 77, 0.56);
+}
+
+.steamwork-asset-card.status-review[open] {
+  border-color: rgba(255, 184, 77, 0.54);
+}
+
+.steamwork-asset-card.status-review > .steamwork-asset-summary {
+  background: rgba(255, 184, 77, 0.055);
+}
+
+:root:not([data-theme="dark"]) .steamwork-asset-alerts {
+  border-color: rgba(230, 92, 92, 0.36);
+  background: rgba(255, 247, 247, 0.92);
+}
+
+:root:not([data-theme="dark"]) .steamwork-asset-card.status-missing[open] {
+  background: rgba(255, 249, 249, 0.86);
+}
+
+:root:not([data-theme="dark"]) .steamwork-asset-card.status-missing > .steamwork-asset-summary {
+  background: rgba(255, 244, 244, 0.8);
+}
+
+:root:not([data-theme="dark"]) .steamwork-asset-group.reference-group {
+  border-color: rgba(226, 150, 42, 0.34);
+  background: rgba(255, 252, 246, 0.9);
+}
+
+:root:not([data-theme="dark"]) .steamwork-asset-group.optional-reference-group {
+  border-color: rgba(111, 130, 145, 0.24);
+  background: rgba(248, 251, 249, 0.9);
+}
+
+:root:not([data-theme="dark"]) .steamwork-asset-group-note {
+  border-color: rgba(226, 150, 42, 0.28);
+  background: rgba(255, 249, 236, 0.78);
+}
+
+:root:not([data-theme="dark"]) .steamwork-asset-group.optional-reference-group .steamwork-asset-group-note {
+  border-color: rgba(111, 130, 145, 0.2);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.steamwork-asset-summary {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 1.4fr) 92px minmax(150px, 0.62fr) minmax(220px, 1fr) minmax(180px, 0.86fr) 24px;
+  align-items: center;
+  gap: 10px;
+  min-height: 66px;
+  padding: 7px 10px 7px 14px;
+  cursor: pointer;
+  list-style: none;
+  transition: background 150ms ease;
+}
+
+.steamwork-asset-summary::-webkit-details-marker {
+  display: none;
+}
+
+.steamwork-asset-summary:hover {
+  background: rgba(15, 143, 98, 0.035);
+}
+
+.steamwork-asset-summary:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+}
+
+.steamwork-asset-summary::after {
+  content: "+";
+  grid-column: 6;
+  grid-row: 1;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  justify-self: end;
+  align-self: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--button-bg);
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 850;
+  line-height: 1;
+}
+
+.steamwork-asset-card[open] .steamwork-asset-summary::after {
+  content: "-";
+  border-color: var(--line-strong);
+  color: var(--soft);
+}
+
+.steamwork-asset-specwrap {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+}
+
+.steamwork-asset-specwrap > span:not(.steamwork-status-badge) {
+  overflow: hidden;
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamwork-asset-statuscell,
+.steamwork-asset-currentcell {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+}
+
+.steamwork-asset-currentcell.is-empty .steamwork-current-name {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.steamwork-asset-speccell {
+  min-width: 0;
+  align-self: center;
+  overflow: hidden;
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamwork-asset-where {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamwork-asset-details {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.78fr) minmax(360px, 1.22fr);
+  grid-template-areas:
+    "stack candidates";
+  align-items: start;
+  gap: 10px;
+  padding: 0 10px 10px;
+}
+
+.steamwork-asset-details.no-current {
+  grid-template-columns: minmax(240px, 0.78fr) minmax(360px, 1.22fr);
+}
+
+.steamwork-asset-details.no-candidates {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "stack";
+}
+
+.steamwork-asset-details.no-candidates .steamwork-stage-zone {
+  min-height: 56px;
+  padding-block: 8px;
+}
+
+.steamwork-asset-group,
+.steamwork-asset-detail-stack,
+.steamwork-stage-zone {
+  min-width: 0;
+}
+
+.steamwork-asset-group,
+.steamwork-stage-zone {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--meta-bg);
+}
+
+.steamwork-asset-group.reference-group {
+  border-color: rgba(255, 184, 77, 0.3);
+  background: rgba(255, 184, 77, 0.035);
+}
+
+.steamwork-asset-group.optional-reference-group {
+  border-color: var(--line);
+  background: rgba(15, 154, 113, 0.025);
+}
+
+.steamwork-stage-zone {
+  min-height: 78px;
+  align-content: center;
+  border-style: dashed;
+  cursor: pointer;
+}
+
+.steamwork-asset-detail-stack {
+  grid-area: stack;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.steamwork-asset-details > .steamwork-asset-group.candidate-group {
+  grid-area: candidates;
+}
+
+.steamwork-stage-zone.drag-over {
+  border-color: var(--green);
+  background: rgba(15, 154, 113, 0.08);
+}
+
+.steamwork-missing-guide,
+.steamwork-optional-guide {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
+  border-radius: 8px;
+}
+
+.steamwork-missing-guide {
+  border: 1px solid rgba(230, 92, 92, 0.3);
+  background: rgba(230, 92, 92, 0.055);
+}
+
+.steamwork-optional-guide {
+  border: 1px solid var(--line);
+  background: rgba(15, 154, 113, 0.035);
+}
+
+.steamwork-missing-guide strong,
+.steamwork-optional-guide strong {
+  color: #d75d5d;
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.steamwork-optional-guide strong {
+  color: var(--muted);
+}
+
+.steamwork-missing-guide-tags,
+.steamwork-optional-guide-tags {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.steamwork-missing-guide-tags small,
+.steamwork-optional-guide-tags small {
+  min-height: 19px;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0 7px;
+  border: 1px solid rgba(230, 92, 92, 0.26);
+  border-radius: 999px;
+  background: var(--button-bg);
+  color: var(--soft);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamwork-optional-guide-tags small {
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.steamwork-asset-card.status-missing .steamwork-stage-zone {
+  border-color: rgba(230, 92, 92, 0.32);
+  background: rgba(230, 92, 92, 0.035);
+}
+
+.steamwork-asset-card.status-review .steamwork-stage-zone {
+  border-color: rgba(255, 184, 77, 0.32);
+  background: rgba(255, 184, 77, 0.04);
+}
+
+.steamwork-asset-card.status-missing .steamwork-stage-zone.drag-over,
+.steamwork-asset-card.status-review .steamwork-stage-zone.drag-over {
+  border-color: var(--green);
+  background: rgba(15, 154, 113, 0.08);
+}
+
+.steamwork-stage-zone strong,
+.steamwork-asset-group-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.steamwork-asset-group-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.steamwork-asset-group-count,
+.steamwork-asset-more,
+.steamwork-asset-group-note {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: none;
+}
+
+.steamwork-asset-group-note {
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 184, 77, 0.24);
+  border-radius: 7px;
+  background: rgba(255, 184, 77, 0.035);
+}
+
+.steamwork-asset-group.optional-reference-group .steamwork-asset-group-note {
+  border-color: var(--line);
+  background: var(--button-bg);
+}
+
+.steamwork-stage-zone span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.steamwork-file-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.steamwork-file-grid.candidate-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+.steamwork-asset-group.asset-screenshots .steamwork-file-grid {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.steamwork-current-file.screenshot-file.compact {
+  grid-template-columns: 96px minmax(0, 1fr);
+}
+
+.steamwork-current-file.screenshot-file.compact .steamwork-asset-thumb {
+  width: 96px;
+  min-width: 96px;
+  height: 54px;
+  min-height: 54px;
+}
+
+.steamwork-asset-group.candidate-group .steamwork-current-file.compact {
+  min-height: 78px;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  align-items: start;
+}
+
+.steamwork-asset-group.candidate-group .steamwork-asset-thumb {
+  width: 86px;
+  min-width: 86px;
+  height: 58px;
+  min-height: 58px;
+  align-self: start;
+  font-size: 10px;
+}
+
+.steamwork-asset-group .steamwork-asset-thumb img {
+  object-fit: contain;
+}
+
+.steamwork-asset-group.candidate-group .steamwork-current-body {
+  align-content: start;
+  gap: 4px;
+}
+
+.steamwork-asset-group.candidate-group .steamwork-open-asset {
+  margin-top: 2px;
+}
+
+.steamwork-asset-more {
+  min-height: 28px;
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  background: var(--panel-bg);
+}
+
+.steamwork-asset-more summary {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.steamwork-asset-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.steamwork-asset-more summary::after {
+  content: "+";
+  margin-left: auto;
+  color: var(--green);
+  font-weight: 900;
+}
+
+.steamwork-asset-more[open] {
+  padding-bottom: 8px;
+}
+
+.steamwork-asset-more[open] summary::after {
+  content: "-";
+}
+
+.steamwork-asset-more .steamwork-file-grid {
+  padding: 0 8px;
+}
+
+.steamwork-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.steamwork-empty-panel {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  background: var(--panel-bg);
+}
+
+.steamwork-empty-panel > span {
+  color: var(--soft);
+  font-weight: 850;
+}
+
+.steamwork-empty-panel > small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.steamwork-asset-namecell {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.steamwork-asset-thumb {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.steamwork-asset-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.steamwork-asset-titlewrap {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.steamwork-asset-titlewrap strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steamwork-asset-titlewrap span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.steamwork-status-badge {
+  min-width: 68px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  margin-bottom: 0;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--button-bg);
+  color: var(--soft);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.steamwork-status-badge.ready {
+  border-color: rgba(15, 154, 113, 0.45);
+  background: rgba(15, 154, 113, 0.12);
+  color: var(--green);
+}
+
+.steamwork-status-badge.review {
+  border-color: rgba(255, 184, 77, 0.42);
+  background: rgba(255, 184, 77, 0.12);
+  color: #c9851b;
+}
+
+.steamwork-status-badge.missing {
+  border-color: rgba(230, 92, 92, 0.42);
+  background: rgba(230, 92, 92, 0.12);
+  color: #d75d5d;
+}
+
+.steamwork-status-badge.optional {
+  color: var(--muted);
+}
+
+.steamwork-spec-text,
+.steamwork-current-name,
+.steamwork-current-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.steamwork-spec-text {
+  color: var(--soft);
+  font-weight: 750;
+}
+
+.steamwork-current-list {
+  display: grid;
+  gap: 7px;
+}
+
+.steamwork-current-file {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 2px;
+}
+
+.steamwork-current-file.compact {
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-bg);
+}
+
+.steamwork-current-file:not(:has(.steamwork-asset-thumb)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.steamwork-current-body {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.steamwork-current-name {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.steamwork-current-tags {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.steamwork-current-meta,
+.steamwork-current-path {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.steamwork-current-source {
+  min-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--button-bg);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.steamwork-fit-badge {
+  min-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-bg);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.steamwork-fit-badge.ok {
+  border-color: rgba(15, 154, 113, 0.34);
+  background: rgba(15, 154, 113, 0.1);
+  color: var(--green);
+}
+
+.steamwork-fit-badge.format,
+.steamwork-fit-badge.size,
+.steamwork-fit-badge.format-size {
+  border-color: rgba(255, 184, 77, 0.34);
+  background: rgba(255, 184, 77, 0.08);
+  color: #b97813;
+}
+
+.steamwork-fit-badge.type {
+  border-color: rgba(230, 92, 92, 0.32);
+  background: rgba(230, 92, 92, 0.08);
+  color: #c85a5a;
+}
+
+.steamwork-current-path {
+  white-space: nowrap;
+}
+
+.steamwork-open-asset {
+  justify-self: start;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--button-bg);
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.steamwork-open-asset:hover,
+.steamwork-open-asset:focus-visible {
+  border-color: var(--line-strong);
+  color: var(--green);
 }
 
 .tool-slot-grid {
@@ -2920,14 +4156,16 @@ body.wallpaper-dragging * {
 .music-tier-section.music-tier-drop-end .music-tier-track-grid::after {
   content: "";
   min-height: 88px;
-  border: 1px dashed var(--line-strong);
+  border: 1px dashed rgba(15, 143, 98, 0.26);
   border-radius: 8px;
-  background: rgba(15, 143, 98, 0.08);
+  background: rgba(15, 143, 98, 0.045);
+  animation: musicDropHintIn 230ms cubic-bezier(0.24, 0.62, 0.2, 1) both;
+  transform-origin: center;
 }
 
 :root[data-theme="dark"] .music-tier-section.music-tier-drop-end .music-tier-track-grid::after {
-  border-color: rgba(134, 205, 234, 0.58);
-  background: rgba(93, 160, 234, 0.11);
+  border-color: rgba(134, 205, 234, 0.34);
+  background: rgba(93, 160, 234, 0.07);
 }
 
 .music-tier-empty {
@@ -3184,6 +4422,11 @@ body.wallpaper-dragging * {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 240ms cubic-bezier(0.24, 0.62, 0.2, 1),
+    opacity 180ms cubic-bezier(0.24, 0.62, 0.2, 1);
 }
 
 :root[data-theme="dark"] .track-card {
@@ -3209,8 +4452,16 @@ body.wallpaper-dragging * {
   border-color: var(--line-strong);
   background: var(--card-bg);
   cursor: grabbing;
-  box-shadow: 0 18px 42px rgba(5, 18, 30, 0.22);
-  transform: scale(1.02);
+  box-shadow: 0 12px 30px rgba(5, 18, 30, 0.18);
+  transform: none;
+  transform-origin: top left;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 240ms cubic-bezier(0.24, 0.62, 0.2, 1),
+    opacity 180ms cubic-bezier(0.24, 0.62, 0.2, 1);
 }
 
 :root[data-theme="dark"] .track-card.music-track-floating {
@@ -3219,11 +4470,20 @@ body.wallpaper-dragging * {
 
 .track-card.music-track-placeholder {
   border-style: dashed;
-  background: rgba(15, 143, 98, 0.06);
+  border-color: rgba(15, 143, 98, 0.22);
+  background: rgba(15, 143, 98, 0.035);
   color: transparent;
-  opacity: 0.36;
+  opacity: 0.24;
   pointer-events: none;
   box-shadow: none;
+  transform-origin: center;
+  scale: 1;
+  will-change: transform, scale, opacity;
+  transition:
+    border-color 220ms cubic-bezier(0.24, 0.62, 0.2, 1),
+    background 220ms cubic-bezier(0.24, 0.62, 0.2, 1),
+    opacity 220ms cubic-bezier(0.24, 0.62, 0.2, 1),
+    scale 220ms cubic-bezier(0.24, 0.62, 0.2, 1);
 }
 
 .music-tier-track-grid.drag-has-placeholder .music-tier-empty {
@@ -3231,7 +4491,9 @@ body.wallpaper-dragging * {
 }
 
 .music-tier-track-grid.drag-has-placeholder .track-card:not(.dragging) {
+  transform-origin: center;
   will-change: transform;
+  backface-visibility: hidden;
 }
 
 body.music-track-dragging,
@@ -3243,18 +4505,45 @@ body.music-track-dragging * {
   content: "";
   position: absolute;
   z-index: 2;
-  left: -5px;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
+  left: -4px;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
   border-radius: 999px;
   background: var(--green);
-  box-shadow: 0 0 0 2px rgba(15, 143, 98, 0.12);
+  box-shadow: 0 0 0 1px rgba(15, 143, 98, 0.1);
+  opacity: 0.72;
+  animation: musicDropLineIn 220ms cubic-bezier(0.24, 0.62, 0.2, 1) both;
+  transform-origin: center;
 }
 
 :root[data-theme="dark"] .track-card.track-drop-before::before {
   background: #8fc6ff;
-  box-shadow: 0 0 0 2px rgba(143, 198, 255, 0.16);
+  box-shadow: 0 0 0 1px rgba(143, 198, 255, 0.12);
+}
+
+@keyframes musicDropHintIn {
+  from {
+    opacity: 0;
+    transform: scale(0.998);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes musicDropLineIn {
+  from {
+    opacity: 0;
+    transform: scaleY(0.94);
+  }
+
+  to {
+    opacity: 0.72;
+    transform: scaleY(1);
+  }
 }
 
 .track-card:focus-visible {
@@ -3433,16 +4722,274 @@ body.music-track-dragging .delete-track-button {
     grid-template-columns: 1fr;
   }
 
+  .steamwork-actions {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .steamwork-asset-details {
+    grid-template-columns: 1fr;
+  }
+
+  .steamwork-asset-summary {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 24px;
+    align-items: start;
+    gap: 8px 14px;
+    min-height: 0;
+    padding-block: 10px;
+  }
+
+  .steamwork-asset-details.no-current {
+    grid-template-columns: 1fr;
+  }
+
+  .steamwork-asset-details,
+  .steamwork-asset-details.no-current {
+    grid-template-areas:
+      "current"
+      "stage"
+      "candidates";
+  }
+
+  .steamwork-asset-details.no-candidates {
+    grid-template-areas:
+      "current"
+      "stage";
+  }
+
+  .steamwork-asset-details.has-guide,
+  .steamwork-asset-details.no-current.has-guide {
+    grid-template-areas:
+      "guide"
+      "current"
+      "stage"
+      "candidates";
+  }
+
+  .steamwork-asset-details.no-candidates.has-guide {
+    grid-template-areas:
+      "guide"
+      "current"
+      "stage";
+  }
+
+  .steamwork-asset-detail-stack {
+    display: contents;
+  }
+
+  .steamwork-asset-detail-stack > .steamwork-missing-guide,
+  .steamwork-asset-detail-stack > .steamwork-optional-guide {
+    grid-area: guide;
+  }
+
+  .steamwork-asset-detail-stack > .steamwork-asset-group:not(.candidate-group) {
+    grid-area: current;
+  }
+
+  .steamwork-asset-details > .steamwork-asset-group.candidate-group {
+    grid-area: candidates;
+  }
+
+  .steamwork-asset-detail-stack > .steamwork-stage-zone {
+    grid-area: stage;
+  }
+
+  .steamwork-asset-statuscell,
+  .steamwork-asset-speccell,
+  .steamwork-asset-currentcell,
+  .steamwork-asset-where {
+    display: grid;
+    grid-template-columns: minmax(76px, auto) minmax(0, 1fr);
+    align-items: baseline;
+    gap: 6px 10px;
+  }
+
+  .steamwork-asset-statuscell::before,
+  .steamwork-asset-speccell::before,
+  .steamwork-asset-currentcell::before,
+  .steamwork-asset-where::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 850;
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+
+  .steamwork-asset-currentcell .steamwork-current-source,
+  .steamwork-asset-currentcell .steamwork-current-meta {
+    grid-column: 2;
+  }
+
+  .steamwork-category-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .steamwork-category-stats {
+    justify-content: flex-start;
+  }
+
+  .steamwork-category-columns {
+    display: none;
+  }
+
+  .steamwork-asset-namecell {
+    grid-column: 1 / 3;
+  }
+
+  .steamwork-asset-statuscell,
+  .steamwork-asset-currentcell {
+    grid-column: 1;
+  }
+
+  .steamwork-asset-speccell,
+  .steamwork-asset-where {
+    grid-column: 2;
+  }
+
+  .steamwork-asset-where {
+    overflow: visible;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .steamwork-asset-summary::after {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+  }
+
   .wallpaper-preview {
     height: clamp(320px, calc(100vh - 360px), 420px);
   }
 }
 
+@media (min-width: 681px) and (max-width: 860px) {
+  .steamwork-category-head {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .steamwork-category-stats {
+    justify-content: flex-end;
+  }
+
+  .steamwork-category-columns {
+    display: grid;
+    grid-template-columns: minmax(190px, 1.45fr) 76px minmax(88px, 0.72fr) minmax(150px, 1fr) 24px;
+    gap: 8px;
+    padding-inline: 8px;
+  }
+
+  .steamwork-category-columns span:nth-child(5) {
+    display: none;
+  }
+
+  .steamwork-category-columns span:nth-child(6) {
+    grid-column: 5;
+  }
+
+  .steamwork-asset-summary {
+    grid-template-columns: minmax(190px, 1.45fr) 76px minmax(88px, 0.72fr) minmax(150px, 1fr) 24px;
+    align-items: center;
+    gap: 8px;
+    min-height: 58px;
+    padding: 7px 8px 7px 12px;
+  }
+
+  .steamwork-asset-namecell,
+  .steamwork-asset-statuscell,
+  .steamwork-asset-speccell,
+  .steamwork-asset-currentcell {
+    grid-column: auto;
+  }
+
+  .steamwork-asset-statuscell,
+  .steamwork-asset-currentcell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .steamwork-asset-speccell {
+    display: block;
+  }
+
+  .steamwork-asset-where {
+    display: none;
+  }
+
+  .steamwork-asset-statuscell::before,
+  .steamwork-asset-speccell::before,
+  .steamwork-asset-currentcell::before,
+  .steamwork-asset-where::before {
+    content: none;
+  }
+
+  .steamwork-asset-currentcell .steamwork-current-source,
+  .steamwork-asset-currentcell .steamwork-current-meta {
+    grid-column: auto;
+  }
+
+  .steamwork-asset-summary::after {
+    grid-column: 5;
+    grid-row: 1;
+  }
+}
+
+@media (min-width: 861px) and (max-width: 1120px) {
+  .steamwork-category-columns {
+    grid-template-columns: minmax(240px, 1.45fr) 86px minmax(120px, 0.72fr) minmax(190px, 1fr) 24px;
+    gap: 8px;
+  }
+
+  .steamwork-category-columns span:nth-child(5) {
+    display: none;
+  }
+
+  .steamwork-category-columns span:nth-child(6) {
+    grid-column: 5;
+  }
+
+  .steamwork-asset-summary {
+    grid-template-columns: minmax(240px, 1.45fr) 86px minmax(120px, 0.72fr) minmax(190px, 1fr) 24px;
+    gap: 8px;
+  }
+
+  .steamwork-asset-where {
+    display: none;
+  }
+
+  .steamwork-asset-summary::after {
+    grid-column: 5;
+  }
+}
+
 @media (max-width: 680px) {
   .app-shell {
-    width: 100vw;
+    width: 100%;
+    max-width: 100%;
     min-width: 360px;
     padding: 12px 10px 22px;
+  }
+
+  .module-bar {
+    max-width: 100%;
+  }
+
+  .module-nav {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .module-link {
+    flex: 0 0 auto;
+    min-width: 0;
+    white-space: nowrap;
   }
 
   .panel-head,
@@ -3460,12 +5007,355 @@ body.music-track-dragging .delete-track-button {
     right: auto;
   }
 
+  .steamwork-assets-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .steamwork-assets-head .workspace-pill {
+    align-self: flex-start;
+    text-align: left;
+  }
+
+  .steamwork-assets-head .workspace-pill.steamwork-summary-pill {
+    justify-content: flex-start;
+  }
+
+  .steamwork-category-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .steamwork-category-jump {
+    min-height: 44px;
+    align-content: center;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 6px;
+    padding: 6px 8px;
+  }
+
+  .steamwork-category-jump-ready {
+    justify-self: end;
+  }
+
+  .steamwork-category-jump-tags {
+    grid-column: 1 / -1;
+    flex-wrap: nowrap;
+    gap: 3px;
+    overflow: hidden;
+  }
+
+  .steamwork-category-jump-tags small {
+    min-height: 16px;
+    padding-inline: 5px;
+    font-size: 9px;
+  }
+
+  .steamwork-asset-alerts {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .steamwork-asset-alert-list {
+    gap: 6px;
+  }
+
+  .steamwork-asset-alert {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    align-items: start;
+    gap: 4px 8px;
+    padding: 7px 8px;
+  }
+
+  .steamwork-alert-status {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 46px;
+    min-height: 20px;
+    padding-inline: 6px;
+    font-size: 10px;
+  }
+
+  .steamwork-alert-body {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .steamwork-alert-tags small {
+    min-height: 16px;
+    padding-inline: 5px;
+    font-size: 9px;
+  }
+
+  .panel,
+  .candidate-strip,
+  .steamwork-workspace,
+  .steamwork-main-panel,
+  .steamwork-actions,
+  .steamwork-assets {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .steamwork-asset-root {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .texture-detail-grid {
     grid-template-columns: 1fr;
   }
 
   .texture-inspector-preview {
     min-height: 210px;
+  }
+}
+
+@media (max-width: 540px) {
+  .steamwork-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .steamwork-asset-summary {
+    grid-template-columns: max-content minmax(0, 1fr) 24px;
+    gap: 6px 8px;
+    min-height: 0;
+    padding: 8px 8px 8px 12px;
+  }
+
+  .steamwork-asset-summary::after {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .steamwork-asset-namecell {
+    grid-column: 1 / 3;
+    grid-row: 1;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .steamwork-asset-summary > .steamwork-asset-namecell .steamwork-asset-thumb {
+    width: 42px;
+    height: 42px;
+  }
+
+  .steamwork-asset-statuscell,
+  .steamwork-asset-speccell,
+  .steamwork-asset-currentcell,
+  .steamwork-asset-where {
+    grid-template-columns: minmax(0, 1fr);
+    align-content: center;
+    gap: 3px;
+  }
+
+  .steamwork-asset-statuscell::before,
+  .steamwork-asset-speccell::before,
+  .steamwork-asset-currentcell::before,
+  .steamwork-asset-where::before {
+    content: none;
+  }
+
+  .steamwork-asset-statuscell {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .steamwork-asset-speccell {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: center;
+  }
+
+  .steamwork-asset-currentcell {
+    grid-column: 1 / 3;
+    grid-row: 3;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+  }
+
+  .steamwork-asset-currentcell .steamwork-current-name {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .steamwork-asset-currentcell .steamwork-current-source,
+  .steamwork-asset-currentcell .steamwork-current-meta {
+    grid-column: auto;
+  }
+
+  .steamwork-asset-where {
+    display: none;
+  }
+
+  .steamwork-asset-group.asset-screenshots .steamwork-file-grid,
+  .steamwork-file-grid,
+  .steamwork-file-grid.candidate-grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .steamwork-current-file.screenshot-file.compact,
+  .steamwork-current-file.compact,
+  .steamwork-asset-group.candidate-group .steamwork-current-file.compact {
+    min-height: 0;
+    grid-template-columns: 78px minmax(0, 1fr);
+    gap: 7px;
+    padding: 7px;
+  }
+
+  .steamwork-asset-group.candidate-group .steamwork-asset-thumb,
+  .steamwork-current-file.screenshot-file.compact .steamwork-asset-thumb,
+  .steamwork-current-file.compact .steamwork-asset-thumb {
+    width: 78px;
+    min-width: 78px;
+    height: 52px;
+    min-height: 52px;
+  }
+
+  .steamwork-current-file.compact .steamwork-current-body {
+    min-height: 52px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    align-content: start;
+    align-items: start;
+    gap: 2px 6px;
+  }
+
+  .steamwork-current-file.compact .steamwork-current-name,
+  .steamwork-current-file.compact .steamwork-current-tags {
+    grid-column: 1;
+  }
+
+  .steamwork-current-file.compact .steamwork-current-name {
+    white-space: normal;
+    line-height: 1.2;
+  }
+
+  .steamwork-current-file.compact .steamwork-current-meta,
+  .steamwork-current-file.compact .steamwork-current-source,
+  .steamwork-current-file.compact .steamwork-fit-badge {
+    font-size: 10px;
+  }
+
+  .steamwork-current-file.compact .steamwork-open-asset {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+    align-self: start;
+    margin-top: 0;
+    min-height: 24px;
+    padding-inline: 8px;
+  }
+}
+
+@media (max-width: 380px) {
+  .app-shell {
+    min-width: 0;
+    padding-inline: 8px;
+  }
+
+  .panel,
+  .candidate-strip {
+    width: 100%;
+    max-width: 100%;
+    padding: 12px;
+  }
+
+  .steamwork-main-panel {
+    gap: 12px;
+  }
+
+  .steamwork-workspace,
+  .steamwork-main-panel,
+  .steamwork-actions,
+  .steamwork-assets {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .steamwork-assets {
+    gap: 9px;
+    padding: 10px;
+    overflow: hidden;
+  }
+
+  .steamwork-assets-head {
+    gap: 6px;
+  }
+
+  .steamwork-assets-head > div {
+    gap: 1px;
+  }
+
+  .steamwork-assets-head > div > span:first-child {
+    display: none;
+  }
+
+  .steamwork-assets-head h3 {
+    font-size: 16px;
+  }
+
+  .steamwork-asset-root {
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .steamwork-assets-head,
+  .steamwork-assets-head > div,
+  .steamwork-asset-list,
+  .steamwork-asset-alerts,
+  .steamwork-asset-category,
+  .steamwork-asset-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .steamwork-assets-head .workspace-pill.steamwork-summary-pill {
+    width: 100%;
+    max-width: 100%;
+    gap: 4px;
+    padding: 3px;
+  }
+
+  .steamwork-summary-chip {
+    min-height: 20px;
+    padding-inline: 6px;
+    font-size: 10px;
+  }
+
+  .steamwork-summary-chip {
+    min-height: 22px;
+    padding-inline: 6px;
+    font-size: 10px;
+  }
+
+  .steamwork-asset-alerts,
+  .steamwork-asset-category {
+    padding-inline: 8px;
+  }
+
+  .steamwork-asset-alert {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    align-items: start;
+  }
+
+  .steamwork-alert-status {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .steamwork-alert-body strong {
+    white-space: normal;
+  }
+
+  .steamwork-asset-summary {
+    padding-inline: 8px 6px;
+  }
+
+  .steamwork-asset-details {
+    padding: 8px;
   }
 }
 

@@ -69,8 +69,54 @@ const defaultBlenderPromptConfig = {
   customLength: ""
 };
 const musicStateVersion = 2;
-const musicReorderCommitRatio = 2 / 3;
+const musicReorderCommitRatio = 1 / 3;
 const musicReorderReturnRatio = 1 - musicReorderCommitRatio;
+const musicPlaceholderLayoutPath = "__music_placeholder__";
+const musicReflowAnimationMinDuration = 240;
+const musicReflowAnimationMaxDuration = 480;
+const musicSettleAnimationMinDuration = 210;
+const musicSettleAnimationMaxDuration = 430;
+const musicReflowAnimationEasing = "cubic-bezier(0.22, 0.52, 0.18, 1)";
+const musicReflowContinueEasing = "cubic-bezier(0.22, 0.52, 0.18, 1)";
+const musicSettleSpringFrequency = 6.7;
+const musicSettleMaxStepMs = 28;
+const musicSettleMaxDurationMs = 720;
+const musicSettleVelocitySnap = 12;
+const musicSettleMaxVelocityBase = 360;
+const musicSettleMaxVelocityDistanceScale = 10;
+const musicFloatingTrackScale = 1;
+const musicReflowAnimationId = "music-reflow";
+const musicDragStartThreshold = 4;
+const musicDragSpringFrequency = 9.8;
+const musicDragTakeoffSpringFrequency = 7.2;
+const musicDragTakeoffDurationMs = 66;
+const musicDragVisualSnapDistance = 0.55;
+const musicDragVisualTargetSmoothingMs = 30;
+const musicDragTakeoffTargetSmoothingMs = 22;
+const musicDragVisualTargetSnapDistance = 0.8;
+const musicDragSpringSnapSpeed = 8;
+const musicDragIntentProbeLead = 0.74;
+const musicDragFrameMs = 1000 / 60;
+const musicDragMinStepMs = 5;
+const musicDragTakeoffMinStepMs = 3;
+const musicDragMaxStepMs = 24;
+const musicDragMaxVisualStep = 60;
+const musicDragTakeoffMaxVisualStep = 48;
+const musicDragMaxVisualStepSqrtFactor = 0.95;
+const musicDragMaxVisualStepRatio = 0.48;
+const musicDragTakeoffMaxVisualStepRatio = 0.48;
+const musicDragMinVisualStep = 16;
+const musicDragSoftStepOverflowRatio = 0.28;
+const musicDragLimitedVelocityBlend = 0.42;
+const musicDragOpposingVelocityDamping = 0.48;
+const musicDragSettledAxisDistance = 1.25;
+const musicDragSettledAxisVelocityDamping = 0.48;
+const musicReflowSnapDistance = 1.8;
+const musicReflowContinueSnapDistance = 1.1;
+const musicReflowContinueDurationScale = 1.12;
+const musicSettleSnapDistance = 0.7;
+const musicPlaceholderTargetSettleMs = 34;
+const musicPlaceholderReflowMinIntervalMs = 24;
 const repeatLoopPath = "M14.6 22.5h-4.1a4 4 0 0 1-4-4v-6.25a4 4 0 0 1 4-4h10.5a4 4 0 0 1 4 4v6.25a4 4 0 0 1-4 4h-6.4zM17.8 19.3l-3.2 3.2 3.2 3.2";
 
 // Player control icons: inline SVG, currentColor stroke, no bitmap assets.
@@ -135,11 +181,12 @@ const i18n = {
     steamworkTitle: "Steamwork",
     steamworkReady: "\u5c31\u7eea",
     steamworkBody: "\u7ba1\u7406 Steamworks\u3001SteamPipeGUI\u3001ContentBuilder/content \u548c\u5ba3\u4f20\u66f4\u65b0\u7d20\u6750\u3002",
-    steamworkDashboard: "Steamworks \u540e\u53f0",
+    steamworkDashboard: "Steamworks",
     steamworkPublishRoot: "ContentBuilder",
-    steamworkGameContent: "ContentBuilder content",
+    steamworkGameContent: "Content",
     steamworkPublishTool: "SteamPipeGUI",
-    steamworkGameContentLabel: "ContentBuilder content",
+    steamworkArtAssets: "\u7d20\u6750",
+    steamworkGameContentLabel: "Content",
     steamworkGameContentTitle: "\u5bfc\u5165\u6e38\u620f\u5185\u5bb9",
     steamworkGameContentReady: "\u628a\u6e38\u620f\u6784\u5efa\u6587\u4ef6\u62d6\u5230 ContentBuilder/content\u3002",
     steamworkPublishToolLabel: "SteamPipeGUI",
@@ -166,12 +213,98 @@ const i18n = {
     steamworkTipRenewDepot: "\u5728\u7f51\u9875\u7248 Steamworks \u91cc Renew / Update Depot\uff0c\u628a\u751f\u6210\u7684 build \u8bbe\u4e3a\u4e0a\u7ebf\u7248\u672c\u3002",
     steamworkRenewDepotNote: "PC + Mobile \u786e\u8ba4\u3002",
     steamworkTipPublish: "\u6700\u540e\u786e\u8ba4\u5e76\u53d1\u5e03\u66f4\u6539\uff1b\u53ef\u80fd\u9700\u8981 Steam Guard / \u624b\u673a\u786e\u8ba4\u3002",
-    steamworkPublishNote: "\u6700\u7ec8\u786e\u8ba4\u3002",
+    steamworkPublishNote: "Pc only",
     steamworkPasswordNote: "\uff08\u5bc6\u7801\u4e0d\u5b58 Console\uff09",
     steamworkImportDragging: "\u677e\u624b\u540e\u5bfc\u5165\u3002",
     steamworkImporting: (count, target) => `\u6b63\u5728\u5bfc\u5165 ${count} \u4e2a\u6587\u4ef6\u5230 ${target}\u3002`,
     steamworkImported: (count, target) => `\u5df2\u5bfc\u5165 ${count} \u4e2a\u6587\u4ef6\u5230 ${target}\u3002`,
     steamworkImportFailed: message => `Steamwork \u5bfc\u5165\u5931\u8d25\uff1a${message}`,
+    steamworkAssetsLabel: "\u7d20\u6750\u53f0\u8d26",
+    steamworkAssetsTitle: "Steam \u7d20\u6750\u6e05\u5355",
+    steamworkAssetLoading: "\u8bfb\u53d6\u4e2d",
+    steamworkAssetLoadFailed: message => `\u7d20\u6750\u8bfb\u53d6\u5931\u8d25\uff1a${message}`,
+    steamworkAssetSummary: (ready, total, review, missing, optional, files) => `${ready}/${total} \u5df2\u5c31\u7eea\u3000${review} \u5f85\u68c0\u67e5\u3000${missing} \u7f3a\u5931\u3000${optional} \u53ef\u9009\u3000${files} \u6587\u4ef6`,
+    steamworkAssetSummaryReady: (ready, total) => `${ready}/${total} \u5df2\u5c31\u7eea`,
+    steamworkAssetSummaryReview: count => `${count} \u5f85\u68c0\u67e5`,
+    steamworkAssetSummaryMissing: count => `${count} \u7f3a\u5931`,
+    steamworkAssetSummaryOptional: count => `${count} \u53ef\u9009`,
+    steamworkAssetSummaryFiles: count => `${count} \u6587\u4ef6`,
+    steamworkAssetColumn: "\u7d20\u6750",
+    steamworkStatusColumn: "\u72b6\u6001",
+    steamworkSpecColumn: "\u89c4\u683c",
+    steamworkCurrentColumn: "\u5f53\u524d\u6587\u4ef6",
+    steamworkTargetColumn: "\u4f4d\u7f6e",
+    steamworkAssetReady: "\u5c31\u7eea",
+    steamworkAssetReview: "\u5f85\u68c0\u67e5",
+    steamworkAssetMissing: "\u7f3a\u5931",
+    steamworkAssetOptional: "\u53ef\u9009",
+    steamworkAssetRequired: "\u5fc5\u9700",
+    steamworkAssetOptionalLabel: "\u53ef\u9009",
+    steamworkAssetNoFile: "\u6ca1\u6709\u5339\u914d\u6587\u4ef6",
+    steamworkAssetNeedSpec: spec => `\u9700\u8981\uff1a${spec}`,
+    steamworkAssetWhereToUse: target => `\u4f4d\u7f6e\uff1a${target}`,
+    steamworkAssetMissingAction: "\u628a\u7b26\u5408\u89c4\u683c\u7684\u6587\u4ef6\u62d6\u5230\u4e0b\u65b9\u201c\u51c6\u5907\u66ff\u6362\u201d\u3002",
+    steamworkAssetMissingGuideTitle: "\u8865\u6587\u4ef6",
+    steamworkAssetMissingGuideSpec: spec => `\u89c4\u683c ${spec}`,
+    steamworkAssetMissingGuideDrop: "\u62d6\u5230\u51c6\u5907\u66ff\u6362",
+    steamworkAssetMissingGuideTarget: target => `Steam \u4f4d\u7f6e ${target}`,
+    steamworkAssetOptionalGuideTitle: "\u53ef\u9009\u7d20\u6750",
+    steamworkAssetOptionalGuideNote: "\u4e0d\u963b\u585e\u53d1\u5e03",
+    steamworkAssetOptionalGuideSpec: spec => `\u5efa\u8bae ${spec}`,
+    steamworkAssetOptionalGuideTarget: target => `Steam \u4f4d\u7f6e ${target}`,
+    steamworkAssetFitOk: "\u89c4\u683c\u5339\u914d",
+    steamworkAssetFitFormat: "\u683c\u5f0f\u4e0d\u7b26",
+    steamworkAssetFitSize: "\u5c3a\u5bf8\u4e0d\u7b26",
+    steamworkAssetFitFormatSize: "\u683c\u5f0f / \u5c3a\u5bf8\u4e0d\u7b26",
+    steamworkAssetFitType: "\u7c7b\u578b\u4e0d\u7b26",
+    steamworkAssetFitCheck: "\u9700\u68c0\u67e5",
+    steamworkAssetOpen: "\u6253\u5f00",
+    steamworkAssetOpenFailed: message => `\u6253\u5f00\u7d20\u6750\u5931\u8d25\uff1a${message}`,
+    steamworkAssetSource: root => `\u7d20\u6750\u5e93\uff1a${root}`,
+    steamworkAssetMatched: "\u5f53\u524d\u5339\u914d",
+    steamworkAssetCandidates: "\u5019\u9009\u7d20\u6750",
+    steamworkAssetReferenceCandidates: "\u53c2\u8003\u5019\u9009",
+    steamworkAssetReferenceHint: "\u6ca1\u6709\u4e25\u683c\u5339\u914d\uff1b\u4e0b\u9762\u662f\u53ef\u53c2\u8003\u6587\u4ef6\u3002",
+    steamworkAssetOptionalCandidates: "\u53ef\u53c2\u8003\u7d20\u6750",
+    steamworkAssetOptionalReferenceHint: "\u53ef\u9009\u9879\u76ee\uff1b\u4e0b\u9762\u662f\u76f8\u5173\u53c2\u8003\u6587\u4ef6\u3002",
+    steamworkAssetStageTitle: "\u51c6\u5907\u66ff\u6362",
+    steamworkAssetStageHint: "\u628a\u65b0\u7d20\u6750\u62d6\u5230\u8fd9\u91cc\uff0c\u5148\u6536\u8fdb D:\\ArtAsset\u3002",
+    steamworkAssetStageDragging: "\u677e\u624b\u540e\u6536\u8fdb\u7d20\u6750\u5e93",
+    steamworkAssetStaging: (count, slot) => `\u6b63\u5728\u4e3a ${slot} \u6536\u5165 ${count} \u4e2a\u6587\u4ef6\u3002`,
+    steamworkAssetStaged: (count, folder) => `\u5df2\u6536\u5165 ${count} \u4e2a\u6587\u4ef6\u5230 ${folder}\u3002`,
+    steamworkAssetStageFailed: message => `\u7d20\u6750\u6536\u5165\u5931\u8d25\uff1a${message}`,
+    steamworkAssetFileCount: count => `${count} \u4e2a\u6587\u4ef6`,
+    steamworkAssetFolderStore: "\u5546\u5e97\u7d20\u6750",
+    steamworkAssetFolderScreenshots: "\u622a\u56fe",
+    steamworkAssetFolderVideo: "\u89c6\u9891",
+    steamworkAssetFolderStaged: "\u5f85\u66ff\u6362",
+    steamworkIssueMissingRequired: "\u7f3a\u5c11\u5fc5\u9700\u7d20\u6750",
+    steamworkIssueOptional: "\u53ef\u9009",
+    steamworkIssueNeedFiles: count => `\u9700\u8981 ${count} \u4e2a\u6587\u4ef6`,
+    steamworkIssueCheckFile: "\u5df2\u627e\u5230\u6587\u4ef6\uff0c\u9700\u68c0\u67e5\u5c3a\u5bf8 / \u683c\u5f0f",
+    steamworkAttentionTitle: "\u5f85\u5904\u7406",
+    steamworkAttentionCount: count => `${count} \u9879`,
+    steamworkAttentionHint: "\u70b9\u51fb\u8df3\u5230\u5bf9\u5e94\u7d20\u6750",
+    steamworkAttentionFixMissing: "\u8865\u6587\u4ef6",
+    steamworkAttentionReview: "\u68c0\u67e5",
+    steamworkAssetNoCandidates: "\u6ca1\u6709\u76f8\u5173\u5019\u9009",
+    steamworkAssetShowCandidates: count => `\u67e5\u770b ${count} \u4e2a\u5019\u9009`,
+    steamworkAssetMoreCandidates: count => `\u8fd8\u6709 ${count} \u4e2a\u5019\u9009`,
+    steamworkAssetShowFiles: count => `\u67e5\u770b ${count} \u4e2a\u6587\u4ef6`,
+    steamworkAssetMoreFiles: count => `\u8fd8\u6709 ${count} \u4e2a\u6587\u4ef6`,
+    steamworkAssetExpand: "\u5c55\u5f00\u7ba1\u7406",
+    steamworkCategoryStore: "\u5546\u5e97\u9875",
+    steamworkCategoryLibrary: "\u8d44\u6599\u5e93",
+    steamworkCategoryCommunity: "\u793e\u533a",
+    steamworkCategoryVideo: "\u89c6\u9891",
+    steamworkCategoryMissing: count => `${count} \u7f3a\u5931`,
+    steamworkCategoryReview: count => `${count} \u5f85\u68c0\u67e5`,
+    steamworkCategoryOptional: count => `${count} \u53ef\u9009`,
+    steamworkTargetGraphicalAssets: "\u5546\u5e97\u9875 > \u56fe\u5f62\u8d44\u4ea7",
+    steamworkTargetScreenshots: "\u5546\u5e97\u9875 > \u622a\u56fe",
+    steamworkTargetCommunityIcons: "\u5546\u5e97\u9875 > \u793e\u533a\u4e0e\u5ba2\u6237\u7aef\u56fe\u6807",
+    steamworkTargetLibraryAssets: "Steamworks > \u8d44\u6599\u5e93\u7d20\u6750",
+    steamworkTargetTrailers: "\u5546\u5e97\u9875 > \u9884\u544a\u7247",
     activeProjectValue: "随机领域 / Blender Assets",
     timeLabel: "Time",
     wallpaperSectionLabel: "预览",
@@ -502,9 +635,10 @@ const i18n = {
     steamworkBody: "Manage Steamworks, SteamPipeGUI, ContentBuilder/content, and promo/update assets.",
     steamworkDashboard: "Steamworks",
     steamworkPublishRoot: "ContentBuilder",
-    steamworkGameContent: "ContentBuilder content",
+    steamworkGameContent: "Content",
     steamworkPublishTool: "SteamPipeGUI",
-    steamworkGameContentLabel: "ContentBuilder content",
+    steamworkArtAssets: "Assets",
+    steamworkGameContentLabel: "Content",
     steamworkGameContentTitle: "Import game content",
     steamworkGameContentReady: "Drop game build files into ContentBuilder/content.",
     steamworkPublishToolLabel: "SteamPipeGUI",
@@ -531,12 +665,98 @@ const i18n = {
     steamworkTipRenewDepot: "In Steamworks web, renew/update the depot and set the generated build live.",
     steamworkRenewDepotNote: "PC + Mobile confirmation.",
     steamworkTipPublish: "Confirm and publish changes; Steam Guard / phone confirmation may be required.",
-    steamworkPublishNote: "Final confirmation.",
+    steamworkPublishNote: "Pc only",
     steamworkPasswordNote: "(password not stored)",
     steamworkImportDragging: "Release to import.",
     steamworkImporting: (count, target) => `Importing ${count} file${count === 1 ? "" : "s"} to ${target}.`,
     steamworkImported: (count, target) => `Imported ${count} file${count === 1 ? "" : "s"} to ${target}.`,
     steamworkImportFailed: message => `Steamwork import failed: ${message}`,
+    steamworkAssetsLabel: "Asset Log",
+    steamworkAssetsTitle: "Steam asset checklist",
+    steamworkAssetLoading: "Loading assets",
+    steamworkAssetLoadFailed: message => `Asset load failed: ${message}`,
+    steamworkAssetSummary: (ready, total, review, missing, optional, files) => `${ready}/${total} ready  ${review} review  ${missing} missing  ${optional} optional  ${files} files`,
+    steamworkAssetSummaryReady: (ready, total) => `${ready}/${total} ready`,
+    steamworkAssetSummaryReview: count => `${count} review`,
+    steamworkAssetSummaryMissing: count => `${count} missing`,
+    steamworkAssetSummaryOptional: count => `${count} optional`,
+    steamworkAssetSummaryFiles: count => `${count} files`,
+    steamworkAssetColumn: "Asset",
+    steamworkStatusColumn: "Status",
+    steamworkSpecColumn: "Spec",
+    steamworkCurrentColumn: "Current",
+    steamworkTargetColumn: "Where",
+    steamworkAssetReady: "Ready",
+    steamworkAssetReview: "Review",
+    steamworkAssetMissing: "Missing",
+    steamworkAssetOptional: "Optional",
+    steamworkAssetRequired: "Required",
+    steamworkAssetOptionalLabel: "Optional",
+    steamworkAssetNoFile: "No matched file",
+    steamworkAssetNeedSpec: spec => `Need: ${spec}`,
+    steamworkAssetWhereToUse: target => `Where: ${target}`,
+    steamworkAssetMissingAction: "Drop a matching file into Prepare replacement below.",
+    steamworkAssetMissingGuideTitle: "Add file",
+    steamworkAssetMissingGuideSpec: spec => `Spec ${spec}`,
+    steamworkAssetMissingGuideDrop: "Drop into Prepare replacement",
+    steamworkAssetMissingGuideTarget: target => `Steam target ${target}`,
+    steamworkAssetOptionalGuideTitle: "Optional asset",
+    steamworkAssetOptionalGuideNote: "Does not block publish",
+    steamworkAssetOptionalGuideSpec: spec => `Suggested ${spec}`,
+    steamworkAssetOptionalGuideTarget: target => `Steam target ${target}`,
+    steamworkAssetFitOk: "Spec OK",
+    steamworkAssetFitFormat: "Format mismatch",
+    steamworkAssetFitSize: "Size mismatch",
+    steamworkAssetFitFormatSize: "Format / size mismatch",
+    steamworkAssetFitType: "Type mismatch",
+    steamworkAssetFitCheck: "Check",
+    steamworkAssetOpen: "Open",
+    steamworkAssetOpenFailed: message => `Open asset failed: ${message}`,
+    steamworkAssetSource: root => `Asset root: ${root}`,
+    steamworkAssetMatched: "Current match",
+    steamworkAssetCandidates: "Asset candidates",
+    steamworkAssetReferenceCandidates: "Reference candidates",
+    steamworkAssetReferenceHint: "No strict match; these files are for reference.",
+    steamworkAssetOptionalCandidates: "Reference assets",
+    steamworkAssetOptionalReferenceHint: "Optional item; these related files are for reference.",
+    steamworkAssetStageTitle: "Prepare replacement",
+    steamworkAssetStageHint: "Drop new assets here to stage them into D:\\ArtAsset.",
+    steamworkAssetStageDragging: "Release to stage into the asset library",
+    steamworkAssetStaging: (count, slot) => `Staging ${count} file${count === 1 ? "" : "s"} for ${slot}.`,
+    steamworkAssetStaged: (count, folder) => `Staged ${count} file${count === 1 ? "" : "s"} to ${folder}.`,
+    steamworkAssetStageFailed: message => `Asset staging failed: ${message}`,
+    steamworkAssetFileCount: count => `${count} file${count === 1 ? "" : "s"}`,
+    steamworkAssetFolderStore: "Store Assets",
+    steamworkAssetFolderScreenshots: "Screenshots",
+    steamworkAssetFolderVideo: "Video",
+    steamworkAssetFolderStaged: "Staged",
+    steamworkIssueMissingRequired: "Missing required asset",
+    steamworkIssueOptional: "Optional",
+    steamworkIssueNeedFiles: count => `Need ${count} file${count === 1 ? "" : "s"}`,
+    steamworkIssueCheckFile: "File found, check size/format",
+    steamworkAttentionTitle: "Needs attention",
+    steamworkAttentionCount: count => `${count} item${count === 1 ? "" : "s"}`,
+    steamworkAttentionHint: "Click to jump to the asset",
+    steamworkAttentionFixMissing: "Add file",
+    steamworkAttentionReview: "Review",
+    steamworkAssetNoCandidates: "No relevant candidates",
+    steamworkAssetShowCandidates: count => `Show ${count} candidate${count === 1 ? "" : "s"}`,
+    steamworkAssetMoreCandidates: count => `${count} more candidate${count === 1 ? "" : "s"}`,
+    steamworkAssetShowFiles: count => `Show ${count} file${count === 1 ? "" : "s"}`,
+    steamworkAssetMoreFiles: count => `${count} more file${count === 1 ? "" : "s"}`,
+    steamworkAssetExpand: "Expand",
+    steamworkCategoryStore: "Store",
+    steamworkCategoryLibrary: "Library",
+    steamworkCategoryCommunity: "Community",
+    steamworkCategoryVideo: "Video",
+    steamworkCategoryMissing: count => `${count} missing`,
+    steamworkCategoryReview: count => `${count} review`,
+    steamworkCategoryOptional: count => `${count} optional`,
+    steamworkTargetGraphicalAssets: "Store Page Admin > Graphical Assets",
+    steamworkTargetScreenshots: "Store Page Admin > Screenshots",
+    steamworkTargetCommunityIcons: "Store Page Admin > Community & Client Icons",
+    steamworkTargetLibraryAssets: "Steamworks > Edit Library Assets",
+    steamworkTargetTrailers: "Store Page Admin > Trailers",
     activeProjectValue: "RandomRealm / Blender Assets",
     timeLabel: "Time",
     wallpaperSectionLabel: "Preview",
@@ -953,12 +1173,17 @@ const els = {
   openSteamworkPublishFolder: document.getElementById("openSteamworkPublishFolder"),
   openSteamworkGameContent: document.getElementById("openSteamworkGameContent"),
   openSteamworkPublishTool: document.getElementById("openSteamworkPublishTool"),
+  openSteamworkArtAsset: document.getElementById("openSteamworkArtAsset"),
   steamworkGameContentDropzone: document.getElementById("steamworkGameContentDropzone"),
   steamworkPublishToolDropzone: document.getElementById("steamworkPublishToolDropzone"),
   steamworkGameContentStatus: document.getElementById("steamworkGameContentStatus"),
   steamworkPublishToolStatus: document.getElementById("steamworkPublishToolStatus"),
   steamworkGameContentFileInput: document.getElementById("steamworkGameContentFileInput"),
   steamworkPublishToolFileInput: document.getElementById("steamworkPublishToolFileInput"),
+  steamworkAssetRoot: document.getElementById("steamworkAssetRoot"),
+  steamworkAssetSummary: document.getElementById("steamworkAssetSummary"),
+  steamworkAssetList: document.getElementById("steamworkAssetList"),
+  steamworkAssetFileInput: document.getElementById("steamworkAssetFileInput"),
   unityStatusText: document.getElementById("unityStatusText"),
   unityBridgeStatus: document.getElementById("unityBridgeStatus"),
   openUnityProjectFolder: document.getElementById("openUnityProjectFolder"),
@@ -1040,6 +1265,7 @@ let musicStatePersistTimer = null;
 let playbackMode = normalizePlaybackMode(localStorage.getItem(storageKeys.playbackMode));
 let draggedModuleId = "";
 let draggedTrackPath = "";
+let currentMusicDropTargetKey = "";
 let suppressTrackClickUntil = 0;
 let lastTrackPointerStart = 0;
 let lastPersistedModuleId = "";
@@ -1057,6 +1283,8 @@ let materialNotice = "";
 let renderTextureNotice = "";
 let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) === "true";
 let githubDownloadsInfo = null;
+let pendingSteamworkAssetSlot = "";
+let steamworkThumbsEnabled = false;
 let workspaceTodoGroups = loadWorkspaceTodos();
 let randomRealmArtContext = loadRandomRealmArtContext();
 let blenderPromptConfig = loadBlenderPromptConfig();
@@ -1090,7 +1318,13 @@ const hasWallpaper = Boolean(els.wallpaperDock);
 const hasMusic = Boolean(els.musicDock);
 const hasWorkspace = Boolean(els.workspaceTodoList || els.materialCandidates);
 const hasMaterialWorkspace = Boolean(els.materialCandidates);
-const hasSteamwork = Boolean(els.steamworkStatusText);
+const hasSteamwork = Boolean(
+  els.openSteamworkDashboard ||
+  els.openSteamworkGameContent ||
+  els.openSteamworkPublishTool ||
+  els.openSteamworkArtAsset ||
+  els.steamworkAssetList
+);
 const musicTierGroups = [
   { id: "first", labelKey: "musicTierFirst" },
   { id: "second", labelKey: "musicTierSecond" },
@@ -1899,6 +2133,24 @@ function createDragDirectionTracker(startX) {
       anchorX = clientX;
     }
     return directionX;
+  };
+}
+
+function createMusicDragDirectionTracker(startValue) {
+  let anchorValue = startValue;
+  let direction = 0;
+  return value => {
+    const delta = value - anchorValue;
+    const distance = Math.abs(delta);
+    const nextDirection = Math.sign(delta);
+    if (!nextDirection) return direction;
+    const isReverse = direction !== 0 && nextDirection !== direction;
+    const threshold = direction === 0 ? 6 : isReverse ? 18 : 8;
+    if (distance >= threshold) {
+      direction = nextDirection;
+      anchorValue = value;
+    }
+    return direction;
   };
 }
 
@@ -2999,6 +3251,7 @@ function settleDraggedWallpaperCard(card, placeholder, animate = true) {
     card.style.removeProperty("height");
     card.style.removeProperty("left");
     card.style.removeProperty("top");
+    card.style.removeProperty("transform");
   };
 
   if (!animate || Math.abs(startRect.left - targetRect.left) < 1 && Math.abs(startRect.top - targetRect.top) < 1) {
@@ -3658,6 +3911,7 @@ function clearMusicDropMarkers(root = els.musicDock || document) {
 function clearMusicTierDragState() {
   clearMusicDropMarkers();
   document.querySelectorAll(".music-tier-section.drag-over").forEach(node => node.classList.remove("drag-over"));
+  currentMusicDropTargetKey = "";
 }
 
 function musicDropBeforePath(section, event) {
@@ -3665,157 +3919,135 @@ function musicDropBeforePath(section, event) {
 }
 
 function musicDropBeforePathFromPoint(section, clientX, clientY, directionX = 0, draggedRect = null, directionY = 0) {
-  const cards = Array.from(section.querySelectorAll(".track-card:not(.dragging):not(.music-track-placeholder)"));
-  const rowNodes = Array.from(section.querySelectorAll(".track-card:not(.dragging)"));
+  const grid = musicGridForSection(section);
+  if (!grid) return "";
+  const cards = musicTrackCardsInGrid(grid);
   if (!cards.length) return "";
-
-  const rows = [];
-  for (const card of rowNodes) {
-    const rect = card.getBoundingClientRect();
-    let row = rows.find(item => Math.abs(item.top - rect.top) < 12);
-    if (!row) {
-      row = { top: rect.top, bottom: rect.bottom, cards: [] };
-      rows.push(row);
-    }
-    row.top = Math.min(row.top, rect.top);
-    row.bottom = Math.max(row.bottom, rect.bottom);
-    if (!card.classList.contains("music-track-placeholder")) {
-      row.cards.push({ card, rect });
-    }
-  }
-
-  rows.sort((a, b) => a.top - b.top);
-  const rowFromVerticalRatio = () => {
-    if (!draggedRect) return null;
-    const matchedRows = [];
-    for (const row of rows) {
-      const rowHeight = Math.max(1, row.bottom - row.top);
-      const overlapsRow = draggedRect.bottom > row.top && draggedRect.top < row.bottom;
-      if (!overlapsRow) continue;
-      if (directionY > 0 && draggedRect.bottom >= row.top + rowHeight * musicReorderCommitRatio) {
-        matchedRows.push(row);
-      } else if (directionY < 0 && draggedRect.top <= row.bottom - rowHeight * musicReorderCommitRatio) {
-        matchedRows.push(row);
-      }
-    }
-    if (matchedRows.length) {
-      return directionY < 0 ? matchedRows[0] : matchedRows[matchedRows.length - 1];
-    }
-    if (directionY) return null;
-
-    let best = null;
-    for (const row of rows) {
-      const rowHeight = Math.max(1, row.bottom - row.top);
-      const overlap = Math.max(0, Math.min(draggedRect.bottom, row.bottom) - Math.max(draggedRect.top, row.top));
-      const score = overlap / rowHeight;
-      if (score >= 0.5 && (!best || score > best.score)) {
-        best = { row, score };
-      }
-    }
-    return best?.row || null;
-  };
-  const placeWithinRow = (row, useX = true) => {
-    row.cards.sort((a, b) => a.rect.left - b.rect.left);
-    if (!useX) return row.cards[0]?.card?.dataset.trackPath || "";
-    for (let index = 0; index < row.cards.length; index += 1) {
-      const { card, rect } = row.cards[index];
-      const thresholdRatio = directionX < 0
-        ? musicReorderReturnRatio
-        : directionX > 0
-          ? musicReorderCommitRatio
-          : 1 / 2;
-      const threshold = rect.left + rect.width * thresholdRatio;
-      const thresholdPadding = directionX ? 0 : 4;
-      if (clientX <= threshold + thresholdPadding) {
-        return card.dataset.trackPath || "";
-      }
-    }
-    return "";
-  };
-
-  const ratioRow = rowFromVerticalRatio();
-  if (ratioRow) {
-    const beforePath = placeWithinRow(ratioRow);
-    const rowIndex = rows.indexOf(ratioRow);
-    const firstRowPath = ratioRow.cards[0]?.card?.dataset.trackPath || "";
-    if (directionY > 0 && beforePath && beforePath === firstRowPath) {
-      return ratioRow.cards[1]?.card?.dataset.trackPath || "";
-    }
-    if (directionY < 0 && !beforePath) {
-      return rows[rowIndex + 1]?.cards?.[0]?.card?.dataset.trackPath || "";
-    }
-    return beforePath;
-  }
-
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex];
-    const nextRow = rows[rowIndex + 1];
-    const rowMid = row.top + (row.bottom - row.top) / 2;
-    if (clientY < rowMid) {
-      return placeWithinRow(row);
-    }
-    if (clientY <= row.bottom + 10) {
-      const rowTarget = placeWithinRow(row);
-      if (rowTarget || !nextRow) return rowTarget;
-      return nextRow.cards?.[0]?.card?.dataset.trackPath || "";
-    }
-    if (nextRow && clientY < nextRow.top) {
-      const gapMid = row.bottom + (nextRow.top - row.bottom) / 2;
-      if (clientY < gapMid) {
-        const rowTarget = placeWithinRow(row);
-        return rowTarget || nextRow.cards?.[0]?.card?.dataset.trackPath || "";
-      }
-      return placeWithinRow(nextRow);
-    }
-  }
-  return "";
+  return musicBeforePathFromLiveRows(grid, cards, clientX, clientY, draggedRect, directionX);
 }
 
-function musicTierAtPoint(clientX, clientY, preferredSection = null) {
-  const node = document.elementFromPoint(clientX, clientY);
-  const direct = node?.closest?.(".music-tier-section") || null;
-  if (direct && !preferredSection) return direct;
-  if (direct && direct === preferredSection) return direct;
-
-  const sections = Array.from(els.musicDock?.querySelectorAll(".music-tier-section") || []);
-  const inHorizontalReach = section => {
-    const rect = section.getBoundingClientRect();
-    return clientX >= rect.left - 20 && clientX <= rect.right + 20;
+function musicProjectedTierReach(section, draggedRect = null) {
+  const grid = musicGridForSection(section);
+  const rowGap = grid ? musicGridGapSize(grid, "rowGap") : 0;
+  const extraBottom = draggedRect?.height
+    ? Math.max(36, draggedRect.height + rowGap)
+    : 30;
+  return {
+    top: 30,
+    bottom: extraBottom
   };
+}
 
-  if (direct && preferredSection) {
-    const directRect = direct.getBoundingClientRect();
-    const preferredRect = preferredSection.getBoundingClientRect();
-    const guard = Math.min(34, directRect.height * 0.24);
-    const enteringDown = preferredRect.top < directRect.top;
-    const enteringUp = preferredRect.top > directRect.top;
-    if (enteringDown && clientY < directRect.top + guard) return preferredSection;
-    if (enteringUp && clientY > directRect.bottom - guard) return preferredSection;
-    return direct;
+function musicTierStableRect(section) {
+  const sectionRect = musicRectSnapshot(section.getBoundingClientRect());
+  const headRect = section.querySelector(".music-tier-head")?.getBoundingClientRect();
+  const grid = musicGridForSection(section);
+  const gridRect = grid?.getBoundingClientRect();
+  const contentBottoms = [
+    sectionRect.top + 44,
+    headRect?.bottom || 0,
+    gridRect ? gridRect.bottom : 0
+  ];
+
+  for (const node of grid?.querySelectorAll?.(".track-card:not(.dragging), .music-tier-empty") || []) {
+    const rect = node.getBoundingClientRect();
+    if (rect.height > 0) {
+      contentBottoms.push(rect.bottom);
+    }
   }
 
-  if (preferredSection && inHorizontalReach(preferredSection)) {
-    const rect = preferredSection.getBoundingClientRect();
-    if (clientY >= rect.top - 30 && clientY <= rect.bottom + 30) return preferredSection;
+  const bottom = Math.max(...contentBottoms.filter(Number.isFinite));
+  return {
+    ...sectionRect,
+    bottom,
+    height: Math.max(1, bottom - sectionRect.top)
+  };
+}
+
+function musicTierHitMetrics(clientX) {
+  const horizontalPad = 20;
+  return Array.from(els.musicDock?.querySelectorAll(".music-tier-section") || [])
+    .map(section => ({ section, rect: musicTierStableRect(section) }))
+    .filter(item => clientX >= item.rect.left - horizontalPad && clientX <= item.rect.right + horizontalPad)
+    .sort((a, b) => a.rect.top - b.rect.top);
+}
+
+function musicProjectedMetricBottom(metric, draggedRect = null) {
+  const reach = musicProjectedTierReach(metric.section, draggedRect);
+  return metric.rect.bottom + Math.max(0, reach.bottom || 0);
+}
+
+function musicTierMetricAtY(metrics, clientY, draggedRect = null, directionY = 0) {
+  if (!metrics.length) return null;
+  const edgeReach = draggedRect?.height
+    ? clamp(draggedRect.height * 0.72, 42, 92)
+    : 48;
+
+  for (let index = 1; index < metrics.length; index += 1) {
+    const previous = metrics[index - 1];
+    const current = metrics[index];
+    const overlapTop = current.rect.top - 4;
+    const overlapBottom = musicProjectedMetricBottom(previous, draggedRect);
+    if (overlapBottom > overlapTop && clientY >= overlapTop && clientY <= overlapBottom) {
+      const overlapRatio = clamp((clientY - overlapTop) / Math.max(1, overlapBottom - overlapTop), 0, 1);
+      const switchRatio = directionY > 0
+        ? 0.64
+        : directionY < 0
+          ? 0.58
+          : 0.61;
+      return overlapRatio <= switchRatio ? previous : current;
+    }
   }
 
-  const reachableSections = sections.filter(inHorizontalReach)
-    .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-  for (let index = 0; index < reachableSections.length; index += 1) {
-    const section = reachableSections[index];
-    const rect = section.getBoundingClientRect();
-    const prev = reachableSections[index - 1]?.getBoundingClientRect();
-    const next = reachableSections[index + 1]?.getBoundingClientRect();
-    const topBoundary = prev ? prev.bottom + (rect.top - prev.bottom) / 2 : rect.top - 36;
-    const bottomBoundary = next ? rect.bottom + (next.top - rect.bottom) / 2 : rect.bottom + 36;
-    if (clientY >= topBoundary && clientY <= bottomBoundary) return section;
+  for (let index = 0; index < metrics.length; index += 1) {
+    const item = metrics[index];
+    const next = metrics[index + 1] || null;
+    const topBoundary = index === 0 ? item.rect.top - edgeReach : item.rect.top;
+    const bottomBoundary = next ? next.rect.top : item.rect.bottom + edgeReach;
+    if (clientY >= topBoundary && clientY < bottomBoundary) {
+      return item;
+    }
   }
 
-  return preferredSection || null;
+  return metrics.reduce((best, item) => {
+    const distance = clientY < item.rect.top
+      ? item.rect.top - clientY
+      : clientY > item.rect.bottom
+        ? clientY - item.rect.bottom
+        : 0;
+    return !best || distance < best.distance ? { item, distance } : best;
+  }, null)?.item || metrics[0];
+}
+
+function musicTierSwitchMargin(draggedRect = null, movingToward = false) {
+  const base = draggedRect?.height
+    ? clamp(draggedRect.height * 0.08, 6, 12)
+    : 8;
+  return movingToward ? Math.max(4, base * 0.55) : base;
+}
+
+function musicTierAtPoint(clientX, clientY, preferredSection = null, draggedRect = null, directionY = 0) {
+  const metrics = musicTierHitMetrics(clientX);
+  if (!metrics.length) return preferredSection || null;
+  const candidate = musicTierMetricAtY(metrics, clientY, draggedRect, directionY);
+  if (!candidate) return preferredSection || null;
+  const preferred = preferredSection
+    ? metrics.find(item => item.section === preferredSection)
+    : null;
+  if (preferred && preferred.section !== candidate.section) {
+    const preferredIndex = metrics.indexOf(preferred);
+    const candidateIndex = metrics.indexOf(candidate);
+    const sectionDirection = Math.sign(candidateIndex - preferredIndex);
+    const movingToward = sectionDirection !== 0 && Math.sign(directionY) === sectionDirection;
+    const margin = musicTierSwitchMargin(draggedRect, movingToward);
+    if (sectionDirection > 0 && clientY < candidate.rect.top + margin) return preferred.section;
+    if (sectionDirection < 0 && clientY > preferred.rect.top - margin) return preferred.section;
+  }
+  return candidate.section;
 }
 
 function musicDropTargetAtPoint(clientX, clientY, preferredSection = null, directionX = 0, directionY = 0, draggedRect = null) {
-  const section = musicTierAtPoint(clientX, clientY, preferredSection);
+  const section = musicTierAtPoint(clientX, clientY, preferredSection, draggedRect, directionY);
   if (!section) return { section: null, tierId: "", beforePath: "" };
   return {
     section,
@@ -3825,8 +4057,14 @@ function musicDropTargetAtPoint(clientX, clientY, preferredSection = null, direc
 }
 
 function showMusicPointerDropTarget(target) {
+  const targetKey = target?.section && isValidMusicTier(target.tierId)
+    ? `${target.tierId}|${target.beforePath || ""}`
+    : "";
+  if (!targetKey && !currentMusicDropTargetKey) return;
+  if (targetKey && targetKey === currentMusicDropTargetKey) return;
   clearMusicTierDragState();
   if (!target?.section || !isValidMusicTier(target.tierId)) return;
+  currentMusicDropTargetKey = targetKey;
   target.section.classList.add("drag-over");
   if (target.beforePath) {
     Array.from(target.section.querySelectorAll(".track-card"))
@@ -3851,37 +4089,225 @@ function isBlockedMusicTrackDragEvent(event, item) {
   return item.libraryId || event.button !== 0 || event.target?.closest?.(".delete-track-button, .delete-popover");
 }
 
-function musicTrackCardsForAnimation() {
-  if (!els.musicDock) return [];
-  return Array.from(els.musicDock.querySelectorAll(".track-card:not(.dragging):not(.music-track-placeholder)"));
+function musicAnimationKey(card) {
+  if (card.classList.contains("music-track-placeholder")) return musicPlaceholderLayoutPath;
+  return card.dataset.trackPath || "";
 }
 
-function animateMusicTrackReflow(mutate) {
-  const cards = musicTrackCardsForAnimation();
-  const first = new Map(cards.map(card => [card.dataset.trackPath, card.getBoundingClientRect()]));
+function musicTrackCardsForAnimation({ includePlaceholder = false } = {}) {
+  if (!els.musicDock) return [];
+  const selector = includePlaceholder
+    ? ".track-card:not(.dragging)"
+    : ".track-card:not(.dragging):not(.music-track-placeholder)";
+  return Array.from(els.musicDock.querySelectorAll(selector))
+    .filter(card => Boolean(musicAnimationKey(card)));
+}
+
+function musicReflowAnimationDurationFor(dx, dy) {
+  const distance = Math.hypot(dx, dy);
+  return clamp(Math.round(205 + Math.sqrt(distance) * 8.8), musicReflowAnimationMinDuration, musicReflowAnimationMaxDuration);
+}
+
+function musicSettleAnimationDurationFor(dx, dy) {
+  const distance = Math.hypot(dx, dy);
+  return clamp(Math.round(188 + Math.sqrt(distance) * 9), musicSettleAnimationMinDuration, musicSettleAnimationMaxDuration);
+}
+
+function musicDampedSpringStep(current, target, velocity, deltaSeconds, frequency) {
+  const omega = Math.max(1, frequency) * Math.PI * 2;
+  const delta = current - target;
+  const spring = velocity + omega * delta;
+  const decay = Math.exp(-omega * deltaSeconds);
+  return {
+    value: target + (delta + spring * deltaSeconds) * decay,
+    velocity: (velocity - omega * spring * deltaSeconds) * decay
+  };
+}
+
+function musicFrameAdjustedDamping(baseDamping, deltaSeconds = musicDragFrameMs / 1000) {
+  const frameSeconds = musicDragFrameMs / 1000;
+  const frames = Number.isFinite(deltaSeconds) && deltaSeconds > 0
+    ? Math.max(1, deltaSeconds / frameSeconds)
+    : 1;
+  return Math.pow(baseDamping, clamp(frames, 1, 2));
+}
+
+function musicDampSettledAxisVelocity(delta, velocity, deltaSeconds = musicDragFrameMs / 1000) {
+  if (!Number.isFinite(velocity)) {
+    return 0;
+  }
+  return Math.abs(delta) <= musicDragSettledAxisDistance
+    ? velocity * musicFrameAdjustedDamping(musicDragSettledAxisVelocityDamping, deltaSeconds)
+    : velocity;
+}
+
+function musicSettleVelocityFor(offset, velocity) {
+  if (!Number.isFinite(velocity)) {
+    return 0;
+  }
+  const maxVelocity = musicSettleMaxVelocityBase + Math.abs(offset) * musicSettleMaxVelocityDistanceScale;
+  const limited = clamp(velocity, -maxVelocity, maxVelocity);
+  return offset * limited > 0
+    ? limited * musicDragOpposingVelocityDamping
+    : limited;
+}
+
+function musicSoftLimitedVisualDistance(distance, maxDistance) {
+  const softRange = Math.max(1, maxDistance * musicDragSoftStepOverflowRatio);
+  const overflow = Math.max(0, distance - maxDistance);
+  return maxDistance + softRange * (1 - Math.exp(-overflow / softRange));
+}
+
+function musicLimitVisualStep(currentLeft, currentTop, nextLeft, nextTop, nextVelocityX, nextVelocityY, deltaSeconds, maxDistance) {
+  const dx = nextLeft - currentLeft;
+  const dy = nextTop - currentTop;
+  const distance = Math.hypot(dx, dy);
+  if (!Number.isFinite(distance) || distance <= maxDistance) {
+    return {
+      left: nextLeft,
+      top: nextTop,
+      velocityX: nextVelocityX,
+      velocityY: nextVelocityY
+    };
+  }
+  const limitedDistance = musicSoftLimitedVisualDistance(distance, maxDistance);
+  const ratio = limitedDistance / distance;
+  const left = currentLeft + dx * ratio;
+  const top = currentTop + dy * ratio;
+  const seconds = Math.max(deltaSeconds, 0.001);
+  const actualVelocityX = (left - currentLeft) / seconds;
+  const actualVelocityY = (top - currentTop) / seconds;
+  const scaledVelocityX = nextVelocityX * ratio;
+  const scaledVelocityY = nextVelocityY * ratio;
+  return {
+    left,
+    top,
+    velocityX: actualVelocityX * (1 - musicDragLimitedVelocityBlend) + scaledVelocityX * musicDragLimitedVelocityBlend,
+    velocityY: actualVelocityY * (1 - musicDragLimitedVelocityBlend) + scaledVelocityY * musicDragLimitedVelocityBlend
+  };
+}
+
+function musicDragPx(value) {
+  return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : 0;
+}
+
+function musicFloatingTrackTransform(dx = 0, dy = 0, scale = musicFloatingTrackScale) {
+  const translate = `translate3d(${musicDragPx(dx)}px, ${musicDragPx(dy)}px, 0)`;
+  return scale === 1 ? translate : `${translate} scale(${scale})`;
+}
+
+function musicReflowTrackTransform(dx = 0, dy = 0) {
+  return `translate3d(${musicDragPx(dx)}px, ${musicDragPx(dy)}px, 0)`;
+}
+
+function musicAnimationNow() {
+  return window.performance?.now?.() || Date.now();
+}
+
+function afterMusicAnimationFrame() {
+  return new Promise(resolve => window.requestAnimationFrame(resolve));
+}
+
+function cancelMusicReflowAnimations(card) {
+  for (const animation of card.getAnimations()) {
+    if (animation.id === musicReflowAnimationId) {
+      animation.cancel();
+    }
+  }
+}
+
+function hasActiveMusicReflowAnimation(card) {
+  return card.getAnimations().some(animation => (
+    animation.id === musicReflowAnimationId &&
+    (animation.playState === "running" || animation.playState === "pending")
+  ));
+}
+
+function cleanupFinishedMusicAnimation(animation) {
+  animation.finished
+    .catch(() => {})
+    .then(() => {
+      if (animation.playState !== "idle") {
+        animation.cancel();
+      }
+    });
+}
+
+function musicRectFromPosition(left, top, width, height) {
+  return {
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height
+  };
+}
+
+function animateMusicPlaceholderIntro(placeholder) {
+  if (!placeholder?.animate) return;
+  const animation = placeholder.animate(
+    [
+      {
+        opacity: 0,
+        scale: "0.985",
+        backgroundColor: "rgba(15, 143, 98, 0)",
+        borderColor: "rgba(15, 143, 98, 0)"
+      },
+      {
+        opacity: 0.24,
+        scale: "1",
+        backgroundColor: "rgba(15, 143, 98, 0.035)",
+        borderColor: "rgba(15, 143, 98, 0.22)"
+      }
+    ],
+    {
+      duration: 220,
+      easing: musicReflowAnimationEasing,
+      fill: "both"
+    }
+  );
+  cleanupFinishedMusicAnimation(animation);
+}
+
+function animateMusicTrackReflow(mutate, options = {}) {
+  const cards = musicTrackCardsForAnimation(options);
+  const first = new Map(cards.map(card => [musicAnimationKey(card), card.getBoundingClientRect()]));
+  const continuing = new Set(
+    cards
+      .filter(card => hasActiveMusicReflowAnimation(card))
+      .map(card => musicAnimationKey(card))
+  );
   for (const card of cards) {
-    card.getAnimations().forEach(animation => animation.cancel());
+    cancelMusicReflowAnimations(card);
   }
 
   mutate();
 
-  for (const card of musicTrackCardsForAnimation()) {
-    const before = first.get(card.dataset.trackPath);
+  for (const card of musicTrackCardsForAnimation(options)) {
+    const before = first.get(musicAnimationKey(card));
     if (!before) continue;
     const after = card.getBoundingClientRect();
     const dx = before.left - after.left;
     const dy = before.top - after.top;
-    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
-    card.animate(
+    const isContinuing = continuing.has(musicAnimationKey(card));
+    const distance = Math.hypot(dx, dy);
+    const snapDistance = isContinuing ? musicReflowContinueSnapDistance : musicReflowSnapDistance;
+    if (distance <= snapDistance) continue;
+    const duration = musicReflowAnimationDurationFor(dx, dy) * (isContinuing ? musicReflowContinueDurationScale : 1);
+    const animation = card.animate(
       [
-        { transform: `translate(${dx}px, ${dy}px)` },
-        { transform: "translate(0, 0)" }
+        { transform: musicReflowTrackTransform(dx, dy) },
+        { transform: musicReflowTrackTransform() }
       ],
       {
-        duration: 160,
-        easing: "cubic-bezier(0.25, 0.1, 0.25, 1)"
+        duration,
+        easing: isContinuing ? musicReflowContinueEasing : musicReflowAnimationEasing,
+        fill: "both"
       }
     );
+    animation.id = musicReflowAnimationId;
+    cleanupFinishedMusicAnimation(animation);
   }
 }
 
@@ -3889,12 +4315,32 @@ function musicGridForSection(section) {
   return section?.querySelector?.(".music-tier-track-grid") || null;
 }
 
+function musicTrackCardsInGrid(grid) {
+  return Array.from(grid?.querySelectorAll?.(".track-card:not(.dragging):not(.music-track-placeholder)") || [])
+    .filter(card => card.dataset.trackPath);
+}
+
 function musicBeforeCardFromPoint(grid, clientX, clientY, directionX = 0, draggedRect = null, directionY = 0) {
   const section = grid?.closest?.(".music-tier-section");
   const beforePath = section ? musicDropBeforePathFromPoint(section, clientX, clientY, directionX, draggedRect, directionY) : "";
   if (!beforePath) return null;
-  return Array.from(grid.querySelectorAll(".track-card:not(.dragging):not(.music-track-placeholder)"))
+  return musicTrackCardsInGrid(grid)
     .find(card => card.dataset.trackPath === beforePath) || null;
+}
+
+function musicBeforeCardFromPlaceholderGrid(grid, placeholder, clientX, clientY, directionX = 0, draggedRect = null, directionY = 0) {
+  if (!grid || !placeholder || placeholder.parentNode !== grid) {
+    return musicBeforeCardFromPoint(grid, clientX, clientY, directionX, draggedRect);
+  }
+  const items = musicLayoutItemsFromGridSlots(grid, placeholder);
+  if (!items.length) return null;
+  const probe = musicDragProbePoint(clientX, clientY, draggedRect);
+  const layout = musicGridLayoutForItems(grid, items, draggedRect);
+  const insertIndex = musicInsertIndexFromGridLayout(layout, probe.x, probe.y, draggedRect, directionX);
+  return layout.cards
+    .slice(insertIndex)
+    .find(item => !item.isPlaceholder && item.card)
+    ?.card || null;
 }
 
 function musicGridColumnCount(grid) {
@@ -3904,24 +4350,200 @@ function musicGridColumnCount(grid) {
   return Math.max(1, columns.length || 1);
 }
 
-function musicRowsFromCards(cards) {
+function musicGridColumnWidths(grid) {
+  const computed = window.getComputedStyle(grid);
+  const widths = computed.gridTemplateColumns
+    .split(" ")
+    .map(value => Number.parseFloat(value))
+    .filter(Number.isFinite);
+  if (widths.length) return widths;
+  const fallbackWidth = grid.getBoundingClientRect().width || 1;
+  return [fallbackWidth];
+}
+
+function musicGridGapSize(grid, property) {
+  const value = Number.parseFloat(window.getComputedStyle(grid)[property]);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function musicTypicalCardHeight(cards, draggedRect = null) {
+  if (draggedRect?.height) return draggedRect.height;
+  const heights = cards
+    .map(card => card.getBoundingClientRect().height)
+    .filter(height => height > 0);
+  return heights.length ? Math.max(...heights) : 88;
+}
+
+function musicDragProbePoint(clientX, clientY, draggedRect = null) {
+  const fallbackX = draggedRect
+    ? draggedRect.left + draggedRect.width / 2
+    : clientX;
+  const fallbackY = draggedRect
+    ? draggedRect.top + draggedRect.height / 2
+    : clientY;
+  const rawX = Number.isFinite(clientX) ? clientX : fallbackX;
+  const rawY = Number.isFinite(clientY) ? clientY : fallbackY;
+  return {
+    x: Number.isFinite(rawX) ? rawX : fallbackX,
+    y: Number.isFinite(rawY) ? rawY : fallbackY
+  };
+}
+
+function musicBeforePathFromLiveRows(grid, cards, clientX, clientY, draggedRect = null, directionX = 0) {
+  if (!grid || !cards?.length) return "";
+  const probe = musicDragProbePoint(clientX, clientY, draggedRect);
+  const layout = musicGridLayoutForItems(grid, musicLayoutItemsFromCards(cards), draggedRect);
+  const insertIndex = musicInsertIndexFromGridLayout(layout, probe.x, probe.y, draggedRect, directionX);
+  return layout.cards[insertIndex]?.path || "";
+}
+
+function musicLayoutItemsFromCards(cards) {
+  return cards.map(card => ({
+    card,
+    path: card.dataset.trackPath || "",
+    rect: musicRectSnapshot(card.getBoundingClientRect())
+  })).filter(item => item.path);
+}
+
+function musicLayoutItemsFromGridSlots(grid, placeholder) {
+  return Array.from(grid?.querySelectorAll?.(".track-card:not(.dragging)") || [])
+    .map(card => {
+      const isPlaceholder = card === placeholder || card.classList.contains("music-track-placeholder");
+      const path = isPlaceholder ? musicPlaceholderLayoutPath : card.dataset.trackPath || "";
+      if (!path) return null;
+      return {
+        card: isPlaceholder ? null : card,
+        isPlaceholder,
+        path,
+        rect: musicRectSnapshot(card.getBoundingClientRect())
+      };
+    })
+    .filter(Boolean);
+}
+
+function musicRowsFromLayoutItems(items) {
   const rows = [];
-  for (const card of cards) {
-    const rect = card.getBoundingClientRect();
-    let row = rows.find(item => Math.abs(item.top - rect.top) < 12);
+  for (const item of items) {
+    let row = rows.find(rowItem => Math.abs(rowItem.top - item.rect.top) < 12);
     if (!row) {
-      row = { top: rect.top, bottom: rect.bottom, cards: [] };
+      row = { top: item.rect.top, bottom: item.rect.bottom, cards: [] };
       rows.push(row);
     }
-    row.top = Math.min(row.top, rect.top);
-    row.bottom = Math.max(row.bottom, rect.bottom);
-    row.cards.push({ card, rect });
+    row.top = Math.min(row.top, item.rect.top);
+    row.bottom = Math.max(row.bottom, item.rect.bottom);
+    row.cards.push(item);
   }
   rows.sort((a, b) => a.top - b.top);
   for (const row of rows) {
     row.cards.sort((a, b) => a.rect.left - b.rect.left);
   }
   return rows;
+}
+
+function musicVirtualLayoutItems(items, gridRect, columnWidths, columnGap, rowGap, rowHeight) {
+  const columnCount = Math.max(1, columnWidths.length || 1);
+  const columnLefts = [];
+  let columnLeft = gridRect.left;
+  for (let index = 0; index < columnCount; index += 1) {
+    columnLefts.push(columnLeft);
+    columnLeft += (columnWidths[index] || gridRect.width || 1) + columnGap;
+  }
+
+  return items.map((item, index) => {
+    const columnIndex = index % columnCount;
+    const rowIndex = Math.floor(index / columnCount);
+    const width = columnWidths[columnIndex] || item.rect.width || gridRect.width || 1;
+    const height = rowHeight || item.rect.height || 88;
+    const left = columnLefts[columnIndex] ?? gridRect.left;
+    const top = gridRect.top + rowIndex * (height + rowGap);
+    return {
+      ...item,
+      rect: {
+        left,
+        right: left + width,
+        top,
+        bottom: top + height,
+        width,
+        height
+      }
+    };
+  });
+}
+
+function musicGridLayoutForItems(grid, items, draggedRect = null) {
+  const gridRect = musicRectSnapshot(grid.getBoundingClientRect());
+  const columnWidths = musicGridColumnWidths(grid);
+  const columnGap = musicGridGapSize(grid, "columnGap");
+  const rowGap = musicGridGapSize(grid, "rowGap");
+  const heights = [
+    ...items.map(item => item.rect.height),
+    draggedRect?.height || 0
+  ].filter(height => height > 0);
+  const rowHeight = heights.length ? Math.max(...heights) : 88;
+  const virtualItems = musicVirtualLayoutItems(items, gridRect, columnWidths, columnGap, rowGap, rowHeight);
+  const rows = musicRowsFromLayoutItems(virtualItems);
+  return {
+    cards: virtualItems,
+    rows,
+    gridRect,
+    columnWidths,
+    columnCount: Math.max(1, columnWidths.length || musicGridColumnCount(grid)),
+    columnGap,
+    rowGap,
+    rowHeight
+  };
+}
+
+function musicRowIndexForLayoutProbe(layout, probeY) {
+  const rows = layout.rows || [];
+  if (!rows.length) return 0;
+  if (probeY <= rows[0].top) return 0;
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const nextRow = rows[index + 1] || null;
+    if (probeY <= row.bottom) return index;
+    if (nextRow && probeY < nextRow.top) {
+      const gapMid = row.bottom + (nextRow.top - row.bottom) / 2;
+      return probeY < gapMid ? index : index + 1;
+    }
+  }
+
+  const lastRow = rows[rows.length - 1];
+  const newRowThreshold = lastRow.bottom + Math.max(6, layout.rowGap / 2);
+  if (probeY <= newRowThreshold) return rows.length - 1;
+  const rowStep = Math.max(1, layout.rowHeight + layout.rowGap);
+  return rows.length + Math.floor(Math.max(0, probeY - newRowThreshold) / rowStep);
+}
+
+function musicRowIndexForDraggedLayout(layout, probeY, draggedRect = null) {
+  const rows = layout?.rows || [];
+  if (!rows.length) return 0;
+  return musicRowIndexForLayoutProbe(layout, probeY);
+}
+
+function musicInsertIndexFromGridLayout(layout, probeX, probeY, draggedRect = null, directionX = 0) {
+  if (!layout?.cards?.length) return 0;
+  const rowIndex = Math.max(0, musicRowIndexForDraggedLayout(layout, probeY, draggedRect));
+  const rows = layout.rows || [];
+  if (rowIndex >= rows.length) return layout.cards.length;
+  const row = rows[rowIndex];
+  const thresholdRatio = directionX < 0
+    ? musicReorderReturnRatio
+    : directionX > 0
+      ? musicReorderCommitRatio
+      : 1 / 2;
+  const beforeItem = row.cards.find(item => probeX <= item.rect.left + item.rect.width * thresholdRatio);
+  if (beforeItem) {
+    const beforeIndex = layout.cards.indexOf(beforeItem);
+    return beforeIndex >= 0 ? beforeIndex : layout.cards.length;
+  }
+  const nextRowFirst = rows[rowIndex + 1]?.cards?.[0] || null;
+  if (nextRowFirst) {
+    const nextRowIndex = layout.cards.indexOf(nextRowFirst);
+    return nextRowIndex >= 0 ? nextRowIndex : layout.cards.length;
+  }
+  return layout.cards.length;
 }
 
 function musicRectSnapshot(rect) {
@@ -3935,164 +4557,6 @@ function musicRectSnapshot(rect) {
   };
 }
 
-function createMusicDragLayoutSnapshot(draggedPath) {
-  const sections = new Map();
-  for (const section of Array.from(els.musicDock?.querySelectorAll(".music-tier-section") || [])) {
-    const grid = musicGridForSection(section);
-    if (!grid) continue;
-    const allCards = Array.from(grid.querySelectorAll(".track-card:not(.music-track-placeholder)"));
-    const sourceCard = allCards.find(card => card.dataset.trackPath === draggedPath) || null;
-    const sourceRect = sourceCard ? musicRectSnapshot(sourceCard.getBoundingClientRect()) : null;
-    const cards = allCards
-      .filter(card => card.dataset.trackPath && card.dataset.trackPath !== draggedPath)
-      .map(card => ({
-        path: card.dataset.trackPath || "",
-        rect: musicRectSnapshot(card.getBoundingClientRect())
-      }));
-    const rows = [];
-    for (const item of cards) {
-      let row = rows.find(rowItem => Math.abs(rowItem.top - item.rect.top) < 12);
-      if (!row) {
-        row = { top: item.rect.top, bottom: item.rect.bottom, cards: [] };
-        rows.push(row);
-      }
-      row.top = Math.min(row.top, item.rect.top);
-      row.bottom = Math.max(row.bottom, item.rect.bottom);
-      row.cards.push(item);
-    }
-    rows.sort((a, b) => a.top - b.top);
-    for (const row of rows) {
-      row.cards.sort((a, b) => a.rect.left - b.rect.left);
-    }
-    const sourceRowIndex = sourceRect
-      ? rows.findIndex(row => {
-        const overlap = Math.min(sourceRect.bottom, row.bottom) - Math.max(sourceRect.top, row.top);
-        return overlap > Math.min(sourceRect.height, Math.max(1, row.bottom - row.top)) * 0.42 || Math.abs(sourceRect.top - row.top) < 12;
-      })
-      : -1;
-    sections.set(section, {
-      cards,
-      rows,
-      sourceRowIndex
-    });
-  }
-  return { sections };
-}
-
-function musicDomCardByPath(grid, path) {
-  if (!grid || !path) return null;
-  return Array.from(grid.querySelectorAll(".track-card:not(.dragging):not(.music-track-placeholder)"))
-    .find(card => card.dataset.trackPath === path) || null;
-}
-
-function musicBeforePathFromDragSnapshot(snapshot, section, clientX, clientY, directionX, directionY, draggedRect) {
-  const layout = snapshot?.sections?.get(section);
-  if (!layout) return { active: false, beforePath: "" };
-  if (!layout.cards.length) return { active: true, beforePath: "" };
-
-  const rowForPoint = () => {
-    for (let index = 0; index < layout.rows.length; index += 1) {
-      const row = layout.rows[index];
-      const nextRow = layout.rows[index + 1];
-      const rowMid = row.top + (row.bottom - row.top) / 2;
-      if (clientY < rowMid || clientY <= row.bottom + 10) return row;
-      if (nextRow && clientY < nextRow.top) {
-        const gapMid = row.bottom + (nextRow.top - row.bottom) / 2;
-        return clientY < gapMid ? row : nextRow;
-      }
-    }
-    return layout.rows[layout.rows.length - 1] || null;
-  };
-
-  let targetRow = null;
-  if (draggedRect && directionY) {
-    for (const row of layout.rows) {
-      const rowHeight = Math.max(1, row.bottom - row.top);
-      const overlapsRow = draggedRect.bottom > row.top && draggedRect.top < row.bottom;
-      if (!overlapsRow) continue;
-      if (directionY > 0 && draggedRect.bottom >= row.top + rowHeight * musicReorderCommitRatio) {
-        targetRow = row;
-      } else if (directionY < 0 && draggedRect.top <= row.bottom - rowHeight * musicReorderCommitRatio) {
-        targetRow = row;
-        break;
-      }
-    }
-  }
-  targetRow = targetRow || rowForPoint();
-  if (!targetRow) return { active: true, beforePath: "" };
-
-  const rowIndex = layout.rows.indexOf(targetRow);
-  const isCrossRow = rowIndex !== layout.sourceRowIndex;
-  // Cross-row movement should not inherit horizontal hysteresis from the starting row.
-  const useDirectionalX = !isCrossRow;
-  const xProbe = useDirectionalX && draggedRect && directionX < 0
-    ? draggedRect.left
-    : useDirectionalX && draggedRect && directionX > 0
-      ? draggedRect.right
-      : draggedRect
-        ? draggedRect.left + draggedRect.width / 2
-        : clientX;
-  let columnIndex = targetRow.cards.length;
-  for (let index = 0; index < targetRow.cards.length; index += 1) {
-    const { rect } = targetRow.cards[index];
-    const thresholdRatio = !useDirectionalX
-      ? 1 / 2
-      : directionX < 0
-      ? musicReorderReturnRatio
-      : directionX > 0
-        ? musicReorderCommitRatio
-        : 1 / 2;
-    if (xProbe <= rect.left + rect.width * thresholdRatio + (useDirectionalX && directionX ? 0 : 4)) {
-      columnIndex = index;
-      break;
-    }
-  }
-
-  const nextRow = layout.rows[rowIndex + 1] || null;
-  return {
-    active: true,
-    beforePath: targetRow.cards[columnIndex]?.path || nextRow?.cards?.[0]?.path || ""
-  };
-}
-
-function musicBeforeCardFromVerticalSlot(grid, clientX, draggedRect, directionY) {
-  if (!grid || !draggedRect || !directionY) return { active: false, before: null };
-  const cards = Array.from(grid.querySelectorAll(".track-card:not(.dragging):not(.music-track-placeholder)"));
-  if (!cards.length) return { active: false, before: null };
-
-  const columns = musicGridColumnCount(grid);
-  const rows = musicRowsFromCards(cards);
-  let targetRow = null;
-  for (const row of rows) {
-    const rowHeight = Math.max(1, row.bottom - row.top);
-    const overlapsRow = draggedRect.bottom > row.top && draggedRect.top < row.bottom;
-    if (!overlapsRow) continue;
-    if (directionY > 0 && draggedRect.bottom >= row.top + rowHeight * musicReorderCommitRatio) {
-      targetRow = row;
-    } else if (directionY < 0 && draggedRect.top <= row.bottom - rowHeight * musicReorderCommitRatio) {
-      targetRow = row;
-      break;
-    }
-  }
-  if (!targetRow) return { active: false, before: null };
-
-  const rowIndex = rows.indexOf(targetRow);
-  let columnIndex = targetRow.cards.length;
-  for (let index = 0; index < targetRow.cards.length; index += 1) {
-    const { rect } = targetRow.cards[index];
-    if (clientX <= rect.left + rect.width / 2) {
-      columnIndex = index;
-      break;
-    }
-  }
-  if (targetRow.cards.length >= columns && columnIndex >= columns) {
-    columnIndex = columns - 1;
-  }
-
-  const targetIndex = clamp(rowIndex * columns + columnIndex, 0, cards.length);
-  return { active: true, before: cards[targetIndex] || null };
-}
-
 function nextMusicCardAfterPlaceholder(placeholder) {
   let sibling = placeholder.nextElementSibling;
   while (sibling) {
@@ -4104,163 +4568,68 @@ function nextMusicCardAfterPlaceholder(placeholder) {
   return null;
 }
 
-function nextMusicTrackCard(card) {
-  let sibling = card?.nextElementSibling || null;
-  while (sibling) {
-    if (sibling.classList.contains("track-card") && !sibling.classList.contains("music-track-placeholder")) {
-      return sibling;
-    }
-    sibling = sibling.nextElementSibling;
-  }
-  return null;
-}
-
-function previousMusicTrackCard(card) {
-  let sibling = card?.previousElementSibling || null;
-  while (sibling) {
-    if (sibling.classList.contains("track-card") && !sibling.classList.contains("music-track-placeholder")) {
-      return sibling;
-    }
-    sibling = sibling.previousElementSibling;
-  }
-  return null;
-}
-
-function musicCardsShareRow(first, second) {
-  if (!first || !second) return false;
-  const firstRect = first.getBoundingClientRect();
-  const secondRect = second.getBoundingClientRect();
-  return Math.abs(firstRect.top - secondRect.top) < 14;
-}
-
-function musicCardSharesPlaceholderRow(placeholder, card) {
-  if (!placeholder || !card) return false;
-  const placeholderRect = placeholder.getBoundingClientRect();
-  const cardRect = card.getBoundingClientRect();
-  return Math.abs(placeholderRect.top - cardRect.top) < 14;
-}
-
-function musicCardSharesDraggedRow(draggedRect, card) {
-  if (!draggedRect || !card) return false;
-  const cardRect = card.getBoundingClientRect();
-  const draggedMidY = draggedRect.top + draggedRect.height / 2;
-  return draggedMidY >= cardRect.top - 28 && draggedMidY <= cardRect.bottom + 28;
-}
-
-function shouldHoldMusicPlaceholder(placeholder, nextGrid, insertBefore, draggedRect) {
-  if (!draggedRect || !placeholder.parentNode) return false;
-
-  const currentGrid = placeholder.parentNode;
-  const currentBefore = nextMusicCardAfterPlaceholder(placeholder);
-  if (currentGrid === nextGrid) {
-    if (insertBefore === currentBefore || (!insertBefore && !currentBefore)) return false;
-    if (musicCardsShareRow(currentBefore, insertBefore)) return false;
-    if (!insertBefore && musicCardSharesPlaceholderRow(placeholder, currentBefore)) return false;
-    if (!currentBefore && musicCardSharesPlaceholderRow(placeholder, insertBefore)) return false;
-    if (!insertBefore && musicCardSharesDraggedRow(draggedRect, currentBefore)) return false;
-    if (!currentBefore && musicCardSharesDraggedRow(draggedRect, insertBefore)) return false;
-  }
-
-  const placeholderRect = placeholder.getBoundingClientRect();
-  if (!placeholderRect.height) return false;
-  const draggedMidY = draggedRect.top + draggedRect.height / 2;
-  const placeholderMidY = placeholderRect.top + placeholderRect.height / 2;
-  const deadZone = Math.min(32, Math.max(18, draggedRect.height * 0.26));
-  return Math.abs(draggedMidY - placeholderMidY) < deadZone;
-}
-
-function musicBeforeCardFromDrag(grid, placeholder, draggedRect, directionX, fallbackCard) {
-  if (!draggedRect || placeholder.parentNode !== grid) return fallbackCard;
-  if (!directionX) return fallbackCard;
-
-  const children = Array.from(grid.children);
-  const placeholderIndex = children.indexOf(placeholder);
-  const cards = Array.from(grid.querySelectorAll(".track-card:not(.dragging):not(.music-track-placeholder)"));
-  const sameRow = (card, rect = card.getBoundingClientRect()) => {
-    const overlap = Math.min(draggedRect.bottom, rect.bottom) - Math.max(draggedRect.top, rect.top);
-    if (overlap >= Math.min(draggedRect.height, rect.height) * 0.34) return true;
-    const draggedMidY = draggedRect.top + draggedRect.height / 2;
-    return draggedMidY >= rect.top - 18 && draggedMidY <= rect.bottom + 18;
-  };
-  const currentBefore = nextMusicCardAfterPlaceholder(placeholder);
-  let bestLeft = null;
-  let bestRight = null;
-  let sawSameRow = false;
-
-  for (const card of cards) {
-    const cardIndex = children.indexOf(card);
-    const rect = card.getBoundingClientRect();
-    if (cardIndex === -1 || cardIndex === placeholderIndex || !sameRow(card, rect)) continue;
-    sawSameRow = true;
-
-    if (cardIndex < placeholderIndex) {
-      const threshold = rect.left + rect.width * musicReorderReturnRatio;
-      const score = (threshold - draggedRect.left) / rect.width;
-      if (score >= 0 && (!bestLeft || score > bestLeft.score)) {
-        bestLeft = { before: card, score };
-      }
-      continue;
-    }
-
-    const threshold = rect.left + rect.width * musicReorderCommitRatio;
-    const score = (draggedRect.right - threshold) / rect.width;
-    if (score >= 0 && (!bestRight || score > bestRight.score)) {
-      bestRight = { before: nextMusicTrackCard(card), score };
-    }
-  }
-
-  if (!sawSameRow) return fallbackCard;
-  if (bestLeft && bestRight) {
-    const scoreGap = bestLeft.score - bestRight.score;
-    const preferred = Math.abs(scoreGap) >= 0.08
-      ? scoreGap > 0
-        ? bestLeft
-        : bestRight
-      : directionX < 0
-        ? bestLeft
-        : directionX > 0
-          ? bestRight
-          : bestLeft.score >= bestRight.score
-            ? bestLeft
-            : bestRight;
-    return preferred.before?.classList?.contains("track-card") ? preferred.before : null;
-  }
-  const best = bestLeft || bestRight;
-  if (best) return best.before?.classList?.contains("track-card") ? best.before : null;
-  return fallbackCard;
-}
-
-function moveMusicPlaceholder(placeholder, section, clientX, clientY, directionX = 0, directionY = 0, draggedRect = null, dragSnapshot = null) {
-  const grid = musicGridForSection(section);
-  if (!grid) return;
-  const stableY = draggedRect ? draggedRect.top + draggedRect.height / 2 : clientY;
-  const pointX = draggedRect && directionX < 0
-    ? draggedRect.left
-    : draggedRect && directionX > 0
-      ? draggedRect.right
-      : clientX;
-  const snapshotTarget = musicBeforePathFromDragSnapshot(dragSnapshot, section, pointX, stableY, directionX, directionY, draggedRect);
-  const verticalSlot = snapshotTarget.active ? { active: false, before: null } : musicBeforeCardFromVerticalSlot(grid, clientX, draggedRect, directionY);
-  const pointBefore = snapshotTarget.active
-    ? musicDomCardByPath(grid, snapshotTarget.beforePath)
-    : verticalSlot.active
-      ? verticalSlot.before
-      : musicBeforeCardFromPoint(grid, pointX, stableY, directionX, draggedRect, directionY);
-  const before = snapshotTarget.active
-    ? pointBefore
-    : verticalSlot.active
-      ? verticalSlot.before
-      : musicBeforeCardFromDrag(grid, placeholder, draggedRect, directionX, pointBefore);
-  const empty = grid.querySelector(".music-tier-empty");
-  const insertBefore = before || empty || null;
-  if (placeholder.parentNode === grid && (insertBefore === placeholder || insertBefore === placeholder.nextElementSibling)) return;
-  if (!snapshotTarget.active && !verticalSlot.active && shouldHoldMusicPlaceholder(placeholder, grid, insertBefore, draggedRect)) return;
-
-  animateMusicTrackReflow(() => {
+function placeMusicPlaceholder(placeholder, grid, insertBefore, animate = true) {
+  const mutate = () => {
     placeholder.parentNode?.classList?.remove("drag-has-placeholder");
     grid.insertBefore(placeholder, insertBefore);
     grid.classList.add("drag-has-placeholder");
-  });
+    placeholder.dataset.lastReflowAt = String(musicAnimationNow());
+  };
+  if (animate) {
+    animateMusicTrackReflow(mutate, { includePlaceholder: true });
+  } else {
+    for (const card of musicTrackCardsForAnimation()) {
+      cancelMusicReflowAnimations(card);
+    }
+    mutate();
+  }
+}
+
+function moveMusicPlaceholder(placeholder, section, clientX, clientY, directionX = 0, directionY = 0, draggedRect = null, options = {}) {
+  const { force = false } = options;
+  const grid = musicGridForSection(section);
+  if (!grid) return "none";
+  const currentSection = placeholder.closest(".music-tier-section");
+  const currentTierId = currentSection?.dataset.tier || "";
+  const targetTierId = section.dataset.tier || "";
+  const stableX = draggedRect ? draggedRect.left + draggedRect.width / 2 : clientX;
+  const rowY = draggedRect ? draggedRect.top + draggedRect.height / 2 : clientY;
+  const before = musicBeforeCardFromPlaceholderGrid(grid, placeholder, stableX, rowY, directionX, draggedRect, directionY);
+  const empty = grid.querySelector(".music-tier-empty");
+  const insertBefore = before || empty || null;
+  const targetKey = `${targetTierId}|${before?.dataset?.trackPath || ""}|${insertBefore === empty ? "__empty__" : ""}`;
+  if (placeholder.parentNode === grid && (insertBefore === placeholder || insertBefore === placeholder.nextElementSibling)) {
+    placeholder.dataset.targetKey = targetKey;
+    placeholder.dataset.pendingTargetKey = "";
+    placeholder.dataset.pendingTargetAt = "0";
+    return "unchanged";
+  }
+
+  const now = musicAnimationNow();
+  const lastReflowAt = Number.parseFloat(placeholder.dataset.lastReflowAt || "0");
+  const recentlyReflowed = Number.isFinite(lastReflowAt) && lastReflowAt > 0 && now - lastReflowAt < musicPlaceholderReflowMinIntervalMs;
+  if (!force && recentlyReflowed && placeholder.dataset.targetKey && placeholder.dataset.targetKey !== targetKey) {
+    placeholder.dataset.pendingTargetKey = targetKey;
+    placeholder.dataset.pendingTargetAt = String(now);
+    return "deferred";
+  }
+
+  const shouldSettleTarget = !force && Math.abs(directionX) < 1 && Math.abs(directionY) < 1;
+  if (shouldSettleTarget && currentTierId && currentTierId === targetTierId && placeholder.dataset.targetKey && placeholder.dataset.targetKey !== targetKey) {
+    const pendingKey = placeholder.dataset.pendingTargetKey || "";
+    const pendingAt = pendingKey === targetKey
+      ? Number.parseFloat(placeholder.dataset.pendingTargetAt || "0")
+      : now;
+    placeholder.dataset.pendingTargetKey = targetKey;
+    placeholder.dataset.pendingTargetAt = String(Number.isFinite(pendingAt) ? pendingAt : now);
+    if (now - pendingAt < musicPlaceholderTargetSettleMs) return "deferred";
+  }
+
+  placeholder.dataset.targetKey = targetKey;
+  placeholder.dataset.pendingTargetKey = "";
+  placeholder.dataset.pendingTargetAt = "0";
+  placeMusicPlaceholder(placeholder, grid, insertBefore, true);
+  return "moved";
 }
 
 function musicBeforePathFromPlaceholder(placeholder) {
@@ -4274,12 +4643,15 @@ function musicBeforePathFromPlaceholder(placeholder) {
   return "";
 }
 
-function settleDraggedMusicTrack(card, placeholder, animate = true) {
+function settleDraggedMusicTrack(card, placeholder, animate = true, motion = {}) {
   const startRect = card.getBoundingClientRect();
+  cancelMusicReflowAnimations(placeholder);
   const targetRect = placeholder.getBoundingClientRect();
   const grid = placeholder.parentNode;
   let settled = false;
   let fallbackTimer = null;
+  let cleanupFrame = 0;
+  let settleFrame = 0;
 
   const cleanup = () => {
     if (settled) return;
@@ -4287,6 +4659,14 @@ function settleDraggedMusicTrack(card, placeholder, animate = true) {
     if (fallbackTimer) {
       window.clearTimeout(fallbackTimer);
       fallbackTimer = null;
+    }
+    if (cleanupFrame) {
+      window.cancelAnimationFrame(cleanupFrame);
+      cleanupFrame = 0;
+    }
+    if (settleFrame) {
+      window.cancelAnimationFrame(settleFrame);
+      settleFrame = 0;
     }
     grid.insertBefore(card, placeholder);
     placeholder.remove();
@@ -4297,41 +4677,76 @@ function settleDraggedMusicTrack(card, placeholder, animate = true) {
     card.style.removeProperty("height");
     card.style.removeProperty("left");
     card.style.removeProperty("top");
+    card.style.removeProperty("transform");
   };
 
-  if (!animate || Math.abs(startRect.left - targetRect.left) < 1 && Math.abs(startRect.top - targetRect.top) < 1) {
+  if (!animate) {
     cleanup();
     return Promise.resolve();
   }
 
+  if (Math.hypot(startRect.left - targetRect.left, startRect.top - targetRect.top) <= musicSettleSnapDistance) {
+    return new Promise(resolve => {
+      cleanupFrame = window.requestAnimationFrame(() => {
+        cleanupFrame = 0;
+        cleanup();
+        resolve();
+      });
+    });
+  }
+
   return new Promise(resolve => {
     const finishCleanup = () => {
-      cleanup();
-      resolve();
-    };
-    card.style.left = `${startRect.left}px`;
-    card.style.top = `${startRect.top}px`;
-    const animation = card.animate(
-      [
-        {
-          left: `${startRect.left}px`,
-          top: `${startRect.top}px`,
-          transform: "scale(1.02)"
-        },
-        {
-          left: `${targetRect.left}px`,
-          top: `${targetRect.top}px`,
-          transform: "scale(1)"
-        }
-      ],
-      {
-        duration: 260,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-        fill: "forwards"
+      if (cleanupFrame) return;
+      if (settleFrame) {
+        window.cancelAnimationFrame(settleFrame);
+        settleFrame = 0;
       }
+      cleanupFrame = window.requestAnimationFrame(() => {
+        cleanupFrame = 0;
+        cleanup();
+        resolve();
+      });
+    };
+    const dx = startRect.left - targetRect.left;
+    const dy = startRect.top - targetRect.top;
+    const maxDuration = Math.max(
+      musicSettleMaxDurationMs,
+      musicSettleAnimationDurationFor(dx, dy) + 180
     );
-    fallbackTimer = window.setTimeout(finishCleanup, 340);
-    animation.finished.catch(() => {}).then(finishCleanup);
+    let offsetX = dx;
+    let offsetY = dy;
+    let velocityX = musicSettleVelocityFor(offsetX, motion.velocityX);
+    let velocityY = musicSettleVelocityFor(offsetY, motion.velocityY);
+    let lastTime = musicAnimationNow();
+    const startTime = lastTime;
+    card.style.left = `${targetRect.left}px`;
+    card.style.top = `${targetRect.top}px`;
+    card.style.transform = musicFloatingTrackTransform(offsetX, offsetY);
+    const tick = timestamp => {
+      const now = timestamp || musicAnimationNow();
+      const elapsed = lastTime
+        ? clamp(now - lastTime, musicDragMinStepMs, musicSettleMaxStepMs)
+        : musicDragFrameMs;
+      const deltaSeconds = elapsed / 1000;
+      const nextX = musicDampedSpringStep(offsetX, 0, velocityX, deltaSeconds, musicSettleSpringFrequency);
+      const nextY = musicDampedSpringStep(offsetY, 0, velocityY, deltaSeconds, musicSettleSpringFrequency);
+      offsetX = nextX.value;
+      offsetY = nextY.value;
+      velocityX = musicDampSettledAxisVelocity(offsetX, nextX.velocity, deltaSeconds);
+      velocityY = musicDampSettledAxisVelocity(offsetY, nextY.velocity, deltaSeconds);
+      lastTime = now;
+      card.style.transform = musicFloatingTrackTransform(offsetX, offsetY);
+      const isSettled = Math.hypot(offsetX, offsetY) <= musicSettleSnapDistance &&
+        Math.hypot(velocityX, velocityY) <= musicSettleVelocitySnap;
+      if (isSettled || now - startTime >= maxDuration) {
+        finishCleanup();
+        return;
+      }
+      settleFrame = window.requestAnimationFrame(tick);
+    };
+    fallbackTimer = window.setTimeout(finishCleanup, maxDuration + 160);
+    settleFrame = window.requestAnimationFrame(tick);
   });
 }
 
@@ -4342,24 +4757,259 @@ function createMusicTrackDragSession(card, item, startX, startY) {
   const placeholder = document.createElement("div");
   placeholder.className = "track-card music-track-placeholder";
   placeholder.style.minHeight = `${rect.height}px`;
+  placeholder.style.height = `${rect.height}px`;
   placeholder.setAttribute("aria-hidden", "true");
   let dragging = false;
   let lastTarget = { section: sourceSection, tierId: sourceSection?.dataset.tier || tierForTrack(item), beforePath: "" };
   const offsetX = startX - rect.left;
   const offsetY = startY - rect.top;
+  const draggedVisualWidth = rect.width * musicFloatingTrackScale;
+  const draggedVisualHeight = rect.height * musicFloatingTrackScale;
   const sourceBeforePath = card.nextElementSibling?.dataset?.trackPath || "";
-  const trackDirectionX = createDragDirectionTracker(startX);
-  const trackDirectionY = createDragDirectionTracker(startY);
-  const dragSnapshot = createMusicDragLayoutSnapshot(item.path);
+  const trackDirectionX = createMusicDragDirectionTracker(startX);
+  const trackDirectionY = createMusicDragDirectionTracker(startY);
+  let pendingMovePoint = null;
+  let moveFrame = 0;
+  let visualFrame = 0;
+  let visualLeft = rect.left;
+  let visualTop = rect.top;
+  let visualVelocityX = 0;
+  let visualVelocityY = 0;
+  let targetLeft = rect.left;
+  let targetTop = rect.top;
+  let visualTargetLeft = rect.left;
+  let visualTargetTop = rect.top;
+  let takeoffUntilTime = 0;
+  let lastVisualFrameTime = 0;
+  let lastDirectionX = 0;
+  let lastDirectionY = 0;
 
-  const moveCardToPoint = (clientX, clientY) => {
+  const paintDraggedCard = () => {
+    card.style.transform = musicFloatingTrackTransform(visualLeft - rect.left, visualTop - rect.top);
+  };
+
+  const advanceVisualFollow = timestamp => {
+    const now = timestamp || musicAnimationNow();
+    const isTakingOff = now < takeoffUntilTime;
+    const minStep = isTakingOff ? musicDragTakeoffMinStepMs : musicDragMinStepMs;
+    const elapsed = lastVisualFrameTime
+      ? clamp(now - lastVisualFrameTime, minStep, musicDragMaxStepMs)
+      : musicDragFrameMs;
+    const smoothingMs = isTakingOff ? musicDragTakeoffTargetSmoothingMs : musicDragVisualTargetSmoothingMs;
+    const targetBlend = 1 - Math.exp(-elapsed / Math.max(1, smoothingMs));
+    visualTargetLeft += (targetLeft - visualTargetLeft) * targetBlend;
+    visualTargetTop += (targetTop - visualTargetTop) * targetBlend;
+    if (Math.hypot(targetLeft - visualTargetLeft, targetTop - visualTargetTop) <= musicDragVisualTargetSnapDistance) {
+      visualTargetLeft = targetLeft;
+      visualTargetTop = targetTop;
+    }
+    const targetSettled = visualTargetLeft === targetLeft && visualTargetTop === targetTop;
+    const dx = visualTargetLeft - visualLeft;
+    const dy = visualTargetTop - visualTop;
+    if (
+      targetSettled &&
+      Math.hypot(dx, dy) <= musicDragVisualSnapDistance &&
+      Math.hypot(visualVelocityX, visualVelocityY) <= musicDragSpringSnapSpeed
+    ) {
+      visualLeft = visualTargetLeft;
+      visualTop = visualTargetTop;
+      visualVelocityX = 0;
+      visualVelocityY = 0;
+      lastVisualFrameTime = now;
+      paintDraggedCard();
+      return false;
+    }
+    const frequency = isTakingOff ? musicDragTakeoffSpringFrequency : musicDragSpringFrequency;
+    const deltaSeconds = elapsed / 1000;
+    if (dx * visualVelocityX + dy * visualVelocityY < 0) {
+      const damping = musicFrameAdjustedDamping(musicDragOpposingVelocityDamping, deltaSeconds);
+      visualVelocityX *= damping;
+      visualVelocityY *= damping;
+    }
+    visualVelocityX = musicDampSettledAxisVelocity(dx, visualVelocityX, deltaSeconds);
+    visualVelocityY = musicDampSettledAxisVelocity(dy, visualVelocityY, deltaSeconds);
+    const nextX = musicDampedSpringStep(visualLeft, visualTargetLeft, visualVelocityX, deltaSeconds, frequency);
+    const nextY = musicDampedSpringStep(visualTop, visualTargetTop, visualVelocityY, deltaSeconds, frequency);
+    const baseMaxVisualStep = isTakingOff ? musicDragTakeoffMaxVisualStep : musicDragMaxVisualStep;
+    const maxVisualStepRatio = isTakingOff ? musicDragTakeoffMaxVisualStepRatio : musicDragMaxVisualStepRatio;
+    const targetDistance = Math.hypot(visualTargetLeft - visualLeft, visualTargetTop - visualTop);
+    const softMaxVisualStep = isTakingOff
+      ? baseMaxVisualStep
+      : baseMaxVisualStep + Math.sqrt(targetDistance) * musicDragMaxVisualStepSqrtFactor;
+    const maxVisualStep = Math.min(
+      softMaxVisualStep,
+      Math.max(musicDragMinVisualStep, targetDistance * maxVisualStepRatio)
+    );
+    const limited = musicLimitVisualStep(
+      visualLeft,
+      visualTop,
+      nextX.value,
+      nextY.value,
+      nextX.velocity,
+      nextY.velocity,
+      deltaSeconds,
+      maxVisualStep
+    );
+    visualLeft = limited.left;
+    visualTop = limited.top;
+    visualVelocityX = limited.velocityX;
+    visualVelocityY = limited.velocityY;
+    lastVisualFrameTime = now;
+    if (
+      targetSettled &&
+      Math.hypot(visualTargetLeft - visualLeft, visualTargetTop - visualTop) <= musicDragVisualSnapDistance &&
+      Math.hypot(visualVelocityX, visualVelocityY) <= musicDragSpringSnapSpeed
+    ) {
+      visualLeft = visualTargetLeft;
+      visualTop = visualTargetTop;
+      visualVelocityX = 0;
+      visualVelocityY = 0;
+    }
+    paintDraggedCard();
+    return true;
+  };
+
+  const currentDraggedRect = (mode = "visual") => musicRectFromPosition(
+    mode === "target"
+      ? targetLeft
+      : mode === "intent"
+        ? visualLeft + (targetLeft - visualLeft) * musicDragIntentProbeLead
+        : visualLeft,
+    mode === "target"
+      ? targetTop
+      : mode === "intent"
+        ? visualTop + (targetTop - visualTop) * musicDragIntentProbeLead
+        : visualTop,
+    draggedVisualWidth,
+    draggedVisualHeight
+  );
+
+  const syncPlaceholderToDraggedRect = (draggedRect, { force = false } = {}) => {
+    const probeX = draggedRect.left + draggedRect.width / 2;
+    const probeY = draggedRect.top + draggedRect.height / 2;
+    lastTarget = musicDropTargetAtPoint(
+      probeX,
+      probeY,
+      lastTarget.section || sourceSection,
+      lastDirectionX,
+      lastDirectionY,
+      draggedRect
+    );
+    if (lastTarget.section && isValidMusicTier(lastTarget.tierId)) {
+      const placeholderMoveState = moveMusicPlaceholder(
+        placeholder,
+        lastTarget.section,
+        probeX,
+        probeY,
+        lastDirectionX,
+        lastDirectionY,
+        draggedRect,
+        { force }
+      );
+      return placeholderMoveState;
+    }
+    return "none";
+  };
+
+  const runVisualFollow = timestamp => {
+    visualFrame = 0;
+    if (!dragging) return;
+    const shouldContinue = advanceVisualFollow(timestamp);
+    const placeholderMoveState = syncPlaceholderToDraggedRect(currentDraggedRect("intent"));
+    if (shouldContinue || placeholderMoveState === "deferred") {
+      scheduleVisualFollow();
+    }
+  };
+
+  const scheduleVisualFollow = () => {
+    if (!visualFrame) {
+      visualFrame = window.requestAnimationFrame(runVisualFollow);
+    }
+  };
+
+  const stopVisualFollow = () => {
+    if (visualFrame) {
+      window.cancelAnimationFrame(visualFrame);
+      visualFrame = 0;
+    }
+  };
+
+  const moveCardToPoint = (clientX, clientY, { paint = true, useTargetRect = false } = {}) => {
     const clamped = clampDragPosition(clientX, clientY, offsetX, offsetY, rect.width, rect.height);
-    card.style.left = `${clamped.left}px`;
-    card.style.top = `${clamped.top}px`;
+    targetLeft = clamped.left;
+    targetTop = clamped.top;
+    if (paint && advanceVisualFollow()) {
+      scheduleVisualFollow();
+    }
+    return currentDraggedRect(useTargetRect ? "target" : "intent");
+  };
+
+  const startDragging = () => {
+    dragging = true;
+    draggedTrackPath = item.path;
+    sourceGrid.insertBefore(placeholder, card);
+    sourceGrid.classList.add("drag-has-placeholder");
+    animateMusicPlaceholderIntro(placeholder);
+    document.body.appendChild(card);
+    card.classList.add("dragging", "music-track-floating");
+    card.style.width = `${rect.width}px`;
+    card.style.height = `${rect.height}px`;
+    card.style.left = `${rect.left}px`;
+    card.style.top = `${rect.top}px`;
+    visualLeft = rect.left;
+    visualTop = rect.top;
+    visualVelocityX = 0;
+    visualVelocityY = 0;
+    targetLeft = rect.left;
+    targetTop = rect.top;
+    visualTargetLeft = rect.left;
+    visualTargetTop = rect.top;
+    lastVisualFrameTime = musicAnimationNow();
+    takeoffUntilTime = lastVisualFrameTime + musicDragTakeoffDurationMs;
+    paintDraggedCard();
+    document.body.classList.add("music-track-dragging");
+  };
+
+  const processMove = (clientX, clientY, options = {}) => {
+    const { allowStart = true, forcePlaceholder = false } = options;
+    const dx = clientX - startX;
+    const dy = clientY - startY;
+    if (!dragging && Math.hypot(dx, dy) < musicDragStartThreshold) return false;
+    if (!dragging && !allowStart) return false;
+    if (!dragging) {
+      startDragging();
+    }
+    const draggedRect = moveCardToPoint(clientX, clientY, {
+      ...options,
+      useTargetRect: forcePlaceholder
+    });
+    lastDirectionX = trackDirectionX(clientX);
+    lastDirectionY = trackDirectionY(clientY);
+    if (syncPlaceholderToDraggedRect(draggedRect, { force: forcePlaceholder }) === "deferred") {
+      scheduleVisualFollow();
+    }
+    return true;
+  };
+
+  const flushPendingMove = (options = {}) => {
+    if (moveFrame) {
+      window.cancelAnimationFrame(moveFrame);
+      moveFrame = 0;
+    }
+    const point = pendingMovePoint;
+    pendingMovePoint = null;
+    return point ? processMove(point.clientX, point.clientY, options) : false;
   };
 
   const finish = shouldCommit => {
+    flushPendingMove({ allowStart: dragging, paint: false, forcePlaceholder: true });
     if (!dragging) return false;
+    advanceVisualFollow(musicAnimationNow());
+    const settleMotion = {
+      velocityX: visualVelocityX,
+      velocityY: visualVelocityY
+    };
+    stopVisualFollow();
     suppressTrackClickUntil = Date.now() + 240;
     draggedTrackPath = "";
     clearMusicTierDragState();
@@ -4370,19 +5020,15 @@ function createMusicTrackDragSession(card, item, startX, startY) {
         ? Array.from(sourceGrid.querySelectorAll(".track-card:not(.dragging):not(.music-track-placeholder)"))
           .find(node => node.dataset.trackPath === sourceBeforePath)
         : null;
-      animateMusicTrackReflow(() => {
-        placeholder.parentNode?.classList?.remove("drag-has-placeholder");
-        sourceGrid.insertBefore(placeholder, sourceBefore);
-        sourceGrid.classList.add("drag-has-placeholder");
-      });
-      return settleDraggedMusicTrack(card, placeholder, true).then(() => false);
+      placeMusicPlaceholder(placeholder, sourceGrid, sourceBefore, true);
+      return settleDraggedMusicTrack(card, placeholder, true, settleMotion).then(() => false);
     }
 
     const targetSection = placeholder.closest(".music-tier-section");
     const tierId = targetSection?.dataset.tier || lastTarget.tierId;
     const beforePath = musicBeforePathFromPlaceholder(placeholder);
     moveTrackToTier(item.path, tierId, beforePath);
-    return settleDraggedMusicTrack(card, placeholder, true).then(() => {
+    return settleDraggedMusicTrack(card, placeholder, true, settleMotion).then(afterMusicAnimationFrame).then(() => {
       renderMusic();
       return true;
     });
@@ -4391,30 +5037,18 @@ function createMusicTrackDragSession(card, item, startX, startY) {
   const move = moveEvent => {
     const dx = moveEvent.clientX - startX;
     const dy = moveEvent.clientY - startY;
-    if (!dragging && Math.hypot(dx, dy) < 6) return false;
-    if (!dragging) {
-      dragging = true;
-      draggedTrackPath = item.path;
-      sourceGrid.insertBefore(placeholder, card);
-      sourceGrid.classList.add("drag-has-placeholder");
-      document.body.appendChild(card);
-      card.classList.add("dragging", "music-track-floating");
-      card.style.width = `${rect.width}px`;
-      card.style.height = `${rect.height}px`;
-      document.body.classList.add("music-track-dragging");
-    }
+    if (!dragging && Math.hypot(dx, dy) < musicDragStartThreshold) return false;
     moveEvent.preventDefault();
-    moveCardToPoint(moveEvent.clientX, moveEvent.clientY);
-    const directionX = trackDirectionX(moveEvent.clientX);
-    const directionY = trackDirectionY(moveEvent.clientY);
-    const draggedRect = card.getBoundingClientRect();
-    const stableX = draggedRect.left + draggedRect.width / 2;
-    const stableY = draggedRect.top + draggedRect.height / 2;
-    lastTarget = musicDropTargetAtPoint(stableX, stableY, lastTarget.section || sourceSection, directionX, directionY, draggedRect);
-    if (lastTarget.section && isValidMusicTier(lastTarget.tierId)) {
-      moveMusicPlaceholder(placeholder, lastTarget.section, moveEvent.clientX, stableY, directionX, directionY, draggedRect, dragSnapshot);
+    pendingMovePoint = { clientX: moveEvent.clientX, clientY: moveEvent.clientY };
+    if (!moveFrame) {
+      moveFrame = window.requestAnimationFrame(() => {
+        moveFrame = 0;
+        const point = pendingMovePoint;
+        pendingMovePoint = null;
+        if (point) processMove(point.clientX, point.clientY);
+      });
     }
-    return true;
+    return dragging;
   };
 
   return {
@@ -8444,6 +9078,7 @@ function randomRealmResourceButtons() {
     els.openSteamworkPublishFolder,
     els.openSteamworkGameContent,
     els.openSteamworkPublishTool,
+    els.openSteamworkArtAsset,
     els.openRandomRealmProject,
     els.openRandomRealmPromo,
     els.openUnityProjectFolder,
@@ -8541,6 +9176,1217 @@ function bindSteamworkDropzone(kind, dropzone, input) {
     dropzone.classList.remove("drag-over");
     uploadSteamworkFiles(kind, event.dataTransfer.files);
   });
+}
+
+function steamworkAssetStatusLabel(status) {
+  if (status === "ready") return text("steamworkAssetReady");
+  if (status === "review") return text("steamworkAssetReview");
+  if (status === "optional") return text("steamworkAssetOptional");
+  return text("steamworkAssetMissing");
+}
+
+function setSteamworkAssetRoot(root = "") {
+  if (!els.steamworkAssetRoot) return;
+  els.steamworkAssetRoot.textContent = root ? text("steamworkAssetSource", root) : "";
+}
+
+function setSteamworkAssetSummaryText(message) {
+  if (!els.steamworkAssetSummary) return;
+  els.steamworkAssetSummary.classList.remove("steamwork-summary-pill");
+  els.steamworkAssetSummary.textContent = message || "";
+}
+
+function renderSteamworkAssetSummaryPills(summary, itemCount) {
+  if (!els.steamworkAssetSummary) return;
+  if (!itemCount) {
+    setSteamworkAssetSummaryText(text("steamworkAssetLoading"));
+    return;
+  }
+
+  const total = summary.total || itemCount;
+  const allStats = [
+    ["ready", text("steamworkAssetSummaryReady", summary.ready || 0, total)],
+    ["review", text("steamworkAssetSummaryReview", summary.review || 0)],
+    ["missing", text("steamworkAssetSummaryMissing", summary.missing || 0)],
+    ["optional", text("steamworkAssetSummaryOptional", summary.optional || 0)],
+    ["files", text("steamworkAssetSummaryFiles", summary.files || 0)]
+  ];
+  const stats = allStats.filter(([kind]) => {
+    if (kind === "ready" || kind === "files") return true;
+    return Number(summary[kind] || 0) > 0;
+  });
+
+  els.steamworkAssetSummary.classList.add("steamwork-summary-pill");
+  els.steamworkAssetSummary.title = allStats.map(([, label]) => label).join(" / ");
+  els.steamworkAssetSummary.setAttribute("aria-label", els.steamworkAssetSummary.title);
+  els.steamworkAssetSummary.replaceChildren(...stats.map(([kind, label]) => {
+    const chip = document.createElement("span");
+    chip.className = `steamwork-summary-chip ${kind}`;
+    chip.textContent = label;
+    return chip;
+  }));
+}
+
+function steamworkAssetIssueText(issue) {
+  const cleanIssue = String(issue || "").trim();
+  if (!cleanIssue) return "";
+  if (cleanIssue === "Missing required asset") return text("steamworkIssueMissingRequired");
+  if (cleanIssue === "Optional") return text("steamworkIssueOptional");
+  if (cleanIssue === "File found, check size/format") return text("steamworkIssueCheckFile");
+  const countMatch = cleanIssue.match(/^Need\s+(\d+)\s+files?$/i);
+  if (countMatch) return text("steamworkIssueNeedFiles", Number(countMatch[1]));
+  return cleanIssue;
+}
+
+function steamworkAssetTargetText(target) {
+  const key = {
+    "Store Page Admin > Graphical Assets": "steamworkTargetGraphicalAssets",
+    "Store Page Admin > Screenshots": "steamworkTargetScreenshots",
+    "Store Page Admin > Community & Client Icons": "steamworkTargetCommunityIcons",
+    "Steamworks > Edit Library Assets": "steamworkTargetLibraryAssets",
+    "Store Page Admin > Trailers": "steamworkTargetTrailers"
+  }[String(target || "")];
+  return key ? text(key) : target || "";
+}
+
+function steamworkAssetSpecText(spec) {
+  const cleanSpec = String(spec || "").trim();
+  if (!cleanSpec || language !== "zh") return cleanSpec;
+  return {
+    "5+ files, 1920 x 1080 minimum, 16:9": "5+ \u5f20\uff0c\u22651080p\uff0c16:9",
+    "256 x 256 or 512 x 512, ICO/PNG": "256/512\uff0cICO/PNG",
+    "184 x 184 JPG": "184 x 184\uff0cJPG",
+    "3840 x 1240 PNG": "3840 x 1240\uff0cPNG",
+    "PNG, 1280 wide and/or 720 tall": "PNG\uff0c\u5bbd 1280 \u6216\u9ad8 720",
+    "MP4/MOV/WMV, up to 1920 x 1080, 30/60 fps": "\u22641080p\uff0c30/60fps",
+    "1920 x 1080 JPG/PNG, frame from the video": "1920 x 1080\uff0cJPG/PNG"
+  }[cleanSpec] || cleanSpec;
+}
+
+function steamworkAssetPreviewUrl(file) {
+  if (!file?.preview || !file.path) return "";
+  const version = file.modified ? `&v=${encodeURIComponent(file.modified)}` : "";
+  return `/api/steamwork/asset-preview?path=${encodeURIComponent(file.path)}${version}`;
+}
+
+function steamworkAssetThumbUrl(file) {
+  if (!steamworkThumbsEnabled || !file?.preview || !file.path) return "";
+  const version = file.modified ? `&v=${encodeURIComponent(file.modified)}` : "";
+  return `/api/steamwork/asset-thumb?path=${encodeURIComponent(file.path)}${version}`;
+}
+
+function steamworkAssetDimensions(file) {
+  if (file?.width && file?.height) return `${file.width}x${file.height}`;
+  return "";
+}
+
+function steamworkAssetExtension(file) {
+  const explicit = String(file?.extension || "").toLowerCase();
+  if (explicit) return explicit.startsWith(".") ? explicit : `.${explicit}`;
+  const match = String(file?.name || "").toLowerCase().match(/\.[^.]+$/);
+  return match ? match[0] : "";
+}
+
+function steamworkAssetCandidateRootHint(item) {
+  if (item?.candidateRootHint) return item.candidateRootHint;
+  if (item?.id === "trailer_poster") return "screenshots";
+  return item?.rootHint || "";
+}
+
+function steamworkAssetCandidatePatterns(item) {
+  const patterns = Array.isArray(item?.candidatePatterns) ? [...item.candidatePatterns] : [];
+  if (item?.id === "trailer_poster") {
+    patterns.push("screenshot", "screen");
+  }
+  return [...new Set(patterns.map(pattern => String(pattern || "").trim()).filter(Boolean))];
+}
+
+function steamworkAssetCandidateFolders(item) {
+  if (item?.kind === "video") return new Set(["video"]);
+  if (item?.id === "screenshots") return new Set(["screenshots"]);
+  if (item?.id === "trailer_poster") return new Set(["screenshots", "store", "root", "staged"]);
+  if (["Store", "Library", "Community", "Video"].includes(item?.category || "")) {
+    return new Set(["store", "root", "staged"]);
+  }
+  return null;
+}
+
+function steamworkAssetCandidateFiles(item, allFiles = []) {
+  const seen = new Set();
+  const matchedPaths = new Set((Array.isArray(item?.files) ? item.files : [])
+    .map(file => file?.path)
+    .filter(Boolean));
+  const folders = steamworkAssetCandidateFolders(item);
+  const sourceFiles = [
+    ...(Array.isArray(item?.candidates) ? item.candidates : []),
+    ...(Array.isArray(allFiles) ? allFiles : [])
+  ];
+  return sourceFiles.filter(file => {
+    const path = file?.path || "";
+    if (!path || seen.has(path) || matchedPaths.has(path)) return false;
+    seen.add(path);
+    const extension = steamworkAssetExtension(file);
+    if (item?.kind === "video") {
+      if (![".mp4", ".mov", ".wmv"].includes(extension)) return false;
+    } else if (![".png", ".jpg", ".jpeg", ".webp", ".ico", ".psd"].includes(extension)) {
+      return false;
+    }
+    return !folders || folders.has(file?.folder || "");
+  });
+}
+
+function steamworkAssetDimensionsOk(item, file) {
+  const mode = item?.dimensionMode || "";
+  const extension = steamworkAssetExtension(file);
+  const width = Number(file?.width) || 0;
+  const height = Number(file?.height) || 0;
+  if (mode === "video") return [".mp4", ".mov", ".wmv"].includes(extension);
+  if (mode === "exact") return width === Number(item?.width || 0) && height === Number(item?.height || 0);
+  if (mode === "min16x9") {
+    const ratio = height > 0 ? width / height : 0;
+    return width >= Number(item?.minWidth || 0) && height >= Number(item?.minHeight || 0) && Math.abs(ratio - 16 / 9) < 0.04;
+  }
+  if (mode === "shortcutIcon") {
+    if (extension === ".ico") return true;
+    return extension === ".png" && (width === 256 && height === 256 || width === 512 && height === 512);
+  }
+  if (mode === "appIcon") return [".jpg", ".jpeg"].includes(extension) && width === 184 && height === 184;
+  if (mode === "libraryLogo") return extension === ".png" && (width === 1280 || height === 720);
+  return false;
+}
+
+function steamworkAssetFitInfo(item, file) {
+  if (!item || !file) return null;
+  if (steamworkAssetDimensionsOk(item, file)) {
+    return { kind: "ok", label: text("steamworkAssetFitOk") };
+  }
+
+  const mode = item?.dimensionMode || "";
+  const extension = steamworkAssetExtension(file);
+  const width = Number(file?.width) || 0;
+  const height = Number(file?.height) || 0;
+  const hasDimensions = width > 0 && height > 0;
+  const isImageLike = [".png", ".jpg", ".jpeg", ".webp", ".ico"].includes(extension);
+  const isVideoLike = [".mp4", ".mov", ".wmv"].includes(extension);
+
+  if (item?.kind === "video") {
+    return { kind: isVideoLike ? "check" : "type", label: isVideoLike ? text("steamworkAssetFitCheck") : text("steamworkAssetFitType") };
+  }
+  if (!isImageLike) {
+    return { kind: "type", label: text("steamworkAssetFitType") };
+  }
+
+  if (mode === "appIcon") {
+    const formatOk = [".jpg", ".jpeg"].includes(extension);
+    const sizeOk = hasDimensions && width === 184 && height === 184;
+    if (!formatOk && hasDimensions && !sizeOk) return { kind: "format-size", label: text("steamworkAssetFitFormatSize") };
+    if (!formatOk) return { kind: "format", label: text("steamworkAssetFitFormat") };
+    return { kind: hasDimensions ? "size" : "check", label: hasDimensions ? text("steamworkAssetFitSize") : text("steamworkAssetFitCheck") };
+  }
+
+  if (mode === "shortcutIcon") {
+    if (![".ico", ".png"].includes(extension)) return { kind: "format", label: text("steamworkAssetFitFormat") };
+    return { kind: hasDimensions || extension === ".png" ? "size" : "check", label: hasDimensions || extension === ".png" ? text("steamworkAssetFitSize") : text("steamworkAssetFitCheck") };
+  }
+
+  if (mode === "libraryLogo" && extension !== ".png") {
+    return { kind: "format", label: text("steamworkAssetFitFormat") };
+  }
+
+  if (mode === "video") {
+    return { kind: "format", label: text("steamworkAssetFitFormat") };
+  }
+
+  return { kind: hasDimensions ? "size" : "check", label: hasDimensions ? text("steamworkAssetFitSize") : text("steamworkAssetFitCheck") };
+}
+
+function steamworkAssetCandidateScore(item, file) {
+  const extension = steamworkAssetExtension(file);
+  const kind = item?.kind || "";
+  if (kind === "video" && ![".mp4", ".mov", ".wmv"].includes(extension)) return -1;
+  if (kind !== "video" && ![".png", ".jpg", ".jpeg", ".webp", ".ico"].includes(extension)) return -1;
+
+  let score = 0;
+  let hasSignal = false;
+  if (steamworkAssetDimensionsOk(item, file)) {
+    score += 120;
+    hasSignal = true;
+  }
+  if (file?.folder === "staged") {
+    score += 90;
+    hasSignal = true;
+  }
+  const candidateRoot = steamworkAssetCandidateRootHint(item);
+  if (candidateRoot && file?.folder === candidateRoot) {
+    score += 80;
+    hasSignal = true;
+  }
+  if (file?.folder === "video" && item?.category === "Video") {
+    score += 80;
+    hasSignal = true;
+  }
+
+  const haystack = `${file?.name || ""} ${file?.path || ""}`.replace(/[_-]/g, " ").toLowerCase();
+  for (const pattern of [...(item?.patterns || []), ...steamworkAssetCandidatePatterns(item)]) {
+    const cleanPattern = String(pattern || "").replace(/[_-]/g, " ").toLowerCase();
+    if (cleanPattern && haystack.includes(cleanPattern)) {
+      score += cleanPattern.length > 4 ? 35 : 15;
+      hasSignal = true;
+    }
+  }
+  return hasSignal ? score : -1;
+}
+
+function steamworkAssetReferenceScore(item, file) {
+  const extension = steamworkAssetExtension(file);
+  const kind = item?.kind || "";
+  if (kind === "video") {
+    return [".mp4", ".mov", ".wmv"].includes(extension) ? 100 : -1;
+  }
+  if (![".png", ".jpg", ".jpeg", ".webp", ".ico"].includes(extension)) return -1;
+
+  let score = steamworkAssetDimensionsOk(item, file) ? 300 : 0;
+  if (file?.folder === "staged") score += 80;
+  const candidateRoot = steamworkAssetCandidateRootHint(item);
+  if (candidateRoot && file?.folder === candidateRoot) score += 140;
+  if (["Store", "Library", "Community", "Video"].includes(item?.category || "") && ["store", "root", "staged"].includes(file?.folder || "")) {
+    score += 18;
+  }
+
+  const width = Number(file?.width) || 0;
+  const height = Number(file?.height) || 0;
+  const targetWidth = Number(item?.width || item?.minWidth) || 0;
+  const targetHeight = Number(item?.height || item?.minHeight) || 0;
+  if (width > 0 && height > 0 && targetWidth > 0 && targetHeight > 0) {
+    const ratio = width / height;
+    const targetRatio = targetWidth / targetHeight;
+    const ratioDelta = Math.abs(Math.log(ratio / targetRatio));
+    const areaDelta = Math.abs(Math.log((width * height) / (targetWidth * targetHeight)));
+    score += Math.max(0, 110 - ratioDelta * 180);
+    score += Math.max(0, 75 - areaDelta * 28);
+    if ((width >= height) === (targetWidth >= targetHeight)) score += 18;
+    if (width < targetWidth * 0.25 || height < targetHeight * 0.25) score -= 80;
+    if (Math.abs(ratio - 1) < 0.04 && Math.abs(targetRatio - 1) > 0.2) score -= 70;
+  }
+
+  const haystack = `${file?.name || ""} ${file?.path || ""}`.replace(/[_-]/g, " ").toLowerCase();
+  if (item?.id === "trailer_poster") {
+    const looksLikeIcon = extension === ".ico" || /\b(?:icon|logo)\b/i.test(haystack);
+    if (looksLikeIcon) score -= 140;
+  }
+  for (const pattern of [...(item?.patterns || []), ...steamworkAssetCandidatePatterns(item)]) {
+    const cleanPattern = String(pattern || "").replace(/[_-]/g, " ").toLowerCase();
+    if (cleanPattern && haystack.includes(cleanPattern)) {
+      score += cleanPattern.length > 4 ? 45 : 18;
+    }
+  }
+  return score;
+}
+
+function steamworkRelevantAssetCandidates(item, allFiles = []) {
+  const candidates = steamworkAssetCandidateFiles(item, allFiles);
+  return candidates.length
+    ? candidates
+      .map(file => ({ file, score: steamworkAssetCandidateScore(item, file) }))
+      .filter(entry => entry.score > 0)
+      .sort((first, second) => second.score - first.score || String(second.file.modified || "").localeCompare(String(first.file.modified || "")))
+      .map(entry => entry.file)
+    : [];
+}
+
+function steamworkCandidateDisplay(item, allFiles = []) {
+  const candidates = steamworkAssetCandidateFiles(item, allFiles);
+  const relevant = steamworkRelevantAssetCandidates(item, allFiles);
+  if (relevant.length || !candidates.length) {
+    return { files: relevant, reference: false };
+  }
+  return {
+    files: candidates
+      .map(file => ({ file, score: steamworkAssetReferenceScore(item, file) }))
+      .filter(entry => entry.score >= 0)
+      .sort((first, second) => second.score - first.score || String(second.file.modified || "").localeCompare(String(first.file.modified || "")))
+      .map(entry => entry.file),
+    reference: true
+  };
+}
+
+function steamworkAssetMeta(file) {
+  if (!file) return text("steamworkAssetNoFile");
+  const pieces = [];
+  const dimensions = steamworkAssetDimensions(file);
+  if (dimensions) pieces.push(dimensions);
+  if (Number.isFinite(Number(file.size))) pieces.push(formatBytes(Number(file.size)));
+  return pieces.join(" · ");
+}
+
+function createSteamworkAssetThumb(file, status) {
+  const thumb = document.createElement("div");
+  thumb.className = "steamwork-asset-thumb";
+  if (file?.preview) {
+    thumb.textContent = (file.extension || "img").replace(".", "").toUpperCase().slice(0, 4);
+    const previewUrl = steamworkAssetPreviewUrl(file);
+    const thumbUrl = steamworkAssetThumbUrl(file);
+    const image = document.createElement("img");
+    image.src = thumbUrl || previewUrl;
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.addEventListener("error", () => {
+      const fallbackHref = previewUrl ? new URL(previewUrl, window.location.href).href : "";
+      if (thumbUrl && fallbackHref && image.src !== fallbackHref) {
+        image.src = previewUrl;
+        return;
+      }
+      image.remove();
+    });
+    thumb.appendChild(image);
+  } else {
+    thumb.textContent = file?.type === "video" ? "MP4" : status === "missing" ? "..." : "IMG";
+  }
+  return thumb;
+}
+
+function renderSteamworkAssetsLegacyTableUnused(state) {
+  if (!hasSteamwork || !els.steamworkAssetTableBody) return;
+  const summary = state?.summary || {};
+  const items = Array.isArray(state?.items) ? state.items : [];
+
+  renderSteamworkAssetSummaryPills(summary, items.length);
+
+  els.steamworkAssetTableBody.innerHTML = "";
+  if (!items.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.textContent = text("steamworkAssetNoFile");
+    row.appendChild(cell);
+    els.steamworkAssetTableBody.appendChild(row);
+    return;
+  }
+
+  for (const item of items) {
+    const row = document.createElement("tr");
+    row.className = `steamwork-asset-row status-${item.status || "missing"}`;
+    const primaryFile = Array.isArray(item.files) ? item.files[0] : null;
+
+    const assetCell = document.createElement("td");
+    const asset = document.createElement("div");
+    asset.className = "steamwork-asset-namecell";
+    asset.appendChild(createSteamworkAssetThumb(primaryFile, item.status));
+
+    const assetText = document.createElement("div");
+    assetText.className = "steamwork-asset-titlewrap";
+    const title = document.createElement("strong");
+    title.textContent = item.name || "";
+    const category = document.createElement("span");
+    category.textContent = steamworkCategoryLabel(item.category || "");
+    assetText.append(title, category);
+    asset.appendChild(assetText);
+    assetCell.appendChild(asset);
+    row.appendChild(assetCell);
+
+    const specCell = document.createElement("td");
+    const status = document.createElement("span");
+    status.className = `steamwork-status-badge ${item.status || "missing"}`;
+    status.textContent = steamworkAssetStatusLabel(item.status);
+    const spec = document.createElement("div");
+    spec.className = "steamwork-spec-text";
+    spec.textContent = steamworkAssetSpecText(item.spec);
+    specCell.append(status, spec);
+    if (item.issue) {
+      const issue = document.createElement("div");
+      issue.className = "steamwork-current-meta";
+      issue.textContent = steamworkAssetIssueText(item.issue);
+      specCell.appendChild(issue);
+    }
+    row.appendChild(specCell);
+
+    const currentCell = document.createElement("td");
+    if (Array.isArray(item.files) && item.files.length) {
+      const fileList = document.createElement("div");
+      fileList.className = "steamwork-current-list";
+      item.files.slice(0, 5).forEach((file, index) => {
+        fileList.appendChild(renderSteamworkAssetFileV2(file, { compact: index > 0 }));
+      });
+      if (item.files.length > 5) {
+        const more = document.createElement("div");
+        more.className = "steamwork-current-meta";
+        more.textContent = `+${item.files.length - 5}`;
+        fileList.appendChild(more);
+      }
+      if (primaryFile?.path) {
+        const openButton = document.createElement("button");
+        openButton.className = "mini-button steamwork-open-asset";
+        openButton.type = "button";
+        openButton.dataset.path = primaryFile.path;
+        openButton.textContent = text("steamworkAssetOpen");
+        fileList.appendChild(openButton);
+      }
+      currentCell.appendChild(fileList);
+    } else {
+      currentCell.textContent = text("steamworkAssetNoFile");
+    }
+    row.appendChild(currentCell);
+
+    const targetCell = document.createElement("td");
+    targetCell.textContent = steamworkAssetTargetText(item.target);
+    row.appendChild(targetCell);
+
+    els.steamworkAssetTableBody.appendChild(row);
+  }
+}
+
+async function loadSteamworkAssetsLegacyTableUnused() {
+  if (!hasSteamwork || !els.steamworkAssetTableBody) return;
+  if (els.steamworkAssetSummary) {
+    els.steamworkAssetSummary.textContent = text("steamworkAssetLoading");
+  }
+  try {
+    const response = await fetch("/api/steamwork/assets", { cache: "no-store" });
+    const state = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(state.error || `HTTP ${response.status}`);
+    renderSteamworkAssetsLegacyTableUnused(state);
+    setSteamworkStatus(text("steamworkAssetSource", state.root || "D:\\ArtAsset"));
+  } catch (error) {
+    const message = text("steamworkAssetLoadFailed", error.message);
+    setSteamworkStatus(message);
+    if (els.steamworkAssetSummary) {
+      els.steamworkAssetSummary.textContent = message;
+    }
+  }
+}
+
+function steamworkAssetMetaV2(file) {
+  if (!file) return text("steamworkAssetNoFile");
+  const pieces = [];
+  const dimensions = steamworkAssetDimensions(file);
+  if (dimensions) pieces.push(dimensions);
+  if (Number.isFinite(Number(file.size))) pieces.push(formatBytes(Number(file.size)));
+  return pieces.join(" / ");
+}
+
+function steamworkAssetFolderLabel(file) {
+  const folder = String(file?.folder || "").toLowerCase();
+  const key = {
+    store: "steamworkAssetFolderStore",
+    screenshots: "steamworkAssetFolderScreenshots",
+    video: "steamworkAssetFolderVideo",
+    staged: "steamworkAssetFolderStaged"
+  }[folder];
+  return key ? text(key) : file?.folder || "";
+}
+
+function steamworkAssetFileDisplayName(file) {
+  const name = file?.name || text("steamworkAssetNoFile");
+  if (String(file?.folder || "").toLowerCase() !== "screenshots") return name;
+  const stem = name.replace(/\.[^.]+$/, "");
+  const match = stem.match(/^screenshot[\s_-]+(\d{4}-\d{2}-\d{2})[\s_-]+(\d{2})(\d{2})(\d{2})$/i);
+  if (match) {
+    return `${match[1]} ${match[2]}:${match[3]}:${match[4]}`;
+  }
+  return stem.replace(/^screenshot[\s_-]*/i, "") || stem || name;
+}
+
+function createSteamworkStatusBadge(statusValue) {
+  const status = document.createElement("span");
+  status.className = `steamwork-status-badge ${statusValue || "missing"}`;
+  status.textContent = steamworkAssetStatusLabel(statusValue);
+  return status;
+}
+
+function renderSteamworkAssetFileV2(file, options = {}) {
+  const compact = Boolean(options.compact);
+  const showOpen = options.showOpen !== false;
+  const fitInfo = steamworkAssetFitInfo(options.requirement, file);
+  const wrap = document.createElement("div");
+  wrap.className = compact ? "steamwork-current-file compact" : "steamwork-current-file";
+  if (String(file?.folder || "").toLowerCase() === "screenshots") {
+    wrap.classList.add("screenshot-file");
+  }
+
+  if (file?.preview) {
+    wrap.appendChild(createSteamworkAssetThumb(file, ""));
+  }
+
+  const body = document.createElement("div");
+  body.className = "steamwork-current-body";
+
+  const name = document.createElement("div");
+  name.className = "steamwork-current-name";
+  name.textContent = steamworkAssetFileDisplayName(file);
+  if (file?.name && name.textContent !== file.name) {
+    name.title = file.name;
+  }
+  body.appendChild(name);
+
+  const tags = document.createElement("div");
+  tags.className = "steamwork-current-tags";
+
+  const meta = document.createElement("div");
+  meta.className = "steamwork-current-meta";
+  meta.textContent = steamworkAssetMetaV2(file);
+  tags.appendChild(meta);
+
+  if (fitInfo) {
+    const fit = document.createElement("div");
+    fit.className = `steamwork-fit-badge ${fitInfo.kind}`;
+    fit.textContent = fitInfo.label;
+    tags.appendChild(fit);
+  }
+
+  const folderLabel = steamworkAssetFolderLabel(file);
+  if (folderLabel) {
+    const source = document.createElement("div");
+    source.className = "steamwork-current-source";
+    source.textContent = folderLabel;
+    tags.appendChild(source);
+  }
+
+  if (tags.childNodes.length) {
+    body.appendChild(tags);
+  }
+
+  if (file?.path && !compact) {
+    const path = document.createElement("div");
+    path.className = "steamwork-current-path";
+    path.textContent = file.path;
+    body.appendChild(path);
+  }
+
+  if (file?.path && showOpen) {
+    const openButton = document.createElement("button");
+    openButton.className = "mini-button steamwork-open-asset";
+    openButton.type = "button";
+    openButton.dataset.path = file.path;
+    openButton.textContent = text("steamworkAssetOpen");
+    body.appendChild(openButton);
+  }
+
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function createSteamworkAssetStageZone(item) {
+  const zone = document.createElement("div");
+  zone.className = "steamwork-stage-zone";
+  zone.tabIndex = 0;
+  zone.dataset.slot = item.id || "";
+
+  const title = document.createElement("strong");
+  title.textContent = text("steamworkAssetStageTitle");
+  const hint = document.createElement("span");
+  hint.textContent = text("steamworkAssetStageHint");
+  zone.append(title, hint);
+
+  const pickFiles = () => {
+    pendingSteamworkAssetSlot = item.id || "";
+    els.steamworkAssetFileInput?.click();
+  };
+
+  zone.addEventListener("click", pickFiles);
+  zone.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      pickFiles();
+    }
+  });
+  zone.addEventListener("dragover", event => {
+    event.preventDefault();
+    zone.classList.add("drag-over");
+    hint.textContent = text("steamworkAssetStageDragging");
+  });
+  zone.addEventListener("dragleave", event => {
+    if (!zone.contains(event.relatedTarget)) {
+      zone.classList.remove("drag-over");
+      hint.textContent = text("steamworkAssetStageHint");
+    }
+  });
+  zone.addEventListener("drop", event => {
+    event.preventDefault();
+    zone.classList.remove("drag-over");
+    hint.textContent = text("steamworkAssetStageHint");
+    stageSteamworkAssetFiles(item.id || "", event.dataTransfer.files, item.name || item.id || "");
+  });
+
+  return zone;
+}
+
+function createSteamworkMissingGuide(item) {
+  if (item?.status !== "missing") return null;
+  const guide = document.createElement("div");
+  guide.className = "steamwork-missing-guide";
+
+  const title = document.createElement("strong");
+  title.textContent = text("steamworkAssetMissingGuideTitle");
+  guide.appendChild(title);
+
+  const tags = document.createElement("span");
+  tags.className = "steamwork-missing-guide-tags";
+  for (const label of [
+    text("steamworkAssetMissingGuideSpec", steamworkAssetSpecText(item.spec)),
+    text("steamworkAssetMissingGuideDrop"),
+    text("steamworkAssetMissingGuideTarget", steamworkAssetTargetText(item.target))
+  ].filter(Boolean)) {
+    const tag = document.createElement("small");
+    tag.textContent = label;
+    tags.appendChild(tag);
+  }
+  guide.appendChild(tags);
+  return guide;
+}
+
+function createSteamworkOptionalGuide(item) {
+  if (item?.status !== "optional" || item?.files?.length) return null;
+  const guide = document.createElement("div");
+  guide.className = "steamwork-optional-guide";
+
+  const title = document.createElement("strong");
+  title.textContent = text("steamworkAssetOptionalGuideTitle");
+  guide.appendChild(title);
+
+  const tags = document.createElement("span");
+  tags.className = "steamwork-optional-guide-tags";
+  for (const label of [
+    text("steamworkAssetOptionalGuideNote"),
+    text("steamworkAssetOptionalGuideSpec", steamworkAssetSpecText(item.spec)),
+    text("steamworkAssetOptionalGuideTarget", steamworkAssetTargetText(item.target))
+  ].filter(Boolean)) {
+    const tag = document.createElement("small");
+    tag.textContent = label;
+    tags.appendChild(tag);
+  }
+  guide.appendChild(tags);
+  return guide;
+}
+
+function renderSteamworkAssetGroup(titleText, files, emptyText, options = {}) {
+  const allFiles = Array.isArray(files) ? files : [];
+  const limit = Number.isFinite(options.limit) ? options.limit : allFiles.length;
+  const visibleFiles = Array.isArray(files)
+    ? allFiles.slice(0, limit)
+    : [];
+  const hiddenFiles = allFiles.slice(visibleFiles.length);
+  const hiddenCount = hiddenFiles.length;
+  const group = document.createElement("div");
+  group.className = [
+    "steamwork-asset-group",
+    options.candidate ? "candidate-group" : "",
+    options.reference ? "reference-group" : "",
+    options.optionalReference ? "optional-reference-group" : ""
+  ].filter(Boolean).join(" ");
+  if (options.assetId) {
+    group.classList.add(`asset-${String(options.assetId).replace(/[^a-z0-9_-]/gi, "-")}`);
+  }
+
+  const title = document.createElement("div");
+  title.className = "steamwork-asset-group-title";
+  const titleLabel = document.createElement("span");
+  titleLabel.textContent = titleText;
+  title.appendChild(titleLabel);
+  if (Array.isArray(files) && files.length) {
+    const count = document.createElement("span");
+    count.className = "steamwork-asset-group-count";
+    count.textContent = text("steamworkAssetFileCount", files.length);
+    title.appendChild(count);
+  }
+  group.appendChild(title);
+  if (options.note) {
+    const note = document.createElement("div");
+    note.className = "steamwork-asset-group-note";
+    note.textContent = options.note;
+    group.appendChild(note);
+  }
+
+  if (!Array.isArray(files) || !files.length) {
+    const empty = document.createElement("div");
+    const details = Array.isArray(options.emptyDetails)
+      ? options.emptyDetails.filter(Boolean)
+      : [];
+    empty.className = `steamwork-empty ${details.length ? "steamwork-empty-panel" : ""}`.trim();
+    const message = document.createElement("span");
+    message.textContent = emptyText;
+    empty.appendChild(message);
+    for (const detailText of details) {
+      const detail = document.createElement("small");
+      detail.textContent = detailText;
+      empty.appendChild(detail);
+    }
+    group.appendChild(empty);
+    return group;
+  }
+
+  if (visibleFiles.length) {
+    const grid = document.createElement("div");
+    grid.className = `steamwork-file-grid ${options.candidate ? "candidate-grid" : ""}`.trim();
+    for (const file of visibleFiles) {
+      grid.appendChild(renderSteamworkAssetFileV2(file, { compact: true, requirement: options.requirement || null }));
+    }
+    group.appendChild(grid);
+  }
+  if (hiddenCount) {
+    const more = document.createElement("details");
+    more.className = "steamwork-asset-more";
+    const summary = document.createElement("summary");
+    const moreKey = options.candidate
+      ? visibleFiles.length
+        ? "steamworkAssetMoreCandidates"
+        : "steamworkAssetShowCandidates"
+      : visibleFiles.length
+        ? "steamworkAssetMoreFiles"
+        : "steamworkAssetShowFiles";
+    summary.textContent = text(moreKey, hiddenCount);
+    more.appendChild(summary);
+
+    const moreGrid = document.createElement("div");
+    moreGrid.className = `steamwork-file-grid ${options.candidate ? "candidate-grid" : ""}`.trim();
+    for (const file of hiddenFiles) {
+      moreGrid.appendChild(renderSteamworkAssetFileV2(file, { compact: true, requirement: options.requirement || null }));
+    }
+    more.appendChild(moreGrid);
+    group.appendChild(more);
+  }
+  return group;
+}
+
+function steamworkCurrentGroupLimit(fileCount = 0) {
+  if (fileCount <= 3) return fileCount;
+  return window.matchMedia?.("(max-width: 540px)")?.matches ? 3 : fileCount;
+}
+
+function steamworkCandidateGroupLimit(fileCount = 0) {
+  if (fileCount <= 3) return fileCount;
+  return window.matchMedia?.("(max-width: 540px)")?.matches ? 3 : 8;
+}
+
+function steamworkCandidateGroupLimitForItem(item, fileCount = 0) {
+  if (item?.status === "missing" || item?.status === "review") {
+    return steamworkCandidateGroupLimit(fileCount);
+  }
+  return 0;
+}
+
+function shouldShowSteamworkCandidateGroup(item, candidateDisplay) {
+  if (candidateDisplay?.files?.length) return true;
+  return item?.status === "missing" || item?.status === "review";
+}
+
+function steamworkCategoryLabel(categoryName) {
+  const key = {
+    Store: "steamworkCategoryStore",
+    Library: "steamworkCategoryLibrary",
+    Community: "steamworkCategoryCommunity",
+    Video: "steamworkCategoryVideo"
+  }[categoryName];
+  return key ? text(key) : categoryName;
+}
+
+function createSteamworkCategorySummary(items) {
+  const ready = items.filter(item => item.status === "ready").length;
+  const missing = items.filter(item => item.status === "missing").length;
+  const review = items.filter(item => item.status === "review").length;
+  const optional = items.filter(item => item.status === "optional").length;
+  const stats = [
+    ["ready", text("steamworkAssetSummaryReady", ready, items.length)]
+  ];
+  if (missing) stats.push(["missing", text("steamworkCategoryMissing", missing)]);
+  if (review) stats.push(["review", text("steamworkCategoryReview", review)]);
+  if (optional) stats.push(["optional", text("steamworkCategoryOptional", optional)]);
+
+  const wrap = document.createElement("div");
+  wrap.className = "steamwork-category-stats";
+  wrap.append(...stats.map(([kind, label]) => {
+    const chip = document.createElement("span");
+    chip.className = `steamwork-category-chip ${kind}`;
+    chip.textContent = label;
+    return chip;
+  }));
+  return wrap;
+}
+
+function renderSteamworkCategoryNav(items, categoryOrder) {
+  const nav = document.createElement("div");
+  nav.className = "steamwork-category-nav";
+  for (const categoryName of categoryOrder) {
+    const categoryItems = items.filter(item => item.category === categoryName);
+    if (!categoryItems.length) continue;
+
+    const ready = categoryItems.filter(item => item.status === "ready").length;
+    const missing = categoryItems.filter(item => item.status === "missing").length;
+    const review = categoryItems.filter(item => item.status === "review").length;
+    const optional = categoryItems.filter(item => item.status === "optional").length;
+
+    const button = document.createElement("button");
+    button.className = `steamwork-category-jump ${missing ? "has-missing" : review ? "has-review" : ""}`.trim();
+    button.type = "button";
+    button.dataset.category = categoryName;
+    button.title = steamworkCategoryLabel(categoryName);
+
+    const main = document.createElement("span");
+    main.className = "steamwork-category-jump-main";
+    const label = document.createElement("strong");
+    label.textContent = steamworkCategoryLabel(categoryName);
+    const readyText = document.createElement("span");
+    readyText.className = "steamwork-category-jump-ready";
+    readyText.textContent = text("steamworkAssetSummaryReady", ready, categoryItems.length);
+    main.append(label, readyText);
+    button.appendChild(main);
+
+    const tags = document.createElement("span");
+    tags.className = "steamwork-category-jump-tags";
+    if (missing) {
+      const tag = document.createElement("small");
+      tag.className = "missing";
+      tag.textContent = text("steamworkCategoryMissing", missing);
+      tags.appendChild(tag);
+    }
+    if (review) {
+      const tag = document.createElement("small");
+      tag.className = "review";
+      tag.textContent = text("steamworkCategoryReview", review);
+      tags.appendChild(tag);
+    }
+    if (optional) {
+      const tag = document.createElement("small");
+      tag.className = "optional";
+      tag.textContent = text("steamworkCategoryOptional", optional);
+      tags.appendChild(tag);
+    }
+    if (tags.childElementCount) button.appendChild(tags);
+    nav.appendChild(button);
+  }
+  return nav.childElementCount ? nav : null;
+}
+
+function renderSteamworkAssetAttention(items) {
+  const attentionItems = items.filter(item => item.status === "missing" || item.status === "review");
+  if (!attentionItems.length) return null;
+
+  const wrap = document.createElement("section");
+  wrap.className = "steamwork-asset-alerts";
+  if (attentionItems.length === 1) {
+    wrap.classList.add("is-compact");
+  }
+
+  const head = document.createElement("div");
+  head.className = "steamwork-asset-alerts-head";
+  const title = document.createElement("strong");
+  title.textContent = text("steamworkAttentionTitle");
+  const count = document.createElement("span");
+  count.textContent = text("steamworkAttentionCount", attentionItems.length);
+  head.append(title, count);
+  wrap.appendChild(head);
+
+  const list = document.createElement("div");
+  list.className = "steamwork-asset-alert-list";
+  for (const item of attentionItems) {
+    const button = document.createElement("button");
+    button.className = `steamwork-asset-alert status-${item.status || "missing"}`;
+    button.type = "button";
+    button.dataset.slot = item.id || "";
+    button.title = text("steamworkAttentionHint");
+
+    const status = document.createElement("span");
+    status.className = "steamwork-alert-status";
+    status.textContent = steamworkAssetStatusLabel(item.status);
+    button.appendChild(status);
+
+    const body = document.createElement("span");
+    body.className = "steamwork-alert-body";
+    const name = document.createElement("strong");
+    name.textContent = item.name || "";
+    const specText = steamworkAssetSpecText(item.spec);
+    const tags = document.createElement("span");
+    tags.className = "steamwork-alert-tags";
+    const actionText = item.status === "missing"
+      ? text("steamworkAttentionFixMissing")
+      : text("steamworkAttentionReview");
+    const tagItems = [
+      ["action", actionText],
+      ["spec", specText],
+      ["category", steamworkCategoryLabel(item.category || "")]
+    ];
+    for (const [kind, label] of tagItems.filter(([, label]) => Boolean(label))) {
+      const tag = document.createElement("small");
+      tag.className = `steamwork-alert-tag-${kind}`;
+      tag.textContent = label;
+      tags.appendChild(tag);
+    }
+    const target = document.createElement("small");
+    target.className = "steamwork-alert-target";
+    target.textContent = steamworkAssetTargetText(item.target);
+    body.append(name, tags, target);
+    button.appendChild(body);
+
+    list.appendChild(button);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
+function createSteamworkAssetCard(item, openIds, allFiles = []) {
+  const card = document.createElement("details");
+  card.className = `steamwork-asset-card status-${item.status || "missing"}`;
+  card.dataset.slot = item.id || "";
+  if (openIds.has(item.id)) {
+    card.open = true;
+  }
+  const primaryFile = Array.isArray(item.files) ? item.files[0] : null;
+  const fileCount = Array.isArray(item.files) ? item.files.length : 0;
+
+  const summaryNode = document.createElement("summary");
+  summaryNode.className = "steamwork-asset-summary";
+
+  const asset = document.createElement("div");
+  asset.className = "steamwork-asset-namecell";
+  asset.appendChild(createSteamworkAssetThumb(primaryFile, item.status));
+
+  const assetText = document.createElement("div");
+  assetText.className = "steamwork-asset-titlewrap";
+  const title = document.createElement("strong");
+  title.textContent = item.name || "";
+  const category = document.createElement("span");
+  category.textContent = steamworkCategoryLabel(item.category || "");
+  assetText.append(title, category);
+  asset.appendChild(assetText);
+  summaryNode.appendChild(asset);
+
+  const statusCell = document.createElement("div");
+  statusCell.className = "steamwork-asset-statuscell";
+  statusCell.dataset.label = text("steamworkStatusColumn");
+  statusCell.appendChild(createSteamworkStatusBadge(item.status));
+  summaryNode.appendChild(statusCell);
+
+  const specCell = document.createElement("span");
+  specCell.className = "steamwork-spec-text steamwork-asset-speccell";
+  specCell.dataset.label = text("steamworkSpecColumn");
+  specCell.textContent = steamworkAssetSpecText(item.spec);
+  summaryNode.appendChild(specCell);
+
+  const currentCell = document.createElement("div");
+  currentCell.className = `steamwork-asset-currentcell ${primaryFile ? "" : "is-empty"}`.trim();
+  currentCell.dataset.label = text("steamworkCurrentColumn");
+  const currentName = document.createElement("span");
+  currentName.className = "steamwork-current-name";
+  currentName.textContent = primaryFile ? steamworkAssetFileDisplayName(primaryFile) : text("steamworkAssetNoFile");
+  if (primaryFile?.name && currentName.textContent !== primaryFile.name) {
+    currentName.title = primaryFile.name;
+  }
+  currentCell.appendChild(currentName);
+  const primarySource = steamworkAssetFolderLabel(primaryFile);
+  if (primarySource) {
+    const source = document.createElement("span");
+    source.className = "steamwork-current-source";
+    source.textContent = primarySource;
+    currentCell.appendChild(source);
+  }
+  if (fileCount > 1) {
+    const currentMeta = document.createElement("span");
+    currentMeta.className = "steamwork-current-meta";
+    currentMeta.textContent = text("steamworkAssetFileCount", fileCount);
+    currentCell.appendChild(currentMeta);
+  }
+  if (item.issue && item.status !== "optional") {
+    const issue = document.createElement("div");
+    issue.className = "steamwork-current-meta";
+    issue.textContent = steamworkAssetIssueText(item.issue);
+    currentCell.appendChild(issue);
+  }
+  summaryNode.appendChild(currentCell);
+
+  const where = document.createElement("span");
+  where.className = "steamwork-asset-where";
+  where.dataset.label = text("steamworkTargetColumn");
+  where.textContent = steamworkAssetTargetText(item.target);
+  summaryNode.appendChild(where);
+  card.appendChild(summaryNode);
+
+  const candidateDisplay = steamworkCandidateDisplay(item, allFiles);
+  const showCandidateGroup = shouldShowSteamworkCandidateGroup(item, candidateDisplay);
+  const details = document.createElement("div");
+  details.className = `steamwork-asset-details ${fileCount ? "" : "no-current"} ${showCandidateGroup ? "" : "no-candidates"}`.trim();
+  const detailStack = document.createElement("div");
+  detailStack.className = "steamwork-asset-detail-stack";
+  const missingGuide = createSteamworkMissingGuide(item);
+  const optionalGuide = createSteamworkOptionalGuide(item);
+  if (missingGuide || optionalGuide) {
+    details.classList.add("has-guide");
+  }
+  if (missingGuide) {
+    detailStack.appendChild(missingGuide);
+  }
+  if (optionalGuide) {
+    detailStack.appendChild(optionalGuide);
+  }
+  const currentGroup = renderSteamworkAssetGroup(text("steamworkAssetMatched"), item.files, text("steamworkAssetNoFile"), {
+    assetId: item.id,
+    limit: steamworkCurrentGroupLimit(fileCount),
+    emptyDetails: item.status === "missing" || item.status === "optional"
+      ? []
+      : [
+        text("steamworkAssetNeedSpec", steamworkAssetSpecText(item.spec)),
+        text("steamworkAssetWhereToUse", steamworkAssetTargetText(item.target))
+      ]
+  });
+  detailStack.append(currentGroup, createSteamworkAssetStageZone(item));
+  details.appendChild(detailStack);
+  if (showCandidateGroup) {
+    const optionalReference = item.status === "optional" && candidateDisplay.reference;
+    const candidateGroup = renderSteamworkAssetGroup(
+      optionalReference
+        ? text("steamworkAssetOptionalCandidates")
+        : candidateDisplay.reference
+          ? text("steamworkAssetReferenceCandidates")
+          : text("steamworkAssetCandidates"),
+      candidateDisplay.files,
+      text("steamworkAssetNoCandidates"),
+      {
+        candidate: true,
+        requirement: item,
+        reference: candidateDisplay.reference,
+        optionalReference,
+        note: optionalReference
+          ? text("steamworkAssetOptionalReferenceHint")
+          : candidateDisplay.reference
+            ? text("steamworkAssetReferenceHint")
+            : "",
+        limit: steamworkCandidateGroupLimitForItem(item, candidateDisplay.files.length)
+      }
+    );
+    details.appendChild(candidateGroup);
+  }
+  card.appendChild(details);
+
+  return card;
+}
+
+function renderSteamworkAssets(state) {
+  if (!hasSteamwork || !els.steamworkAssetList) return;
+  const summary = state?.summary || {};
+  const items = Array.isArray(state?.items) ? state.items : [];
+  const allFiles = Array.isArray(state?.files) ? state.files : [];
+  steamworkThumbsEnabled = Boolean(state?.thumbs);
+  setSteamworkAssetRoot(state?.root || "D:\\ArtAsset");
+
+  renderSteamworkAssetSummaryPills(summary, items.length);
+
+  const openIds = new Set(
+    [...els.steamworkAssetList.querySelectorAll(".steamwork-asset-card[open]")]
+      .map(node => node.dataset.slot)
+      .filter(Boolean)
+  );
+  els.steamworkAssetList.innerHTML = "";
+
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "steamwork-empty";
+    empty.textContent = text("steamworkAssetNoFile");
+    els.steamworkAssetList.appendChild(empty);
+    return;
+  }
+
+  const categoryOrder = ["Store", "Library", "Community", "Video"];
+  const attention = renderSteamworkAssetAttention(items);
+  if (attention) els.steamworkAssetList.appendChild(attention);
+  const categoryNav = renderSteamworkCategoryNav(items, categoryOrder);
+  if (categoryNav) els.steamworkAssetList.appendChild(categoryNav);
+
+  for (const categoryName of categoryOrder) {
+    const categoryItems = items.filter(item => item.category === categoryName);
+    if (!categoryItems.length) continue;
+
+    const section = document.createElement("section");
+    section.className = "steamwork-asset-category";
+    section.dataset.category = categoryName;
+
+    const head = document.createElement("div");
+    head.className = "steamwork-category-head";
+    const title = document.createElement("h4");
+    title.textContent = steamworkCategoryLabel(categoryName);
+    head.append(title, createSteamworkCategorySummary(categoryItems));
+    section.appendChild(head);
+
+    const body = document.createElement("div");
+    body.className = "steamwork-category-body";
+    const columns = document.createElement("div");
+    columns.className = "steamwork-category-columns";
+    for (const label of [
+      text("steamworkAssetColumn"),
+      text("steamworkStatusColumn"),
+      text("steamworkSpecColumn"),
+      text("steamworkCurrentColumn"),
+      text("steamworkTargetColumn")
+    ]) {
+      const cell = document.createElement("span");
+      cell.textContent = label;
+      columns.appendChild(cell);
+    }
+    columns.appendChild(document.createElement("span"));
+    body.appendChild(columns);
+    for (const item of categoryItems) {
+      body.appendChild(createSteamworkAssetCard(item, openIds, allFiles));
+    }
+    section.appendChild(body);
+    els.steamworkAssetList.appendChild(section);
+  }
+}
+
+async function loadSteamworkAssets() {
+  if (!hasSteamwork || !els.steamworkAssetList) return;
+  setSteamworkAssetSummaryText(text("steamworkAssetLoading"));
+  setSteamworkAssetRoot("");
+  try {
+    const response = await fetch("/api/steamwork/assets", { cache: "no-store" });
+    const state = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(state.error || `HTTP ${response.status}`);
+    renderSteamworkAssets(state);
+    setSteamworkStatus(text("steamworkAssetSource", state.root || "D:\\ArtAsset"));
+  } catch (error) {
+    const message = text("steamworkAssetLoadFailed", error.message);
+    setSteamworkStatus(message);
+    setSteamworkAssetRoot("D:\\ArtAsset");
+    setSteamworkAssetSummaryText(message);
+  }
+}
+
+async function stageSteamworkAssetFiles(slot, files, label = slot) {
+  if (!hasSteamwork || !slot) return;
+  const selectedFiles = Array.from(files || []);
+  if (!selectedFiles.length) return;
+
+  const formData = new FormData();
+  selectedFiles.forEach(file => formData.append("files", file, file.name));
+  setSteamworkStatus(text("steamworkAssetStaging", selectedFiles.length, label));
+
+  try {
+    const response = await fetch(`/api/steamwork/assets/stage/${encodeURIComponent(slot)}`, {
+      method: "POST",
+      body: formData
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (result.state) {
+      renderSteamworkAssets(result.state);
+    } else {
+      await loadSteamworkAssets();
+    }
+    const count = Array.isArray(result.files) ? result.files.length : selectedFiles.length;
+    setSteamworkStatus(text("steamworkAssetStaged", count, result.destination || "D:\\ArtAsset"));
+  } catch (error) {
+    setSteamworkStatus(text("steamworkAssetStageFailed", error.message));
+  } finally {
+    if (els.steamworkAssetFileInput) {
+      els.steamworkAssetFileInput.value = "";
+    }
+  }
+}
+
+async function openSteamworkAsset(path) {
+  if (!path) return;
+  try {
+    await postJson("/api/steamwork/open-asset", { path });
+  } catch (error) {
+    setSteamworkStatus(text("steamworkAssetOpenFailed", error.message));
+  }
 }
 
 async function uploadRenderTextureFiles(files) {
@@ -8642,11 +10488,55 @@ if (hasSteamwork && els.openSteamworkGameContent) {
 if (hasSteamwork && els.openSteamworkPublishTool) {
   els.openSteamworkPublishTool.addEventListener("click", () => openRandomRealmResource("publishToolFolder", "steamworkPublishTool"));
 }
+if (hasSteamwork && els.openSteamworkArtAsset) {
+  els.openSteamworkArtAsset.addEventListener("click", () => openRandomRealmResource("steamworkAssetFolder", "steamworkArtAssets"));
+}
 if (hasSteamwork && els.steamworkGameContentFileInput) {
   els.steamworkGameContentFileInput.addEventListener("change", event => uploadSteamworkFiles("gameContent", event.target.files));
 }
 if (hasSteamwork && els.steamworkPublishToolFileInput) {
   els.steamworkPublishToolFileInput.addEventListener("change", event => uploadSteamworkFiles("publishTool", event.target.files));
+}
+if (hasSteamwork && els.steamworkAssetList) {
+  els.steamworkAssetList.addEventListener("click", event => {
+    const categoryJump = event.target.closest(".steamwork-category-jump");
+    if (categoryJump) {
+      event.preventDefault();
+      const category = categoryJump.dataset.category || "";
+      const section = Array.from(els.steamworkAssetList.querySelectorAll(".steamwork-asset-category"))
+        .find(node => node.dataset.category === category);
+      section?.scrollIntoView({ block: "start", behavior: "smooth" });
+      return;
+    }
+
+    const jump = event.target.closest(".steamwork-asset-alert");
+    if (jump) {
+      event.preventDefault();
+      const card = Array.from(els.steamworkAssetList.querySelectorAll(".steamwork-asset-card"))
+        .find(node => node.dataset.slot === (jump.dataset.slot || ""));
+      if (card) {
+        card.open = true;
+        window.requestAnimationFrame(() => {
+          const rect = card.getBoundingClientRect();
+          const scrollRoot = document.scrollingElement || document.documentElement;
+          const viewportGap = Math.max(12, (window.innerHeight - Math.min(rect.height, window.innerHeight)) / 2);
+          scrollRoot.scrollTop = Math.max(0, scrollRoot.scrollTop + rect.top - viewportGap);
+          card.querySelector(".steamwork-asset-summary")?.focus?.({ preventScroll: true });
+        });
+      }
+      return;
+    }
+
+    const button = event.target.closest(".steamwork-open-asset");
+    if (!button) return;
+    event.preventDefault();
+    openSteamworkAsset(button.dataset.path || "");
+  });
+}
+if (hasSteamwork && els.steamworkAssetFileInput) {
+  els.steamworkAssetFileInput.addEventListener("change", event => {
+    stageSteamworkAssetFiles(pendingSteamworkAssetSlot, event.target.files, pendingSteamworkAssetSlot);
+  });
 }
 bindSteamworkDropzone("gameContent", els.steamworkGameContentDropzone, els.steamworkGameContentFileInput);
 bindSteamworkDropzone("publishTool", els.steamworkPublishToolDropzone, els.steamworkPublishToolFileInput);
@@ -9008,6 +10898,7 @@ restoreInitialModuleUrl();
 if (hasWallpaper) loadWallpapers();
 if (hasMusic) loadMusic();
 if (hasWorkspace) loadGithubDownloadsInfo();
+if (hasSteamwork) loadSteamworkAssets();
 if (hasMaterialWorkspace && downloadIntakeEnabled) {
   loadMaterialCandidates();
 } else if (hasMaterialWorkspace) {

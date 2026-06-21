@@ -7,6 +7,7 @@ from pathlib import Path
 import html
 import io
 import json
+import math
 import mimetypes
 import os
 import re
@@ -77,6 +78,11 @@ STEAMWORK_GAMECONTENT_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_GAMECON
 STEAMWORK_PUBLISH_TOOL_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_PUBLISH_TOOL_DIR", str(STEAMWORK_SDK_TOOLS_DIR / "SteamPipeGUI")))
 STEAMWORK_PUBLISH_TOOL_EXE = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_PUBLISH_TOOL_EXE", str(STEAMWORK_PUBLISH_TOOL_DIR / "SteamPipeGUI.exe")))
 RANDOMREALM_PROMO_DIR = Path(os.environ.get("CODEX_CONTROL_RANDOMREALM_PROMO_DIR", str(RANDOMREALM_PROJECT_DIR / "Screenshots")))
+STEAMWORK_ASSET_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_ASSET_DIR", r"D:\ArtAsset"))
+STEAMWORK_STORE_ASSET_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_STORE_ASSET_DIR", str(STEAMWORK_ASSET_DIR / "Game" / "Store Assets")))
+STEAMWORK_SCREENSHOT_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_SCREENSHOT_DIR", str(STEAMWORK_ASSET_DIR / "Game" / "ScreenShots Assets")))
+STEAMWORK_VIDEO_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_VIDEO_DIR", str(STEAMWORK_ASSET_DIR / "Game" / "Demo vedio")))
+STEAMWORK_THUMB_DIR = APP_DIR / "cache" / "steamwork_thumbs"
 DEFAULT_BLENDER_PROJECT_ROOTS = [
     Path(r"D:\Blender\Projects"),
     Path(r"D:\ArtAsset"),
@@ -108,6 +114,9 @@ MATERIAL_TEXTURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tga", ".tif", ".tiff",
 PREVIEWABLE_TEXTURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 MATERIAL_CANDIDATE_EXTENSIONS = MATERIAL_PACKAGE_EXTENSIONS | MATERIAL_TEXTURE_EXTENSIONS
 BLENDER_PROJECT_EXTENSIONS = {".blend"}
+STEAMWORK_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".ico"}
+STEAMWORK_VIDEO_EXTENSIONS = {".mp4", ".mov", ".wmv"}
+STEAMWORK_ASSET_EXTENSIONS = STEAMWORK_IMAGE_EXTENSIONS | STEAMWORK_VIDEO_EXTENSIONS | {".psd"}
 CONSOLE_MODULE_HREFS = {
     "manager": "manager.html",
     "workspace": "workspace.html",
@@ -526,6 +535,26 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/workspace/github-downloads":
             self.send_json(github_downloads_state())
             return
+        if parsed.path == "/api/steamwork/assets":
+            self.send_json(steamwork_assets_state())
+            return
+        if parsed.path == "/api/steamwork/asset-preview":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                asset_path = steamwork_asset_preview_path(query.get("path", [""])[0])
+                content_type = mimetypes.guess_type(str(asset_path))[0] or "application/octet-stream"
+                self.send_file_response(asset_path, content_type, filename=asset_path.name)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            return
+        if parsed.path == "/api/steamwork/asset-thumb":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                thumb_path = steamwork_asset_thumbnail_path(query.get("path", [""])[0])
+                self.send_file_response(thumb_path, "image/jpeg", filename=thumb_path.name)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            return
         if parsed.path == "/api/randomrealm/unity/bridge-status":
             self.send_json(randomrealm_unity_bridge_status())
             return
@@ -575,6 +604,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/steamwork/publish-tool/upload":
                 self.send_json(import_steamwork_files("publishTool", self.read_multipart_files(MAX_STEAMWORK_UPLOAD_BYTES)))
                 return
+            if parsed.path.startswith("/api/steamwork/assets/stage/"):
+                requirement_id = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1])
+                self.send_json(stage_steamwork_asset_files(requirement_id, self.read_multipart_files(MAX_STEAMWORK_UPLOAD_BYTES)))
+                return
 
             payload = self.read_json_body()
             if parsed.path == "/api/wallpapers/apply":
@@ -615,6 +648,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/workspace/open-github-downloads":
                 self.send_json(open_github_downloads())
+                return
+            if parsed.path == "/api/steamwork/open-asset":
+                self.send_json(open_steamwork_asset(payload.get("path", "")))
                 return
             if parsed.path == "/api/randomrealm/open-resource":
                 self.send_json(open_randomrealm_resource(payload.get("id", "")))
@@ -1246,6 +1282,10 @@ def open_randomrealm_resource(resource_id):
         "publishToolFolder": ("file", STEAMWORK_PUBLISH_TOOL_EXE),
         "projectFolder": ("folder", RANDOMREALM_PROJECT_DIR),
         "promoFolder": ("folder", RANDOMREALM_PROMO_DIR),
+        "steamworkAssetFolder": ("folder", STEAMWORK_ASSET_DIR),
+        "steamworkStoreAssetFolder": ("folder", STEAMWORK_STORE_ASSET_DIR),
+        "steamworkScreenshotFolder": ("folder", STEAMWORK_SCREENSHOT_DIR),
+        "steamworkVideoFolder": ("folder", STEAMWORK_VIDEO_DIR),
     }
     resource = resources.get(str(resource_id or ""))
     if not resource:
@@ -4833,6 +4873,628 @@ def import_steamwork_files(target_key, files):
             }
             for path in copied
         ],
+    }
+
+
+STEAMWORK_ASSET_REQUIREMENTS = [
+    {
+        "id": "header_capsule",
+        "category": "Store",
+        "name": "Header Capsule",
+        "required": True,
+        "spec": "920 x 430",
+        "target": "Store Page Admin > Graphical Assets",
+        "kind": "image",
+        "dimensionMode": "exact",
+        "width": 920,
+        "height": 430,
+        "patterns": ["header capsule", "header", "capsule", "920x430"],
+    },
+    {
+        "id": "small_capsule",
+        "category": "Store",
+        "name": "Small Capsule",
+        "required": True,
+        "spec": "462 x 174",
+        "target": "Store Page Admin > Graphical Assets",
+        "kind": "image",
+        "dimensionMode": "exact",
+        "width": 462,
+        "height": 174,
+        "patterns": ["small capsule", "small", "462x174"],
+    },
+    {
+        "id": "main_capsule",
+        "category": "Store",
+        "name": "Main Capsule",
+        "required": True,
+        "spec": "1232 x 706",
+        "target": "Store Page Admin > Graphical Assets",
+        "kind": "image",
+        "dimensionMode": "exact",
+        "width": 1232,
+        "height": 706,
+        "patterns": ["main capsule", "main", "1232x706"],
+    },
+    {
+        "id": "vertical_capsule",
+        "category": "Store",
+        "name": "Vertical Capsule",
+        "required": True,
+        "spec": "748 x 896",
+        "target": "Store Page Admin > Graphical Assets",
+        "kind": "image",
+        "dimensionMode": "exact",
+        "width": 748,
+        "height": 896,
+        "patterns": ["vertical capsule", "vertical", "hero capsule", "748x896"],
+    },
+    {
+        "id": "screenshots",
+        "category": "Store",
+        "name": "Screenshots",
+        "required": True,
+        "spec": "5+ files, 1920 x 1080 minimum, 16:9",
+        "target": "Store Page Admin > Screenshots",
+        "kind": "image-set",
+        "dimensionMode": "min16x9",
+        "minWidth": 1920,
+        "minHeight": 1080,
+        "minCount": 5,
+        "multiple": True,
+        "rootHint": "screenshots",
+        "patterns": ["screenshot", "screen"],
+    },
+    {
+        "id": "page_background",
+        "category": "Store",
+        "name": "Page Background",
+        "required": False,
+        "spec": "1438 x 810",
+        "target": "Store Page Admin > Graphical Assets",
+        "kind": "image",
+        "dimensionMode": "exact",
+        "width": 1438,
+        "height": 810,
+        "patterns": ["page background", "background", "1438x810"],
+    },
+    {
+        "id": "shortcut_icon",
+        "category": "Community",
+        "name": "Shortcut Icon",
+        "required": True,
+        "spec": "256 x 256 or 512 x 512, ICO/PNG",
+        "target": "Store Page Admin > Community & Client Icons",
+        "kind": "image",
+        "dimensionMode": "shortcutIcon",
+        "patterns": ["256.ico", "shortcut", "icon", "logo256"],
+    },
+    {
+        "id": "app_icon",
+        "category": "Community",
+        "name": "App Icon",
+        "required": True,
+        "spec": "184 x 184 JPG",
+        "target": "Store Page Admin > Community & Client Icons",
+        "kind": "image",
+        "dimensionMode": "appIcon",
+        "width": 184,
+        "height": 184,
+        "patterns": ["app icon", "app", "184"],
+    },
+    {
+        "id": "library_capsule",
+        "category": "Library",
+        "name": "Library Capsule",
+        "required": True,
+        "spec": "600 x 900",
+        "target": "Steamworks > Edit Library Assets",
+        "kind": "image",
+        "dimensionMode": "exact",
+        "width": 600,
+        "height": 900,
+        "patterns": ["600x900", "library capsule", "lib", "capsule"],
+    },
+    {
+        "id": "library_header",
+        "category": "Library",
+        "name": "Library Header",
+        "required": True,
+        "spec": "920 x 430",
+        "target": "Steamworks > Edit Library Assets",
+        "kind": "image",
+        "dimensionMode": "exact",
+        "width": 920,
+        "height": 430,
+        "patterns": ["library header", "header", "capsule", "920x430"],
+    },
+    {
+        "id": "library_hero",
+        "category": "Library",
+        "name": "Library Hero",
+        "required": True,
+        "spec": "3840 x 1240 PNG",
+        "target": "Steamworks > Edit Library Assets",
+        "kind": "image",
+        "dimensionMode": "exact",
+        "width": 3840,
+        "height": 1240,
+        "patterns": ["3840x1240", "hero"],
+    },
+    {
+        "id": "library_logo",
+        "category": "Library",
+        "name": "Library Logo",
+        "required": True,
+        "spec": "PNG, 1280 wide and/or 720 tall",
+        "target": "Steamworks > Edit Library Assets",
+        "kind": "image",
+        "dimensionMode": "libraryLogo",
+        "patterns": ["1280x720", "library logo", "logo", "icon1280"],
+    },
+    {
+        "id": "trailer",
+        "category": "Video",
+        "name": "Trailer",
+        "required": True,
+        "spec": "MP4/MOV/WMV, up to 1920 x 1080, 30/60 fps",
+        "target": "Store Page Admin > Trailers",
+        "kind": "video",
+        "dimensionMode": "video",
+        "patterns": ["demo", "trailer", "video", "vedio"],
+    },
+    {
+        "id": "trailer_poster",
+        "category": "Video",
+        "name": "Custom Trailer Poster",
+        "required": False,
+        "spec": "1920 x 1080 JPG/PNG, frame from the video",
+        "target": "Store Page Admin > Trailers",
+        "kind": "image",
+        "dimensionMode": "exact",
+        "width": 1920,
+        "height": 1080,
+        "candidateRootHint": "screenshots",
+        "candidatePatterns": ["screenshot", "screen"],
+        "patterns": ["poster", "thumbnail", "trailer", "1920x1080"],
+    },
+]
+
+
+def steamwork_scan_roots():
+    primary_candidates = [
+        ("store", STEAMWORK_STORE_ASSET_DIR),
+        ("screenshots", STEAMWORK_SCREENSHOT_DIR),
+        ("video", STEAMWORK_VIDEO_DIR),
+    ]
+    roots = []
+    seen = set()
+    for label, path in primary_candidates:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if not resolved.exists() or not resolved.is_dir() or resolved in seen:
+            continue
+        if STEAMWORK_ASSET_DIR.exists() and not is_path_inside(resolved, STEAMWORK_ASSET_DIR):
+            continue
+        roots.append((label, resolved))
+        seen.add(resolved)
+    if roots:
+        return roots
+    try:
+        root = STEAMWORK_ASSET_DIR.resolve()
+    except OSError:
+        return roots
+    if root.exists() and root.is_dir():
+        roots.append(("root", root))
+    return roots
+
+
+def steamwork_asset_path_from_relative(relative_path):
+    clean = str(relative_path or "").replace("\\", "/").lstrip("/")
+    if not clean:
+        raise ValueError("Steamwork asset path is required")
+    root = STEAMWORK_ASSET_DIR.resolve()
+    candidate = (root / clean).resolve()
+    if not is_path_inside(candidate, root):
+        raise ValueError("Steamwork asset path is outside the asset folder")
+    if not candidate.exists() or not candidate.is_file():
+        raise ValueError("Steamwork asset file was not found")
+    return candidate
+
+
+def steamwork_asset_preview_path(relative_path):
+    target = steamwork_asset_path_from_relative(relative_path)
+    if target.suffix.lower() not in PREVIEWABLE_TEXTURE_EXTENSIONS | {".ico"}:
+        raise ValueError("preview is available for image assets only")
+    return target
+
+
+def steamwork_asset_thumbnail_path(relative_path, max_size=(360, 240)):
+    source = steamwork_asset_preview_path(relative_path)
+    try:
+        stat = source.stat()
+    except OSError as error:
+        raise ValueError("Steamwork asset file was not found") from error
+
+    cache_key = hashlib.sha256(
+        f"{source.relative_to(STEAMWORK_ASSET_DIR.resolve()).as_posix()}|{stat.st_mtime_ns}|{stat.st_size}|{max_size[0]}x{max_size[1]}".encode("utf-8")
+    ).hexdigest()[:24]
+    target = STEAMWORK_THUMB_DIR / f"{cache_key}.jpg"
+    if target.exists():
+        return target
+
+    try:
+        from PIL import Image, ImageOps
+    except ImportError as error:
+        raise ValueError("thumbnail generation requires Pillow") from error
+
+    try:
+        STEAMWORK_THUMB_DIR.mkdir(parents=True, exist_ok=True)
+        with Image.open(source) as image:
+            image = ImageOps.exif_transpose(image)
+            image.thumbnail(max_size, Image.Resampling.LANCZOS)
+            if image.mode not in {"RGB", "L"}:
+                background = Image.new("RGB", image.size, (36, 48, 63))
+                alpha = image.getchannel("A") if "A" in image.getbands() else None
+                background.paste(image.convert("RGBA"), mask=alpha)
+                image = background
+            elif image.mode == "L":
+                image = image.convert("RGB")
+            image.save(target, format="JPEG", quality=78, optimize=True, progressive=True)
+    except OSError as error:
+        raise ValueError(f"could not generate Steamwork thumbnail: {error}") from error
+    return target
+
+
+def open_steamwork_asset(relative_path):
+    return open_file_resource(steamwork_asset_path_from_relative(relative_path))
+
+
+def steamwork_requirement_by_id(requirement_id):
+    clean_id = str(requirement_id or "").strip()
+    for requirement in STEAMWORK_ASSET_REQUIREMENTS:
+        if requirement.get("id") == clean_id:
+            return requirement
+    raise ValueError("unknown Steamwork asset slot")
+
+
+def steamwork_stage_folder(requirement):
+    requirement_id = requirement.get("id", "")
+    if requirement_id == "screenshots":
+        return STEAMWORK_SCREENSHOT_DIR
+    if requirement.get("kind") == "video":
+        return STEAMWORK_VIDEO_DIR
+    return STEAMWORK_STORE_ASSET_DIR
+
+
+def steamwork_allowed_stage_extensions(requirement):
+    if requirement.get("kind") == "video":
+        return STEAMWORK_VIDEO_EXTENSIONS
+    return STEAMWORK_IMAGE_EXTENSIONS | {".psd"}
+
+
+def safe_steamwork_stage_filename(requirement, filename):
+    raw_name = Path(str(filename or "").replace("\\", "/")).name
+    suffix = Path(raw_name).suffix.lower()
+    if suffix not in steamwork_allowed_stage_extensions(requirement):
+        raise ValueError("file type does not match this Steamwork asset slot")
+
+    stem = Path(raw_name).stem.strip()
+    stem = re.sub(r"[^\w .()\-]+", "-", stem, flags=re.UNICODE).strip(" .-_")
+    if not stem:
+        stem = "asset"
+    prefix = slugify_english_name(requirement.get("name", requirement.get("id", "")), "steamwork-asset")
+    if not stem.lower().startswith(prefix.lower()):
+        stem = f"{prefix} - {stem}"
+    return f"{stem[:120]}{suffix}"
+
+
+def unique_steamwork_stage_path(root, filename):
+    safe_name = Path(str(filename or "").replace("\\", "/")).name
+    suffix = Path(safe_name).suffix.lower()
+    stem = Path(safe_name).stem
+    candidate = (root / safe_name).resolve()
+    index = 2
+    while candidate.exists():
+        candidate = (root / f"{stem}-{index}{suffix}").resolve()
+        index += 1
+    if not is_path_inside(candidate, root):
+        raise ValueError("target file is outside the Steamwork asset folder")
+    return candidate
+
+
+def stage_steamwork_asset_files(requirement_id, files):
+    if not files:
+        raise ValueError("no files were uploaded")
+
+    requirement = steamwork_requirement_by_id(requirement_id)
+    root = steamwork_stage_folder(requirement).resolve()
+    if STEAMWORK_ASSET_DIR.exists() and not is_path_inside(root, STEAMWORK_ASSET_DIR):
+        raise ValueError("Steamwork asset target is outside the asset folder")
+    root.mkdir(parents=True, exist_ok=True)
+
+    saved = []
+    for item in files:
+        filename = str(item.get("filename", ""))
+        data = item.get("data", b"")
+        if not filename or not data:
+            continue
+        safe_name = safe_steamwork_stage_filename(requirement, filename)
+        target = unique_steamwork_stage_path(root, safe_name)
+        target.write_bytes(data)
+        record = steamwork_asset_file_record(target, "staged")
+        if record:
+            saved.append(record)
+
+    if not saved:
+        raise ValueError("no files were staged")
+
+    state = steamwork_assets_state()
+    return {
+        "ok": True,
+        "slot": requirement.get("id"),
+        "destination": str(root),
+        "files": saved,
+        "state": state,
+    }
+
+
+def steamwork_asset_file_record(path, root_label):
+    try:
+        stat = path.stat()
+        rel = path.relative_to(STEAMWORK_ASSET_DIR.resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+
+    suffix = path.suffix.lower()
+    dimensions = texture_file_dimensions(path) if suffix in PREVIEWABLE_TEXTURE_EXTENSIONS else None
+    record = {
+        "name": path.name,
+        "path": rel,
+        "folder": root_label,
+        "extension": suffix,
+        "size": stat.st_size,
+        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        "type": "video" if suffix in STEAMWORK_VIDEO_EXTENSIONS else "image",
+        "preview": suffix in PREVIEWABLE_TEXTURE_EXTENSIONS | {".ico"},
+    }
+    if dimensions:
+        record["width"] = dimensions.get("width")
+        record["height"] = dimensions.get("height")
+    return record
+
+
+def list_steamwork_asset_files(limit=500):
+    files = []
+    seen = set()
+    for root_label, root in steamwork_scan_roots():
+        for path in root.rglob("*"):
+            if len(files) >= limit:
+                break
+            if not path.is_file() or path.suffix.lower() not in STEAMWORK_ASSET_EXTENSIONS:
+                continue
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if resolved in seen:
+                continue
+            record = steamwork_asset_file_record(resolved, root_label)
+            if record:
+                files.append(record)
+                seen.add(resolved)
+    files.sort(key=lambda item: item.get("modified", ""), reverse=True)
+    return files
+
+
+def steamwork_asset_dimensions_ok(requirement, file_record):
+    mode = requirement.get("dimensionMode", "")
+    suffix = file_record.get("extension", "")
+    width = int(file_record.get("width") or 0)
+    height = int(file_record.get("height") or 0)
+
+    if mode == "video":
+        return suffix in STEAMWORK_VIDEO_EXTENSIONS
+    if mode == "exact":
+        return width == int(requirement.get("width") or 0) and height == int(requirement.get("height") or 0)
+    if mode == "min16x9":
+        if width <= 0 or height <= 0:
+            return False
+        ratio = width / height
+        return width >= int(requirement.get("minWidth") or 0) and height >= int(requirement.get("minHeight") or 0) and abs(ratio - (16 / 9)) < 0.04
+    if mode == "shortcutIcon":
+        if suffix == ".ico":
+            return True
+        return suffix == ".png" and (width, height) in {(256, 256), (512, 512)}
+    if mode == "appIcon":
+        return suffix in {".jpg", ".jpeg"} and width == 184 and height == 184
+    if mode == "libraryLogo":
+        return suffix == ".png" and (width == 1280 or height == 720)
+    return False
+
+
+def steamwork_asset_match_score(requirement, file_record):
+    suffix = file_record.get("extension", "")
+    kind = requirement.get("kind", "")
+    if kind == "video" and suffix not in STEAMWORK_VIDEO_EXTENSIONS:
+        return -1
+    if kind != "video" and suffix not in STEAMWORK_IMAGE_EXTENSIONS:
+        return -1
+
+    haystack = f"{file_record.get('name', '')} {file_record.get('path', '')}".replace("_", " ").replace("-", " ").lower()
+    score = 0
+    has_match_signal = False
+    if steamwork_asset_dimensions_ok(requirement, file_record):
+        score += 120
+        has_match_signal = True
+    if file_record.get("folder") == "staged":
+        score += 90
+        has_match_signal = True
+    if requirement.get("rootHint") and file_record.get("folder") == requirement.get("rootHint"):
+        score += 80
+        has_match_signal = True
+    if file_record.get("folder") == "store" and requirement.get("category") in {"Store", "Library", "Community"}:
+        score += 20
+    if file_record.get("folder") == "video" and requirement.get("category") == "Video":
+        score += 80
+        has_match_signal = True
+
+    for pattern in requirement.get("patterns", []):
+        clean_pattern = str(pattern).replace("_", " ").replace("-", " ").lower()
+        if clean_pattern and clean_pattern in haystack:
+            score += 35 if len(clean_pattern) > 4 else 15
+            has_match_signal = True
+
+    return score if has_match_signal else -1
+
+
+def steamwork_asset_reference_score(requirement, file_record):
+    suffix = file_record.get("extension", "")
+    kind = requirement.get("kind", "")
+    if kind == "video":
+        return 100 if suffix in STEAMWORK_VIDEO_EXTENSIONS else -1
+    if suffix not in STEAMWORK_IMAGE_EXTENSIONS | {".ico"}:
+        return -1
+
+    score = 300 if steamwork_asset_dimensions_ok(requirement, file_record) else 0
+    if file_record.get("folder") == "staged":
+        score += 80
+    candidate_root = requirement.get("candidateRootHint") or requirement.get("rootHint")
+    if candidate_root and file_record.get("folder") == candidate_root:
+        score += 140
+    if requirement.get("category") in {"Store", "Library", "Community", "Video"} and file_record.get("folder") in {"store", "root", "staged"}:
+        score += 18
+
+    width = int(file_record.get("width") or 0)
+    height = int(file_record.get("height") or 0)
+    target_width = int(requirement.get("width") or requirement.get("minWidth") or 0)
+    target_height = int(requirement.get("height") or requirement.get("minHeight") or 0)
+    if width > 0 and height > 0 and target_width > 0 and target_height > 0:
+        ratio = width / height
+        target_ratio = target_width / target_height
+        ratio_delta = abs(math.log(ratio / target_ratio))
+        area_delta = abs(math.log((width * height) / (target_width * target_height)))
+        score += max(0, 110 - ratio_delta * 180)
+        score += max(0, 75 - area_delta * 28)
+        if (width >= height) == (target_width >= target_height):
+            score += 18
+        if width < target_width * 0.25 or height < target_height * 0.25:
+            score -= 80
+        if abs(ratio - 1) < 0.04 and abs(target_ratio - 1) > 0.2:
+            score -= 70
+
+    haystack = f"{file_record.get('name', '')} {file_record.get('path', '')}".replace("_", " ").replace("-", " ").lower()
+    if requirement.get("id") == "trailer_poster":
+        if suffix == ".ico" or re.search(r"\b(icon|logo)\b", haystack):
+            score -= 140
+    for pattern in [*requirement.get("patterns", []), *requirement.get("candidatePatterns", [])]:
+        clean_pattern = str(pattern).replace("_", " ").replace("-", " ").lower()
+        if clean_pattern and clean_pattern in haystack:
+            score += 45 if len(clean_pattern) > 4 else 18
+    return score
+
+
+def steamwork_requirement_matches(requirement, files):
+    scored = []
+    for file_record in files:
+        score = steamwork_asset_match_score(requirement, file_record)
+        if score <= 0:
+            continue
+        scored.append((score, file_record))
+    scored.sort(key=lambda item: (item[0], item[1].get("modified", "")), reverse=True)
+    if requirement.get("multiple"):
+        return [item[1] for item in scored[:24]]
+    return [scored[0][1]] if scored else []
+
+
+def steamwork_requirement_candidate_files(requirement, files, matches):
+    matched_paths = {item.get("path") for item in matches if item.get("path")}
+    category = requirement.get("category")
+    kind = requirement.get("kind")
+    candidates = []
+    for file_record in files:
+        suffix = file_record.get("extension", "")
+        if file_record.get("path") in matched_paths:
+            continue
+        score = steamwork_asset_match_score(requirement, file_record)
+        if score <= 0:
+            score = steamwork_asset_reference_score(requirement, file_record)
+            if score < 0:
+                continue
+        if kind == "video":
+            if suffix not in STEAMWORK_VIDEO_EXTENSIONS or file_record.get("folder") != "video":
+                continue
+        else:
+            if suffix not in STEAMWORK_IMAGE_EXTENSIONS | {".psd"}:
+                continue
+            if requirement.get("id") == "screenshots":
+                if file_record.get("folder") != "screenshots":
+                    continue
+            elif requirement.get("id") == "trailer_poster":
+                if file_record.get("folder") not in {"screenshots", "store", "root", "staged"}:
+                    continue
+            elif category in {"Store", "Library", "Community", "Video"}:
+                if file_record.get("folder") not in {"store", "root", "staged"}:
+                    continue
+        candidates.append((score, file_record))
+
+    candidates.sort(key=lambda item: (item[0], item[1].get("modified", "")), reverse=True)
+    return [item[1] for item in candidates[:18]]
+
+
+def steamwork_requirement_state(requirement, files):
+    matches = steamwork_requirement_matches(requirement, files)
+    min_count = int(requirement.get("minCount") or 1)
+    required = bool(requirement.get("required"))
+    enough_matches = len(matches) >= min_count
+
+    if not matches:
+        status = "missing" if required else "optional"
+        issue = "Missing required asset" if required else "Optional"
+    elif not enough_matches:
+        status = "missing" if required else "review"
+        issue = f"Need {min_count} files"
+    else:
+        valid_count = sum(1 for item in matches if steamwork_asset_dimensions_ok(requirement, item))
+        if valid_count >= min_count:
+            status = "ready"
+            issue = ""
+        else:
+            status = "review"
+            issue = "File found, check size/format"
+
+    return {
+        **requirement,
+        "status": status,
+        "issue": issue,
+        "files": matches,
+        "candidates": steamwork_requirement_candidate_files(requirement, files, matches),
+    }
+
+
+def steamwork_assets_state():
+    files = list_steamwork_asset_files()
+    items = [steamwork_requirement_state(requirement, files) for requirement in STEAMWORK_ASSET_REQUIREMENTS]
+    summary = {
+        "total": len(items),
+        "ready": sum(1 for item in items if item["status"] == "ready"),
+        "review": sum(1 for item in items if item["status"] == "review"),
+        "missing": sum(1 for item in items if item["status"] == "missing"),
+        "optional": sum(1 for item in items if item["status"] == "optional"),
+        "files": len(files),
+    }
+    return {
+        "ok": True,
+        "root": str(STEAMWORK_ASSET_DIR),
+        "storeAssets": str(STEAMWORK_STORE_ASSET_DIR),
+        "screenshots": str(STEAMWORK_SCREENSHOT_DIR),
+        "videos": str(STEAMWORK_VIDEO_DIR),
+        "thumbs": True,
+        "items": items,
+        "files": files,
+        "summary": summary,
     }
 
 

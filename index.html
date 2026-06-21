@@ -45,7 +45,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-225">
+  <link rel="stylesheet" href="styles.css?v=control-console-479">
 </head>
 <body>
   <main class="app-shell">
@@ -505,19 +505,33 @@
             <div class="section-label">Steamwork</div>
             <h2 id="steamworkTitle" data-i18n="steamworkTitle">Steamwork</h2>
           </div>
-          <span id="steamworkStatusText" class="workspace-pill" data-i18n="steamworkReady">Ready</span>
         </div>
-
-        <p class="randomrealm-note" data-i18n="steamworkBody">Publish builds, promo resources, and update material staging.</p>
 
         <div class="randomrealm-release-actions steamwork-actions">
           <button id="openSteamworkDashboard" class="ghost-button primary-action" type="button" data-i18n="steamworkDashboard">Steamworks</button>
-          <button id="openSteamworkGameContent" class="ghost-button" type="button" data-i18n="steamworkGameContent">ContentBuilder content</button>
+          <button id="openSteamworkGameContent" class="ghost-button" type="button" data-i18n="steamworkGameContent">Content</button>
           <button id="openSteamworkPublishTool" class="ghost-button" type="button" data-i18n="steamworkPublishTool">SteamPipeGUI</button>
+          <button id="openSteamworkArtAsset" class="ghost-button" type="button" data-i18n="steamworkArtAssets">Assets</button>
         </div>
 
-        <div class="steamwork-tips" aria-label="Steamwork publish tips">
-          <span data-i18n="steamworkTipsLabel">Tips</span>
+        <div class="steamwork-assets" aria-label="Steamwork asset checklist">
+          <div class="steamwork-assets-head">
+            <div>
+              <span data-i18n="steamworkAssetsLabel">Assets</span>
+              <h3 data-i18n="steamworkAssetsTitle">Steam asset checklist</h3>
+              <small id="steamworkAssetRoot" class="steamwork-asset-root"></small>
+            </div>
+            <span id="steamworkAssetSummary" class="workspace-pill" data-i18n="steamworkAssetLoading">Loading assets</span>
+          </div>
+          <div id="steamworkAssetList" class="steamwork-asset-list">
+            <div class="steamwork-empty" data-i18n="steamworkAssetLoading">Loading assets</div>
+          </div>
+        </div>
+
+        <details class="steamwork-tips" aria-label="Steamwork publish tips">
+          <summary>
+            <span data-i18n="steamworkTipsLabel">Tips</span>
+          </summary>
           <div class="steamwork-table-wrap">
             <table class="steamwork-tip-table">
               <thead>
@@ -546,7 +560,7 @@
                 <tr>
                   <td data-i18n="steamworkStepPublish">4. Publish</td>
                   <td data-i18n="steamworkTipPublish">Publish changes and finish Steam Guard / phone confirmation if needed.</td>
-                  <td data-i18n="steamworkPublishNote">Final confirmation.</td>
+                  <td data-i18n="steamworkPublishNote">Pc only</td>
                 </tr>
               </tbody>
             </table>
@@ -576,7 +590,8 @@
               </tbody>
             </table>
           </div>
-        </div>
+        </details>
+
       </article>
     </section>
 
@@ -720,8 +735,9 @@
   <input id="randomRealmTextureFileInput" class="visually-hidden" type="file" multiple accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp">
   <input id="steamworkGameContentFileInput" class="visually-hidden" type="file" multiple>
   <input id="steamworkPublishToolFileInput" class="visually-hidden" type="file" multiple>
+  <input id="steamworkAssetFileInput" class="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
   <audio id="audioPlayer" preload="metadata"></audio>
 
-  <script src="app.js?v=control-console-225"></script>
+  <script src="app.js?v=control-console-479"></script>
 </body>
 </html>
