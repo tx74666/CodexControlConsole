@@ -22,6 +22,22 @@ Latest release: [github.com/tx74666/CodexControlConsole/releases/latest](https:/
 
 Lite opens with only Wallpaper and Music. Developer opens with Manager, Console, Blender, Unity, Steamwork, RandomRealm, Music, and Wallpaper.
 
+## Updates
+
+Portable Windows builds check the latest GitHub release in the background. When a newer version is available, choose **Update** in Console; Codex Console downloads the matching Lite or Developer ZIP, verifies its SHA-256 checksum and app manifest, installs it, and restarts.
+
+Updates are never installed silently. A source checkout opens the release page instead of overwriting the repository.
+
+## Multiple Windows Users
+
+Each Windows account keeps its own settings, indexes, cookies, and update files in:
+
+```text
+%LOCALAPPDATA%\CodexControlConsole
+```
+
+The extracted program folder can therefore be shared without mixing users' runtime data. Set `CODEX_CONTROL_DATA_DIR` to use a different per-user location. No installation identifier or usage data is sent anywhere.
+
 ## Android
 
 1. On the PC, start `Start-ControlConsole-LAN.vbs`.
@@ -43,7 +59,31 @@ Use LAN mode only on a trusted network.
 ## Build Locally
 
 ```powershell
-.\tools\package-desktop.ps1 -Version 0.2.1 -OutputDir dist
+.\tools\package-desktop.ps1 -Version 0.3.0 -OutputDir dist
 ```
 
 The package script builds the developer ZIP, the lite ZIP, and the compatibility Windows ZIP. Runtime cache, cookies, downloaded music, and local browser profiles are not included.
+
+## Check The UI
+
+With Control Console running locally, use Node.js 22 or newer:
+
+```powershell
+node .\tools\check-console-ui.mjs
+```
+
+The check covers cache consistency, lazy module loading, Blender view transitions, stable backgrounds, and horizontal overflow.
+
+To verify the Blender GitHub Coop workflow without touching a real project, remote, or desktop app:
+
+```powershell
+python .\tools\check-blender-github-share.py
+```
+
+To verify archive validation, rollback, and per-user update storage:
+
+```powershell
+python .\tools\check-console-update.py
+```
+
+Blender > Helper > GitHub Coop lists the `.blend` files in the selected project as compact cards. Use the three links to open that project in GitHub Desktop, its local folder, or its GitHub repository. When no remote exists yet, the GitHub link opens the new-repository page. The underlying share service still supports Git, Git LFS, per-project settings, version commits, and pushes.

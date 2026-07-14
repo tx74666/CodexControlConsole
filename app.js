@@ -17,8 +17,11 @@ const storageKeys = {
   lastModule: "codexControl.lastModule.v1",
   downloadIntake: "codexControl.downloadIntake.v1",
   workspaceTodos: "codexControl.workspaceTodos.v1",
+  tutorialMode: "codexControl.tutorialMode.v1",
   randomRealmArtContext: "codexControl.randomRealmArtContext.v1",
-  blenderPromptConfig: "codexControl.blenderPromptConfig.v1"
+  blenderView: "codexControl.blenderView.v1",
+  blenderPromptConfig: "codexControl.blenderPromptConfig.v1",
+  lyricsHeight: "codexControl.lyricsHeight.v1"
 };
 
 const modules = [
@@ -47,7 +50,10 @@ function normalizeEdition(value) {
 
 let consoleEdition = normalizeEdition(hasEditionQuery ? initialEditionQuery : "developer");
 
-const playbackModes = ["repeatAll", "repeatOne"];
+const playbackModes = ["repeatAll", "repeatOne", "playOnce"];
+const steamworksAppId = "3983670";
+const steamworksAppUrl = `https://partner.steamgames.com/apps/landing/${steamworksAppId}`;
+const steamworksBuildsUrl = `https://partner.steamgames.com/apps/builds/${steamworksAppId}`;
 const defaultRandomRealmArtTypes = ["MESH", "CURVE", "LIGHT", "CAMERA", "VOLUME", "FONT", "EMPTY"];
 const randomRealmArtTypeLabels = {
   MESH: "Mesh",
@@ -68,7 +74,7 @@ const defaultBlenderPromptConfig = {
   customWidth: "",
   customLength: ""
 };
-const musicStateVersion = 2;
+const musicStateVersion = 3;
 const musicReorderCommitRatio = 1 / 3;
 const musicReorderReturnRatio = 1 - musicReorderCommitRatio;
 const musicPlaceholderLayoutPath = "__music_placeholder__";
@@ -117,6 +123,12 @@ const musicReflowContinueDurationScale = 1.12;
 const musicSettleSnapDistance = 0.7;
 const musicPlaceholderTargetSettleMs = 34;
 const musicPlaceholderReflowMinIntervalMs = 24;
+const musicKeyboardSeekSeconds = 5;
+const wallpaperReorderCommitRatio = 1 / 3;
+const wallpaperReorderReturnRatio = 1 - wallpaperReorderCommitRatio;
+const wallpaperPlaceholderLayoutPath = "__wallpaper_placeholder__";
+const wallpaperPlaceholderTargetSettleMs = 34;
+const wallpaperPlaceholderReflowMinIntervalMs = 24;
 const repeatLoopPath = "M14.6 22.5h-4.1a4 4 0 0 1-4-4v-6.25a4 4 0 0 1 4-4h10.5a4 4 0 0 1 4 4v6.25a4 4 0 0 1-4 4h-6.4zM17.8 19.3l-3.2 3.2 3.2 3.2";
 
 // Player control icons: inline SVG, currentColor stroke, no bitmap assets.
@@ -131,6 +143,11 @@ const musicPlayerIcons = {
     <svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false">
       <path class="repeat-loop-icon" d="${repeatLoopPath}" />
       <text class="repeat-one-number" x="16" y="15.7">1</text>
+    </svg>
+  `,
+  playOnce: `
+    <svg viewBox="0 0 32 32" width="32" height="32" aria-hidden="true" focusable="false">
+      <text class="repeat-one-number play-once-number" x="16" y="16">1</text>
     </svg>
   `
 };
@@ -170,7 +187,97 @@ const i18n = {
     managerLayoutSlotTwo: "收纳箱",
     managerLayoutSlotThree: "桌面快照",
     managerLayoutHint: "拖动 tab 改变顺序，拖到 Archive 只会收纳，不会删除。",
+    tutorialModeToggle: "教程模式",
+    tutorialModeOn: "教程模式已打开：显示说明和辅助入口",
+    tutorialModeOff: "教程模式已关闭：只保留关键入口",
     blenderSectionLabel: "Blender",
+    blenderBuilderTab: "Builder",
+    blenderHelperTab: "Helper",
+    blenderHelperTitle: "Blender Hub",
+    blenderHelperBadge: "\u5730\u56fe",
+    blenderHubReady: "\u53ef\u7528",
+    blenderHubNext: "\u9884\u7559",
+    blenderHubBuilderTitle: "Builder \u5de5\u4f5c\u53f0",
+    blenderHubBuilderBody: "\u8d34\u56fe\u3001Prompt\u3001\u5f53\u524d\u7269\u4f53",
+    blenderHubBuildingTitle: "Building \u9879\u76ee",
+    blenderHubBuildingBody: "\u5efa\u7b51\u5757\u3001\u6a21\u5757\u3001\u6446\u653e\u89c4\u5219",
+    blenderHubCharacterTitle: "\u89d2\u8272 / X",
+    blenderHubCharacterBody: "\u4eba\u7269\u3001\u88c5\u5907\u3001\u6750\u8d28\u68c0\u67e5",
+    blenderHubAnimationTitle: "Animation",
+    blenderHubAnimationBody: "\u52a8\u4f5c\u3001\u65f6\u95f4\u8f74\u3001\u5bfc\u51fa\u8282\u594f",
+    blenderHubTextureTitle: "Texture Lab",
+    blenderHubTextureBody: "PBR\u3001\u5c3a\u5bf8\u3001\u66ff\u6362\u5305",
+    blenderHubBridgeTitle: "Unity Bridge",
+    blenderHubBridgeBody: "\u5bfc\u51fa\u3001Temp\u3001\u5bfc\u5165\u68c0\u67e5",
+    blenderGithubHubTitle: "GitHub Coop",
+    blenderGithubHubBody: "Blender 项目入口",
+    blenderGithubTitle: "GitHub Coop",
+    blenderGithubBlendFilesLabel: "Blend 文件",
+    blenderGithubLinksLabel: "项目入口",
+    blenderGithubDesktop: "GitHub Desktop",
+    blenderGithubFolder: "文件",
+    blenderGithubOpenShort: "GitHub",
+    blenderGithubNoBlendFiles: "没有找到 .blend 文件",
+    blenderGithubCardTitle: file => `选中 ${file}`,
+    blenderGithubLoading: "读取中",
+    blenderGithubReady: "就绪",
+    blenderGithubProjectLabel: "Blender 项目",
+    blenderGithubRefreshTitle: "刷新 Git 状态",
+    blenderGithubBlendFileLabel: "Blend 文件",
+    blenderGithubBranchLabel: "分支",
+    blenderGithubRemoteLabel: "Remote",
+    blenderGithubLastVersionLabel: "最近版本",
+    blenderGithubRepositoryLabel: "GitHub 仓库",
+    blenderGithubRepositoryPlaceholder: "https://github.com/owner/repository.git",
+    blenderGithubVisibilityLabel: "可见性",
+    blenderGithubPrivate: "Private",
+    blenderGithubPublic: "Public",
+    blenderGithubVersionLabel: "版本号",
+    blenderGithubMessageLabel: "本次版本说明",
+    blenderGithubMessagePlaceholder: "这个版本改了什么",
+    blenderGithubScopeLabel: "共享范围",
+    blenderGithubScopeCurrent: "仅当前 .blend",
+    blenderGithubScopeProject: "整个项目目录",
+    blenderGithubScopeCustom: "自定义",
+    blenderGithubIncludeLabel: "包含文件",
+    blenderGithubExcludeLabel: "排除文件",
+    blenderGithubChangesLabel: "Git 变更",
+    blenderGithubInitialize: "初始化仓库",
+    blenderGithubCommit: "提交版本",
+    blenderGithubPush: "推送",
+    blenderGithubOpen: "打开 GitHub",
+    blenderGithubStateUninitialized: "未初始化",
+    blenderGithubStateInitialized: "已初始化",
+    blenderGithubStateDirty: "存在未提交修改",
+    blenderGithubStateCommitted: "已提交",
+    blenderGithubStatePendingPush: "待推送",
+    blenderGithubStateBehind: "远端有更新",
+    blenderGithubStateSynced: "已同步",
+    blenderGithubStateGitUnavailable: "Git 不可用",
+    blenderGithubToolsReady: "Git · LFS 已就绪",
+    blenderGithubLfsMissing: "需要安装 Git LFS",
+    blenderGithubGhReady: "GitHub CLI 已登录",
+    blenderGithubGhFallback: "GitHub CLI 未安装或未登录；可填写空仓库 URL",
+    blenderGithubWorkingTreeClean: "工作区干净",
+    blenderGithubMoreChanges: count => `还有 ${count} 项变更`,
+    blenderGithubLastCommit: (hash, subject) => `${hash} · ${subject}`,
+    blenderGithubNoCommit: "还没有提交",
+    blenderGithubSaving: "正在保存项目配置",
+    blenderGithubSaved: "项目配置已保存",
+    blenderGithubInitializedReady: "仓库和 Git LFS 已就绪",
+    blenderGithubInitializedNoRemote: "本地仓库已就绪；填写空 GitHub 仓库 URL 后即可推送",
+    blenderGithubCommitComplete: version => `版本 ${version} 已提交`,
+    blenderGithubPushComplete: "已推送到 GitHub",
+    blenderGithubOpenComplete: "已打开 GitHub 仓库",
+    blenderGithubInitializing: "正在初始化 Git 和 Git LFS",
+    blenderGithubCommitting: "正在提交版本",
+    blenderGithubPushing: "正在推送到 GitHub",
+    blenderGithubOpening: "正在打开 GitHub 仓库",
+    blenderGithubFailed: message => `处理失败：${message}`,
+    blenderGithubPublicConfirm: "Public 仓库所有人都可以访问。确认切换为 Public？",
+    blenderGithubCreateConfirm: name => `没有填写仓库 URL。要使用 GitHub CLI 创建 ${name} 吗？`,
+    blenderGithubReplaceRemoteConfirm: "当前 origin 指向另一个仓库。确认替换它？",
+    blenderGithubSelectProject: "选择 Blender 项目",
     unitySectionLabel: "Unity",
     unityControlTitle: "Unity Control",
     unityControlBody: "RandomRealm2 工程入口、素材入口和 Unity 侧发布前检查。",
@@ -180,19 +287,21 @@ const i18n = {
     unityBridgeBody: "Blender 导出到 Unity temp 后，RandomRealm 导入器再把 temp 内容归类到 Builder 生成资产、Prefab 和清单里。",
     steamworkTitle: "Steamwork",
     steamworkReady: "\u5c31\u7eea",
-    steamworkBody: "\u7ba1\u7406 Steamworks\u3001SteamPipeGUI\u3001ContentBuilder/content \u548c\u5ba3\u4f20\u66f4\u65b0\u7d20\u6750\u3002",
+    steamworkBody: "\u7ba1\u7406 Steamworks\u3001SteamPipe GUI\u3001ContentBuilder/content \u548c\u5ba3\u4f20\u66f4\u65b0\u7d20\u6750\u3002",
     steamworkDashboard: "Steamworks",
     steamworkPublishRoot: "ContentBuilder",
     steamworkGameContent: "Content",
-    steamworkPublishTool: "SteamPipeGUI",
+    steamworkPublishTool: "SteamPipe GUI",
     steamworkArtAssets: "\u7d20\u6750",
     steamworkGameContentLabel: "Content",
     steamworkGameContentTitle: "\u5bfc\u5165\u6e38\u620f\u5185\u5bb9",
     steamworkGameContentReady: "\u628a\u6e38\u620f\u6784\u5efa\u6587\u4ef6\u62d6\u5230 ContentBuilder/content\u3002",
-    steamworkPublishToolLabel: "SteamPipeGUI",
-    steamworkPublishToolTitle: "\u5bfc\u5165 SteamPipeGUI \u5de5\u5177",
-    steamworkPublishToolReady: "\u628a SteamPipeGUI \u76f8\u5173\u6587\u4ef6\u62d6\u5230\u8fd9\u91cc\u3002",
+    steamworkPublishToolLabel: "SteamPipe GUI",
+    steamworkPublishToolTitle: "\u5bfc\u5165 SteamPipe GUI \u5de5\u5177",
+    steamworkPublishToolReady: "\u628a SteamPipeGUI.exe \u6216\u76f8\u5173\u6587\u4ef6\u62d6\u5230\u8fd9\u91cc\u3002",
     steamworkTipsLabel: "\u53d1\u5e03\u6d41\u7a0b Tips",
+    steamworkStepsSection: "\u6b65\u9aa4",
+    steamworkAppInfoSection: "App \u4fe1\u606f",
     steamworkStepColumn: "\u6b65\u9aa4",
     steamworkActionColumn: "\u64cd\u4f5c",
     steamworkNoteColumn: "\u63d0\u9192",
@@ -204,13 +313,18 @@ const i18n = {
     steamworkStepPublish: "4. \u53d1\u5e03",
     steamworkTipBuild: "\u5148\u5728 Unity / PC \u6253\u5305\u6e38\u620f\u3002",
     steamworkBuildNote: "\u53ea\u7528 PC\u3002",
-    steamworkTipConfig: "SteamPipeGUI \u5efa\u8bae\u586b\u5199\uff1aApp ID 3983670\uff0cDepot ID 3983671\uff0cBuild Description \u53ef\u7528 1.5.31\u3002",
+    steamworkTipConfig: "SteamPipe GUI \u5efa\u8bae\u586b\u5199\uff1aApp ID 3983670\uff0cDepot ID 3983671\uff0cBuild Description \u53ef\u7528 1.5.31\u3002",
     steamworkTipPaths: "\u8def\u5f84\uff1aBuild Path = D:\\Steamwork\\Steamwork\\sdk\\tools\\ContentBuilder\\content\uff0cContentBuilder Path = D:\\Steamwork\\Steamwork\\sdk\\tools\\ContentBuilder\u3002",
     steamworkTipLogin: "Steam Login = pixel_roblez\uff1b\u5bc6\u7801\u4e0d\u5199\u8fdb Console\u3002",
     steamworkTipContent: "\u628a\u6253\u5305\u7ed3\u679c\u653e\u5230 ContentBuilder/content\u3002",
-    steamworkTipPipe: "\u6253\u5f00 SteamPipe Build Uploader\uff0c\u586b\u5b57\u6bb5\u540e\u4e0a\u4f20\u3002",
+    steamworkTipOpenPrefix: "\u7528 ",
+    steamworkTipPipe: "\u586b\u5b57\u6bb5\u5e76\u4e0a\u4f20\u3002",
+    steamworkPublishToolLocate: "\u5b9a\u4f4d .exe",
+    steamworkPublishToolChoose: "\u9009\u62e9 SteamPipeGUI.exe",
+    steamworkPublishToolMissing: "\u6ca1\u6709\u627e\u5230 SteamPipeGUI.exe\uff1b\u8bf7\u5148\u5b9a\u4f4d / \u5bfc\u5165\u8fd9\u4e2a exe\u3002",
     steamworkUploadNote: "PC + Mobile \u786e\u8ba4\u3002",
-    steamworkTipRenewDepot: "\u5728\u7f51\u9875\u7248 Steamworks \u91cc Renew / Update Depot\uff0c\u628a\u751f\u6210\u7684 build \u8bbe\u4e3a\u4e0a\u7ebf\u7248\u672c\u3002",
+    steamworkBuildsLink: "Steamworks Builds",
+    steamworkTipRenewDepot: "\u628a\u4e0a\u4f20\u7684 build \u8bbe\u4e3a\u4e0a\u7ebf\u3002",
     steamworkRenewDepotNote: "PC + Mobile \u786e\u8ba4\u3002",
     steamworkTipPublish: "\u6700\u540e\u786e\u8ba4\u5e76\u53d1\u5e03\u66f4\u6539\uff1b\u53ef\u80fd\u9700\u8981 Steam Guard / \u624b\u673a\u786e\u8ba4\u3002",
     steamworkPublishNote: "Pc only",
@@ -324,7 +438,7 @@ const i18n = {
     count: count => `${count} 张`,
     noCandidates: "还没有候选",
     addHint: "支持 jpg / png / bmp / webp。",
-    cardTitle: name => `${name}\n双击应用，右键唤出删除`,
+    cardTitle: name => `${name}\n单击选择，双击应用`,
     deleteButtonLabel: name => `删除 ${name}`,
     deletePrompt: "删除？",
     confirmDeleteAction: "删除",
@@ -339,6 +453,70 @@ const i18n = {
     musicTitle: "音乐播放器",
     nowPlayingLabel: "当前播放",
     musicEmptyBody: "加入 mp3、wav、m4a、flac、ogg、opus。",
+    lyricsSectionLabel: "Lyrics",
+    lyricsTitle: "歌词",
+    lyricsHide: "收起",
+    lyricsShow: "展开歌词",
+    lyricsEmpty: "这首歌还没有歌词文件。",
+    lyricsLoading: "正在读取歌词。",
+    lyricsInstrumental: "没有可显示的歌词。",
+    lyricsUnsynced: "歌词没有时间轴，作为全文显示。",
+    lyricsLoadFailed: message => `歌词读取失败：${message}`,
+    lyricsButtonLabel: name => `歌词：${name}`,
+    lyricsFindLabel: name => `查找歌词：${name}`,
+    lyricsSeekLabel: line => `跳到歌词：${line}`,
+    lyricsMarkArmed: "已选中，直接填开始/结束时间",
+    lyricsMarkSaved: time => `已标记 ${time}`,
+    lyricsEndMarkSaved: time => `结束点 ${time}`,
+    lyricsStartMarkSaved: time => `开始点 ${time}`,
+    lyricsMarkCancelled: "已撤销这个词缝本次标记",
+    lyricsMarkFailed: message => `标记失败：${message}`,
+    lyricsTimingPick: "同一句歌词右键三下才打开时间编辑（施工中）。",
+    lyricsTimingClose: "关闭时间设置",
+    lyricsTimingStartLabel: "开始变白",
+    lyricsTimingEndLabel: "完全变白",
+    lyricsTimingTimePlaceholder: "分:秒.毫秒",
+    lyricsTimingUseNowStart: "当前作开始",
+    lyricsTimingUseNowEnd: "当前作结束",
+    lyricsTimingSave: "保存",
+    lyricsTimingClear: "撤销本次",
+    lyricsTimingTarget: (word, line) => `正在调：${word || "这一格"} · 第 ${line} 行`,
+    lyricsTimingLineTitle: (line, count) => `第 ${line} 行 · ${count} 个字/词`,
+    lyricsTimingPreviewLabel: "原句",
+    lyricsTimingRowsLabel: "逐字时间",
+    lyricsTimingTokenHeader: "字/词",
+    lyricsTimingStartHeader: "开始",
+    lyricsTimingEndHeader: "结束",
+    lyricsTimingDurationHeader: "时长",
+    lyricsTimingDetailTitle: word => `精调：${word || "这一格"}`,
+    lyricsTimingRangeTitle: (start, end) => start === end ? `精调：${start}` : `精调：${start} 到 ${end}`,
+    lyricsTimingWaveLabel: "声音波形",
+    lyricsTimingSelectLine: "选整句",
+    lyricsTimingRangeDuration: duration => `选区 ${duration}`,
+    lyricsTimingSaveSelected: "保存选中",
+    lyricsTimingSaveLine: "保存本句",
+    lyricsTimingClearLine: "撤销本句本次",
+    lyricsTimingSaved: (start, end) => `已暂存：${start} 到 ${end}`,
+    lyricsTimingRangeSaved: count => `已暂存选中的 ${count} 个字/词`,
+    lyricsTimingLineSaved: count => `已暂存 ${count} 个字/词`,
+    lyricsTimingCleared: "已撤销这个字/词本次设置",
+    lyricsTimingLineCleared: "已撤销这一句本次设置",
+    lyricsTimingLineEmpty: "这一句还没有填完整的时间",
+    lyricsTimingIncomplete: "开始和结束都要填",
+    lyricsTimingInvalid: "时间格式不对，用 1:23.450 或 83.45",
+    lyricsTimingRangeInvalid: "结束时间要晚于开始时间",
+    lyricsTimingOrderInvalid: "后一个词不能压到前一个词里",
+    lyricsTimingOrderCorrected: count => `已按顺序纠正 ${count} 个词`,
+    lyricsTimingWordMoved: word => `已移动 ${word}`,
+    lyricsTimingHoldLabel: "静止区",
+    lyricsTimingHoldHint: "Alt 拖动会保留空隙，空隙不读条。",
+    lyricsTimingHoldInserted: "已加静止区",
+    lyricsTimingHoldRemoved: "已删除静止区",
+    lyricsTimingHoldInsertedBetween: (previous, next) => `已在 ${previous} / ${next} 之间加静止区`,
+    lyricsTimingHoldRemovedBetween: (previous, next) => `已删除 ${previous} / ${next} 之间的静止区`,
+    lyricsTimingHoldTooShort: "这里空间太短，换个位置",
+    lyricsNotFound: name => `没找到歌词：${name}`,
+    lyricsSearchFailed: message => `歌词查找失败：${message}`,
     previousTrack: "上一首",
     playTrack: "播放",
     pauseTrack: "暂停",
@@ -346,6 +524,7 @@ const i18n = {
     playbackModeSequential: "顺序",
     playbackModeRepeatAll: "循环",
     playbackModeRepeatOne: "单曲",
+    playbackModePlayOnce: "一次",
     playbackModeTitle: label => `播放模式：${label}`,
     volumeLabel: "音量",
     musicListTitle: "本地音乐",
@@ -391,6 +570,7 @@ const i18n = {
     deleteTrackLabel: name => `删除 ${name}`,
     trackMeta: (type, size) => `${type.toUpperCase()} · ${size}`,
     musicAdded: count => `已加入 ${count} 首音乐。`,
+    musicLyricsAdded: count => `已加入 ${count} 个歌词文件。`,
     musicDeleted: name => `已删除：${name}`,
     musicLoadFailed: message => `读取音乐失败：${message}`,
     musicUploadFailed: message => `加入音乐失败：${message}`,
@@ -545,6 +725,19 @@ const i18n = {
     githubDownloadsFound: url => `下载页：${url}`,
     githubDownloadsNotConfigured: "还没有连接 GitHub 仓库。给 Codex World 添加 origin 以后，这里会自动定位到 Releases。",
     githubDownloadsOpenFailed: message => `打开 GitHub 下载页失败：${message}`,
+    consoleUpdateChecking: "正在检查",
+    consoleUpdateLatest: "已是最新版",
+    consoleUpdateAvailable: version => `可更新到 v${version}`,
+    consoleUpdateNoRelease: "尚未找到发布版",
+    consoleUpdateAuto: "自动",
+    consoleUpdateRefresh: "检查更新",
+    consoleUpdateInstall: "更新",
+    consoleUpdateDownload: "下载",
+    consoleUpdateRelease: "Release",
+    consoleUpdateInstalling: "正在下载并校验",
+    consoleUpdateRestarting: "即将重启",
+    consoleUpdateConfirm: version => `更新到 v${version} 后 Codex Console 会自动重启。现在更新？`,
+    consoleUpdateFailed: message => `更新失败：${message}`,
     todoGroupPieces: "Pieces / 部件",
     todoGroupTextures: "Blend -> Unity 贴图",
     todoGroupStory: "Story / 故事",
@@ -622,7 +815,97 @@ const i18n = {
     managerLayoutSlotTwo: "Archive bin",
     managerLayoutSlotThree: "Desktop snapshot",
     managerLayoutHint: "Drag tabs to reorder. Drop a tab on Archive to store it without deleting it.",
+    tutorialModeToggle: "Tutorial Mode",
+    tutorialModeOn: "Tutorial mode is on: showing guidance and helper actions",
+    tutorialModeOff: "Tutorial mode is off: showing only key actions",
     blenderSectionLabel: "Blender",
+    blenderBuilderTab: "Builder",
+    blenderHelperTab: "Helper",
+    blenderHelperTitle: "Blender Hub",
+    blenderHelperBadge: "Map",
+    blenderHubReady: "Ready",
+    blenderHubNext: "Next",
+    blenderHubBuilderTitle: "Builder Workbench",
+    blenderHubBuilderBody: "Textures, prompts, selected object",
+    blenderHubBuildingTitle: "Building Projects",
+    blenderHubBuildingBody: "Blocks, modules, placement rules",
+    blenderHubCharacterTitle: "Character Lab",
+    blenderHubCharacterBody: "Characters, outfits, material checks",
+    blenderHubAnimationTitle: "Animation",
+    blenderHubAnimationBody: "Actions, timeline, export rhythm",
+    blenderHubTextureTitle: "Texture Lab",
+    blenderHubTextureBody: "PBR, size checks, replacement packs",
+    blenderHubBridgeTitle: "Unity Bridge",
+    blenderHubBridgeBody: "Export, temp folder, import checks",
+    blenderGithubHubTitle: "GitHub Coop",
+    blenderGithubHubBody: "Blender project access",
+    blenderGithubTitle: "GitHub Coop",
+    blenderGithubBlendFilesLabel: "Blend files",
+    blenderGithubLinksLabel: "Project links",
+    blenderGithubDesktop: "GitHub Desktop",
+    blenderGithubFolder: "Files",
+    blenderGithubOpenShort: "GitHub",
+    blenderGithubNoBlendFiles: "No .blend files found",
+    blenderGithubCardTitle: file => `Select ${file}`,
+    blenderGithubLoading: "Loading",
+    blenderGithubReady: "Ready",
+    blenderGithubProjectLabel: "Blender Project",
+    blenderGithubRefreshTitle: "Refresh Git status",
+    blenderGithubBlendFileLabel: "Blend File",
+    blenderGithubBranchLabel: "Branch",
+    blenderGithubRemoteLabel: "Remote",
+    blenderGithubLastVersionLabel: "Last Version",
+    blenderGithubRepositoryLabel: "GitHub Repository",
+    blenderGithubRepositoryPlaceholder: "https://github.com/owner/repository.git",
+    blenderGithubVisibilityLabel: "Visibility",
+    blenderGithubPrivate: "Private",
+    blenderGithubPublic: "Public",
+    blenderGithubVersionLabel: "Version",
+    blenderGithubMessageLabel: "Version Note",
+    blenderGithubMessagePlaceholder: "What changed in this version",
+    blenderGithubScopeLabel: "Share Range",
+    blenderGithubScopeCurrent: "Current .blend",
+    blenderGithubScopeProject: "Project Folder",
+    blenderGithubScopeCustom: "Custom",
+    blenderGithubIncludeLabel: "Include Patterns",
+    blenderGithubExcludeLabel: "Exclude Patterns",
+    blenderGithubChangesLabel: "Git Changes",
+    blenderGithubInitialize: "Initialize Repository",
+    blenderGithubCommit: "Commit Version",
+    blenderGithubPush: "Push",
+    blenderGithubOpen: "Open GitHub",
+    blenderGithubStateUninitialized: "Not Initialized",
+    blenderGithubStateInitialized: "Initialized",
+    blenderGithubStateDirty: "Uncommitted Changes",
+    blenderGithubStateCommitted: "Committed",
+    blenderGithubStatePendingPush: "Pending Push",
+    blenderGithubStateBehind: "Remote Updated",
+    blenderGithubStateSynced: "Synced",
+    blenderGithubStateGitUnavailable: "Git Unavailable",
+    blenderGithubToolsReady: "Git · LFS ready",
+    blenderGithubLfsMissing: "Git LFS is required",
+    blenderGithubGhReady: "GitHub CLI signed in",
+    blenderGithubGhFallback: "GitHub CLI is unavailable or signed out; paste an empty repository URL",
+    blenderGithubWorkingTreeClean: "Working tree clean",
+    blenderGithubMoreChanges: count => `${count} more change${count === 1 ? "" : "s"}`,
+    blenderGithubLastCommit: (hash, subject) => `${hash} · ${subject}`,
+    blenderGithubNoCommit: "No commits yet",
+    blenderGithubSaving: "Saving project settings",
+    blenderGithubSaved: "Project settings saved",
+    blenderGithubInitializedReady: "Repository and Git LFS are ready",
+    blenderGithubInitializedNoRemote: "Local repository is ready; add an empty GitHub repository URL before pushing",
+    blenderGithubCommitComplete: version => `Version ${version} committed`,
+    blenderGithubPushComplete: "Pushed to GitHub",
+    blenderGithubOpenComplete: "GitHub repository opened",
+    blenderGithubInitializing: "Initializing Git and Git LFS",
+    blenderGithubCommitting: "Committing version",
+    blenderGithubPushing: "Pushing to GitHub",
+    blenderGithubOpening: "Opening GitHub repository",
+    blenderGithubFailed: message => `Action failed: ${message}`,
+    blenderGithubPublicConfirm: "A Public repository can be accessed by anyone. Switch to Public?",
+    blenderGithubCreateConfirm: name => `No repository URL is set. Create ${name} with GitHub CLI?`,
+    blenderGithubReplaceRemoteConfirm: "Origin points to another repository. Replace it?",
+    blenderGithubSelectProject: "Select Blender project",
     unitySectionLabel: "Unity",
     unityControlTitle: "Unity Control",
     unityControlBody: "RandomRealm2 project entry points, promo assets, and Unity-side pre-release checks.",
@@ -632,19 +915,21 @@ const i18n = {
     unityBridgeBody: "Blender exports into Unity temp; the RandomRealm importer consumes that temp output and categorizes it into Builder assets, prefabs, and inventory.",
     steamworkTitle: "Steamwork",
     steamworkReady: "Ready",
-    steamworkBody: "Manage Steamworks, SteamPipeGUI, ContentBuilder/content, and promo/update assets.",
+    steamworkBody: "Manage Steamworks, SteamPipe GUI, ContentBuilder/content, and promo/update assets.",
     steamworkDashboard: "Steamworks",
     steamworkPublishRoot: "ContentBuilder",
     steamworkGameContent: "Content",
-    steamworkPublishTool: "SteamPipeGUI",
+    steamworkPublishTool: "SteamPipe GUI",
     steamworkArtAssets: "Assets",
     steamworkGameContentLabel: "Content",
     steamworkGameContentTitle: "Import game content",
     steamworkGameContentReady: "Drop game build files into ContentBuilder/content.",
-    steamworkPublishToolLabel: "SteamPipeGUI",
-    steamworkPublishToolTitle: "Import SteamPipeGUI tools",
-    steamworkPublishToolReady: "Drop SteamPipeGUI-related files here.",
+    steamworkPublishToolLabel: "SteamPipe GUI",
+    steamworkPublishToolTitle: "Import SteamPipe GUI tools",
+    steamworkPublishToolReady: "Drop SteamPipeGUI.exe or related files here.",
     steamworkTipsLabel: "Publish Tips",
+    steamworkStepsSection: "Steps",
+    steamworkAppInfoSection: "App Info",
     steamworkStepColumn: "Step",
     steamworkActionColumn: "Action",
     steamworkNoteColumn: "Note",
@@ -656,13 +941,18 @@ const i18n = {
     steamworkStepPublish: "4. Publish",
     steamworkTipBuild: "Build the game first from Unity / PC.",
     steamworkBuildNote: "PC only.",
-    steamworkTipConfig: "SteamPipeGUI fields: App ID 3983670, Depot ID 3983671, Build Description can use 1.5.31.",
+    steamworkTipConfig: "SteamPipe GUI fields: App ID 3983670, Depot ID 3983671, Build Description can use 1.5.31.",
     steamworkTipPaths: "Paths: Build Path = D:\\Steamwork\\Steamwork\\sdk\\tools\\ContentBuilder\\content, ContentBuilder Path = D:\\Steamwork\\Steamwork\\sdk\\tools\\ContentBuilder.",
     steamworkTipLogin: "Steam Login = pixel_roblez. Do not store the password in Console.",
     steamworkTipContent: "Put the build output into ContentBuilder/content.",
-    steamworkTipPipe: "Open SteamPipe Build Uploader, fill the fields, then upload.",
+    steamworkTipOpenPrefix: "Use ",
+    steamworkTipPipe: "to fill fields and upload.",
+    steamworkPublishToolLocate: "Locate .exe",
+    steamworkPublishToolChoose: "Choose SteamPipeGUI.exe",
+    steamworkPublishToolMissing: "SteamPipeGUI.exe was not found; locate / import that exe first.",
     steamworkUploadNote: "PC + Mobile confirmation.",
-    steamworkTipRenewDepot: "In Steamworks web, renew/update the depot and set the generated build live.",
+    steamworkBuildsLink: "Steamworks Builds",
+    steamworkTipRenewDepot: "to set the uploaded build live.",
     steamworkRenewDepotNote: "PC + Mobile confirmation.",
     steamworkTipPublish: "Confirm and publish changes; Steam Guard / phone confirmation may be required.",
     steamworkPublishNote: "Pc only",
@@ -776,7 +1066,7 @@ const i18n = {
     count: count => `${count} images`,
     noCandidates: "No candidates",
     addHint: "Supports jpg / png / bmp / webp.",
-    cardTitle: name => `${name}\nDouble-click to apply, right-click for delete`,
+    cardTitle: name => `${name}\nClick to select, double-click to apply`,
     deleteButtonLabel: name => `Delete ${name}`,
     deletePrompt: "Delete?",
     confirmDeleteAction: "Delete",
@@ -791,6 +1081,70 @@ const i18n = {
     musicTitle: "Music Player",
     nowPlayingLabel: "Now playing",
     musicEmptyBody: "Add mp3, wav, m4a, flac, ogg, or opus.",
+    lyricsSectionLabel: "Lyrics",
+    lyricsTitle: "Lyrics",
+    lyricsHide: "Collapse",
+    lyricsShow: "Show lyrics",
+    lyricsEmpty: "No lyrics file for this track.",
+    lyricsLoading: "Loading lyrics.",
+    lyricsInstrumental: "No displayable lyrics.",
+    lyricsUnsynced: "Lyrics have no timeline; showing full text.",
+    lyricsLoadFailed: message => `Lyrics failed: ${message}`,
+    lyricsButtonLabel: name => `Lyrics: ${name}`,
+    lyricsFindLabel: name => `Find lyrics: ${name}`,
+    lyricsSeekLabel: line => `Jump to lyric: ${line}`,
+    lyricsMarkArmed: "Selected; enter start/end timing",
+    lyricsMarkSaved: time => `Marked ${time}`,
+    lyricsEndMarkSaved: time => `End pinned at ${time}`,
+    lyricsStartMarkSaved: time => `Start pinned at ${time}`,
+    lyricsMarkCancelled: "Undid this session mark",
+    lyricsMarkFailed: message => `Mark failed: ${message}`,
+    lyricsTimingPick: "Triple right-click the same lyric line to open timing editor (WIP).",
+    lyricsTimingClose: "Close timing editor",
+    lyricsTimingStartLabel: "Starts turning white",
+    lyricsTimingEndLabel: "Fully white by",
+    lyricsTimingTimePlaceholder: "m:ss.mmm",
+    lyricsTimingUseNowStart: "Use now as start",
+    lyricsTimingUseNowEnd: "Use now as end",
+    lyricsTimingSave: "Save",
+    lyricsTimingClear: "Undo this change",
+    lyricsTimingTarget: (word, line) => `Editing: ${word || "this slot"} · line ${line}`,
+    lyricsTimingLineTitle: (line, count) => `Line ${line} · ${count} words/chars`,
+    lyricsTimingPreviewLabel: "Line preview",
+    lyricsTimingRowsLabel: "Word timing",
+    lyricsTimingTokenHeader: "Word",
+    lyricsTimingStartHeader: "Start",
+    lyricsTimingEndHeader: "End",
+    lyricsTimingDurationHeader: "Duration",
+    lyricsTimingDetailTitle: word => `Fine tune: ${word || "this slot"}`,
+    lyricsTimingRangeTitle: (start, end) => start === end ? `Fine tune: ${start}` : `Fine tune: ${start} to ${end}`,
+    lyricsTimingWaveLabel: "Waveform",
+    lyricsTimingSelectLine: "Select line",
+    lyricsTimingRangeDuration: duration => `Range ${duration}`,
+    lyricsTimingSaveSelected: "Save selected",
+    lyricsTimingSaveLine: "Save line",
+    lyricsTimingClearLine: "Undo line",
+    lyricsTimingSaved: (start, end) => `Staged: ${start} to ${end}`,
+    lyricsTimingRangeSaved: count => `Staged ${count} selected word${count === 1 ? "" : "s"}`,
+    lyricsTimingLineSaved: count => `Staged ${count} word${count === 1 ? "" : "s"}`,
+    lyricsTimingCleared: "Undid this word timing change",
+    lyricsTimingLineCleared: "Undid this line timing change",
+    lyricsTimingLineEmpty: "No complete timings in this line yet",
+    lyricsTimingIncomplete: "Start and end are both required",
+    lyricsTimingInvalid: "Use 1:23.450 or 83.45",
+    lyricsTimingRangeInvalid: "End time must be after start time",
+    lyricsTimingOrderInvalid: "A later word cannot overlap the previous word",
+    lyricsTimingOrderCorrected: count => `Corrected ${count} word${count === 1 ? "" : "s"} into order`,
+    lyricsTimingWordMoved: word => `Moved ${word}`,
+    lyricsTimingHoldLabel: "Hold",
+    lyricsTimingHoldHint: "Alt-drag keeps empty gaps; gaps do not advance the lyric.",
+    lyricsTimingHoldInserted: "Added hold",
+    lyricsTimingHoldRemoved: "Removed hold",
+    lyricsTimingHoldInsertedBetween: (previous, next) => `Added hold between ${previous} / ${next}`,
+    lyricsTimingHoldRemovedBetween: (previous, next) => `Removed hold between ${previous} / ${next}`,
+    lyricsTimingHoldTooShort: "Not enough room here",
+    lyricsNotFound: name => `No lyrics found: ${name}`,
+    lyricsSearchFailed: message => `Lyrics search failed: ${message}`,
     previousTrack: "Previous track",
     playTrack: "Play",
     pauseTrack: "Pause",
@@ -798,6 +1152,7 @@ const i18n = {
     playbackModeSequential: "Order",
     playbackModeRepeatAll: "Loop",
     playbackModeRepeatOne: "Single",
+    playbackModePlayOnce: "Once",
     playbackModeTitle: label => `Playback mode: ${label}`,
     volumeLabel: "Volume",
     musicListTitle: "Local Music",
@@ -843,6 +1198,7 @@ const i18n = {
     deleteTrackLabel: name => `Delete ${name}`,
     trackMeta: (type, size) => `${type.toUpperCase()} · ${size}`,
     musicAdded: count => `Added ${count} track${count === 1 ? "" : "s"}.`,
+    musicLyricsAdded: count => `Added ${count} lyric file${count === 1 ? "" : "s"}.`,
     musicDeleted: name => `Deleted: ${name}`,
     musicLoadFailed: message => `Could not read music: ${message}`,
     musicUploadFailed: message => `Add music failed: ${message}`,
@@ -997,6 +1353,19 @@ const i18n = {
     githubDownloadsFound: url => `Downloads: ${url}`,
     githubDownloadsNotConfigured: "No GitHub repository is linked yet. Add an origin remote to Codex World and this shortcut will target Releases automatically.",
     githubDownloadsOpenFailed: message => `Could not open GitHub downloads: ${message}`,
+    consoleUpdateChecking: "Checking",
+    consoleUpdateLatest: "Up to date",
+    consoleUpdateAvailable: version => `v${version} available`,
+    consoleUpdateNoRelease: "No release found",
+    consoleUpdateAuto: "Auto",
+    consoleUpdateRefresh: "Check for updates",
+    consoleUpdateInstall: "Update",
+    consoleUpdateDownload: "Download",
+    consoleUpdateRelease: "Release",
+    consoleUpdateInstalling: "Downloading and verifying",
+    consoleUpdateRestarting: "Restarting",
+    consoleUpdateConfirm: version => `Codex Console will restart after updating to v${version}. Update now?`,
+    consoleUpdateFailed: message => `Update failed: ${message}`,
     todoGroupPieces: "Pieces",
     todoGroupTextures: "Blend -> Unity Textures",
     todoGroupStory: "Story",
@@ -1100,6 +1469,7 @@ const els = {
   managerVisibleTabs: document.getElementById("managerVisibleTabs"),
   managerArchivedTabs: document.getElementById("managerArchivedTabs"),
   managerLayoutOrder: document.getElementById("managerLayoutOrder"),
+  tutorialModeToggle: document.getElementById("tutorialModeToggle"),
   localTime: document.getElementById("localTime"),
   languageToggle: document.getElementById("languageToggle"),
   themeToggle: document.getElementById("themeToggle"),
@@ -1141,6 +1511,19 @@ const els = {
   musicLibraryCount: document.getElementById("musicLibraryCount"),
   musicDock: document.getElementById("musicDock"),
   musicCount: document.getElementById("musicCount"),
+  nowPlayingArt: document.getElementById("nowPlayingArt"),
+  nowPlayingLyricsPanel: document.getElementById("nowPlayingLyricsPanel"),
+  nowPlayingLyricsList: document.getElementById("nowPlayingLyricsList"),
+  nowPlayingLyricsStatus: document.getElementById("nowPlayingLyricsStatus"),
+  lyricsTimingEditor: document.getElementById("lyricsTimingEditor"),
+  lyricsTimingTarget: document.getElementById("lyricsTimingTarget"),
+  lyricsTimingStartInput: document.getElementById("lyricsTimingStartInput"),
+  lyricsTimingEndInput: document.getElementById("lyricsTimingEndInput"),
+  lyricsTimingUseNowStart: document.getElementById("lyricsTimingUseNowStart"),
+  lyricsTimingUseNowEnd: document.getElementById("lyricsTimingUseNowEnd"),
+  lyricsTimingSave: document.getElementById("lyricsTimingSave"),
+  lyricsTimingClear: document.getElementById("lyricsTimingClear"),
+  lyricsTimingClose: document.getElementById("lyricsTimingClose"),
   openDownloads: document.getElementById("openDownloads"),
   refreshMaterialCandidates: document.getElementById("refreshMaterialCandidates"),
   importMaterial: document.getElementById("importMaterial"),
@@ -1157,6 +1540,14 @@ const els = {
   openGithubDownloads: document.getElementById("openGithubDownloads"),
   githubDownloadsLink: document.getElementById("githubDownloadsLink"),
   githubDownloadsMeta: document.getElementById("githubDownloadsMeta"),
+  consoleUpdateCurrent: document.getElementById("consoleUpdateCurrent"),
+  consoleUpdateStatus: document.getElementById("consoleUpdateStatus"),
+  consoleUpdateRelease: document.getElementById("consoleUpdateRelease"),
+  consoleUpdateAuto: document.getElementById("consoleUpdateAuto"),
+  consoleUpdateRefresh: document.getElementById("consoleUpdateRefresh"),
+  consoleUpdateInstall: document.getElementById("consoleUpdateInstall"),
+  consoleUpdateError: document.getElementById("consoleUpdateError"),
+  consoleUpdateTop: document.getElementById("consoleUpdateTop"),
   workspaceTodoCategory: document.getElementById("workspaceTodoCategory"),
   workspaceTodoInput: document.getElementById("workspaceTodoInput"),
   addWorkspaceTodo: document.getElementById("addWorkspaceTodo"),
@@ -1173,6 +1564,9 @@ const els = {
   openSteamworkPublishFolder: document.getElementById("openSteamworkPublishFolder"),
   openSteamworkGameContent: document.getElementById("openSteamworkGameContent"),
   openSteamworkPublishTool: document.getElementById("openSteamworkPublishTool"),
+  openSteamworkPublishToolTip: document.getElementById("openSteamworkPublishToolTip"),
+  openSteamworkBuildsTip: document.getElementById("openSteamworkBuildsTip"),
+  locateSteamworkPublishTool: document.getElementById("locateSteamworkPublishTool"),
   openSteamworkArtAsset: document.getElementById("openSteamworkArtAsset"),
   steamworkGameContentDropzone: document.getElementById("steamworkGameContentDropzone"),
   steamworkPublishToolDropzone: document.getElementById("steamworkPublishToolDropzone"),
@@ -1188,6 +1582,33 @@ const els = {
   unityBridgeStatus: document.getElementById("unityBridgeStatus"),
   openUnityProjectFolder: document.getElementById("openUnityProjectFolder"),
   openUnityPromoFolder: document.getElementById("openUnityPromoFolder"),
+  blenderGithubSharePanel: document.getElementById("blenderGithubSharePanel"),
+  blenderGithubState: document.getElementById("blenderGithubState"),
+  blenderGithubProject: document.getElementById("blenderGithubProject"),
+  blenderGithubBlendCards: document.getElementById("blenderGithubBlendCards"),
+  blenderGithubProjectPath: document.getElementById("blenderGithubProjectPath"),
+  blenderGithubRefresh: document.getElementById("blenderGithubRefresh"),
+  blenderGithubBlendFile: document.getElementById("blenderGithubBlendFile"),
+  blenderGithubBranch: document.getElementById("blenderGithubBranch"),
+  blenderGithubRemote: document.getElementById("blenderGithubRemote"),
+  blenderGithubLastVersion: document.getElementById("blenderGithubLastVersion"),
+  blenderGithubRepository: document.getElementById("blenderGithubRepository"),
+  blenderGithubToolStatus: document.getElementById("blenderGithubToolStatus"),
+  blenderGithubVersion: document.getElementById("blenderGithubVersion"),
+  blenderGithubMessage: document.getElementById("blenderGithubMessage"),
+  blenderGithubCommitMeta: document.getElementById("blenderGithubCommitMeta"),
+  blenderGithubCustomScope: document.getElementById("blenderGithubCustomScope"),
+  blenderGithubIncludes: document.getElementById("blenderGithubIncludes"),
+  blenderGithubExcludes: document.getElementById("blenderGithubExcludes"),
+  blenderGithubChangesCount: document.getElementById("blenderGithubChangesCount"),
+  blenderGithubChanges: document.getElementById("blenderGithubChanges"),
+  blenderGithubInitialize: document.getElementById("blenderGithubInitialize"),
+  blenderGithubCommit: document.getElementById("blenderGithubCommit"),
+  blenderGithubPush: document.getElementById("blenderGithubPush"),
+  blenderGithubOpen: document.getElementById("blenderGithubOpen"),
+  blenderGithubDesktop: document.getElementById("blenderGithubDesktop"),
+  blenderGithubFolder: document.getElementById("blenderGithubFolder"),
+  blenderGithubStatus: document.getElementById("blenderGithubStatus"),
   randomRealmBlenderProject: document.getElementById("randomRealmBlenderProject"),
   randomRealmProjectPath: document.getElementById("randomRealmProjectPath"),
   randomRealmProjectSearch: document.getElementById("randomRealmProjectSearch"),
@@ -1244,6 +1665,9 @@ let theme = normalizeTheme(localStorage.getItem(storageKeys.theme));
 let pendingDeletePath = "";
 let draggedWallpaperPath = "";
 let suppressWallpaperClickUntil = 0;
+let lastWallpaperClickPath = "";
+let lastWallpaperClickAt = 0;
+const wallpaperDoubleClickMs = 520;
 let pendingDeleteTrackPath = "";
 let userSeeking = false;
 let pendingSeekRatio = null;
@@ -1259,6 +1683,46 @@ let musicLibraryNotice = "";
 let musicCookieState = { available: false };
 let musicLibraries = [];
 let libraryTracks = [];
+let musicLyricsTrackPath = "";
+let musicLyricsLines = [];
+let musicLyricsStatus = "";
+let musicLyricsActiveIndex = -1;
+let musicLyricsSynced = false;
+let musicLyricsAnalysis = null;
+let musicLyricsLoadToken = 0;
+let musicLyricsLookupPath = "";
+let musicLyricsPreloadTimer = 0;
+let musicLyricsPlaybackPreloadKey = "";
+const musicLyricsCache = new Map();
+const musicLyricsTextPromises = new Map();
+const musicLyricsAnalysisPromises = new Map();
+let musicLyricsAnimationFrame = 0;
+let musicLyricsPanelHeight = Number(localStorage.getItem(storageKeys.lyricsHeight)) || 0;
+let musicLyricsPanelResizing = false;
+let musicLyricsResizeStartY = 0;
+let musicLyricsResizeStartHeight = 0;
+let musicLyricsResizePointerId = null;
+let suppressLyricsLineClickUntil = 0;
+let heldLyricsActiveIndex = -1;
+let heldLyricsActiveUntil = 0;
+let lyricsTimingContextLineIndex = -1;
+let lyricsTimingContextClickCount = 0;
+let lyricsTimingContextLastAt = 0;
+let activeLyricsTimingTarget = null;
+let activeLyricsTimingRangeStart = 0;
+let activeLyricsTimingRangeEnd = 0;
+let activeLyricsTimingRangeMode = "word";
+let lyricsTimingWaveDrag = null;
+let suppressLyricsTimingClickUntil = 0;
+let suppressLyricsTimingContextMenuUntil = 0;
+let lyricsTimingAutoSaveTimer = null;
+const lyricsTimingMinBoundaryGap = 0.03;
+const lyricsTimingWaveMinEdgePadSeconds = 0.18;
+const lyricsTimingWaveMaxEdgePadSeconds = 0.7;
+const lyricsTimingWaveEdgePadRatio = 0.24;
+let pendingMusicLyricMarks = new Map();
+let sessionMusicLyricMarks = new Map();
+let musicLyricMarksFlushPromise = null;
 let promotedLibraryTracks = loadPromotedLibraryTracks();
 let musicLibraryPollTimer = null;
 let musicStatePersistTimer = null;
@@ -1282,7 +1746,19 @@ let selectedMaterialPath = "";
 let materialNotice = "";
 let renderTextureNotice = "";
 let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) === "true";
+let tutorialMode = localStorage.getItem(storageKeys.tutorialMode) === "true";
+let activeBlenderView = normalizeBlenderWorkspaceView(localStorage.getItem(storageKeys.blenderView));
+let blenderViewTransitionTimer = 0;
+let blenderViewTransitionFrame = 0;
+let blenderViewTransitionAnimations = [];
+let blenderGithubShareState = null;
+let blenderGithubBusy = false;
+let blenderGithubPublicConfirmed = false;
+let blenderGithubSaveRequested = false;
+let blenderGithubLoadSequence = 0;
 let githubDownloadsInfo = null;
+let consoleUpdateState = null;
+let consoleUpdateBusy = false;
 let pendingSteamworkAssetSlot = "";
 let steamworkThumbsEnabled = false;
 let workspaceTodoGroups = loadWorkspaceTodos();
@@ -1290,6 +1766,7 @@ let randomRealmArtContext = loadRandomRealmArtContext();
 let blenderPromptConfig = loadBlenderPromptConfig();
 let randomRealmBlenderProjects = [];
 let randomRealmBlenderObjects = [];
+let randomRealmLoadedObjectsProject = "";
 let randomRealmSelectedOldTexture = null;
 let randomRealmSelectedMaterial = "";
 let randomRealmNewTexture = null;
@@ -1312,6 +1789,10 @@ const consoleRedoStack = [];
 const consoleHistoryLimit = 80;
 const smoothValueAnimations = new Map();
 let consoleHistoryApplying = false;
+let clockTickTimer = 0;
+let runtimeActivityReady = false;
+const loadedModuleData = new Set();
+const loadingModuleData = new Map();
 const shouldRestoreLastModuleOnLoad = currentPageName() === "index.html" && lastModuleId();
 let activeModuleId = initialModuleId();
 const hasWallpaper = Boolean(els.wallpaperDock);
@@ -1433,6 +1914,10 @@ function currentPageName() {
   return window.location.pathname.split("/").pop() || "index.html";
 }
 
+function isModuleForeground(id) {
+  return !document.hidden && activeModuleId === id;
+}
+
 function moduleUrl(href) {
   const params = new URLSearchParams(window.location.search);
   if (consoleEdition === "lite") {
@@ -1505,7 +1990,9 @@ function initialModuleId() {
 
 function rememberActiveModule(id) {
   if (isModuleId(id)) {
-    localStorage.setItem(storageKeys.lastModule, id);
+    if (localStorage.getItem(storageKeys.lastModule) !== id) {
+      localStorage.setItem(storageKeys.lastModule, id);
+    }
     persistConsoleState(id);
   }
 }
@@ -1529,7 +2016,83 @@ function restoreInitialModuleUrl() {
   }
 }
 
+async function loadModuleData(id) {
+  switch (id) {
+    case "wallpaper":
+      if (hasWallpaper) await loadWallpapers();
+      break;
+    case "music":
+      if (hasMusic) await loadMusic();
+      break;
+    case "workspace":
+      if (hasWorkspace) await loadGithubDownloadsInfo();
+      if (els.consoleUpdateStatus) await loadConsoleUpdateStatus({ check: true, quiet: true });
+      if (hasMaterialWorkspace && downloadIntakeEnabled) await loadMaterialCandidates();
+      break;
+    case "blender":
+      if (hasRandomRealmArtTools()) {
+        await loadRandomRealmBlenderProjects({ limit: 40, loadObjects: activeBlenderView === "builder" });
+      }
+      if (hasBlenderGithubShare() && !blenderGithubShareState && !blenderGithubBusy) {
+        await loadBlenderGithubShare({ detect: true });
+      }
+      break;
+    case "unity":
+      await loadUnityBridgeStatus();
+      break;
+    case "steamwork":
+      if (hasSteamwork) await loadSteamworkAssets();
+      break;
+    default:
+      break;
+  }
+}
+
+function ensureModuleDataLoaded(id = activeModuleId) {
+  const moduleId = moduleById(id).id;
+  if (loadedModuleData.has(moduleId)) return Promise.resolve();
+  if (loadingModuleData.has(moduleId)) return loadingModuleData.get(moduleId);
+
+  const request = loadModuleData(moduleId)
+    .catch(() => {})
+    .finally(() => {
+      loadingModuleData.delete(moduleId);
+      loadedModuleData.add(moduleId);
+    });
+  loadingModuleData.set(moduleId, request);
+  return request;
+}
+
+function syncRuntimeActivity(options = {}) {
+  if (!runtimeActivityReady) return;
+
+  if (!document.hidden) {
+    ensureModuleDataLoaded(activeModuleId);
+  }
+
+  syncLyricsAnimationLoop();
+
+  if (isModuleForeground("music")) {
+    if (hasActiveMusicLibraryGrab() && !musicLibraryPollTimer) {
+      scheduleMusicLibraryPoll(options.resume || options.moduleChanged ? 250 : 4000);
+    }
+  } else {
+    stopMusicLibraryPoll();
+  }
+
+  if (isModuleForeground("blender")) {
+    startRandomRealmLiveSelectionPolling({ immediate: Boolean(options.resume || options.moduleChanged) });
+    if (randomRealmPackedPackagePaths().length && !randomRealmTextureApplyPollTimer && !randomRealmTextureApplyPollInFlight) {
+      scheduleRandomRealmTextureApplyPoll(options.resume || options.moduleChanged ? 250 : 2600);
+    }
+  } else {
+    stopRandomRealmLiveSelectionPolling();
+    stopRandomRealmTextureApplyPolling();
+  }
+}
+
 function activateModule(id, push = false, options = {}) {
+  const previousActiveModuleId = activeModuleId;
   const archived = new Set(allArchivedModuleIds());
   const deleted = new Set(deletedModuleIds());
   let next = moduleById(id);
@@ -1559,10 +2122,154 @@ function activateModule(id, push = false, options = {}) {
   }
 
   renderModuleNavs();
+  syncRuntimeActivity({ moduleChanged: previousActiveModuleId !== activeModuleId });
 }
 
 function applyModuleHistory(id) {
   activateModule(id, false, { allowArchived: true, replaceUrl: true });
+}
+
+function normalizeBlenderWorkspaceView(value) {
+  return value === "builder" ? "builder" : "helper";
+}
+
+function setBlenderWorkspaceView(value, options = {}) {
+  const previousView = activeBlenderView;
+  activeBlenderView = normalizeBlenderWorkspaceView(value);
+  if (options.persist !== false) {
+    localStorage.setItem(storageKeys.blenderView, activeBlenderView);
+  }
+  const buttons = Array.from(document.querySelectorAll("[data-blender-view-target]"));
+  const activeButtonIndex = Math.max(0, buttons.findIndex(button => button.dataset.blenderViewTarget === activeBlenderView));
+  document.querySelector(".blender-subnav")?.style.setProperty("--blender-subtab-index", String(activeButtonIndex));
+  for (const button of buttons) {
+    const active = button.dataset.blenderViewTarget === activeBlenderView;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+  }
+
+  if (runtimeActivityReady && isModuleForeground("blender")) {
+    if (activeBlenderView === "builder") {
+      const project = els.randomRealmBlenderProject?.value || "";
+      if (project && randomRealmLoadedObjectsProject !== project) {
+        loadRandomRealmBlenderObjects();
+      }
+    } else if (!blenderGithubShareState && !blenderGithubBusy) {
+      loadBlenderGithubShare({ detect: true });
+    }
+  }
+
+  const views = Array.from(document.querySelectorAll("[data-blender-view]"));
+  const nextView = views.find(view => view.dataset.blenderView === activeBlenderView);
+  const oldView = views.find(view => view.dataset.blenderView === previousView);
+  const stage = document.querySelector(".blender-view-stage");
+  const shouldAnimate = options.animate !== false
+    && previousView !== activeBlenderView
+    && stage
+    && nextView
+    && oldView
+    && !oldView.hidden
+    && !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+
+  window.clearTimeout(blenderViewTransitionTimer);
+  window.cancelAnimationFrame(blenderViewTransitionFrame);
+  blenderViewTransitionFrame = 0;
+  for (const animation of blenderViewTransitionAnimations) {
+    animation.cancel();
+  }
+  blenderViewTransitionAnimations = [];
+  for (const view of views) {
+    view.classList.remove("entering", "leaving");
+    view.style.transform = "";
+  }
+  stage?.classList.remove("switching", "to-helper", "to-builder");
+
+  if (!shouldAnimate) {
+    for (const view of views) {
+      const active = view.dataset.blenderView === activeBlenderView;
+      view.hidden = !active;
+      view.classList.toggle("active", active);
+    }
+    if (stage) stage.style.height = "";
+    return;
+  }
+
+  const stageStyle = getComputedStyle(stage);
+  const stageVerticalChrome = (parseFloat(stageStyle.paddingTop) || 0)
+    + (parseFloat(stageStyle.paddingBottom) || 0)
+    + (parseFloat(stageStyle.borderTopWidth) || 0)
+    + (parseFloat(stageStyle.borderBottomWidth) || 0);
+  const targetViewName = activeBlenderView;
+  const direction = activeBlenderView === "builder" ? 1 : -1;
+  const slideDistance = Math.ceil(stage.getBoundingClientRect().width + 8);
+  const nextStart = `translate3d(${direction * slideDistance}px, 0, 0)`;
+  const oldEnd = `translate3d(${-direction * slideDistance}px, 0, 0)`;
+  const neutral = "translate3d(0, 0, 0)";
+  nextView.hidden = false;
+  nextView.classList.add("entering");
+  nextView.classList.add("active");
+  oldView.classList.add("active");
+  oldView.classList.add("leaving");
+  const targetHeight = Math.max(nextView.getBoundingClientRect().height + stageVerticalChrome, 1);
+
+  stage.style.height = `${targetHeight}px`;
+  stage.classList.add("switching", activeBlenderView === "builder" ? "to-builder" : "to-helper");
+  nextView.style.transform = nextStart;
+  oldView.style.transform = neutral;
+  stage.getBoundingClientRect();
+
+  const cleanup = () => {
+    if (activeBlenderView !== targetViewName) return;
+    window.clearTimeout(blenderViewTransitionTimer);
+    window.cancelAnimationFrame(blenderViewTransitionFrame);
+    blenderViewTransitionFrame = 0;
+    blenderViewTransitionAnimations = [];
+    for (const view of views) {
+      const active = view.dataset.blenderView === activeBlenderView;
+      view.hidden = !active;
+      view.classList.toggle("active", active);
+      view.classList.remove("entering", "leaving");
+      view.style.transform = "";
+    }
+    stage.classList.remove("switching", "to-helper", "to-builder");
+    stage.style.height = "";
+  };
+
+  const cleanupAfterFinalPaint = () => {
+    if (activeBlenderView !== targetViewName) return;
+    window.cancelAnimationFrame(blenderViewTransitionFrame);
+    blenderViewTransitionFrame = window.requestAnimationFrame(() => {
+      blenderViewTransitionFrame = window.requestAnimationFrame(() => {
+        blenderViewTransitionFrame = 0;
+        cleanup();
+      });
+    });
+  };
+
+  if (typeof nextView.animate !== "function" || typeof oldView.animate !== "function") {
+    oldView.style.transform = oldEnd;
+    nextView.style.transform = neutral;
+    blenderViewTransitionTimer = window.setTimeout(cleanupAfterFinalPaint, 420);
+    return;
+  }
+
+  const timing = {
+    duration: 420,
+    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+    fill: "forwards"
+  };
+  const oldAnimation = oldView.animate([
+    { transform: neutral },
+    { transform: oldEnd }
+  ], timing);
+  const nextAnimation = nextView.animate([
+    { transform: nextStart },
+    { transform: neutral }
+  ], timing);
+  blenderViewTransitionAnimations = [oldAnimation, nextAnimation];
+  Promise.allSettled(blenderViewTransitionAnimations.map(animation => animation.finished)).then(cleanupAfterFinalPaint);
+  blenderViewTransitionTimer = window.setTimeout(cleanup, 560);
 }
 
 function recordModuleChange(beforeId, afterId) {
@@ -2154,6 +2861,16 @@ function createMusicDragDirectionTracker(startValue) {
   };
 }
 
+function dragInsertionProbeX(probeX, draggedRect = null, directionX = 0) {
+  if (draggedRect && directionX > 0 && Number.isFinite(draggedRect.right)) {
+    return draggedRect.right;
+  }
+  if (draggedRect && directionX < 0 && Number.isFinite(draggedRect.left)) {
+    return draggedRect.left;
+  }
+  return probeX;
+}
+
 function updateArchiveDragState(clientX, clientY) {
   if (!els.moduleArchive) return false;
 
@@ -2668,13 +3385,24 @@ function renderModuleNavs() {
 
   const order = visibleModuleOrder();
   const byId = new Map(modules.map(item => [item.id, item]));
+  const items = order.map(id => byId.get(id)).filter(Boolean);
 
   for (const nav of navs) {
-    nav.innerHTML = "";
-    for (const id of order) {
-      const item = byId.get(id);
-      if (!item) continue;
+    const currentLinks = Array.from(nav.querySelectorAll(":scope > .module-link"));
+    const canReuse = currentLinks.length === items.length
+      && currentLinks.every((link, index) => link.dataset.moduleId === items[index].id);
+    if (canReuse) {
+      currentLinks.forEach((link, index) => {
+        const item = items[index];
+        link.classList.toggle("active", item.id === activeModuleId);
+        link.href = item.href;
+        link.textContent = text(item.labelKey);
+      });
+      continue;
+    }
 
+    nav.innerHTML = "";
+    for (const item of items) {
       const link = document.createElement("a");
       link.className = `module-link ${item.id === activeModuleId ? "active" : ""}`;
       link.href = item.href;
@@ -2860,6 +3588,29 @@ function setTheme(nextMode, options = {}) {
   }
 }
 
+function applyTutorialMode(options = {}) {
+  tutorialMode = Boolean(tutorialMode);
+  document.documentElement.classList.toggle("tutorial-mode", tutorialMode);
+  if (document.body) {
+    document.body.classList.toggle("tutorial-mode", tutorialMode);
+  }
+  if (els.tutorialModeToggle) {
+    els.tutorialModeToggle.classList.toggle("active", tutorialMode);
+    els.tutorialModeToggle.setAttribute("aria-pressed", String(tutorialMode));
+    const label = text(tutorialMode ? "tutorialModeOn" : "tutorialModeOff");
+    els.tutorialModeToggle.title = label;
+    els.tutorialModeToggle.setAttribute("aria-label", label);
+  }
+  if (options.persist) {
+    localStorage.setItem(storageKeys.tutorialMode, tutorialMode ? "true" : "false");
+  }
+}
+
+function toggleTutorialMode() {
+  tutorialMode = !tutorialMode;
+  applyTutorialMode({ persist: true });
+}
+
 function applyConsoleEdition(nextEdition, options = {}) {
   const previousEdition = consoleEdition;
   consoleEdition = normalizeEdition(nextEdition);
@@ -2921,6 +3672,7 @@ function applyLanguage() {
     els.languageToggle.textContent = language === "zh" ? "EN" : "中文";
   }
   applyTheme();
+  applyTutorialMode();
   activateModule(activeModuleId, false);
   if (hasWallpaper) renderWallpapers();
   if (hasMusic) {
@@ -2934,11 +3686,15 @@ function applyLanguage() {
   }
   if (hasWorkspace) {
     renderGithubDownloads();
+    renderConsoleUpdate();
     renderWorkspaceTodos();
   }
   if (hasRandomRealmArtTools()) {
     renderRandomRealmUsedTextures();
     setRandomRealmArtStatus(randomRealmArtNotice);
+  }
+  if (blenderGithubShareState) {
+    renderBlenderGithubShare(blenderGithubShareState, { preserveForm: true });
   }
   tick();
 }
@@ -3130,47 +3886,220 @@ function cancelDeleteWallpaper() {
   renderWallpapers();
 }
 
-function wallpaperDropBeforePath(clientX, clientY) {
-  const cards = Array.from(els.wallpaperDock?.querySelectorAll(".wallpaper-card:not(.dragging):not(.wallpaper-placeholder)") || []);
-  if (!cards.length) return "";
+function wallpaperAnimationNow() {
+  return window.performance?.now?.() || Date.now();
+}
 
+function wallpaperGridColumnCount(grid) {
+  const columns = window.getComputedStyle(grid).gridTemplateColumns
+    .split(" ")
+    .filter(Boolean);
+  return Math.max(1, columns.length || 1);
+}
+
+function wallpaperGridColumnWidths(grid) {
+  const computed = window.getComputedStyle(grid);
+  const widths = computed.gridTemplateColumns
+    .split(" ")
+    .map(value => Number.parseFloat(value))
+    .filter(Number.isFinite);
+  if (widths.length) return widths;
+  const fallbackWidth = grid.getBoundingClientRect().width || 1;
+  return [fallbackWidth];
+}
+
+function wallpaperGridGapSize(grid, property) {
+  const value = Number.parseFloat(window.getComputedStyle(grid)[property]);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function wallpaperRectSnapshot(rect) {
+  return {
+    left: rect.left,
+    right: rect.right,
+    top: rect.top,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height
+  };
+}
+
+function wallpaperDragProbePoint(clientX, clientY, draggedRect = null) {
+  const fallbackX = draggedRect
+    ? draggedRect.left + draggedRect.width / 2
+    : clientX;
+  const fallbackY = draggedRect
+    ? draggedRect.top + draggedRect.height / 2
+    : clientY;
+  const rawX = Number.isFinite(clientX) ? clientX : fallbackX;
+  const rawY = Number.isFinite(clientY) ? clientY : fallbackY;
+  return {
+    x: Number.isFinite(rawX) ? rawX : fallbackX,
+    y: Number.isFinite(rawY) ? rawY : fallbackY
+  };
+}
+
+function wallpaperCardsInGrid(grid) {
+  return Array.from(grid?.querySelectorAll?.(".wallpaper-card:not(.dragging):not(.wallpaper-placeholder)") || [])
+    .filter(card => card.dataset.wallpaperPath);
+}
+
+function wallpaperLayoutItemsFromCards(cards) {
+  return cards.map(card => ({
+    card,
+    path: card.dataset.wallpaperPath || "",
+    rect: wallpaperRectSnapshot(card.getBoundingClientRect())
+  })).filter(item => item.path);
+}
+
+function wallpaperLayoutItemsFromGridSlots(grid, placeholder) {
+  return Array.from(grid?.querySelectorAll?.(".wallpaper-card:not(.dragging)") || [])
+    .map(card => {
+      const isPlaceholder = card === placeholder || card.classList.contains("wallpaper-placeholder");
+      const path = isPlaceholder ? wallpaperPlaceholderLayoutPath : card.dataset.wallpaperPath || "";
+      if (!path) return null;
+      return {
+        card: isPlaceholder ? null : card,
+        isPlaceholder,
+        path,
+        rect: wallpaperRectSnapshot(card.getBoundingClientRect())
+      };
+    })
+    .filter(Boolean);
+}
+
+function wallpaperRowsFromLayoutItems(items) {
   const rows = [];
-  for (const card of cards) {
-    const rect = card.getBoundingClientRect();
-    let row = rows.find(item => Math.abs(item.top - rect.top) < 12);
+  for (const item of items) {
+    let row = rows.find(rowItem => Math.abs(rowItem.top - item.rect.top) < 12);
     if (!row) {
-      row = { top: rect.top, bottom: rect.bottom, cards: [] };
+      row = { top: item.rect.top, bottom: item.rect.bottom, cards: [] };
       rows.push(row);
     }
-    row.top = Math.min(row.top, rect.top);
-    row.bottom = Math.max(row.bottom, rect.bottom);
-    row.cards.push({ card, rect });
+    row.top = Math.min(row.top, item.rect.top);
+    row.bottom = Math.max(row.bottom, item.rect.bottom);
+    row.cards.push(item);
   }
-
   rows.sort((a, b) => a.top - b.top);
-  const pathWithinRow = row => {
+  for (const row of rows) {
     row.cards.sort((a, b) => a.rect.left - b.rect.left);
-    for (const { card, rect } of row.cards) {
-      if (clientX < rect.left + rect.width / 2) {
-        return card.dataset.wallpaperPath || "";
-      }
-    }
-    return "";
-  };
+  }
+  return rows;
+}
 
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex];
-    const nextRow = rows[rowIndex + 1];
-    const rowMid = row.top + (row.bottom - row.top) / 2;
-    if (clientY < rowMid || clientY <= row.bottom + 10) {
-      return pathWithinRow(row);
-    }
-    if (nextRow && clientY < nextRow.top) {
+function wallpaperVirtualLayoutItems(items, gridRect, columnWidths, columnGap, rowGap, rowHeight) {
+  const columnCount = Math.max(1, columnWidths.length || 1);
+  const columnLefts = [];
+  let columnLeft = gridRect.left;
+  for (let index = 0; index < columnCount; index += 1) {
+    columnLefts.push(columnLeft);
+    columnLeft += (columnWidths[index] || gridRect.width || 1) + columnGap;
+  }
+
+  return items.map((item, index) => {
+    const columnIndex = index % columnCount;
+    const rowIndex = Math.floor(index / columnCount);
+    const width = columnWidths[columnIndex] || item.rect.width || gridRect.width || 1;
+    const height = rowHeight || item.rect.height || 88;
+    const left = columnLefts[columnIndex] ?? gridRect.left;
+    const top = gridRect.top + rowIndex * (height + rowGap);
+    return {
+      ...item,
+      rect: {
+        left,
+        right: left + width,
+        top,
+        bottom: top + height,
+        width,
+        height
+      }
+    };
+  });
+}
+
+function wallpaperGridLayoutForItems(grid, items, draggedRect = null) {
+  const gridRect = wallpaperRectSnapshot(grid.getBoundingClientRect());
+  const columnWidths = wallpaperGridColumnWidths(grid);
+  const columnGap = wallpaperGridGapSize(grid, "columnGap");
+  const rowGap = wallpaperGridGapSize(grid, "rowGap");
+  const heights = [
+    ...items.map(item => item.rect.height),
+    draggedRect?.height || 0
+  ].filter(height => height > 0);
+  const rowHeight = heights.length ? Math.max(...heights) : 88;
+  const virtualItems = wallpaperVirtualLayoutItems(items, gridRect, columnWidths, columnGap, rowGap, rowHeight);
+  const rows = wallpaperRowsFromLayoutItems(virtualItems);
+  return {
+    cards: virtualItems,
+    rows,
+    gridRect,
+    columnWidths,
+    columnCount: Math.max(1, columnWidths.length || wallpaperGridColumnCount(grid)),
+    columnGap,
+    rowGap,
+    rowHeight
+  };
+}
+
+function wallpaperRowIndexForLayoutProbe(layout, probeY) {
+  const rows = layout.rows || [];
+  if (!rows.length) return 0;
+  if (probeY <= rows[0].top) return 0;
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const nextRow = rows[index + 1] || null;
+    if (probeY <= row.bottom) return index;
+    if (nextRow && probeY < nextRow.top) {
       const gapMid = row.bottom + (nextRow.top - row.bottom) / 2;
-      return clientY < gapMid ? "" : pathWithinRow(nextRow);
+      return probeY < gapMid ? index : index + 1;
     }
   }
-  return "";
+
+  const lastRow = rows[rows.length - 1];
+  const newRowThreshold = lastRow.bottom + Math.max(6, layout.rowGap / 2);
+  if (probeY <= newRowThreshold) return rows.length - 1;
+  const rowStep = Math.max(1, layout.rowHeight + layout.rowGap);
+  return rows.length + Math.floor(Math.max(0, probeY - newRowThreshold) / rowStep);
+}
+
+function wallpaperInsertIndexFromGridLayout(layout, probeX, probeY, draggedRect = null, directionX = 0) {
+  if (!layout?.cards?.length) return 0;
+  const rowIndex = Math.max(0, wallpaperRowIndexForLayoutProbe(layout, probeY));
+  const rows = layout.rows || [];
+  if (rowIndex >= rows.length) return layout.cards.length;
+  const row = rows[rowIndex];
+  const thresholdRatio = directionX < 0
+    ? wallpaperReorderReturnRatio
+    : directionX > 0
+      ? wallpaperReorderCommitRatio
+      : 1 / 2;
+  const comparisonX = dragInsertionProbeX(probeX, draggedRect, directionX);
+  const beforeItem = row.cards.find(item => comparisonX <= item.rect.left + item.rect.width * thresholdRatio);
+  if (beforeItem) {
+    const beforeIndex = layout.cards.indexOf(beforeItem);
+    return beforeIndex >= 0 ? beforeIndex : layout.cards.length;
+  }
+  const nextRowFirst = rows[rowIndex + 1]?.cards?.[0] || null;
+  if (nextRowFirst) {
+    const nextRowIndex = layout.cards.indexOf(nextRowFirst);
+    return nextRowIndex >= 0 ? nextRowIndex : layout.cards.length;
+  }
+  return layout.cards.length;
+}
+
+function wallpaperBeforePathFromLiveGrid(grid, cards, clientX, clientY, draggedRect = null, directionX = 0) {
+  if (!grid || !cards?.length) return "";
+  const probe = wallpaperDragProbePoint(clientX, clientY, draggedRect);
+  const layout = wallpaperGridLayoutForItems(grid, wallpaperLayoutItemsFromCards(cards), draggedRect);
+  const insertIndex = wallpaperInsertIndexFromGridLayout(layout, probe.x, probe.y, draggedRect, directionX);
+  return layout.cards[insertIndex]?.path || "";
+}
+
+function wallpaperDropBeforePath(clientX, clientY, directionX = 0, draggedRect = null) {
+  const grid = els.wallpaperDock;
+  const cards = wallpaperCardsInGrid(grid);
+  return wallpaperBeforePathFromLiveGrid(grid, cards, clientX, clientY, draggedRect, directionX);
 }
 
 function clearWallpaperDropMarkers() {
@@ -3203,19 +4132,84 @@ function reorderWallpaper(path, beforePath = "", options = {}) {
   }
 }
 
-function wallpaperBeforeCardFromPoint(clientX, clientY) {
-  const beforePath = wallpaperDropBeforePath(clientX, clientY);
+function wallpaperBeforeCardFromPoint(clientX, clientY, directionX = 0, draggedRect = null) {
+  const beforePath = wallpaperDropBeforePath(clientX, clientY, directionX, draggedRect);
   if (!beforePath) return null;
-  return Array.from(els.wallpaperDock?.querySelectorAll(".wallpaper-card:not(.dragging):not(.wallpaper-placeholder)") || [])
+  return wallpaperCardsInGrid(els.wallpaperDock)
     .find(card => card.dataset.wallpaperPath === beforePath) || null;
 }
 
-function moveWallpaperPlaceholder(placeholder, clientX, clientY) {
-  const before = wallpaperBeforeCardFromPoint(clientX, clientY);
-  if (before === placeholder || before === placeholder.nextElementSibling) return;
-  animateWallpaperReflow(() => {
-    els.wallpaperDock.insertBefore(placeholder, before);
-  });
+function wallpaperBeforeCardFromPlaceholderGrid(grid, placeholder, clientX, clientY, directionX = 0, draggedRect = null) {
+  if (!grid || !placeholder || placeholder.parentNode !== grid) {
+    return wallpaperBeforeCardFromPoint(clientX, clientY, directionX, draggedRect);
+  }
+  const items = wallpaperLayoutItemsFromGridSlots(grid, placeholder);
+  if (!items.length) return null;
+  const probe = wallpaperDragProbePoint(clientX, clientY, draggedRect);
+  const layout = wallpaperGridLayoutForItems(grid, items, draggedRect);
+  const insertIndex = wallpaperInsertIndexFromGridLayout(layout, probe.x, probe.y, draggedRect, directionX);
+  return layout.cards
+    .slice(insertIndex)
+    .find(item => !item.isPlaceholder && item.card)
+    ?.card || null;
+}
+
+function placeWallpaperPlaceholder(placeholder, grid, insertBefore, animate = true) {
+  const mutate = () => {
+    grid.insertBefore(placeholder, insertBefore);
+    placeholder.dataset.lastReflowAt = String(wallpaperAnimationNow());
+  };
+  if (animate) {
+    animateWallpaperReflow(mutate);
+  } else {
+    for (const card of wallpaperCardsForAnimation()) {
+      card.getAnimations().forEach(animation => animation.cancel());
+    }
+    mutate();
+  }
+}
+
+function moveWallpaperPlaceholder(placeholder, clientX, clientY, directionX = 0, directionY = 0, draggedRect = null, options = {}) {
+  const { force = false } = options;
+  const grid = els.wallpaperDock;
+  if (!grid) return "none";
+  const stableX = draggedRect ? draggedRect.left + draggedRect.width / 2 : clientX;
+  const rowY = draggedRect ? draggedRect.top + draggedRect.height / 2 : clientY;
+  const before = wallpaperBeforeCardFromPlaceholderGrid(grid, placeholder, stableX, rowY, directionX, draggedRect);
+  const insertBefore = before || null;
+  const targetKey = before?.dataset?.wallpaperPath || "__end__";
+  if (placeholder.parentNode === grid && (insertBefore === placeholder || insertBefore === placeholder.nextElementSibling)) {
+    placeholder.dataset.targetKey = targetKey;
+    placeholder.dataset.pendingTargetKey = "";
+    placeholder.dataset.pendingTargetAt = "0";
+    return "unchanged";
+  }
+
+  const now = wallpaperAnimationNow();
+  const lastReflowAt = Number.parseFloat(placeholder.dataset.lastReflowAt || "0");
+  const recentlyReflowed = Number.isFinite(lastReflowAt) && lastReflowAt > 0 && now - lastReflowAt < wallpaperPlaceholderReflowMinIntervalMs;
+  if (!force && recentlyReflowed && placeholder.dataset.targetKey && placeholder.dataset.targetKey !== targetKey) {
+    placeholder.dataset.pendingTargetKey = targetKey;
+    placeholder.dataset.pendingTargetAt = String(now);
+    return "deferred";
+  }
+
+  const shouldSettleTarget = !force && Math.abs(directionX) < 1 && Math.abs(directionY) < 1;
+  if (shouldSettleTarget && placeholder.dataset.targetKey && placeholder.dataset.targetKey !== targetKey) {
+    const pendingKey = placeholder.dataset.pendingTargetKey || "";
+    const pendingAt = pendingKey === targetKey
+      ? Number.parseFloat(placeholder.dataset.pendingTargetAt || "0")
+      : now;
+    placeholder.dataset.pendingTargetKey = targetKey;
+    placeholder.dataset.pendingTargetAt = String(Number.isFinite(pendingAt) ? pendingAt : now);
+    if (now - pendingAt < wallpaperPlaceholderTargetSettleMs) return "deferred";
+  }
+
+  placeholder.dataset.targetKey = targetKey;
+  placeholder.dataset.pendingTargetKey = "";
+  placeholder.dataset.pendingTargetAt = "0";
+  placeWallpaperPlaceholder(placeholder, grid, insertBefore, true);
+  return "moved";
 }
 
 function wallpaperBeforePathFromPlaceholder(placeholder) {
@@ -3292,7 +4286,14 @@ function createWallpaperDragSession(card, item, startX, startY) {
   const offsetY = startY - rect.top;
   const sourceOrder = wallpaperOrderSnapshot();
   const sourceBeforePath = card.nextElementSibling?.dataset?.wallpaperPath || "";
+  placeholder.dataset.targetKey = sourceBeforePath || "__end__";
+  placeholder.dataset.pendingTargetKey = "";
+  placeholder.dataset.pendingTargetAt = "0";
+  const trackWallpaperDirectionX = createMusicDragDirectionTracker(startX);
+  const trackWallpaperDirectionY = createMusicDragDirectionTracker(startY);
   let dragging = false;
+  let lastDirectionX = 0;
+  let lastDirectionY = 0;
 
   const moveCardToPoint = (clientX, clientY) => {
     const clamped = clampDragPosition(clientX, clientY, offsetX, offsetY, rect.width, rect.height);
@@ -3322,6 +4323,16 @@ function createWallpaperDragSession(card, item, startX, startY) {
       return settleDraggedWallpaperCard(card, placeholder, true).then(() => false);
     }
 
+    const draggedRect = card.getBoundingClientRect();
+    moveWallpaperPlaceholder(
+      placeholder,
+      draggedRect.left + draggedRect.width / 2,
+      draggedRect.top + draggedRect.height / 2,
+      lastDirectionX,
+      lastDirectionY,
+      draggedRect,
+      { force: true }
+    );
     const beforePath = wallpaperBeforePathFromPlaceholder(placeholder);
     const nextOrder = orderWithMovedPath(sourceOrder, item.path, beforePath);
     wallpaperOrder = nextOrder;
@@ -3348,9 +4359,18 @@ function createWallpaperDragSession(card, item, startX, startY) {
       document.body.classList.add("wallpaper-dragging");
     }
     moveEvent.preventDefault();
+    lastDirectionX = trackWallpaperDirectionX(moveEvent.clientX);
+    lastDirectionY = trackWallpaperDirectionY(moveEvent.clientY);
     moveCardToPoint(moveEvent.clientX, moveEvent.clientY);
     const draggedRect = card.getBoundingClientRect();
-    moveWallpaperPlaceholder(placeholder, draggedRect.left + draggedRect.width / 2, draggedRect.top + draggedRect.height / 2);
+    moveWallpaperPlaceholder(
+      placeholder,
+      draggedRect.left + draggedRect.width / 2,
+      draggedRect.top + draggedRect.height / 2,
+      lastDirectionX,
+      lastDirectionY,
+      draggedRect
+    );
     return true;
   };
 
@@ -3488,6 +4508,16 @@ function renderWallpapers() {
     card.addEventListener("mousedown", event => beginWallpaperMouseDrag(event, card, item));
     card.addEventListener("click", () => {
       if (Date.now() < suppressWallpaperClickUntil) return;
+      const now = Date.now();
+      const isSecondClick = lastWallpaperClickPath === item.path && now - lastWallpaperClickAt <= wallpaperDoubleClickMs;
+      lastWallpaperClickPath = item.path;
+      lastWallpaperClickAt = now;
+      if (isSecondClick) {
+        lastWallpaperClickPath = "";
+        lastWallpaperClickAt = 0;
+        applyWallpaper(item);
+        return;
+      }
       setSelectedWallpaper(item.path);
     });
     card.addEventListener("dblclick", () => applyWallpaper(item));
@@ -3567,6 +4597,46 @@ function selectedTrack() {
   return playable.find(item => item.path === selectedTrackPath) || playable[0] || null;
 }
 
+function normalizeMusicTrackPathValue(path) {
+  return String(path || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
+}
+
+function musicTrackPathExists(path) {
+  const cleanPath = normalizeMusicTrackPathValue(path);
+  return Boolean(cleanPath && allMusicTracks().some(item => item.path === cleanPath));
+}
+
+function firstExistingMusicTrackPath(...paths) {
+  for (const path of paths) {
+    const cleanPath = normalizeMusicTrackPathValue(path);
+    if (cleanPath && musicTrackPathExists(cleanPath)) return cleanPath;
+  }
+  return "";
+}
+
+function activeLyricsTimingTrackPath() {
+  const root = els.lyricsTimingEditor || document.getElementById("lyricsTimingEditor");
+  if (!root || root.hidden) return "";
+  const candidate = normalizeMusicTrackPathValue(activeLyricsTimingTarget?.path || musicLyricsTrackPath);
+  return musicTrackPathExists(candidate) ? candidate : "";
+}
+
+function musicStateSelectedTrackPath() {
+  return normalizeMusicTrackPathValue(selectedTrackPath);
+}
+
+function setSelectedTrackPath(path, options = {}) {
+  selectedTrackPath = normalizeMusicTrackPathValue(path);
+  if (selectedTrackPath) {
+    localStorage.setItem(storageKeys.selectedTrack, selectedTrackPath);
+  } else {
+    localStorage.removeItem(storageKeys.selectedTrack);
+  }
+  if (options.preload !== false) scheduleSelectedLyricsPreload();
+  if (options.persist === "now") persistMusicStateNow();
+  else if (options.persist === "soon") persistMusicStateSoon();
+}
+
 function normalizePlaybackMode(mode) {
   return playbackModes.includes(mode) ? mode : "repeatAll";
 }
@@ -3584,6 +4654,7 @@ function themeLabelKey(mode = theme) {
 }
 
 function playbackModeLabelKey(mode = playbackMode) {
+  if (mode === "playOnce") return "playbackModePlayOnce";
   if (mode === "repeatOne") return "playbackModeRepeatOne";
   return "playbackModeRepeatAll";
 }
@@ -3757,6 +4828,12 @@ function saveMusicStateLocal() {
   localStorage.setItem(storageKeys.musicTiers, JSON.stringify(musicTierAssignments));
   localStorage.setItem(storageKeys.musicOrder, JSON.stringify(musicTierOrder));
   localStorage.setItem(storageKeys.promotedLibraryTracks, JSON.stringify(promotedLibraryTracks));
+  const cleanSelectedTrackPath = musicStateSelectedTrackPath();
+  if (cleanSelectedTrackPath) {
+    localStorage.setItem(storageKeys.selectedTrack, cleanSelectedTrackPath);
+  } else {
+    localStorage.removeItem(storageKeys.selectedTrack);
+  }
 }
 
 function musicStatePayload() {
@@ -3764,7 +4841,8 @@ function musicStatePayload() {
     stateVersion: musicStateVersion,
     tiers: { ...musicTierAssignments },
     order: [...musicTierOrder],
-    promotedLibraryTracks: { ...promotedLibraryTracks }
+    promotedLibraryTracks: { ...promotedLibraryTracks },
+    selectedTrackPath: musicStateSelectedTrackPath()
   };
 }
 
@@ -3812,16 +4890,20 @@ function flushMusicStateBeforeUnload() {
   }).catch(() => {});
 }
 
-function applyMusicState(state) {
+function applyMusicState(state, options = {}) {
   if (!state || typeof state !== "object") return;
   const hasServerTiers = Object.prototype.hasOwnProperty.call(state, "tiers");
   const hasServerOrder = Object.prototype.hasOwnProperty.call(state, "order");
   const hasServerPromoted = Object.prototype.hasOwnProperty.call(state, "promotedLibraryTracks");
+  const hasServerSelected = Object.prototype.hasOwnProperty.call(state, "selectedTrackPath");
+  const preferredSelectedTrackPath = normalizeMusicTrackPathValue(options.preferredSelectedTrackPath || "");
+  const currentSelectedTrackPath = normalizeMusicTrackPathValue(selectedTrackPath);
   const serverTiers = state.tiers && typeof state.tiers === "object" && !Array.isArray(state.tiers) ? state.tiers : {};
   const serverPromoted = state.promotedLibraryTracks && typeof state.promotedLibraryTracks === "object" && !Array.isArray(state.promotedLibraryTracks)
     ? state.promotedLibraryTracks
     : {};
   const serverOrder = sanitizeMusicTierOrder(state.order || []);
+  const serverSelectedTrackPath = normalizeMusicTrackPathValue(state.selectedTrackPath);
   const cleanServerTiers = Object.fromEntries(
     Object.entries(serverTiers)
       .map(([path, tierId]) => [String(path), normalizeMusicTier(String(tierId || ""))])
@@ -3843,10 +4925,27 @@ function applyMusicState(state) {
   } else {
     promotedLibraryTracks = { ...promotedLibraryTracks, ...cleanServerPromoted };
   }
+  libraryTracks = flattenLibraryTracks(musicLibraries);
   if (hasServerOrder) {
     musicTierOrder = serverOrder;
   } else if (serverOrder.length) {
     musicTierOrder = sanitizeMusicTierOrder([...serverOrder, ...musicTierOrder]);
+  }
+  const restoredSelectedTrackPath = firstExistingMusicTrackPath(
+    preferredSelectedTrackPath,
+    serverSelectedTrackPath,
+    currentSelectedTrackPath
+  );
+  if (restoredSelectedTrackPath) {
+    setSelectedTrackPath(restoredSelectedTrackPath);
+    if (restoredSelectedTrackPath !== serverSelectedTrackPath) {
+      persistMusicStateSoon();
+    }
+  } else if (hasServerSelected || currentSelectedTrackPath) {
+    setSelectedTrackPath("");
+  }
+  if (!hasServerSelected && selectedTrackPath) {
+    persistMusicStateSoon();
   }
   saveMusicStateLocal();
 }
@@ -4533,7 +5632,8 @@ function musicInsertIndexFromGridLayout(layout, probeX, probeY, draggedRect = nu
     : directionX > 0
       ? musicReorderCommitRatio
       : 1 / 2;
-  const beforeItem = row.cards.find(item => probeX <= item.rect.left + item.rect.width * thresholdRatio);
+  const comparisonX = dragInsertionProbeX(probeX, draggedRect, directionX);
+  const beforeItem = row.cards.find(item => comparisonX <= item.rect.left + item.rect.width * thresholdRatio);
   if (beforeItem) {
     const beforeIndex = layout.cards.indexOf(beforeItem);
     return beforeIndex >= 0 ? beforeIndex : layout.cards.length;
@@ -5227,12 +6327,7 @@ function setTrackTier(path, tierId, beforePath = "") {
 function setSelectedTrack(path) {
   pendingDeleteTrackPath = "";
   musicNotice = "";
-  selectedTrackPath = path || "";
-  if (selectedTrackPath) {
-    localStorage.setItem(storageKeys.selectedTrack, selectedTrackPath);
-  } else {
-    localStorage.removeItem(storageKeys.selectedTrack);
-  }
+  setSelectedTrackPath(path, { persist: "now" });
   renderMusic();
   renderMusicLibraries();
 }
@@ -5543,16 +6638,21 @@ function hasActiveMusicLibraryGrab() {
   return musicLibraries.some(item => item.status === "queued" || item.status === "grabbing");
 }
 
-function scheduleMusicLibraryPoll() {
+function stopMusicLibraryPoll() {
   if (musicLibraryPollTimer) {
     window.clearTimeout(musicLibraryPollTimer);
     musicLibraryPollTimer = null;
   }
-  if (!hasActiveMusicLibraryGrab()) return;
+}
+
+function scheduleMusicLibraryPoll(delay = 4000) {
+  stopMusicLibraryPoll();
+  if (!hasActiveMusicLibraryGrab() || !isModuleForeground("music")) return;
   musicLibraryPollTimer = window.setTimeout(() => {
     musicLibraryPollTimer = null;
+    if (!isModuleForeground("music")) return;
     loadMusic();
-  }, 4000);
+  }, delay);
 }
 
 function createTrackCard(item) {
@@ -5594,11 +6694,13 @@ function createTrackCard(item) {
   if (item.libraryId) {
     card.classList.add("library-track-card");
   }
-  card.addEventListener("click", () => {
+  card.addEventListener("click", event => {
+    if (event.target.closest("button, input, select, textarea, a")) return;
     if (Date.now() < suppressTrackClickUntil) return;
     playTrack(item);
   });
-  card.addEventListener("dblclick", () => {
+  card.addEventListener("dblclick", event => {
+    if (event.target.closest("button, input, select, textarea, a")) return;
     if (Date.now() < suppressTrackClickUntil) return;
     playTrack(item);
   });
@@ -5748,6 +6850,3348 @@ function createMusicTierSection(group, items) {
   return section;
 }
 
+function parseLyricsTimestamp(raw) {
+  const match = String(raw || "").match(/^(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?$/);
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  const seconds = Number(match[2]);
+  const fraction = match[3] || "0";
+  if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+  const millis = Number(fraction.padEnd(3, "0").slice(0, 3));
+  return minutes * 60 + seconds + millis / 1000;
+}
+
+function parseLyricsText(rawText, type = "lrc") {
+  const rawLines = String(rawText || "").replace(/\r/g, "").split("\n");
+  const timed = [];
+  const plain = [];
+
+  for (const rawLine of rawLines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (type === "lrc" && /^\[(?:ar|al|ti|by|offset|length|re):/i.test(line)) continue;
+
+    const tags = [...line.matchAll(/\[([0-9]{1,2}:[0-9]{2}(?:[.:][0-9]{1,3})?)\]/g)];
+    const lyric = line.replace(/\[[^\]]+\]/g, "").trim();
+    if (tags.length) {
+      for (const tag of tags) {
+        const time = parseLyricsTimestamp(tag[1]);
+        if (time != null) timed.push({ time, text: lyric, rest: !lyric });
+      }
+      continue;
+    }
+    plain.push(line);
+  }
+
+  if (timed.length) {
+    return {
+      synced: true,
+      lines: timed.sort((left, right) => left.time - right.time),
+      status: ""
+    };
+  }
+
+  return {
+    synced: false,
+    lines: plain.map((textLine, index) => ({ time: index, text: textLine })),
+    status: plain.length ? text("lyricsUnsynced") : text("lyricsInstrumental")
+  };
+}
+
+function clearMusicLyrics(status = text("lyricsEmpty")) {
+  stopLyricsAnimationLoop();
+  musicLyricsTrackPath = "";
+  musicLyricsLines = [];
+  musicLyricsStatus = status;
+  musicLyricsActiveIndex = -1;
+  musicLyricsSynced = false;
+  musicLyricsAnalysis = null;
+  musicLyricsLookupPath = "";
+  renderLyricsPanel();
+}
+
+function isCompactLyricCharacter(char) {
+  return /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/u.test(char);
+}
+
+function lyricsTextParts(rawText) {
+  const parts = [];
+  let buffer = "";
+  const flush = () => {
+    if (!buffer) return;
+    parts.push({ text: buffer, word: true });
+    buffer = "";
+  };
+  for (const char of String(rawText || "...")) {
+    if (/\s/u.test(char)) {
+      flush();
+      parts.push({ text: char, word: false });
+    } else if (isCompactLyricCharacter(char)) {
+      flush();
+      parts.push({ text: char, word: true });
+    } else {
+      buffer += char;
+    }
+  }
+  flush();
+  return parts.length ? parts : [{ text: "...", word: true }];
+}
+
+function lyricsTimingTokens(rawText) {
+  return lyricsTextParts(rawText).filter(part => part.word).map(part => part.text);
+}
+
+function renderLyricsWords(node, rawText) {
+  node.textContent = "";
+  const parts = lyricsTextParts(rawText);
+  let wordIndex = 0;
+  for (const part of parts) {
+    if (!part.text) continue;
+    if (!part.word) {
+      node.appendChild(document.createTextNode(part.text));
+      continue;
+    }
+    const word = document.createElement("span");
+    word.className = "lyric-word";
+    word.dataset.wordIndex = String(wordIndex);
+    word.style.setProperty("--word-fill", "0");
+    word.textContent = part.text;
+    node.appendChild(word);
+    wordIndex += 1;
+  }
+  node.dataset.wordCount = String(wordIndex);
+}
+
+function lyricsPanelMaxHeight() {
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 720;
+  return Math.max(124, Math.min(560, viewportHeight - 260));
+}
+
+function cleanLyricsPanelHeight(value) {
+  const height = Number(value);
+  if (!Number.isFinite(height) || height <= 0) return 0;
+  return Math.round(clamp(height, 124, lyricsPanelMaxHeight()));
+}
+
+function applyLyricsPanelHeight() {
+  const panel = els.nowPlayingLyricsPanel;
+  if (!panel) return;
+  const height = cleanLyricsPanelHeight(musicLyricsPanelHeight);
+  if (!height) {
+    panel.style.height = "";
+    panel.style.maxHeight = "";
+    return;
+  }
+  musicLyricsPanelHeight = height;
+  panel.style.height = `${height}px`;
+  panel.style.maxHeight = `${height}px`;
+}
+
+function isLyricsPanelResizeEdge(event) {
+  const panel = els.nowPlayingLyricsPanel;
+  if (!panel || panel.hidden) return false;
+  const rect = panel.getBoundingClientRect();
+  return event.clientY >= rect.bottom - 14 && event.clientY <= rect.bottom + 4;
+}
+
+function setLyricsPanelResizeHover(event) {
+  const panel = els.nowPlayingLyricsPanel;
+  if (!panel || musicLyricsPanelResizing) return;
+  panel.classList.toggle("can-resize", isLyricsPanelResizeEdge(event));
+}
+
+function clearLyricsPanelResizeHover() {
+  if (musicLyricsPanelResizing) return;
+  els.nowPlayingLyricsPanel?.classList.remove("can-resize");
+}
+
+function beginLyricsPanelResize(event) {
+  if (event.button !== 0 || !isLyricsPanelResizeEdge(event)) return;
+  const panel = els.nowPlayingLyricsPanel;
+  if (!panel) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const rect = panel.getBoundingClientRect();
+  musicLyricsPanelResizing = true;
+  musicLyricsResizePointerId = event.pointerId;
+  musicLyricsResizeStartY = event.clientY;
+  musicLyricsResizeStartHeight = rect.height;
+  panel.classList.add("can-resize", "resizing");
+  document.body.classList.add("lyrics-resizing");
+  try {
+    panel.setPointerCapture(event.pointerId);
+  } catch {}
+  window.addEventListener("pointermove", moveLyricsPanelResize, { passive: false });
+  window.addEventListener("pointerup", finishLyricsPanelResize);
+  window.addEventListener("pointercancel", finishLyricsPanelResize);
+}
+
+function moveLyricsPanelResize(event) {
+  if (!musicLyricsPanelResizing || event.pointerId !== musicLyricsResizePointerId) return;
+  event.preventDefault();
+  musicLyricsPanelHeight = cleanLyricsPanelHeight(musicLyricsResizeStartHeight + event.clientY - musicLyricsResizeStartY);
+  applyLyricsPanelHeight();
+}
+
+function finishLyricsPanelResize(event) {
+  if (!musicLyricsPanelResizing || event.pointerId !== musicLyricsResizePointerId) return;
+  const panel = els.nowPlayingLyricsPanel;
+  musicLyricsPanelResizing = false;
+  musicLyricsResizePointerId = null;
+  window.removeEventListener("pointermove", moveLyricsPanelResize);
+  window.removeEventListener("pointerup", finishLyricsPanelResize);
+  window.removeEventListener("pointercancel", finishLyricsPanelResize);
+  try {
+    panel?.releasePointerCapture(event.pointerId);
+  } catch {}
+  panel?.classList.remove("can-resize", "resizing");
+  document.body.classList.remove("lyrics-resizing");
+  suppressLyricsLineClickUntil = performance.now() + 260;
+  if (musicLyricsPanelHeight) localStorage.setItem(storageKeys.lyricsHeight, String(musicLyricsPanelHeight));
+}
+
+function resizeLyricsPanelToViewport() {
+  if (!musicLyricsPanelHeight) return;
+  const nextHeight = cleanLyricsPanelHeight(musicLyricsPanelHeight);
+  if (nextHeight !== musicLyricsPanelHeight) {
+    musicLyricsPanelHeight = nextHeight;
+    localStorage.setItem(storageKeys.lyricsHeight, String(musicLyricsPanelHeight));
+  }
+  applyLyricsPanelHeight();
+}
+
+function renderLyricsPanel() {
+  if (!hasMusic || !els.nowPlayingLyricsPanel || !els.nowPlayingLyricsList || !els.nowPlayingLyricsStatus) return;
+  const selected = selectedTrack();
+  const selectedPath = selected?.path || "";
+  const hasCachedLyrics = Boolean(selected?.lyricsUrl);
+  const isPanelTrack = Boolean(selectedPath && musicLyricsTrackPath === selectedPath);
+  const canShowLyrics = hasCachedLyrics || isPanelTrack;
+  if (!canShowLyrics && musicLyricsTrackPath && !musicLyricsLookupPath) {
+    musicLyricsTrackPath = "";
+    musicLyricsLines = [];
+    musicLyricsStatus = "";
+    musicLyricsActiveIndex = -1;
+    musicLyricsSynced = false;
+    musicLyricsAnalysis = null;
+  }
+  const isOpen = canShowLyrics && isPanelTrack;
+  els.nowPlayingLyricsPanel.hidden = !isOpen;
+  if (isOpen) applyLyricsPanelHeight();
+  else {
+    els.nowPlayingLyricsPanel.classList.remove("can-resize", "resizing");
+    closeLyricsTimingEditor();
+  }
+  if (els.nowPlayingArt) {
+    const label = hasCachedLyrics && selected
+      ? text("lyricsButtonLabel", displayTrackName(selected.name))
+      : selected
+        ? text("lyricsFindLabel", displayTrackName(selected.name))
+        : text("nowPlayingLabel");
+    els.nowPlayingArt.classList.toggle("has-lyrics", hasCachedLyrics);
+    els.nowPlayingArt.classList.toggle("can-find-lyrics", Boolean(selectedPath));
+    els.nowPlayingArt.classList.toggle("lyrics-searching", Boolean(selectedPath && musicLyricsLookupPath === selectedPath));
+    els.nowPlayingArt.title = selectedPath ? label : "";
+    els.nowPlayingArt.setAttribute("aria-label", label);
+    els.nowPlayingArt.setAttribute("aria-expanded", String(isOpen));
+    els.nowPlayingArt.tabIndex = selectedPath ? 0 : -1;
+  }
+  detachLyricsTimingEditorFromList();
+  els.nowPlayingLyricsList.innerHTML = "";
+  els.nowPlayingLyricsPanel.classList.toggle("is-synced", musicLyricsSynced);
+  els.nowPlayingLyricsPanel.classList.toggle("is-plain", !musicLyricsSynced && Boolean(musicLyricsLines.length));
+  els.nowPlayingLyricsPanel.classList.toggle("has-active-line", musicLyricsActiveIndex >= 0);
+  musicLyricsLines.forEach((line, index) => {
+    const isRestLine = Boolean(line.rest);
+    const canSeek = Boolean(musicLyricsSynced && Number.isFinite(line.time) && !isRestLine);
+    const node = document.createElement(canSeek ? "button" : "p");
+    node.className = "music-lyrics-line";
+    node.dataset.lyricsIndex = String(index);
+    const lineText = isRestLine ? "" : line.text || "...";
+    node.classList.toggle("rest", isRestLine);
+    node.setAttribute("aria-hidden", isRestLine ? "true" : "false");
+    if (canSeek && !isRestLine) renderLyricsWords(node, lineText);
+    else node.textContent = lineText;
+    syncManualLyricMarkClasses(node, index);
+    if (canSeek) {
+      node.type = "button";
+      node.title = text("lyricsSeekLabel", lineText);
+      node.setAttribute("aria-label", text("lyricsSeekLabel", lineText));
+      node.addEventListener("click", event => {
+        if (performance.now() < suppressLyricsLineClickUntil) {
+          event.preventDefault();
+          return;
+        }
+        seekToLyricsLine(index);
+      });
+    }
+    els.nowPlayingLyricsList.appendChild(node);
+  });
+  syncLyricsLineVisualStates(musicLyricsActiveIndex);
+  els.nowPlayingLyricsStatus.textContent = musicLyricsStatus;
+  els.nowPlayingLyricsStatus.hidden = Boolean(musicLyricsLines.length) && !musicLyricsStatus;
+}
+
+const lyricsLineSwitchLeadSeconds = 0.02;
+const lyricsFirstLineLeadSeconds = 0.02;
+const lyricsWordFillLeadSeconds = 0;
+const lyricsMinWordFillSeconds = 0.72;
+const lyricsWordFillOutroSeconds = 0.18;
+const lyricsLineRestHoldSeconds = 0.34;
+const lyricsLineRestFadeMinSeconds = 0.32;
+const lyricsLineRestFadeMaxSeconds = 0.78;
+
+function lyricsLineDisplayStartTime(index) {
+  const rawStart = Number(musicLyricsLines[index]?.time);
+  const analysisStart = lyricsLineAnalysisStartTime(index);
+  const manualStart = manualLyricLineStartTime(index);
+  if (Number.isFinite(manualStart)) {
+    return manualStart - (index <= 0 ? lyricsFirstLineLeadSeconds : lyricsLineSwitchLeadSeconds);
+  }
+  let start = Number.isFinite(rawStart) ? rawStart : analysisStart;
+  if (Number.isFinite(rawStart) && Number.isFinite(analysisStart)) {
+    const analysisDelay = analysisStart - rawStart;
+    start = analysisDelay > 0
+      ? rawStart + Math.min(0.045, analysisDelay * 0.18)
+      : analysisStart;
+  }
+  if (!Number.isFinite(start)) return start;
+  return start - (index <= 0 ? lyricsFirstLineLeadSeconds : lyricsLineSwitchLeadSeconds);
+}
+
+function activeLyricsIndexAt(time) {
+  if (!musicLyricsSynced || !musicLyricsLines.length || !musicLyricsLines[0] || !Number.isFinite(musicLyricsLines[0].time)) return -1;
+  let active = -1;
+  for (let index = 0; index < musicLyricsLines.length; index += 1) {
+    if (time >= lyricsLineDisplayStartTime(index)) active = index;
+    else break;
+  }
+  return active;
+}
+
+function easeLyricsValue(value) {
+  const clean = clamp(Number(value) || 0, 0, 1);
+  return clean * clean * (3 - 2 * clean);
+}
+
+function easeLyricsSegmentValue(value, previous = null, next = null, span = null) {
+  const clean = clamp(Number(value) || 0, 0, 1);
+  const fillDelta = Math.abs((Number(next?.fill) || 0) - (Number(previous?.fill) || 0));
+  if (fillDelta <= 0.001) return clean;
+  const waveDriven = Boolean(previous?.wave || next?.wave || span?.profile === "gated-cumulative");
+  const holdDriven = Boolean(previous?.hold || next?.hold);
+  if (waveDriven) {
+    return clamp(clean * 0.88 + easeLyricsValue(clean) * 0.12, 0, 1);
+  }
+  if (holdDriven) {
+    const attack = 1 - Math.pow(1 - clean, 1.35);
+    return clamp(attack * 0.68 + easeLyricsValue(clean) * 0.32, 0, 1);
+  }
+  return easeLyricsValue(clean);
+}
+
+function easeLyricsWordFill(value, span = null) {
+  const clean = clamp(Number(value) || 0, 0, 1);
+  const attack = clamp(Number(span?.attack) || 0.5, 0.2, 1);
+  const curve = String(span?.curve || "");
+  if (curve === "strong") {
+    const exponent = 1.75 + attack * 1.2;
+    return 1 - Math.pow(1 - clean, exponent);
+  }
+  if (curve === "punctuated") {
+    const head = clean < 0.78
+      ? 1 - Math.pow(1 - clean / 0.78, 1.45 + attack)
+      : 1;
+    const tail = clean < 0.78 ? 0 : easeLyricsValue((clean - 0.78) / 0.22);
+    return clamp(head * 0.94 + tail * 0.06, 0, 1);
+  }
+  const shaped = clean * clean * (3 - 2 * clean);
+  return clamp(shaped * (0.82 + attack * 0.18) + clean * (0.18 - attack * 0.08), 0, 1);
+}
+
+function lyricsFillFromSpanPoints(elapsed, span = null) {
+  const state = lyricsFillStateFromSpanPoints(elapsed, span);
+  return state ? state.fill : NaN;
+}
+
+function lyricsFillStateFromSpanPoints(elapsed, span = null) {
+  const rawPoints = Array.isArray(span?.fillPoints) ? span.fillPoints : [];
+  if (rawPoints.length < 2) return null;
+  const points = rawPoints
+    .map(point => ({
+      time: Number(point?.time),
+      fill: clamp(Number(point?.fill) || 0, 0, 1),
+      hold: Boolean(point?.hold),
+      wave: Boolean(point?.wave)
+    }))
+    .filter(point => Number.isFinite(point.time))
+    .sort((a, b) => a.time - b.time);
+  if (points.length < 2) return null;
+  if (elapsed <= points[0].time) {
+    return {
+      fill: points[0].fill,
+      velocity: 0,
+      hold: Boolean(points[0].hold),
+      wave: Boolean(points[0].wave),
+      progress: 0
+    };
+  }
+  const last = points[points.length - 1];
+  const spanEnd = Number(span?.end);
+  const visualLimit = Number.isFinite(spanEnd) && spanEnd > last.time
+    ? spanEnd
+    : last.time + 0.08;
+  let visualCursor = points[0].time;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const next = points[index];
+    const fillDelta = Math.abs(next.fill - previous.fill);
+    const waveDriven = Boolean(previous.wave || next.wave || span?.profile === "gated-cumulative");
+    const holdDriven = Boolean((previous.hold && next.hold) || fillDelta <= 0.018);
+    const naturalDuration = Math.max(0.008, next.time - previous.time);
+    const minVisualDuration = waveDriven || holdDriven
+      ? Math.min(0.018, naturalDuration)
+      : clamp(fillDelta * 0.078, 0.035, 0.068);
+    const desiredDuration = waveDriven || holdDriven
+      ? naturalDuration
+      : Math.max(minVisualDuration, next.time - previous.time);
+    const visualStart = waveDriven || holdDriven
+      ? previous.time
+      : Math.max(previous.time, visualCursor);
+    if (elapsed < visualStart) {
+      return {
+        fill: previous.fill,
+        velocity: 0,
+        hold: Boolean(previous.hold),
+        wave: Boolean(previous.wave),
+        progress: 0
+      };
+    }
+    const remainingSegments = Math.max(0, points.length - index - 1);
+    const reserve = remainingSegments * (waveDriven || holdDriven ? 0.006 : 0.024);
+    const latestEnd = Math.max(visualStart + (waveDriven || holdDriven ? 0.008 : 0.024), visualLimit - reserve);
+    const segmentDuration = waveDriven || holdDriven
+      ? desiredDuration
+      : Math.max(0.024, Math.min(desiredDuration, latestEnd - visualStart));
+    const segmentEnd = visualStart + segmentDuration;
+    if (elapsed > segmentEnd) {
+      visualCursor = Math.max(visualCursor, segmentEnd);
+      continue;
+    }
+    const raw = clamp((elapsed - visualStart) / segmentDuration, 0, 1);
+    const eased = easeLyricsSegmentValue(raw, previous, next, span);
+    const velocity = clamp(fillDelta / Math.max(0.035, segmentDuration) * 0.075, 0, 1);
+    return {
+      fill: clamp(previous.fill + (next.fill - previous.fill) * eased, 0, 1),
+      velocity,
+      hold: holdDriven,
+      wave: waveDriven,
+      progress: raw
+    };
+  }
+  return {
+    fill: last.fill,
+    velocity: 0,
+    hold: Boolean(last.hold),
+    wave: Boolean(last.wave),
+    progress: 1
+  };
+}
+
+function lyricsLineText(index) {
+  return String(musicLyricsLines[index]?.text || "");
+}
+
+function lyricsAnalysisLine(index) {
+  if (!musicLyricsAnalysis || musicLyricsAnalysis.path !== musicLyricsTrackPath || !Array.isArray(musicLyricsAnalysis.lines)) return null;
+  const direct = musicLyricsAnalysis.lines[index];
+  if (direct && Number(direct.index) === index) return direct;
+  return musicLyricsAnalysis.lines.find(line => Number(line.index) === index) || null;
+}
+
+function manualLyricMarksForLine(index) {
+  if (!musicLyricsAnalysis || musicLyricsAnalysis.path !== musicLyricsTrackPath || !Array.isArray(musicLyricsAnalysis.manualMarks)) return [];
+  return musicLyricsAnalysis.manualMarks.filter(mark => {
+    const time = Number(mark?.time);
+    return Number(mark?.lineIndex) === index && Number.isFinite(time) && time >= 0;
+  });
+}
+
+function musicLyricMarkRole(mark) {
+  return String(mark?.role || "").toLowerCase() === "start" ? "start" : "end";
+}
+
+function musicLyricMarkStorageKey(mark) {
+  return [
+    mark?.path || musicLyricsTrackPath || "",
+    Number(mark?.lineIndex),
+    Number(mark?.boundaryIndex),
+    musicLyricMarkRole(mark)
+  ].join("\u0000");
+}
+
+function musicLyricMarkComparable(mark) {
+  return [
+    Number(mark?.lineIndex) || 0,
+    Number(mark?.boundaryIndex) || 0,
+    musicLyricMarkRole(mark) === "start" ? 0 : 1,
+    Number(mark?.time) || 0
+  ];
+}
+
+function sortMusicLyricMarks(marks) {
+  return [...marks].sort((left, right) => {
+    const a = musicLyricMarkComparable(left);
+    const b = musicLyricMarkComparable(right);
+    return a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3];
+  });
+}
+
+function mergePendingMusicLyricMarksIntoAnalysis(analysis) {
+  if (!analysis?.path) return analysis;
+  const pending = Array.from(sessionMusicLyricMarks.values())
+    .filter(mark => mark.path === analysis.path);
+  if (!pending.length) return analysis;
+  const pendingKeys = new Set(pending.map(musicLyricMarkStorageKey));
+  const existing = Array.isArray(analysis.manualMarks) ? analysis.manualMarks : [];
+  return {
+    ...analysis,
+    manualMarks: sortMusicLyricMarks([
+      ...existing.filter(mark => !pendingKeys.has(musicLyricMarkStorageKey({ ...mark, path: analysis.path }))),
+      ...pending
+    ])
+  };
+}
+
+function stagePendingMusicLyricMark(mark) {
+  const clean = {
+    ...mark,
+    kind: "boundary",
+    role: musicLyricMarkRole(mark),
+    wordIndex: null,
+    createdAt: mark.createdAt || new Date().toISOString()
+  };
+  sessionMusicLyricMarks.set(musicLyricMarkStorageKey(clean), clean);
+  pendingMusicLyricMarks.set(musicLyricMarkStorageKey(clean), clean);
+  if (!musicLyricsAnalysis || musicLyricsAnalysis.path !== clean.path) {
+    musicLyricsAnalysis = { ok: true, path: clean.path, lines: [], manualMarks: [] };
+  }
+  musicLyricsAnalysis = mergePendingMusicLyricMarksIntoAnalysis({
+    ...musicLyricsAnalysis,
+    path: clean.path
+  });
+}
+
+function sessionLyricMarksForLine(index) {
+  return Array.from(sessionMusicLyricMarks.values()).filter(mark => (
+    mark.path === musicLyricsTrackPath &&
+    Number(mark.lineIndex) === index &&
+    Number.isFinite(Number(mark.boundaryIndex))
+  ));
+}
+
+function removePendingMusicLyricMarksForTarget(path, lineIndex, boundaryIndex, roles = ["start", "end"]) {
+  const cleanRoles = (Array.isArray(roles) ? roles : [roles]).map(role => role === "start" ? "start" : "end");
+  const removedMarks = new Map();
+  let removed = false;
+  for (const role of cleanRoles) {
+    const key = musicLyricMarkStorageKey({ path, lineIndex, boundaryIndex, role });
+    const mark = sessionMusicLyricMarks.get(key) || pendingMusicLyricMarks.get(key);
+    if (mark) removedMarks.set(key, mark.createdAt || "");
+    removed = sessionMusicLyricMarks.delete(key) || removed;
+    removed = pendingMusicLyricMarks.delete(key) || removed;
+  }
+  if (musicLyricsAnalysis?.path === path && Array.isArray(musicLyricsAnalysis.manualMarks)) {
+    musicLyricsAnalysis = {
+      ...musicLyricsAnalysis,
+      manualMarks: musicLyricsAnalysis.manualMarks.filter(mark => {
+        const key = musicLyricMarkStorageKey({ ...mark, path });
+        if (!removedMarks.has(key)) return true;
+        const removedAt = removedMarks.get(key);
+        return removedAt && mark?.createdAt !== removedAt;
+      })
+    };
+  }
+  return removed;
+}
+
+function flushPendingMusicLyricMarks(options = {}) {
+  const marks = Array.from(pendingMusicLyricMarks.values());
+  if (!marks.length) return Promise.resolve({ ok: true, count: 0 });
+  const payload = { marks };
+  if (options.beacon && navigator.sendBeacon) {
+    const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+    navigator.sendBeacon("/api/music/lyrics/marks/batch", blob);
+    pendingMusicLyricMarks.clear();
+    return Promise.resolve({ ok: true, count: marks.length });
+  }
+  const sent = new Map(marks.map(mark => [musicLyricMarkStorageKey(mark), mark.createdAt]));
+  musicLyricMarksFlushPromise = postJson("/api/music/lyrics/marks/batch", payload)
+    .then(result => {
+      sent.forEach((createdAt, key) => {
+        if (pendingMusicLyricMarks.get(key)?.createdAt === createdAt) {
+          pendingMusicLyricMarks.delete(key);
+        }
+      });
+      if (result?.marksByPath && musicLyricsAnalysis?.path && Array.isArray(result.marksByPath[musicLyricsAnalysis.path])) {
+        musicLyricsAnalysis = {
+          ...mergePendingMusicLyricMarksIntoAnalysis(musicLyricsAnalysis),
+          manualMarks: result.marksByPath[musicLyricsAnalysis.path]
+        };
+        musicLyricsAnalysis = mergePendingMusicLyricMarksIntoAnalysis(musicLyricsAnalysis);
+        const cachedTrack = selectedTrack()?.path === musicLyricsAnalysis.path ? selectedTrack() : musicLyricsAnalysis.path;
+        setMusicLyricsCacheEntry(cachedTrack, { analysis: musicLyricsAnalysis, analysisLoadedAt: Date.now() });
+        if (activeLyricsTimingTarget?.path === musicLyricsAnalysis.path && !els.lyricsTimingEditor?.hidden) {
+          renderLyricsTimingEditor();
+          syncLyricsLineVisualStates(musicLyricsActiveIndex, { instant: true });
+          updateLyricsProgress(Number(els.audioPlayer?.currentTime) || 0);
+        }
+      }
+      return result;
+    })
+    .catch(error => {
+      if (musicLyricsTrackPath && els.nowPlayingLyricsStatus) {
+        musicLyricsStatus = text("lyricsMarkFailed", error.message);
+        els.nowPlayingLyricsStatus.textContent = musicLyricsStatus;
+        els.nowPlayingLyricsStatus.hidden = false;
+      }
+      return { ok: false, error: error.message };
+    })
+    .finally(() => {
+      musicLyricMarksFlushPromise = null;
+    });
+  return musicLyricMarksFlushPromise;
+}
+
+function latestManualLyricBoundaryMarksForLine(index, preferredRole = "") {
+  const result = new Map();
+  for (const mark of manualLyricMarksForLine(index)) {
+    const boundaryIndex = Number(mark?.boundaryIndex);
+    if (!Number.isFinite(boundaryIndex) || boundaryIndex < 0) continue;
+    const role = musicLyricMarkRole(mark);
+    const key = boundaryIndex;
+    const previous = result.get(key);
+    const previousStamp = Date.parse(previous?.createdAt || "") || -1;
+    const markStamp = Date.parse(mark?.createdAt || "") || -1;
+    const previousRole = musicLyricMarkRole(previous);
+    const markPriority = preferredRole && role === preferredRole ? 2 : 1;
+    const previousPriority = preferredRole && previousRole === preferredRole ? 2 : 1;
+    if (!previous || markPriority > previousPriority || (markPriority === previousPriority && markStamp >= previousStamp)) {
+      result.set(key, mark);
+    }
+  }
+  return result;
+}
+
+function latestManualLyricBoundaryMark(index, boundaryIndex, role) {
+  const cleanBoundary = Math.max(0, Math.round(Number(boundaryIndex) || 0));
+  const cleanRole = role === "start" ? "start" : "end";
+  let latest = null;
+  let latestStamp = -1;
+  for (const mark of manualLyricMarksForLine(index)) {
+    if (Number(mark?.boundaryIndex) !== cleanBoundary || musicLyricMarkRole(mark) !== cleanRole) continue;
+    const time = Number(mark?.time);
+    if (!Number.isFinite(time)) continue;
+    const stamp = Date.parse(mark?.createdAt || "") || 0;
+    if (!latest || stamp >= latestStamp) {
+      latest = mark;
+      latestStamp = stamp;
+    }
+  }
+  return latest;
+}
+
+function exactManualLyricBoundaryTime(index, boundaryIndex, role) {
+  const mark = latestManualLyricBoundaryMark(index, boundaryIndex, role);
+  const time = Number(mark?.time);
+  return Number.isFinite(time) ? time : NaN;
+}
+
+function lyricsWordCountForLine(index, analysisLine = lyricsAnalysisLine(index)) {
+  const words = lyricsTimingTokens(lyricsLineText(index));
+  const spanCount = Array.isArray(analysisLine?.wordSpans) ? analysisLine.wordSpans.length : 0;
+  return Math.max(words.length, spanCount, 0);
+}
+
+function lyricsAutoBoundaryRelativeTime(boundaryIndex, analysisLine = null, wordCount = 0) {
+  const index = Math.max(0, Math.min(Math.round(Number(boundaryIndex) || 0), Math.max(0, wordCount)));
+  const wordTimes = Array.isArray(analysisLine?.wordTimes) ? analysisLine.wordTimes.map(Number) : [];
+  const hasAnalyzedWordTimes = wordTimes.length >= wordCount + 1;
+  if (hasAnalyzedWordTimes && Number.isFinite(wordTimes[index])) return Math.max(0, wordTimes[index]);
+  const wordSpans = Array.isArray(analysisLine?.wordSpans) ? analysisLine.wordSpans : [];
+  const hasAnalyzedWordSpans = wordSpans.length >= wordCount;
+  if (index <= 0) return 0;
+  if (index >= wordCount) {
+    const duration = Number(analysisLine?.duration);
+    if (Number.isFinite(duration)) return Math.max(0, duration);
+    const last = hasAnalyzedWordSpans ? wordSpans[wordSpans.length - 1] : null;
+    const lastEnd = Number(last?.end ?? last?.fillEnd);
+    if (Number.isFinite(lastEnd)) return Math.max(0, lastEnd);
+  }
+  const nextStart = Number(hasAnalyzedWordSpans ? wordSpans[index]?.start : NaN);
+  if (Number.isFinite(nextStart)) return Math.max(0, nextStart);
+  const previousEnd = Number(hasAnalyzedWordSpans ? wordSpans[index - 1]?.end ?? wordSpans[index - 1]?.fillEnd : NaN);
+  if (Number.isFinite(previousEnd)) return Math.max(0, previousEnd);
+  const duration = Number(analysisLine?.duration);
+  if (Number.isFinite(duration) && wordCount > 0) return Math.max(0, duration * (index / wordCount));
+  return index;
+}
+
+function manualLyricBoundaryAnchors(index, analysisLine = lyricsAnalysisLine(index), wordCount = 0, preferredRole = "") {
+  const anchors = [];
+  latestManualLyricBoundaryMarksForLine(index, preferredRole).forEach(mark => {
+    const boundaryIndex = Math.max(0, Math.min(Math.round(Number(mark?.boundaryIndex) || 0), wordCount));
+    const time = Number(mark?.time);
+    if (!Number.isFinite(time)) return;
+    anchors.push({
+      index: boundaryIndex,
+      time,
+      role: musicLyricMarkRole(mark)
+    });
+  });
+  anchors.sort((left, right) => left.index - right.index || left.time - right.time);
+  const deduped = [];
+  for (const anchor of anchors) {
+    if (deduped.length && deduped[deduped.length - 1].index === anchor.index) {
+      deduped[deduped.length - 1] = anchor;
+    } else {
+      deduped.push(anchor);
+    }
+  }
+  return deduped;
+}
+
+function manualLyricBoundaryTime(index, boundaryIndex, analysisLine = lyricsAnalysisLine(index), wordCount = 0, lineStart = NaN, preferredRole = "") {
+  const anchors = manualLyricBoundaryAnchors(index, analysisLine, wordCount, preferredRole);
+  if (!anchors.length) return NaN;
+  const cleanBoundary = Math.max(0, Math.min(Math.round(Number(boundaryIndex) || 0), wordCount));
+  const exact = anchors.find(anchor => anchor.index === cleanBoundary);
+  if (exact) return exact.time;
+  if (!Number.isFinite(lineStart)) return NaN;
+
+  const targetAuto = lineStart + lyricsAutoBoundaryRelativeTime(cleanBoundary, analysisLine, wordCount);
+  const previous = [...anchors].reverse().find(anchor => anchor.index < cleanBoundary);
+  const next = anchors.find(anchor => anchor.index > cleanBoundary);
+  if (previous && next) {
+    const previousAuto = lineStart + lyricsAutoBoundaryRelativeTime(previous.index, analysisLine, wordCount);
+    const nextAuto = lineStart + lyricsAutoBoundaryRelativeTime(next.index, analysisLine, wordCount);
+    const autoSpan = nextAuto - previousAuto;
+    const indexSpan = Math.max(1, next.index - previous.index);
+    const ratio = autoSpan > 0.001
+      ? clamp((targetAuto - previousAuto) / autoSpan, 0, 1)
+      : clamp((cleanBoundary - previous.index) / indexSpan, 0, 1);
+    return previous.time + (next.time - previous.time) * ratio;
+  }
+  if (previous) {
+    const previousAuto = lineStart + lyricsAutoBoundaryRelativeTime(previous.index, analysisLine, wordCount);
+    return previous.time + (targetAuto - previousAuto);
+  }
+  if (next) {
+    const nextAuto = lineStart + lyricsAutoBoundaryRelativeTime(next.index, analysisLine, wordCount);
+    return next.time - (nextAuto - targetAuto);
+  }
+  return NaN;
+}
+
+function manualLyricWordTiming(index, wordIndex, analysisLine = lyricsAnalysisLine(index), wordCount = 0, lineStart = NaN) {
+  const start = exactManualLyricBoundaryTime(index, wordIndex, "start");
+  if (!Number.isFinite(start)) return null;
+  let end = exactManualLyricBoundaryTime(index, wordIndex + 1, "end");
+  if (!Number.isFinite(end)) return null;
+  if (end <= start) end = start + 0.08;
+  return { start, end };
+}
+
+function manualLyricLineStartTime(index) {
+  return exactManualLyricBoundaryTime(index, 0, "start");
+}
+
+function manualLyricLineEndTime(index) {
+  const analysisLine = lyricsAnalysisLine(index);
+  const wordCount = lyricsWordCountForLine(index, analysisLine);
+  if (!wordCount) return NaN;
+  return exactManualLyricBoundaryTime(index, wordCount, "end");
+}
+
+function toggleSessionLyricBoundaryClass(wordNodes, boundaryIndex, role = "end", enabled = true) {
+  if (!wordNodes.length) return;
+  const index = Math.max(0, Math.min(wordNodes.length, Math.round(Number(boundaryIndex) || 0)));
+  const target = index <= 0 ? wordNodes[0] : wordNodes[index - 1];
+  const suffix = index <= 0 ? "before" : "after";
+  const cleanRole = role === "start" ? "start" : "end";
+  target.classList.toggle(`session-lyric-boundary-${cleanRole}-${suffix}`, Boolean(enabled));
+}
+
+function syncManualLyricMarkClasses(node, index) {
+  if (!node) return;
+  const marks = manualLyricMarksForLine(index);
+  node.classList.toggle("has-manual-mark", Boolean(marks.length));
+  const sessionMarks = sessionLyricMarksForLine(index);
+  const words = Array.from(node.querySelectorAll(".lyric-word"));
+  words.forEach(word => {
+    word.classList.remove(
+      "session-lyric-boundary-before",
+      "session-lyric-boundary-after",
+      "session-lyric-boundary-start-before",
+      "session-lyric-boundary-start-after",
+      "session-lyric-boundary-end-before",
+      "session-lyric-boundary-end-after"
+    );
+  });
+}
+
+function lyricsLineAnalysisStartTime(index) {
+  const start = Number(musicLyricsLines[index]?.time);
+  if (!Number.isFinite(start)) return start;
+  const analysisLine = lyricsAnalysisLine(index);
+  const analysisTime = Number(analysisLine?.analysisTime);
+  if (Number.isFinite(analysisTime)) return analysisTime;
+  const offset = Number(analysisLine?.startOffset);
+  if (Number.isFinite(offset)) return start + clamp(offset, -0.1, 0.16);
+  return start;
+}
+
+function lyricsLineWordStartTime(index) {
+  const manualStart = manualLyricLineStartTime(index);
+  if (Number.isFinite(manualStart)) return manualStart;
+  const rawStart = Number(musicLyricsLines[index]?.time);
+  const analysisStart = lyricsLineAnalysisStartTime(index);
+  if (!Number.isFinite(rawStart)) return analysisStart;
+  if (!Number.isFinite(analysisStart)) return rawStart;
+
+  const analysisDelay = analysisStart - rawStart;
+  if (analysisDelay > 0) {
+    return rawStart + Math.min(0.075, analysisDelay * 0.34);
+  }
+  return analysisStart;
+}
+
+function lyricsLineWordStats(index) {
+  const textLine = lyricsLineText(index);
+  const words = lyricsTimingTokens(textLine);
+  const characters = textLine.replace(/\s+/g, "").length;
+  return {
+    words: Math.max(1, words.length),
+    characters: Math.max(1, characters)
+  };
+}
+
+function lyricsWordEstimateWeight(token) {
+  const raw = String(token || "");
+  const clean = raw.replace(/[^A-Za-z0-9']/g, "").toLowerCase();
+  const letters = clean.replace(/[^A-Za-z]/g, "");
+  const syllables = lyricsEstimatedSyllableCount(clean);
+  const consonants = (letters.match(/[bcdfghjklmnpqrstvwxz]/g) || []).length;
+  const longTail = Math.max(0, letters.length - 6);
+  let weight = 0.14 + syllables * 0.26 + Math.min(letters.length, 8) * 0.026 + consonants * 0.012;
+  if (clean.includes("'")) {
+    weight += 0.04;
+  }
+  if (/(ing|tion|sion|ly|ness|ment)$/.test(clean)) {
+    weight += 0.08;
+  }
+  if (longTail > 0) {
+    weight += Math.min(0.16, longTail * 0.018);
+  }
+  if (lyricsLightWord(clean)) {
+    weight *= 0.62;
+  } else if (["you", "your", "me", "my", "our", "us", "he", "she", "they", "that", "this", "with", "for"].includes(clean)) {
+    weight *= 0.78;
+  }
+  if (/[,;:!?)]$/.test(raw)) {
+    weight += 0.16;
+  }
+  return Math.max(0.12, weight);
+}
+
+function lyricsLightWord(clean) {
+  return ["the", "a", "an", "of", "to", "we", "are", "is", "it", "i", "im", "i'm", "up", "and", "or", "in", "on", "at"].includes(clean);
+}
+
+function lyricsEstimatedSyllableCount(token) {
+  const clean = String(token || "").replace(/[^A-Za-z]/g, "").toLowerCase();
+  if (!clean) return 1;
+  let groups = clean.match(/[aeiouy]+/g)?.length || 1;
+  if (clean.endsWith("e") && groups > 1 && !clean.endsWith("le") && !clean.endsWith("ye")) {
+    groups -= 1;
+  }
+  return clamp(groups, 1, 4);
+}
+
+function lyricsEstimatedTextFillDuration(index, gap = NaN) {
+  const textLine = lyricsLineText(index);
+  const words = lyricsTimingTokens(textLine);
+  const characters = textLine.replace(/\s+/g, "").length;
+  const weighted = words.reduce((total, word) => total + lyricsWordEstimateWeight(word), 0) || Math.max(1, words.length) * 0.35;
+  const quickEstimate = 0.18 + weighted * 0.58 + characters * 0.006;
+  const longEstimate = 0.24 + words.length * 0.26 + characters * 0.014;
+  let estimate = quickEstimate;
+  if (Number.isFinite(gap) && gap >= 5 && words.length >= 8) {
+    estimate = longEstimate * 0.72 + quickEstimate * 0.28;
+  } else if (Number.isFinite(gap) && gap >= 3) {
+    estimate = quickEstimate * 0.78 + longEstimate * 0.22;
+  }
+  if (/[.!?]$/.test(textLine.trim())) {
+    estimate += 0.1;
+  }
+  return estimate;
+}
+
+function lyricsNextLineTime(index) {
+  for (let nextIndex = index + 1; nextIndex < musicLyricsLines.length; nextIndex += 1) {
+    const nextTime = Number(musicLyricsLines[nextIndex]?.time);
+    if (Number.isFinite(nextTime)) return nextTime;
+  }
+  return NaN;
+}
+
+function lyricsEstimatedWordFillDuration(index) {
+  const analysisLine = lyricsAnalysisLine(index);
+  const analyzedDuration = Number(analysisLine?.duration);
+  if (Number.isFinite(analyzedDuration) && analyzedDuration > 0) {
+    return clamp(analyzedDuration, lyricsMinWordFillSeconds, 8);
+  }
+
+  const start = Number(musicLyricsLines[index]?.time);
+  if (!Number.isFinite(start)) return 2.2;
+  const nextTime = lyricsNextLineTime(index);
+  const gap = Number.isFinite(nextTime) ? Math.max(0.2, nextTime - start) : NaN;
+  const textEstimate = lyricsEstimatedTextFillDuration(index, gap);
+  if (!Number.isFinite(gap)) return clamp(textEstimate, lyricsMinWordFillSeconds, 3.8);
+
+  const holdBeforeNext = gap >= 4 ? 1 : gap >= 3 ? 0.72 : 0.24;
+  const gapCap = Math.max(lyricsMinWordFillSeconds, gap - holdBeforeNext);
+  const ratioCap = Math.max(lyricsMinWordFillSeconds, gap * (gap >= 4 ? 0.56 : gap >= 3 ? 0.66 : 0.86));
+  return clamp(Math.min(textEstimate, gapCap, ratioCap), lyricsMinWordFillSeconds, Math.max(lyricsMinWordFillSeconds, gapCap));
+}
+
+function lyricsWordFillStartTime(index) {
+  const start = lyricsLineWordStartTime(index);
+  if (!Number.isFinite(start)) return start;
+  return start - lyricsWordFillLeadSeconds;
+}
+
+function lyricsLineEndTime(index) {
+  const start = lyricsWordFillStartTime(index);
+  if (!Number.isFinite(start)) return start;
+  const autoEnd = start + lyricsEstimatedWordFillDuration(index);
+  const manualEnd = manualLyricLineEndTime(index);
+  return Number.isFinite(manualEnd) ? Math.max(autoEnd, manualEnd) : autoEnd;
+}
+
+function lyricsLineOutroProgress(index, time = 0) {
+  const nextStart = lyricsLineDisplayStartTime(index + 1);
+  if (!Number.isFinite(nextStart)) return 0;
+  return easeLyricsValue((time - (nextStart - lyricsWordFillOutroSeconds)) / lyricsWordFillOutroSeconds);
+}
+
+function lyricsLinePostVocalProgress(index, time = 0) {
+  const lineEnd = lyricsLineEndTime(index);
+  if (!Number.isFinite(lineEnd)) return 0;
+  const nextStart = lyricsLineDisplayStartTime(index + 1);
+  const visualEnd = Number.isFinite(nextStart) ? nextStart : lyricsLineVisualHoldEndTime(index);
+  if (!Number.isFinite(visualEnd) || visualEnd <= lineEnd) return 0;
+  const gap = visualEnd - lineEnd;
+  if (gap <= 0.58) return 0;
+  const hold = Math.min(lyricsLineRestHoldSeconds, Math.max(0.16, gap * 0.28));
+  const fade = clamp(gap * 0.34, lyricsLineRestFadeMinSeconds, lyricsLineRestFadeMaxSeconds);
+  return easeLyricsValue((time - lineEnd - hold) / fade);
+}
+
+function lyricsLineVisualHoldEndTime(index) {
+  const nextStart = lyricsLineDisplayStartTime(index + 1);
+  if (Number.isFinite(nextStart)) return nextStart;
+  const duration = audioDuration();
+  const start = Number(musicLyricsLines[index]?.time);
+  if (Number.isFinite(start) && duration > start + 0.5) return duration;
+  return lyricsLineEndTime(index) + 0.4;
+}
+
+function lyricsLineProgress(index, time) {
+  const start = lyricsWordFillStartTime(index);
+  const end = lyricsLineEndTime(index);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  const raw = clamp((time - start) / (end - start), 0, 1);
+  return easeLyricsValue(raw);
+}
+
+function updateActiveLyricsWordProgress() {
+  const list = els.nowPlayingLyricsList;
+  const active = list?.querySelector(".music-lyrics-line.active");
+  if (!list || !active || !musicLyricsSynced || musicLyricsActiveIndex < 0) return;
+  list.querySelectorAll(".music-lyrics-line:not(.active)").forEach(node => resetLyricsWordProgress(node, 0));
+  active.style.setProperty("--line-progress", "1");
+  active.style.setProperty("--line-end-soft", "0");
+  active.style.setProperty("--line-rest-progress", "0");
+  active.style.setProperty("--line-rest-glow", "28%");
+  active.classList.remove("ending", "line-resting");
+  active.querySelectorAll(".lyric-word").forEach(word => {
+    word.style.setProperty("--word-fill", "1");
+    word.style.setProperty("--word-strength", "0.72");
+    word.style.setProperty("--word-transition", "120ms");
+    word.style.removeProperty("--word-current-brightness");
+    word.style.removeProperty("--word-current-saturation");
+    word.style.removeProperty("--word-valley");
+    word.style.removeProperty("--word-motion");
+    word.style.removeProperty("--word-break-strength");
+    word.style.removeProperty("--word-phrase-rest");
+    word.style.removeProperty("--word-valley-shadow");
+    word.classList.add("word-sung");
+    word.classList.remove("word-current", "word-hold", "word-wave-current", "word-phrase-rest", "word-strong", "word-valley-break", "word-group-break");
+  });
+}
+
+function resetLyricsWordProgress(node, value = 0) {
+  if (!node) return;
+  node.style.removeProperty("--line-progress");
+  node.style.removeProperty("--line-end-soft");
+  node.style.removeProperty("--line-rest-progress");
+  node.style.removeProperty("--line-rest-glow");
+  node.classList.remove("ending", "line-resting");
+  node.querySelectorAll(".lyric-word").forEach(word => {
+    word.style.setProperty("--word-fill", String(value));
+    word.style.removeProperty("--word-strength");
+    word.style.removeProperty("--word-current-brightness");
+    word.style.removeProperty("--word-current-saturation");
+    word.style.removeProperty("--word-valley");
+    word.style.removeProperty("--word-motion");
+    word.style.removeProperty("--word-break-strength");
+    word.style.removeProperty("--word-phrase-rest");
+    word.style.removeProperty("--word-valley-shadow");
+    word.style.removeProperty("--word-transition");
+    word.classList.toggle("word-sung", value >= 1);
+    word.classList.remove("word-current");
+    word.classList.remove("word-hold", "word-wave-current", "word-phrase-rest", "word-strong", "word-valley-break", "word-group-break");
+  });
+}
+
+function lyricsColorMix(fromToken, fromPercent, toToken) {
+  return `color-mix(in srgb, var(${fromToken}) ${Math.round(clamp(fromPercent, 0, 1) * 100)}%, var(${toToken}))`;
+}
+
+function setLyricsLineTone(node, tone = {}) {
+  if (!node) return;
+  if (tone.color) node.style.setProperty("--line-color", tone.color);
+  if (Number.isFinite(tone.opacity)) node.style.setProperty("--line-opacity", tone.opacity.toFixed(3));
+  if (Number.isFinite(tone.brightness)) node.style.setProperty("--line-brightness", tone.brightness.toFixed(3));
+  if (Number.isFinite(tone.saturation)) node.style.setProperty("--line-saturation", tone.saturation.toFixed(3));
+  if (Number.isFinite(tone.lift)) node.style.setProperty("--line-lift", `${tone.lift.toFixed(2)}px`);
+}
+
+function clearLyricsLineTone(node) {
+  if (!node) return;
+  node.style.removeProperty("--line-color");
+  node.style.removeProperty("--line-opacity");
+  node.style.removeProperty("--line-brightness");
+  node.style.removeProperty("--line-saturation");
+  node.style.removeProperty("--line-lift");
+}
+
+function updateLyricsLineTone(time = 0) {
+  const list = els.nowPlayingLyricsList;
+  if (!list) return;
+  const lines = list.querySelectorAll(".music-lyrics-line");
+  if (!musicLyricsSynced || !musicLyricsLines.length) {
+    lines.forEach(clearLyricsLineTone);
+    return;
+  }
+  lines.forEach(node => {
+    const index = Number(node.dataset.lyricsIndex);
+    const line = musicLyricsLines[index];
+    if (!Number.isFinite(index) || !line) {
+      clearLyricsLineTone(node);
+      return;
+    }
+
+    if (musicLyricsActiveIndex < 0) {
+      setLyricsLineTone(node, {
+        color: "var(--lyrics-upcoming-dim)",
+        opacity: 0.54,
+        brightness: 0.88,
+        saturation: 0.84,
+        lift: 0
+      });
+      return;
+    }
+
+    const distance = index - musicLyricsActiveIndex;
+    if (distance === 0) {
+      setLyricsLineTone(node, {
+        color: "var(--lyrics-active-text)",
+        opacity: 1,
+        brightness: 1.1,
+        saturation: 1.12,
+        lift: 0
+      });
+      return;
+    }
+
+    setLyricsLineTone(node, {
+      color: "var(--lyrics-upcoming-dim)",
+      opacity: 0.54,
+      brightness: 0.88,
+      saturation: 0.84,
+      lift: 0
+    });
+  });
+}
+
+function setLyricsLineVisualState(node, index, activeIndex = musicLyricsActiveIndex) {
+  if (!node) return;
+  node.className = "music-lyrics-line";
+  const line = musicLyricsLines[index];
+  const canSeek = Boolean(musicLyricsSynced && line && Number.isFinite(line.time));
+  node.classList.toggle("can-seek", canSeek);
+  syncManualLyricMarkClasses(node, index);
+  resetLyricsWordProgress(node, 0);
+  if (!musicLyricsSynced) return;
+
+  if (activeIndex < 0) {
+    node.classList.add("upcoming");
+    node.classList.add(index > 2 ? "distant" : "nearby");
+    return;
+  }
+
+  const distance = index - activeIndex;
+  if (distance === 0) {
+    node.classList.add("active");
+    return;
+  }
+  node.classList.add(distance < 0 ? "past" : "upcoming");
+  if (distance < 0) resetLyricsWordProgress(node, 0);
+  if (Math.abs(distance) === 1) node.classList.add("nearby");
+  else if (Math.abs(distance) > 3) node.classList.add("distant");
+}
+
+function syncLyricsLineVisualStates(activeIndex = musicLyricsActiveIndex, options = {}) {
+  const list = els.nowPlayingLyricsList;
+  const panel = els.nowPlayingLyricsPanel;
+  if (!list || !panel) return;
+  panel.classList.toggle("is-synced", musicLyricsSynced);
+  panel.classList.toggle("is-plain", !musicLyricsSynced && Boolean(musicLyricsLines.length));
+  panel.classList.toggle("has-active-line", activeIndex >= 0);
+  list.querySelectorAll(".music-lyrics-line").forEach(node => {
+    setLyricsLineVisualState(node, Number(node.dataset.lyricsIndex), activeIndex);
+  });
+  if (options.scroll && activeIndex >= 0) {
+    const active = list.querySelector(`[data-lyrics-index="${activeIndex}"]`);
+    active?.scrollIntoView({ block: "center", behavior: options.instant ? "auto" : "smooth" });
+  }
+  const currentTime = Number.isFinite(els.audioPlayer?.currentTime) ? els.audioPlayer.currentTime : 0;
+  updateActiveLyricsWordProgress(currentTime);
+  updateLyricsLineTone(currentTime);
+  syncLyricsTimingSelection();
+  syncLyricsAnimationLoop();
+}
+
+function lyricsAnimationShouldRun() {
+  return Boolean(
+    hasMusic &&
+    isModuleForeground("music") &&
+    musicLyricsSynced &&
+    musicLyricsLines.length &&
+    musicLyricsTrackPath &&
+    musicLyricsTrackPath === selectedTrackPath &&
+    els.nowPlayingLyricsPanel &&
+    !els.nowPlayingLyricsPanel.hidden &&
+    els.audioPlayer &&
+    !els.audioPlayer.paused &&
+    !els.audioPlayer.ended
+  );
+}
+
+function stopLyricsAnimationLoop() {
+  if (!musicLyricsAnimationFrame) return;
+  window.cancelAnimationFrame(musicLyricsAnimationFrame);
+  musicLyricsAnimationFrame = 0;
+}
+
+function syncLyricsAnimationLoop() {
+  if (!lyricsAnimationShouldRun()) {
+    stopLyricsAnimationLoop();
+    return;
+  }
+  if (musicLyricsAnimationFrame) return;
+  const tick = () => {
+    musicLyricsAnimationFrame = 0;
+    const current = Number.isFinite(els.audioPlayer.currentTime) ? els.audioPlayer.currentTime : 0;
+    updateLyricsProgress(current);
+    if (lyricsAnimationShouldRun()) {
+      musicLyricsAnimationFrame = window.requestAnimationFrame(tick);
+    }
+  };
+  musicLyricsAnimationFrame = window.requestAnimationFrame(tick);
+}
+
+function applyAudioCurrentTime(nextTime) {
+  try {
+    if (typeof els.audioPlayer.fastSeek === "function") {
+      els.audioPlayer.fastSeek(nextTime);
+    } else {
+      els.audioPlayer.currentTime = nextTime;
+    }
+  } catch {
+    try {
+      els.audioPlayer.currentTime = nextTime;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function seekToLyricsLine(index) {
+  const line = musicLyricsLines[index];
+  if (!musicLyricsSynced || !line || !Number.isFinite(line.time)) return;
+  const item = selectedTrack();
+  if (!item?.url || !item?.path) return;
+  const targetUrl = new URL(item.url, window.location.href).href;
+  if (selectedTrackPath !== item.path) {
+    setSelectedTrackPath(item.path, { persist: "now" });
+  }
+  if (els.audioPlayer.src !== targetUrl) {
+    els.audioPlayer.src = item.url;
+    els.audioPlayer.load();
+  }
+
+  const beforeRatio = currentAudioSeekRatio();
+  let didSeek = false;
+  const applySeek = () => {
+    if (didSeek) return;
+    const duration = audioDuration();
+    if (duration <= 0) return;
+    didSeek = true;
+    const displayStart = lyricsLineDisplayStartTime(index);
+    const targetStart = Number.isFinite(displayStart) ? displayStart : line.time;
+    const targetTime = clamp(targetStart, 0, Math.max(0, duration - 0.05));
+    if (!applyAudioCurrentTime(targetTime)) return;
+    pendingSeekRatio = null;
+    const targetRatio = clamp(targetTime / duration, 0, 1);
+    els.trackSeek.value = String(targetRatio * 100);
+    els.trackCurrentTime.textContent = formatDuration(targetTime);
+    els.trackDuration.textContent = formatDuration(duration);
+    musicLyricsActiveIndex = index;
+    heldLyricsActiveIndex = index;
+    heldLyricsActiveUntil = performance.now() + 760;
+    syncLyricsLineVisualStates(index, { scroll: true });
+    updateActiveLyricsWordProgress(targetTime);
+    recordTrackSeekChange(beforeRatio, targetRatio);
+    updateTrackProgress();
+  };
+
+  if (audioDuration() > 0) {
+    applySeek();
+    return;
+  }
+  els.audioPlayer.addEventListener("loadedmetadata", applySeek, { once: true });
+  els.audioPlayer.addEventListener("canplay", applySeek, { once: true });
+}
+
+function lyricsWordIndexAtTime(index, time = 0) {
+  const node = Array.from(els.nowPlayingLyricsList?.querySelectorAll(".music-lyrics-line") || [])
+    .find(item => Number(item.dataset.lyricsIndex) === index);
+  const wordNodes = Array.from(node?.querySelectorAll(".lyric-word") || []);
+  const wordCount = wordNodes.length;
+  if (!wordCount || !Number.isFinite(time)) return null;
+  const analysisLine = lyricsAnalysisLine(index);
+  const elapsed = time - lyricsWordFillStartTime(index);
+  const wordSpans = Array.isArray(analysisLine?.wordSpans) ? analysisLine.wordSpans : [];
+  if (Number.isFinite(elapsed) && wordSpans.length >= wordCount) {
+    let nearest = 0;
+    for (let wordIndex = 0; wordIndex < wordCount; wordIndex += 1) {
+      const start = Number(wordSpans[wordIndex]?.start);
+      const end = Number(wordSpans[wordIndex]?.fillEnd ?? wordSpans[wordIndex]?.end);
+      if (!Number.isFinite(start)) continue;
+      if (elapsed >= start) nearest = wordIndex;
+      if (Number.isFinite(end) && elapsed >= start && elapsed <= end) return wordIndex;
+      if (elapsed < start) break;
+    }
+    return clamp(nearest, 0, wordCount - 1);
+  }
+  const progress = lyricsLineProgress(index, time);
+  if (!Number.isFinite(progress)) return null;
+  return clamp(Math.ceil(progress * wordCount) - 1, 0, wordCount - 1);
+}
+
+function primaryLyricWordRect(word) {
+  const rects = Array.from(word?.getClientRects?.() || []).filter(rect => rect.width > 0 && rect.height > 0);
+  return rects[0] || word?.getBoundingClientRect?.() || null;
+}
+
+function closestLyricsBoundaryTarget(lineNode, clientX, clientY) {
+  const words = Array.from(lineNode?.querySelectorAll?.(".lyric-word") || []);
+  const wordRects = words
+    .map((word, index) => ({ word, index, rect: primaryLyricWordRect(word) }))
+    .filter(item => item.rect);
+  if (!wordRects.length) return null;
+
+  const candidates = [];
+  const addCandidate = (boundaryIndex, x, y) => {
+    const previousWord = boundaryIndex > 0 ? words[boundaryIndex - 1] : null;
+    const nextWord = boundaryIndex < words.length ? words[boundaryIndex] : null;
+    const dx = clientX - x;
+    const dy = clientY - y;
+    candidates.push({
+      boundaryIndex,
+      x,
+      y,
+      score: dx * dx + dy * dy * 0.72,
+      previousWord,
+      nextWord
+    });
+  };
+
+  const first = wordRects[0];
+  addCandidate(0, first.rect.left, first.rect.top + first.rect.height / 2);
+  for (let index = 1; index < wordRects.length; index += 1) {
+    const previous = wordRects[index - 1];
+    const next = wordRects[index];
+    const previousCenterY = previous.rect.top + previous.rect.height / 2;
+    const nextCenterY = next.rect.top + next.rect.height / 2;
+    const sameVisualRow = Math.abs(previousCenterY - nextCenterY) <= Math.max(previous.rect.height, next.rect.height) * 0.74;
+    if (sameVisualRow) {
+      addCandidate(index, (previous.rect.right + next.rect.left) / 2, (previousCenterY + nextCenterY) / 2);
+    } else {
+      addCandidate(index, previous.rect.right, previousCenterY);
+      addCandidate(index, next.rect.left, nextCenterY);
+    }
+  }
+  const last = wordRects[wordRects.length - 1];
+  addCandidate(words.length, last.rect.right, last.rect.top + last.rect.height / 2);
+
+  const best = candidates.sort((left, right) => left.score - right.score)[0];
+  if (!best) return null;
+  return {
+    boundaryIndex: best.boundaryIndex,
+    wordCount: words.length,
+    previousWord: best.previousWord?.textContent || "",
+    nextWord: best.nextWord?.textContent || "",
+    markerWord: best.boundaryIndex <= 0 ? words[0] : words[best.boundaryIndex - 1],
+  };
+}
+
+function formatLyricsEditorTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "";
+  const totalMillis = Math.round(seconds * 1000);
+  const minutes = Math.floor(totalMillis / 60000);
+  const wholeSeconds = Math.floor((totalMillis % 60000) / 1000);
+  const millis = totalMillis % 1000;
+  return `${minutes}:${String(wholeSeconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+}
+
+function parseLyricsEditorTime(value) {
+  let raw = String(value || "").trim();
+  if (!raw) return NaN;
+  raw = raw
+    .replace(/[：]/g, ":")
+    .replace(/\s+/g, "")
+    .replace(/[\uff1a]/g, ":")
+    .replace(/\u5206/gi, ":")
+    .replace(/\u79d2/gi, "")
+    .replace(/分/gi, ":")
+    .replace(/秒/gi, "")
+    .replace(/m/gi, ":")
+    .replace(/s/gi, "");
+  if (/^\d+(?:\.\d+)?$/.test(raw)) return Number(raw);
+  const parts = raw.split(":");
+  if (parts.length < 2 || parts.some(part => part === "")) return NaN;
+  const seconds = Number(parts.pop());
+  if (!Number.isFinite(seconds)) return NaN;
+  let units = 0;
+  for (const part of parts) {
+    const valuePart = Number(part);
+    if (!Number.isFinite(valuePart)) return NaN;
+    units = units * 60 + valuePart;
+  }
+  return units * 60 + seconds;
+}
+
+function lyricsBoundaryReferenceTime(lineIndex, boundaryIndex, role) {
+  const exact = latestManualLyricBoundaryMark(lineIndex, boundaryIndex, role);
+  const exactTime = Number(exact?.time);
+  if (Number.isFinite(exactTime)) return exactTime;
+  const analysisLine = lyricsAnalysisLine(lineIndex);
+  const wordCount = lyricsWordCountForLine(lineIndex, analysisLine);
+  const lineStart = lyricsWordFillStartTime(lineIndex);
+  if (Number.isFinite(lineStart)) {
+    return lineStart + lyricsAutoBoundaryRelativeTime(boundaryIndex, analysisLine, wordCount);
+  }
+  const rawStart = Number(musicLyricsLines[lineIndex]?.time);
+  if (Number.isFinite(rawStart)) {
+    return rawStart + lyricsAutoBoundaryRelativeTime(boundaryIndex, analysisLine, wordCount);
+  }
+  return NaN;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+
+function refreshLyricsTimingEditorRefs() {
+  const root = els.lyricsTimingEditor;
+  if (!root) return;
+  els.lyricsTimingTarget = root.querySelector("#lyricsTimingTarget");
+  els.lyricsTimingStartInput = root.querySelector("#lyricsTimingStartInput");
+  els.lyricsTimingEndInput = root.querySelector("#lyricsTimingEndInput");
+  els.lyricsTimingUseNowStart = root.querySelector("[data-lyrics-action='use-now-start']");
+  els.lyricsTimingUseNowEnd = root.querySelector("[data-lyrics-action='use-now-end']");
+  els.lyricsTimingSave = root.querySelector("[data-lyrics-action='save-selected']");
+  els.lyricsTimingClear = root.querySelector("[data-lyrics-action='clear-selected']");
+  els.lyricsTimingClose = root.querySelector("[data-lyrics-action='close']");
+}
+
+function bindLyricsTimingEditorEvents(root = els.lyricsTimingEditor) {
+  if (!hasMusic || !root || root.dataset.lyricsTimingBound === "true") return;
+  root.addEventListener("click", handleLyricsTimingEditorClick);
+  root.addEventListener("contextmenu", handleLyricsTimingEditorContextMenu);
+  root.addEventListener("dblclick", handleLyricsTimingEditorDoubleClick);
+  root.addEventListener("input", handleLyricsTimingEditorInput);
+  root.addEventListener("keydown", handleLyricsTimingEditorKeydown);
+  root.addEventListener("focusout", handleLyricsTimingEditorFocusOut);
+  root.addEventListener("pointerdown", handleLyricsTimingWavePointerDown);
+  root.addEventListener("pointermove", handleLyricsTimingWavePointerMove);
+  root.addEventListener("pointerup", finishLyricsTimingWaveDrag);
+  root.addEventListener("pointercancel", finishLyricsTimingWaveDrag);
+  root.dataset.lyricsTimingBound = "true";
+}
+
+function ensureLyricsTimingEditorRoot() {
+  let root = els.lyricsTimingEditor || document.getElementById("lyricsTimingEditor");
+  if (!root || !root.isConnected) {
+    root = document.createElement("div");
+    root.id = "lyricsTimingEditor";
+    root.className = "lyrics-timing-editor";
+    root.hidden = true;
+  }
+  els.lyricsTimingEditor = root;
+  root.classList.add("lyrics-timing-editor");
+  if (els.nowPlayingLyricsPanel?.parentElement) {
+    els.nowPlayingLyricsPanel.insertAdjacentElement("afterend", root);
+  } else {
+    els.nowPlayingLyricsPanel?.appendChild(root);
+  }
+  bindLyricsTimingEditorEvents(root);
+  refreshLyricsTimingEditorRefs();
+  return root;
+}
+
+function detachLyricsTimingEditorFromList() {
+  ensureLyricsTimingEditorRoot();
+}
+
+function mountLyricsTimingEditorForLine(lineIndex) {
+  const root = ensureLyricsTimingEditorRoot();
+  if (!root) return;
+  root.hidden = false;
+  window.requestAnimationFrame(() => {
+    root.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
+}
+
+function lyricsLineTimingTargets(lineIndex) {
+  const words = lyricsTimingTokens(lyricsLineText(lineIndex));
+  const wordCount = words.length;
+  return words.map((wordText, wordIndex) => ({
+    path: musicLyricsTrackPath,
+    lineIndex,
+    wordIndex,
+    wordCount,
+    wordText,
+    previousWord: words[wordIndex - 1] || "",
+    nextWord: words[wordIndex + 1] || "",
+    startBoundaryIndex: wordIndex,
+    endBoundaryIndex: wordIndex + 1,
+    lineText: lyricsLineText(lineIndex)
+  }));
+}
+
+function lyricsTimingTargetForLineWord(lineIndex, wordIndex) {
+  const targets = lyricsLineTimingTargets(lineIndex);
+  if (!targets.length) return null;
+  const cleanIndex = clamp(Math.round(Number(wordIndex) || 0), 0, targets.length - 1);
+  return targets[cleanIndex] || null;
+}
+
+function lyricsTimingInputState(target, role) {
+  const boundaryIndex = role === "start" ? target.startBoundaryIndex : target.endBoundaryIndex;
+  const exact = exactManualLyricBoundaryTime(target.lineIndex, boundaryIndex, role);
+  const reference = lyricsBoundaryReferenceTime(target.lineIndex, boundaryIndex, role);
+  return {
+    manual: Number.isFinite(exact),
+    value: Number.isFinite(exact) ? formatLyricsEditorTime(exact) : "",
+    placeholder: Number.isFinite(reference) ? formatLyricsEditorTime(reference) : ""
+  };
+}
+
+function lyricsTimingTargetHasManual(target) {
+  return lyricsTimingInputState(target, "start").manual || lyricsTimingInputState(target, "end").manual;
+}
+
+function normalizeLyricsTimingRange(target = activeLyricsTimingTarget) {
+  const wordCount = Math.max(1, Number(target?.wordCount) || 1);
+  if (!Number.isFinite(activeLyricsTimingRangeStart) || !Number.isFinite(activeLyricsTimingRangeEnd)) {
+    activeLyricsTimingRangeStart = Number(target?.wordIndex) || 0;
+    activeLyricsTimingRangeEnd = activeLyricsTimingRangeStart;
+  }
+  activeLyricsTimingRangeStart = clamp(Math.round(activeLyricsTimingRangeStart), 0, wordCount - 1);
+  activeLyricsTimingRangeEnd = clamp(Math.round(activeLyricsTimingRangeEnd), 0, wordCount - 1);
+  if (activeLyricsTimingRangeEnd < activeLyricsTimingRangeStart) {
+    [activeLyricsTimingRangeStart, activeLyricsTimingRangeEnd] = [activeLyricsTimingRangeEnd, activeLyricsTimingRangeStart];
+  }
+}
+
+function lyricsTimingWordInRange(wordIndex) {
+  return Number(wordIndex) >= activeLyricsTimingRangeStart && Number(wordIndex) <= activeLyricsTimingRangeEnd;
+}
+
+function lyricsTimingSelectedTargets() {
+  const target = activeLyricsTimingTarget;
+  if (!target) return [];
+  normalizeLyricsTimingRange(target);
+  return lyricsLineTimingTargets(target.lineIndex).filter(item => lyricsTimingWordInRange(item.wordIndex));
+}
+
+function lyricsTimingRangeBoundary(role) {
+  normalizeLyricsTimingRange(activeLyricsTimingTarget);
+  return role === "start" ? activeLyricsTimingRangeStart : activeLyricsTimingRangeEnd + 1;
+}
+
+function lyricsTimingRangeSegmentTime(role) {
+  const target = activeLyricsTimingTarget;
+  if (!target) return NaN;
+  normalizeLyricsTimingRange(target);
+  const segments = lyricsTimingWordSegments(target.lineIndex);
+  const segment = role === "start"
+    ? segments[activeLyricsTimingRangeStart]
+    : segments[activeLyricsTimingRangeEnd];
+  const time = role === "start" ? Number(segment?.start) : Number(segment?.end);
+  return Number.isFinite(time) ? time : NaN;
+}
+
+function lyricsTimingRangeInputState(role) {
+  const target = activeLyricsTimingTarget;
+  if (!target) return { manual: false, value: "", placeholder: "", time: NaN };
+  const boundaryIndex = lyricsTimingRangeBoundary(role);
+  const exact = exactManualLyricBoundaryTime(target.lineIndex, boundaryIndex, role);
+  const segmentTime = lyricsTimingRangeSegmentTime(role);
+  const reference = Number.isFinite(segmentTime)
+    ? segmentTime
+    : lyricsBoundaryReferenceTime(target.lineIndex, boundaryIndex, role);
+  const time = Number.isFinite(segmentTime) ? segmentTime : Number.isFinite(exact) ? exact : reference;
+  return {
+    manual: Number.isFinite(exact),
+    value: Number.isFinite(exact) ? formatLyricsEditorTime(exact) : "",
+    placeholder: Number.isFinite(reference) ? formatLyricsEditorTime(reference) : "",
+    time
+  };
+}
+
+function lyricsTimingDurationTextFromValues(startValue, endValue) {
+  const start = parseLyricsEditorTime(startValue);
+  const end = parseLyricsEditorTime(endValue);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "";
+  return formatLyricsEditorTime(end - start);
+}
+
+function lyricsTimingDurationText(target) {
+  const start = lyricsTimingInputState(target, "start").value;
+  const end = lyricsTimingInputState(target, "end").value;
+  return lyricsTimingDurationTextFromValues(start, end);
+}
+
+function lyricsTimingInputHtml(target, role, className) {
+  const state = lyricsTimingInputState(target, role);
+  return `<input class="${className}" type="text" inputmode="decimal" autocomplete="off" data-role="${role}" data-word-index="${target.wordIndex}" value="${escapeHtml(state.value)}" placeholder="${escapeHtml(state.placeholder)}">`;
+}
+
+function lyricsTimingRangeInputHtml(role, className, id = "") {
+  const state = lyricsTimingRangeInputState(role);
+  const idPart = id ? ` id="${id}"` : "";
+  return `<input${idPart} class="${className}" type="text" inputmode="decimal" autocomplete="off" data-role="${role}" value="${escapeHtml(state.value)}" placeholder="${escapeHtml(state.placeholder)}">`;
+}
+
+function lyricsWaveformWindow(lineIndex) {
+  const analysisLine = lyricsAnalysisLine(lineIndex);
+  const waveform = analysisLine?.waveform && typeof analysisLine.waveform === "object" ? analysisLine.waveform : null;
+  const samples = Array.isArray(waveform?.samples) ? waveform.samples.map(Number).filter(Number.isFinite) : [];
+  const lineStart = Number(waveform?.start);
+  const lineEnd = Number(waveform?.end);
+  if (samples.length && Number.isFinite(lineStart) && Number.isFinite(lineEnd) && lineEnd > lineStart) {
+    return { start: lineStart, end: lineEnd, samples };
+  }
+  const start = Number(musicLyricsLines[lineIndex]?.time);
+  const next = lyricsNextLineTime(lineIndex);
+  const fallbackStart = Number.isFinite(start) ? Math.max(0, start - 0.25) : 0;
+  const fallbackEnd = Number.isFinite(next) ? next + 0.25 : fallbackStart + Math.max(1.2, lyricsEstimatedWordFillDuration(lineIndex) + 0.5);
+  return { start: fallbackStart, end: fallbackEnd, samples: [] };
+}
+
+function lyricsWaveformPercent(time, wave) {
+  if (!Number.isFinite(time) || !wave || wave.end <= wave.start) return 0;
+  return clamp((time - wave.start) / (wave.end - wave.start), 0, 1) * 100;
+}
+
+function lyricsWaveformTime(percent, wave) {
+  if (!wave || wave.end <= wave.start) return NaN;
+  return wave.start + clamp(percent, 0, 1) * (wave.end - wave.start);
+}
+
+function lyricsWaveformPolygon(samples, width = 1000, height = 96) {
+  const hasSamples = Boolean(samples.length);
+  const source = hasSamples
+    ? samples
+    : Array.from({ length: 48 }, (_, index) => 0.58 + Math.sin(index * 0.6) * 0.08);
+  const clean = source.map(value => {
+    const normalized = clamp(Number(value) || 0, 0, 1);
+    const boosted = Math.pow(normalized, 0.68);
+    return Math.max(hasSamples ? 0.22 : 0.46, boosted);
+  });
+  const middle = height / 2;
+  const top = clean.map((value, index) => {
+    const x = clean.length <= 1 ? 0 : (index / (clean.length - 1)) * width;
+    const amp = clamp(Number(value) || 0, 0, 1) * (height * 0.46);
+    return `${x.toFixed(1)},${(middle - amp).toFixed(1)}`;
+  });
+  const bottom = [...clean].reverse().map((value, reverseIndex) => {
+    const index = clean.length - 1 - reverseIndex;
+    const x = clean.length <= 1 ? 0 : (index / (clean.length - 1)) * width;
+    const amp = clamp(Number(value) || 0, 0, 1) * (height * 0.46);
+    return `${x.toFixed(1)},${(middle + amp).toFixed(1)}`;
+  });
+  return [...top, ...bottom].join(" ");
+}
+
+function lyricsTimingWordSegments(lineIndex, wave = lyricsWaveformWindow(lineIndex)) {
+  return lyricsTimingWordSegmentPlan(lineIndex, wave).segments;
+}
+
+function lyricsTimingWordSegmentPlan(lineIndex, wave = lyricsWaveformWindow(lineIndex)) {
+  const targets = lyricsLineTimingTargets(lineIndex);
+  const span = Math.max(0.2, (Number(wave?.end) || 0) - (Number(wave?.start) || 0));
+  let previousEnd = NaN;
+  let correctedCount = 0;
+  const segments = targets.map((target, index) => {
+    let start = lyricsBoundaryReferenceTime(lineIndex, target.startBoundaryIndex, "start");
+    let end = lyricsBoundaryReferenceTime(lineIndex, target.endBoundaryIndex, "end");
+    if (!Number.isFinite(start)) {
+      start = wave.start + span * (index / Math.max(1, targets.length));
+    }
+    if (!Number.isFinite(end)) {
+      end = wave.start + span * ((index + 1) / Math.max(1, targets.length));
+    }
+    start = Math.max(0, start);
+    end = Math.max(0, end);
+    const originalStart = start;
+    const originalEnd = end;
+    let corrected = false;
+    if (Number.isFinite(previousEnd) && start < previousEnd) {
+      const shift = previousEnd - start;
+      start += shift;
+      end += shift;
+      corrected = true;
+    }
+    const minDuration = Math.max(lyricsTimingMinBoundaryGap, Math.min(0.08, span / Math.max(10, targets.length * 6)));
+    if (end < start + minDuration) {
+      end = start + minDuration;
+      corrected = true;
+    }
+    if (corrected || Math.abs(start - originalStart) > 0.0005 || Math.abs(end - originalEnd) > 0.0005) {
+      correctedCount += 1;
+    }
+    previousEnd = end;
+    return {
+      ...target,
+      originalStart,
+      originalEnd,
+      start,
+      end,
+      corrected
+    };
+  });
+  return { segments, correctedCount };
+}
+
+function lyricsTimingRangeTimeLimits(target = activeLyricsTimingTarget) {
+  if (!target) return { minStart: -Infinity, maxEnd: Infinity };
+  normalizeLyricsTimingRange(target);
+  const segments = lyricsTimingWordSegments(target.lineIndex);
+  const rangeStartBoundary = lyricsTimingRangeBoundary("start");
+  const rangeEndBoundary = lyricsTimingRangeBoundary("end");
+  const selectedStartSegment = segments[rangeStartBoundary];
+  const selectedEndSegment = segments[rangeEndBoundary - 1];
+  const wave = lyricsWaveformWindow(target.lineIndex);
+  const previousBlock = lyricsTimingRangeSideBlock(target.lineIndex, rangeStartBoundary, "previous", segments);
+  const nextBlock = lyricsTimingRangeSideBlock(target.lineIndex, rangeEndBoundary, "next", segments);
+  const waveStart = Number(wave?.start);
+  const waveEnd = Number(wave?.end);
+  const selectedCount = Math.max(1, rangeEndBoundary - rangeStartBoundary);
+  const previousSpanStart = Number(segments[previousBlock?.startIndex]?.start);
+  const nextSpanEnd = Number(segments[nextBlock?.endIndex]?.end);
+  const previousCount = previousBlock ? previousBlock.endIndex - previousBlock.startIndex + 1 : 0;
+  const nextCount = nextBlock ? nextBlock.endIndex - nextBlock.startIndex + 1 : 0;
+  const minStart = previousBlock
+    ? previousSpanStart + previousCount * lyricsTimingMinBoundaryGap
+    : rangeStartBoundary <= 0
+      ? (Number.isFinite(waveStart) ? waveStart : 0)
+      : Number(selectedStartSegment?.start);
+  const maxEnd = nextBlock
+    ? nextSpanEnd - nextCount * lyricsTimingMinBoundaryGap
+    : rangeEndBoundary >= segments.length
+      ? (Number.isFinite(waveEnd) ? waveEnd : Number(selectedEndSegment?.end))
+      : Number(selectedEndSegment?.end);
+  return {
+    minStart: Number.isFinite(minStart) ? minStart : 0,
+    maxEnd: Number.isFinite(maxEnd) ? maxEnd : Infinity,
+    minDuration: selectedCount * lyricsTimingMinBoundaryGap
+  };
+}
+
+function lyricsTimingTargetTimeLimits(target) {
+  if (!target) return { minStart: -Infinity, maxEnd: Infinity };
+  const segments = lyricsTimingWordSegments(target.lineIndex);
+  const previousEnd = Number(segments[target.wordIndex - 1]?.end);
+  const nextStart = Number(segments[target.wordIndex + 1]?.start);
+  return {
+    minStart: Number.isFinite(previousEnd) ? previousEnd : -Infinity,
+    maxEnd: Number.isFinite(nextStart) ? nextStart : Infinity
+  };
+}
+
+function constrainLyricsTimingTimes(start, end, limits = {}, role = "") {
+  let cleanStart = Number(start);
+  let cleanEnd = Number(end);
+  if (!Number.isFinite(cleanStart) || !Number.isFinite(cleanEnd)) {
+    return { ok: false, message: text("lyricsTimingInvalid"), start: cleanStart, end: cleanEnd, corrected: false };
+  }
+  const minStart = Number.isFinite(limits.minStart) ? limits.minStart : 0;
+  const maxEnd = Number.isFinite(limits.maxEnd) ? limits.maxEnd : Infinity;
+  const minGap = Number.isFinite(limits.minDuration)
+    ? Math.max(lyricsTimingMinBoundaryGap, Number(limits.minDuration))
+    : lyricsTimingMinBoundaryGap;
+  let corrected = false;
+  if (role === "start") {
+    const maxStart = Math.min(cleanEnd - minGap, maxEnd - minGap);
+    if (maxStart < minStart) {
+      return { ok: false, message: text("lyricsTimingOrderInvalid"), start: cleanStart, end: cleanEnd, corrected };
+    }
+    const nextStart = clamp(cleanStart, minStart, maxStart);
+    corrected = corrected || Math.abs(nextStart - cleanStart) > 0.0005;
+    cleanStart = nextStart;
+  } else if (role === "end") {
+    const minEnd = Math.max(cleanStart + minGap, minStart + minGap);
+    if (maxEnd < minEnd) {
+      return { ok: false, message: text("lyricsTimingOrderInvalid"), start: cleanStart, end: cleanEnd, corrected };
+    }
+    const nextEnd = clamp(cleanEnd, minEnd, maxEnd);
+    corrected = corrected || Math.abs(nextEnd - cleanEnd) > 0.0005;
+    cleanEnd = nextEnd;
+  } else {
+    const nextStart = Math.max(cleanStart, minStart);
+    const nextEnd = Math.min(cleanEnd, maxEnd);
+    corrected = corrected || Math.abs(nextStart - cleanStart) > 0.0005 || Math.abs(nextEnd - cleanEnd) > 0.0005;
+    cleanStart = nextStart;
+    cleanEnd = nextEnd;
+    if (cleanEnd <= cleanStart + minGap) {
+      return { ok: false, message: text("lyricsTimingOrderInvalid"), start: cleanStart, end: cleanEnd, corrected };
+    }
+  }
+  if (cleanEnd <= cleanStart) {
+    return { ok: false, message: text("lyricsTimingRangeInvalid"), start: cleanStart, end: cleanEnd, corrected };
+  }
+  return { ok: true, start: cleanStart, end: cleanEnd, corrected };
+}
+
+function lyricsTimingRangeSideBlock(lineIndex, boundaryIndex, side, segments = lyricsTimingWordSegments(lineIndex)) {
+  const cleanBoundary = Math.round(Number(boundaryIndex));
+  if (!Number.isFinite(cleanBoundary) || !Array.isArray(segments) || !segments.length) return null;
+  const holdBoundaries = new Set();
+  if (side === "previous") {
+    if (cleanBoundary <= 0 || holdBoundaries.has(cleanBoundary)) return null;
+    let startIndex = 0;
+    for (let index = cleanBoundary - 1; index > 0; index -= 1) {
+      if (holdBoundaries.has(index)) {
+        startIndex = index;
+        break;
+      }
+    }
+    const endIndex = Math.min(cleanBoundary - 1, segments.length - 1);
+    return startIndex <= endIndex ? { startIndex, endIndex } : null;
+  }
+  if (cleanBoundary >= segments.length || holdBoundaries.has(cleanBoundary)) return null;
+  let endIndex = segments.length - 1;
+  for (let index = cleanBoundary + 1; index < segments.length; index += 1) {
+    if (holdBoundaries.has(index)) {
+      endIndex = index - 1;
+      break;
+    }
+  }
+  const startIndex = Math.max(0, cleanBoundary);
+  return startIndex <= endIndex ? { startIndex, endIndex } : null;
+}
+
+function updateLyricsTimingSegmentRange(segment, start, end, changed) {
+  if (!segment) return false;
+  const cleanStart = Number(start);
+  const cleanEnd = Number(end);
+  if (!Number.isFinite(cleanStart) || !Number.isFinite(cleanEnd) || cleanEnd < cleanStart + lyricsTimingMinBoundaryGap - 0.0005) {
+    return false;
+  }
+  const hasChanged = changed ||
+    Math.abs(Number(segment.start) - cleanStart) > 0.0005 ||
+    Math.abs(Number(segment.end) - cleanEnd) > 0.0005;
+  if (!hasChanged) return true;
+  segment.start = cleanStart;
+  segment.end = cleanEnd;
+  segment.corrected = true;
+  return true;
+}
+
+function layoutLyricsTimingPreviousNeighborsToBoundary(segments, startIndex, endIndex, boundaryTime) {
+  const firstIndex = Math.max(0, Math.round(Number(startIndex)));
+  const lastIndex = Math.min(segments.length - 1, Math.round(Number(endIndex)));
+  const boundary = Number(boundaryTime);
+  if (!Array.isArray(segments) || firstIndex > lastIndex) {
+    return { ok: true, segments: [] };
+  }
+  if (!Number.isFinite(boundary)) {
+    return { ok: false, message: text("lyricsTimingOrderInvalid"), segments: [] };
+  }
+  const changed = [];
+  let nextStart = boundary;
+  for (let index = lastIndex; index >= firstIndex; index -= 1) {
+    const segment = segments[index];
+    if (!segment) continue;
+    const oldStart = Number(segment.start);
+    const oldEnd = Number(segment.end);
+    let start = Number.isFinite(oldStart) ? oldStart : nextStart - lyricsTimingMinBoundaryGap;
+    const end = nextStart;
+    if (end < start + lyricsTimingMinBoundaryGap) {
+      start = end - lyricsTimingMinBoundaryGap;
+    }
+    if (start < -0.0005 || end < start + lyricsTimingMinBoundaryGap - 0.0005) {
+      return { ok: false, message: text("lyricsTimingOrderInvalid"), segments: changed };
+    }
+    const didChange = Math.abs(start - oldStart) > 0.0005 || Math.abs(end - oldEnd) > 0.0005;
+    if (!updateLyricsTimingSegmentRange(segment, Math.max(0, start), end, didChange)) {
+      return { ok: false, message: text("lyricsTimingOrderInvalid"), segments: changed };
+    }
+    if (didChange) changed.push(segment);
+    nextStart = segment.start;
+  }
+  return { ok: true, segments: changed };
+}
+
+function layoutLyricsTimingNextNeighborsToBoundary(segments, startIndex, endIndex, boundaryTime) {
+  const firstIndex = Math.max(0, Math.round(Number(startIndex)));
+  const lastIndex = Math.min(segments.length - 1, Math.round(Number(endIndex)));
+  const boundary = Number(boundaryTime);
+  if (!Array.isArray(segments) || firstIndex > lastIndex) {
+    return { ok: true, segments: [] };
+  }
+  if (!Number.isFinite(boundary)) {
+    return { ok: false, message: text("lyricsTimingOrderInvalid"), segments: [] };
+  }
+  const changed = [];
+  let previousEnd = boundary;
+  for (let index = firstIndex; index <= lastIndex; index += 1) {
+    const segment = segments[index];
+    if (!segment) continue;
+    const oldStart = Number(segment.start);
+    const oldEnd = Number(segment.end);
+    const start = previousEnd;
+    let end = Number.isFinite(oldEnd) ? oldEnd : start + lyricsTimingMinBoundaryGap;
+    if (end < start + lyricsTimingMinBoundaryGap) {
+      end = start + lyricsTimingMinBoundaryGap;
+    }
+    if (start < -0.0005 || end < start + lyricsTimingMinBoundaryGap - 0.0005) {
+      return { ok: false, message: text("lyricsTimingOrderInvalid"), segments: changed };
+    }
+    const didChange = Math.abs(start - oldStart) > 0.0005 || Math.abs(end - oldEnd) > 0.0005;
+    if (!updateLyricsTimingSegmentRange(segment, Math.max(0, start), end, didChange)) {
+      return { ok: false, message: text("lyricsTimingOrderInvalid"), segments: changed };
+    }
+    if (didChange) changed.push(segment);
+    previousEnd = segment.end;
+  }
+  return { ok: true, segments: changed };
+}
+
+function layoutLyricsTimingWordDrag(drag, desiredStart, options = {}) {
+  const segments = Array.isArray(drag?.segments) ? drag.segments.map(segment => ({ ...segment })) : [];
+  const index = Number(drag?.wordIndex);
+  const current = segments[index];
+  if (!current) return { ok: false, message: text("lyricsTimingInvalid"), segments: [] };
+  const wave = drag.wave || lyricsTimingWordDragWave(drag.waveNode);
+  const duration = Math.max(lyricsTimingMinBoundaryGap, Number(drag.duration) || lyricsTimingMinBoundaryGap);
+  const previousBlock = lyricsTimingRangeSideBlock(drag.lineIndex, index, "previous", segments);
+  const nextBlock = lyricsTimingRangeSideBlock(drag.lineIndex, index + 1, "next", segments);
+  const preserveGap = Boolean(options.preserveGap);
+  const movingRight = Number(desiredStart) > Number(drag.startTime) + 0.0005;
+  const movingLeft = Number(desiredStart) < Number(drag.startTime) - 0.0005;
+  const previousSpanStart = Number(segments[previousBlock?.startIndex]?.start);
+  const nextSpanEnd = Number(segments[nextBlock?.endIndex]?.end);
+  const previousCount = previousBlock ? previousBlock.endIndex - previousBlock.startIndex + 1 : 0;
+  const nextCount = nextBlock ? nextBlock.endIndex - nextBlock.startIndex + 1 : 0;
+  const previousEnd = Number(segments[index - 1]?.end);
+  const nextStart = Number(segments[index + 1]?.start);
+  const minStart = preserveGap && !movingLeft
+    ? index <= 0
+      ? (Number.isFinite(wave.start) ? wave.start : 0)
+      : Number.isFinite(previousEnd)
+        ? previousEnd
+        : Number(current.start)
+    : previousBlock
+    ? previousSpanStart + previousCount * lyricsTimingMinBoundaryGap
+    : index <= 0
+      ? (Number.isFinite(wave.start) ? wave.start : 0)
+      : Number(current.start);
+  const maxStart = preserveGap && !movingRight
+    ? index >= segments.length - 1
+      ? (Number.isFinite(wave.end) ? Number(wave.end) - duration : Number(current.start))
+      : Number.isFinite(nextStart)
+        ? nextStart - duration
+        : Number(current.start)
+    : nextBlock
+    ? nextSpanEnd - nextCount * lyricsTimingMinBoundaryGap - duration
+    : index >= segments.length - 1
+      ? (Number.isFinite(wave.end) ? Number(wave.end) - duration : Number(current.start))
+      : Number(current.start);
+  if (!Number.isFinite(maxStart) || maxStart < minStart) {
+    return { ok: false, message: text("lyricsTimingOrderInvalid"), segments };
+  }
+  const start = clamp(Number(desiredStart), minStart, maxStart);
+  const end = start + duration;
+  current.start = start;
+  current.end = end;
+  current.corrected = true;
+  let compressed = false;
+  if (previousBlock && (!preserveGap || movingLeft)) {
+    const previousLayout = layoutLyricsTimingPreviousNeighborsToBoundary(
+      segments,
+      previousBlock.startIndex,
+      previousBlock.endIndex,
+      start
+    );
+    if (!previousLayout.ok) return { ...previousLayout, segments };
+    compressed = compressed || previousLayout.segments.some(segment => segment.corrected);
+  }
+  if (nextBlock && (!preserveGap || movingRight)) {
+    const nextLayout = layoutLyricsTimingNextNeighborsToBoundary(
+      segments,
+      nextBlock.startIndex,
+      nextBlock.endIndex,
+      end
+    );
+    if (!nextLayout.ok) return { ...nextLayout, segments };
+    compressed = compressed || nextLayout.segments.some(segment => segment.corrected);
+  }
+
+  return {
+    ok: true,
+    start,
+    end,
+    segments,
+    compressed
+  };
+}
+
+function repairLyricsTimingLineOrder(lineIndex) {
+  const plan = lyricsTimingWordSegmentPlan(lineIndex);
+  if (!plan.correctedCount) return 0;
+  let saved = 0;
+  for (const segment of plan.segments) {
+    if (!segment.corrected) continue;
+    const result = stageLyricsTimingTarget(segment, segment.start, segment.end);
+    if (result.ok) saved += 1;
+  }
+  return saved;
+}
+
+function lyricsTimingWaveWordsHtml(lineIndex, wave, segments = lyricsTimingWordSegments(lineIndex, wave)) {
+  return segments.map(item => {
+    const leftPct = lyricsWaveformPercent(item.start, wave);
+    const rightPct = lyricsWaveformPercent(item.end, wave);
+    const widthPct = Math.max(0.05, rightPct - leftPct);
+    const compact = widthPct < 4.2;
+    const classes = [
+      "lyrics-wave-word",
+      lyricsTimingWordInRange(item.wordIndex) ? "selected" : "",
+      item.wordIndex === activeLyricsTimingTarget?.wordIndex ? "active" : "",
+      lyricsTimingTargetHasManual(item) ? "has-manual" : "",
+      compact ? "compact" : ""
+    ].filter(Boolean).join(" ");
+    return `
+      <button class="${classes}" type="button" data-lyrics-action="select-word" data-word-index="${item.wordIndex}" style="left:${leftPct.toFixed(3)}%; width:${widthPct.toFixed(3)}%" title="${escapeHtml(item.wordText)}">
+        <span>${escapeHtml(item.wordText)}</span>
+      </button>
+    `;
+  }).join("");
+}
+
+function lyricsTimingWaveEdgePadding(firstStart, lastEnd, wave) {
+  if (!Number.isFinite(firstStart) || !Number.isFinite(lastEnd) || lastEnd <= firstStart) {
+    return lyricsTimingWaveMinEdgePadSeconds;
+  }
+  const segmentSpan = lastEnd - firstStart;
+  const waveSpan = Number(wave?.end) - Number(wave?.start);
+  const base = Math.max(segmentSpan * lyricsTimingWaveEdgePadRatio, Number.isFinite(waveSpan) ? waveSpan * 0.08 : 0);
+  return clamp(base, lyricsTimingWaveMinEdgePadSeconds, lyricsTimingWaveMaxEdgePadSeconds);
+}
+
+function lyricsTimingWaveHtml(lineIndex) {
+  let wave = lyricsWaveformWindow(lineIndex);
+  const segmentPlan = lyricsTimingWordSegmentPlan(lineIndex, wave);
+  const firstStart = Math.min(...segmentPlan.segments.map(item => item.start).filter(Number.isFinite));
+  const lastEnd = Math.max(...segmentPlan.segments.map(item => item.end).filter(Number.isFinite));
+  const edgePad = lyricsTimingWaveEdgePadding(firstStart, lastEnd, wave);
+  if (Number.isFinite(firstStart) && firstStart - edgePad < wave.start) {
+    wave = { ...wave, start: Math.max(0, firstStart - edgePad) };
+  }
+  if (Number.isFinite(lastEnd) && lastEnd + edgePad > wave.end) {
+    wave = { ...wave, end: lastEnd + edgePad };
+  }
+  const startState = lyricsTimingRangeInputState("start");
+  const endState = lyricsTimingRangeInputState("end");
+  const startTime = Number.isFinite(startState.time) ? startState.time : wave.start;
+  const endTime = Number.isFinite(endState.time) ? endState.time : wave.end;
+  const startPct = lyricsWaveformPercent(startTime, wave);
+  const endPct = lyricsWaveformPercent(endTime, wave);
+  const leftPct = Math.min(startPct, endPct);
+  const widthPct = Math.max(1, Math.abs(endPct - startPct));
+  const duration = Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime
+    ? formatLyricsEditorTime(endTime - startTime)
+    : "";
+  return `
+    <div class="lyrics-wave-editor" data-wave-start="${wave.start}" data-wave-end="${wave.end}" aria-label="${escapeHtml(text("lyricsTimingWaveLabel"))}" title="${escapeHtml(text("lyricsTimingHoldHint"))}">
+      <svg class="lyrics-wave-svg" viewBox="0 0 1000 96" preserveAspectRatio="none" aria-hidden="true">
+        <polygon class="lyrics-wave-fill" points="${lyricsWaveformPolygon(wave.samples)}"></polygon>
+        <line class="lyrics-wave-midline" x1="0" y1="48" x2="1000" y2="48"></line>
+      </svg>
+      <div class="lyrics-wave-selection" style="left:${leftPct.toFixed(3)}%; width:${widthPct.toFixed(3)}%"></div>
+      <div class="lyrics-wave-playhead" style="left:${lyricsWaveformPercent(Number(els.audioPlayer?.currentTime) || 0, wave).toFixed(3)}%"></div>
+      <div class="lyrics-wave-words">
+        ${lyricsTimingWaveWordsHtml(lineIndex, wave, segmentPlan.segments)}
+      </div>
+      <button class="lyrics-wave-handle start" type="button" data-lyrics-wave-handle="start" style="left:${startPct.toFixed(3)}%" aria-label="${escapeHtml(text("lyricsTimingStartLabel"))}"></button>
+      <button class="lyrics-wave-handle end" type="button" data-lyrics-wave-handle="end" style="left:${endPct.toFixed(3)}%" aria-label="${escapeHtml(text("lyricsTimingEndLabel"))}"></button>
+      <div class="lyrics-wave-labels">
+        <span>${escapeHtml(formatLyricsEditorTime(startTime))}</span>
+        <span>${escapeHtml(duration ? text("lyricsTimingRangeDuration", duration) : "")}</span>
+        <span>${escapeHtml(formatLyricsEditorTime(endTime))}</span>
+      </div>
+    </div>
+  `;
+}
+
+function setLyricsEditorInput(input, seconds) {
+  if (input) input.value = formatLyricsEditorTime(seconds);
+}
+
+function lyricsTimingDetailTime(role) {
+  const input = role === "start" ? els.lyricsTimingStartInput : els.lyricsTimingEndInput;
+  const raw = String(input?.value || input?.placeholder || "").trim();
+  return parseLyricsEditorTime(raw);
+}
+
+function syncLyricsTimingWaveFromDetailInputs() {
+  const root = els.lyricsTimingEditor;
+  const waveNode = root?.querySelector(".lyrics-wave-editor");
+  if (!root || !waveNode) return;
+  const wave = {
+    start: Number(waveNode.dataset.waveStart),
+    end: Number(waveNode.dataset.waveEnd)
+  };
+  const startTime = lyricsTimingDetailTime("start");
+  const endTime = lyricsTimingDetailTime("end");
+  const startPct = lyricsWaveformPercent(startTime, wave);
+  const endPct = lyricsWaveformPercent(endTime, wave);
+  const leftPct = Math.min(startPct, endPct);
+  const widthPct = Math.max(1, Math.abs(endPct - startPct));
+  const startHandle = waveNode.querySelector(".lyrics-wave-handle.start");
+  const endHandle = waveNode.querySelector(".lyrics-wave-handle.end");
+  const selection = waveNode.querySelector(".lyrics-wave-selection");
+  const labels = waveNode.querySelectorAll(".lyrics-wave-labels span");
+  if (startHandle) startHandle.style.left = `${startPct.toFixed(3)}%`;
+  if (endHandle) endHandle.style.left = `${endPct.toFixed(3)}%`;
+  if (selection) {
+    selection.style.left = `${leftPct.toFixed(3)}%`;
+    selection.style.width = `${widthPct.toFixed(3)}%`;
+  }
+  if (labels[0]) labels[0].textContent = formatLyricsEditorTime(startTime);
+  if (labels[1]) labels[1].textContent = Number.isFinite(startTime) && Number.isFinite(endTime) && endTime > startTime
+    ? text("lyricsTimingRangeDuration", formatLyricsEditorTime(endTime - startTime))
+    : "";
+  if (labels[2]) labels[2].textContent = formatLyricsEditorTime(endTime);
+}
+
+function updateLyricsTimingWavePlayhead(time = Number(els.audioPlayer?.currentTime) || 0) {
+  const root = els.lyricsTimingEditor;
+  const waveNode = root?.querySelector(".lyrics-wave-editor");
+  const playhead = waveNode?.querySelector(".lyrics-wave-playhead");
+  if (!waveNode || !playhead) return;
+  const wave = {
+    start: Number(waveNode.dataset.waveStart),
+    end: Number(waveNode.dataset.waveEnd)
+  };
+  if (!Number.isFinite(wave.start) || !Number.isFinite(wave.end) || wave.end <= wave.start) return;
+  const percent = lyricsWaveformPercent(time, wave);
+  playhead.style.left = `${percent.toFixed(3)}%`;
+  waveNode.classList.toggle("playhead-outside", time < wave.start || time > wave.end);
+}
+
+function setLyricsTimingWaveWordRect(waveNode, wave, segment) {
+  const node = waveNode?.querySelector(`.lyrics-wave-word[data-word-index="${segment.wordIndex}"]`);
+  if (!node) return;
+  const leftPct = lyricsWaveformPercent(segment.start, wave);
+  const rightPct = lyricsWaveformPercent(segment.end, wave);
+  node.style.left = `${leftPct.toFixed(3)}%`;
+  node.style.width = `${Math.max(0.05, rightPct - leftPct).toFixed(3)}%`;
+}
+
+function lyricsTimingWordDragWave(waveNode) {
+  return {
+    start: Number(waveNode?.dataset.waveStart),
+    end: Number(waveNode?.dataset.waveEnd)
+  };
+}
+
+function updateLyricsTimingWordDragFromPointer(event) {
+  const drag = lyricsTimingWaveDrag;
+  const waveNode = drag?.waveNode;
+  if (!drag || !waveNode) return;
+  const rect = waveNode.getBoundingClientRect();
+  if (!rect.width) return;
+  const wave = lyricsTimingWordDragWave(waveNode);
+  const deltaTime = ((event.clientX - drag.startClientX) / rect.width) * (wave.end - wave.start);
+  const preserveGap = Boolean(event.altKey);
+  const layout = layoutLyricsTimingWordDrag(drag, drag.startTime + deltaTime, { preserveGap });
+  if (!layout.ok) {
+    setLyricsMarkStatus(layout.message);
+    return;
+  }
+  drag.currentStart = layout.start;
+  drag.currentEnd = layout.end;
+  drag.currentSegments = layout.segments;
+  drag.compressed = Boolean(layout.compressed);
+  drag.preserveGap = preserveGap;
+  drag.moved = drag.moved || Math.abs(layout.start - drag.startTime) > 0.006;
+
+  for (const segment of layout.segments) setLyricsTimingWaveWordRect(waveNode, wave, segment);
+  setLyricsEditorInput(els.lyricsTimingStartInput, layout.start);
+  setLyricsEditorInput(els.lyricsTimingEndInput, layout.end);
+  syncLyricsTimingWaveFromDetailInputs();
+  updateLyricsTimingDurationForSelectedRange();
+}
+
+function previewLyricsTimingSelectedRangeLayout(layout, waveNode) {
+  if (!layout?.ok || !waveNode) return;
+  const wave = lyricsTimingWordDragWave(waveNode);
+  for (const segment of layout.segments || []) setLyricsTimingWaveWordRect(waveNode, wave, segment);
+  for (const segment of layout.sideSegments || []) setLyricsTimingWaveWordRect(waveNode, wave, segment);
+}
+
+function updateLyricsTimingBoundaryDragFromPointer(event) {
+  const drag = lyricsTimingWaveDrag;
+  const waveNode = drag?.waveNode;
+  if (!drag || !waveNode) return;
+  const rect = waveNode.getBoundingClientRect();
+  if (!rect.width) return;
+  const wave = lyricsTimingWordDragWave(waveNode);
+  let time = lyricsWaveformTime((event.clientX - rect.left) / rect.width, wave);
+  if (!Number.isFinite(time)) return;
+  time = clamp(time, wave.start, wave.end);
+  const startTime = drag.role === "start" ? time : lyricsTimingDetailTime("start");
+  const endTime = drag.role === "end" ? time : lyricsTimingDetailTime("end");
+  const constrained = constrainLyricsTimingTimes(startTime, endTime, lyricsTimingRangeTimeLimits(), drag.role);
+  if (!constrained.ok) {
+    setLyricsMarkStatus(constrained.message);
+    return;
+  }
+  time = drag.role === "start" ? constrained.start : constrained.end;
+  setLyricsEditorInput(drag.role === "start" ? els.lyricsTimingStartInput : els.lyricsTimingEndInput, time);
+  syncLyricsTimingWaveFromDetailInputs();
+  updateLyricsTimingDurationForSelectedRange();
+  const layout = lyricsTimingSelectedRangeLayout(constrained.start, constrained.end);
+  if (!layout.ok) {
+    setLyricsMarkStatus(layout.message);
+    return;
+  }
+  drag.currentStart = layout.start;
+  drag.currentEnd = layout.end;
+  drag.currentSegments = layout.segments;
+  drag.moved = drag.moved ||
+    Math.abs(layout.start - drag.startTime) > 0.0005 ||
+    Math.abs(layout.end - drag.endTime) > 0.0005;
+  previewLyricsTimingSelectedRangeLayout(layout, waveNode);
+}
+
+function updateLyricsTimingWaveFromPointer(event) {
+  if (lyricsTimingWaveDrag?.mode === "word") updateLyricsTimingWordDragFromPointer(event);
+  else updateLyricsTimingBoundaryDragFromPointer(event);
+}
+
+function handleLyricsTimingWavePointerDown(event) {
+  if (event.button === 2) {
+    const waveNode = event.target.closest?.(".lyrics-wave-editor");
+    if (!waveNode || !els.lyricsTimingEditor?.contains(waveNode)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    suppressLyricsTimingContextMenuUntil = performance.now() + 700;
+    if (!lyricsTimingWaveDrag) togglePlayback();
+    return;
+  }
+  if (event.button !== 0) return;
+  const handle = event.target.closest?.("[data-lyrics-wave-handle]");
+  if (handle && els.lyricsTimingEditor?.contains(handle)) {
+    event.preventDefault();
+    const waveNode = handle.closest(".lyrics-wave-editor");
+    lyricsTimingWaveDrag = {
+      mode: "boundary",
+      role: handle.dataset.lyricsWaveHandle === "start" ? "start" : "end",
+      pointerId: event.pointerId,
+      waveNode,
+      startTime: lyricsTimingDetailTime("start"),
+      endTime: lyricsTimingDetailTime("end"),
+      moved: false
+    };
+    try {
+      els.lyricsTimingEditor.setPointerCapture(event.pointerId);
+    } catch {}
+    updateLyricsTimingWaveFromPointer(event);
+    return;
+  }
+
+  const wordNode = event.target.closest?.(".lyrics-wave-word");
+  if (!wordNode || !els.lyricsTimingEditor?.contains(wordNode)) return;
+  const target = activeLyricsTimingTarget;
+  if (!target) return;
+  const wordIndex = Number(wordNode.dataset.wordIndex);
+  const wordTarget = lyricsTimingTargetForLineWord(target.lineIndex, wordIndex);
+  if (!wordTarget) return;
+  const waveNode = wordNode.closest(".lyrics-wave-editor");
+  const segments = lyricsTimingWordSegments(target.lineIndex);
+  const segment = segments.find(item => item.wordIndex === wordIndex);
+  if (!waveNode || !segment) return;
+  event.preventDefault();
+  activeLyricsTimingTarget = wordTarget;
+  activeLyricsTimingRangeStart = wordTarget.wordIndex;
+  activeLyricsTimingRangeEnd = wordTarget.wordIndex;
+  activeLyricsTimingRangeMode = "word";
+  syncLyricsTimingPanelSelection();
+  setLyricsEditorInput(els.lyricsTimingStartInput, segment.start);
+  setLyricsEditorInput(els.lyricsTimingEndInput, segment.end);
+  syncLyricsTimingWaveFromDetailInputs();
+  updateLyricsTimingDurationForSelectedRange();
+  wordNode.classList.add("dragging");
+  lyricsTimingWaveDrag = {
+    mode: "word",
+    pointerId: event.pointerId,
+    waveNode,
+    wordNode,
+    lineIndex: target.lineIndex,
+    wordIndex,
+    startClientX: event.clientX,
+    startTime: segment.start,
+    endTime: segment.end,
+    currentStart: segment.start,
+    currentEnd: segment.end,
+    duration: segment.end - segment.start,
+    previousSegment: segments[wordIndex - 1],
+    nextSegment: segments[wordIndex + 1],
+    segments: segments.map(item => ({ ...item })),
+    tailAnchorEnd: Number(segments[segments.length - 1]?.end),
+    wave: lyricsTimingWordDragWave(waveNode),
+    moved: false
+  };
+  try {
+    els.lyricsTimingEditor.setPointerCapture(event.pointerId);
+  } catch {}
+}
+
+function handleLyricsTimingWavePointerMove(event) {
+  if (!lyricsTimingWaveDrag || lyricsTimingWaveDrag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  updateLyricsTimingWaveFromPointer(event);
+}
+
+function finishLyricsTimingWordDrag(drag) {
+  drag.wordNode?.classList.remove("dragging");
+  if (!drag.moved) return;
+  const currentTarget = lyricsTimingTargetForLineWord(drag.lineIndex, drag.wordIndex);
+  if (!currentTarget) return;
+  const originalSegments = Array.isArray(drag.segments) ? drag.segments : [];
+  const nextSegments = Array.isArray(drag.currentSegments) ? drag.currentSegments : [];
+  let saved = 0;
+  for (const segment of nextSegments) {
+    const original = originalSegments.find(item => item.wordIndex === segment.wordIndex);
+    const changed = !original ||
+      Math.abs(Number(original.start) - Number(segment.start)) > 0.0005 ||
+      Math.abs(Number(original.end) - Number(segment.end)) > 0.0005;
+    if (!changed) continue;
+    saved += stageLyricsTimingSegmentBoundaryChanges(segment, original);
+  }
+  activeLyricsTimingTarget = currentTarget;
+  activeLyricsTimingRangeStart = currentTarget.wordIndex;
+  activeLyricsTimingRangeEnd = currentTarget.wordIndex;
+  activeLyricsTimingRangeMode = "word";
+  suppressLyricsTimingClickUntil = performance.now() + 360;
+  renderLyricsTimingEditor();
+  setLyricsMarkStatus(text("lyricsTimingWordMoved", currentTarget.wordText));
+  flushPendingMusicLyricMarks();
+  syncLyricsLineVisualStates(musicLyricsActiveIndex, { instant: true });
+  updateLyricsProgress(Number(els.audioPlayer?.currentTime) || 0);
+}
+
+function finishLyricsTimingBoundaryDrag(drag) {
+  if (!drag.moved) return;
+  const result = stageLyricsTimingSelectedRange(drag.currentStart, drag.currentEnd);
+  if (!result.ok) {
+    setLyricsMarkStatus(result.message);
+    return;
+  }
+  suppressLyricsTimingClickUntil = performance.now() + 360;
+  renderLyricsTimingEditor();
+  setLyricsMarkStatus(
+    result.corrected
+      ? text("lyricsTimingOrderCorrected", result.count)
+      : result.count === 1
+        ? text("lyricsTimingSaved", formatLyricsEditorTime(result.start), formatLyricsEditorTime(result.end))
+        : text("lyricsTimingRangeSaved", result.count)
+  );
+  flushPendingMusicLyricMarks();
+  syncLyricsLineVisualStates(musicLyricsActiveIndex, { instant: true });
+  updateLyricsProgress(Number(els.audioPlayer?.currentTime) || 0);
+}
+
+function finishLyricsTimingWaveDrag(event) {
+  if (!lyricsTimingWaveDrag || lyricsTimingWaveDrag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  const drag = lyricsTimingWaveDrag;
+  try {
+    els.lyricsTimingEditor?.releasePointerCapture(event.pointerId);
+  } catch {}
+  lyricsTimingWaveDrag = null;
+  if (drag.mode === "word") finishLyricsTimingWordDrag(drag);
+  else if (drag.mode === "boundary") finishLyricsTimingBoundaryDrag(drag);
+}
+
+function lyricsTimingWaveTimeFromPointer(event, waveNode) {
+  const rect = waveNode?.getBoundingClientRect?.();
+  if (!rect?.width) return NaN;
+  const wave = {
+    start: Number(waveNode.dataset.waveStart),
+    end: Number(waveNode.dataset.waveEnd)
+  };
+  return lyricsWaveformTime((event.clientX - rect.left) / rect.width, wave);
+}
+
+function seekLyricsTimingWaveToPointer(event, waveNode) {
+  if (!hasMusic || !els.audioPlayer || !waveNode) return false;
+  const time = lyricsTimingWaveTimeFromPointer(event, waveNode);
+  if (!Number.isFinite(time)) return false;
+  const duration = audioDuration();
+  const targetTime = duration > 0 ? clamp(time, 0, duration) : Math.max(0, time);
+  const beforeRatio = currentAudioSeekRatio();
+  if (!applyAudioCurrentTime(targetTime)) return false;
+  pendingSeekRatio = null;
+  userSeeking = false;
+  const nextRatio = duration > 0 ? clamp(targetTime / duration, 0, 1) : 0;
+  if (els.trackSeek) els.trackSeek.value = String(nextRatio * 100);
+  if (els.trackCurrentTime) els.trackCurrentTime.textContent = formatDuration(targetTime);
+  if (els.trackDuration) els.trackDuration.textContent = formatDuration(duration);
+  if (duration > 0) recordTrackSeekChange(beforeRatio, nextRatio);
+  updateLyricsProgress(targetTime);
+  updateTrackProgress();
+  return true;
+}
+
+function clearLyricsTimingSelection() {
+  els.nowPlayingLyricsList?.querySelectorAll(".lyric-word.lyrics-timing-selected").forEach(word => {
+    word.classList.remove("lyrics-timing-selected");
+  });
+}
+
+function syncLyricsTimingSelection() {
+  clearLyricsTimingSelection();
+}
+
+function closeLyricsTimingEditor() {
+  clearLyricsTimingAutoSave();
+  activeLyricsTimingTarget = null;
+  activeLyricsTimingRangeMode = "word";
+  if (els.lyricsTimingEditor) els.lyricsTimingEditor.hidden = true;
+  clearLyricsTimingSelection();
+}
+
+function syncLyricsTimingPanelSelection() {
+  const root = els.lyricsTimingEditor;
+  const target = activeLyricsTimingTarget;
+  if (!root || !target) return;
+  normalizeLyricsTimingRange(target);
+  root.querySelectorAll("[data-word-index]").forEach(node => {
+    const wordIndex = Number(node.dataset.wordIndex);
+    node.classList.toggle("selected", lyricsTimingWordInRange(wordIndex));
+    node.classList.toggle("active", wordIndex === target.wordIndex);
+  });
+  if (els.lyricsTimingTarget) {
+    els.lyricsTimingTarget.textContent = text("lyricsTimingTarget", target.wordText, target.lineIndex + 1);
+  }
+  syncLyricsTimingSelection();
+}
+
+function renderLyricsTimingEditor() {
+  const root = ensureLyricsTimingEditorRoot();
+  const target = activeLyricsTimingTarget;
+  if (!root || !target || target.path !== musicLyricsTrackPath) return 0;
+  const targets = lyricsLineTimingTargets(target.lineIndex);
+  if (!targets.length) {
+    closeLyricsTimingEditor();
+    return 0;
+  }
+  const repairedCount = repairLyricsTimingLineOrder(target.lineIndex);
+  const selectedIndex = clamp(Math.round(Number(target.wordIndex) || 0), 0, targets.length - 1);
+  activeLyricsTimingTarget = targets[selectedIndex];
+  const selected = activeLyricsTimingTarget;
+  normalizeLyricsTimingRange(selected);
+  if (activeLyricsTimingRangeMode !== "range" || !lyricsTimingWordInRange(selected.wordIndex)) {
+    activeLyricsTimingRangeStart = selected.wordIndex;
+    activeLyricsTimingRangeEnd = selected.wordIndex;
+    activeLyricsTimingRangeMode = "word";
+  }
+  const selectedTargets = lyricsTimingSelectedTargets();
+  const rangeFirst = selectedTargets[0] || selected;
+  const rangeLast = selectedTargets[selectedTargets.length - 1] || selected;
+
+  root.innerHTML = `
+    <div class="lyrics-timing-head">
+      <div class="lyrics-timing-title-stack">
+        <span id="lyricsTimingTarget" class="lyrics-timing-target">${escapeHtml(text("lyricsTimingTarget", selected.wordText, selected.lineIndex + 1))}</span>
+        <span class="lyrics-timing-line-title">${escapeHtml(text("lyricsTimingLineTitle", selected.lineIndex + 1, targets.length))}</span>
+      </div>
+      <button class="lyrics-timing-close" type="button" data-lyrics-action="close" aria-label="${escapeHtml(text("lyricsTimingClose"))}">x</button>
+    </div>
+    ${lyricsTimingWaveHtml(selected.lineIndex)}
+    <div class="lyrics-timing-detail">
+      <strong>${escapeHtml(text("lyricsTimingRangeTitle", rangeFirst.wordText, rangeLast.wordText))}</strong>
+      <div class="lyrics-timing-fields">
+        <label>
+          <span>${escapeHtml(text("lyricsTimingStartLabel"))}</span>
+          ${lyricsTimingRangeInputHtml("start", "lyrics-detail-time", "lyricsTimingStartInput")}
+        </label>
+        <label>
+          <span>${escapeHtml(text("lyricsTimingEndLabel"))}</span>
+          ${lyricsTimingRangeInputHtml("end", "lyrics-detail-time", "lyricsTimingEndInput")}
+        </label>
+      </div>
+      <div class="lyrics-timing-actions">
+        <button type="button" data-lyrics-action="select-line">${escapeHtml(text("lyricsTimingSelectLine"))}</button>
+      </div>
+    </div>
+  `;
+  refreshLyricsTimingEditorRefs();
+  mountLyricsTimingEditorForLine(selected.lineIndex);
+  syncLyricsTimingPanelSelection();
+  updateLyricsTimingWavePlayhead(Number(els.audioPlayer?.currentTime) || 0);
+  if (repairedCount) setLyricsMarkStatus(text("lyricsTimingOrderCorrected", repairedCount));
+  return repairedCount;
+}
+
+function selectLyricsTimingWord(lineIndex, wordIndex, options = {}) {
+  const target = lyricsTimingTargetForLineWord(lineIndex, wordIndex);
+  if (!target) return false;
+  if (options.extend && activeLyricsTimingTarget?.lineIndex === lineIndex) {
+    activeLyricsTimingRangeStart = Math.min(activeLyricsTimingRangeStart, target.wordIndex);
+    activeLyricsTimingRangeEnd = Math.max(activeLyricsTimingRangeEnd, target.wordIndex);
+    activeLyricsTimingRangeMode = "range";
+  } else {
+    activeLyricsTimingRangeStart = target.wordIndex;
+    activeLyricsTimingRangeEnd = target.wordIndex;
+    activeLyricsTimingRangeMode = "word";
+  }
+  activeLyricsTimingTarget = target;
+  renderLyricsTimingEditor();
+  return true;
+}
+
+function selectLyricsTimingLine() {
+  const target = activeLyricsTimingTarget;
+  if (!target) return;
+  activeLyricsTimingRangeStart = 0;
+  activeLyricsTimingRangeEnd = Math.max(0, target.wordCount - 1);
+  activeLyricsTimingRangeMode = "range";
+  renderLyricsTimingEditor();
+}
+
+function lyricsWordIndexFromLineEvent(lineNode, event) {
+  const wordNode = event?.target?.closest?.(".lyric-word");
+  if (wordNode && lineNode?.contains(wordNode)) {
+    const wordIndex = Number(wordNode.dataset.wordIndex);
+    if (Number.isFinite(wordIndex)) return wordIndex;
+  }
+  if (event) {
+    const boundaryTarget = closestLyricsBoundaryTarget(lineNode, event.clientX, event.clientY);
+    const markerIndex = Number(boundaryTarget?.markerWord?.dataset?.wordIndex);
+    if (Number.isFinite(markerIndex)) return markerIndex;
+  }
+  const lineIndex = Number(lineNode?.dataset?.lyricsIndex);
+  const currentTime = Number(els.audioPlayer?.currentTime);
+  const timedIndex = lyricsWordIndexAtTime(lineIndex, currentTime);
+  return Number.isFinite(timedIndex) ? timedIndex : 0;
+}
+
+function lyricsWordTimingTargetFromEvent(lineNode, event) {
+  const lineIndex = Number(lineNode.dataset.lyricsIndex);
+  const wordIndex = lyricsWordIndexFromLineEvent(lineNode, event);
+  if (!Number.isFinite(lineIndex) || !Number.isFinite(wordIndex)) return null;
+  return lyricsTimingTargetForLineWord(lineIndex, wordIndex);
+}
+
+function populateLyricsTimingEditor(target) {
+  if (!target || !els.lyricsTimingEditor) return;
+  preloadLyricsHotspotLine(target.lineIndex);
+  activeLyricsTimingTarget = target;
+  activeLyricsTimingRangeStart = target.wordIndex;
+  activeLyricsTimingRangeEnd = target.wordIndex;
+  activeLyricsTimingRangeMode = "word";
+  const repairedCount = renderLyricsTimingEditor();
+  if (!repairedCount) setLyricsMarkStatus(text("lyricsMarkArmed"));
+}
+
+function openLyricsTimingEditorFromContext(event) {
+  if (!hasMusic || !musicLyricsSynced || !musicLyricsTrackPath || musicLyricsTrackPath !== selectedTrackPath) return;
+  const lineNode = event.target.closest?.(".music-lyrics-line");
+  if (!lineNode || !els.nowPlayingLyricsList?.contains(lineNode) || lineNode.classList.contains("rest")) return;
+  event.preventDefault();
+  suppressLyricsLineClickUntil = performance.now() + 320;
+  const lineIndex = Number(lineNode.dataset.lyricsIndex);
+  const now = performance.now();
+  if (lineIndex === lyricsTimingContextLineIndex && now - lyricsTimingContextLastAt <= 1100) {
+    lyricsTimingContextClickCount += 1;
+  } else {
+    lyricsTimingContextLineIndex = lineIndex;
+    lyricsTimingContextClickCount = 1;
+  }
+  lyricsTimingContextLastAt = now;
+  if (lyricsTimingContextClickCount < 3) {
+    return;
+  }
+  lyricsTimingContextClickCount = 0;
+  const target = lyricsWordTimingTargetFromEvent(lineNode, event);
+  if (!target) return;
+  populateLyricsTimingEditor(target);
+}
+
+function setLyricsTimingInputToCurrent(role) {
+  const currentTime = Number(els.audioPlayer?.currentTime);
+  if (!Number.isFinite(currentTime)) return;
+  const target = activeLyricsTimingTarget;
+  if (!target) return;
+  const startTime = role === "start" ? currentTime : lyricsTimingDetailTime("start");
+  const endTime = role === "end" ? currentTime : lyricsTimingDetailTime("end");
+  const constrained = constrainLyricsTimingTimes(startTime, endTime, lyricsTimingRangeTimeLimits(target), role);
+  if (!constrained.ok) {
+    setLyricsMarkStatus(constrained.message);
+    return;
+  }
+  const time = role === "start" ? constrained.start : constrained.end;
+  const value = formatLyricsEditorTime(time);
+  setLyricsEditorInput(role === "start" ? els.lyricsTimingStartInput : els.lyricsTimingEndInput, time);
+  if (activeLyricsTimingRangeStart === activeLyricsTimingRangeEnd) {
+    const rowInput = els.lyricsTimingEditor?.querySelector(`.lyrics-row-time[data-word-index="${target.wordIndex}"][data-role="${role}"]`);
+    if (rowInput) rowInput.value = value;
+    updateLyricsTimingDurationForWord(target.wordIndex);
+  }
+  syncLyricsTimingWaveFromDetailInputs();
+  updateLyricsTimingDurationForSelectedRange();
+}
+
+function stageLyricsTimingBoundaryMark(target, role, time, note = "") {
+  const cleanRole = role === "start" ? "start" : "end";
+  const boundaryIndex = cleanRole === "start" ? target.startBoundaryIndex : target.endBoundaryIndex;
+  const previousWord = cleanRole === "start" ? target.previousWord : target.wordText;
+  const nextWord = cleanRole === "start" ? target.wordText : target.nextWord;
+  stagePendingMusicLyricMark({
+    path: target.path,
+    role: cleanRole,
+    time: Math.max(0, Math.round(time * 1000) / 1000),
+    lineIndex: target.lineIndex,
+    boundaryIndex,
+    previousWord,
+    nextWord,
+    wordCount: target.wordCount,
+    word: target.wordText,
+    lineText: target.lineText,
+    note: note || (cleanRole === "start" ? "manual-editor-start-boundary" : "manual-editor-end-boundary")
+  });
+}
+
+function stageLyricsTimingTarget(target, start, end, options = {}) {
+  if (!target) return { ok: false, message: text("lyricsTimingInvalid") };
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < 0) {
+    return { ok: false, message: text("lyricsTimingInvalid") };
+  }
+  if (end <= start) {
+    return { ok: false, message: text("lyricsTimingRangeInvalid") };
+  }
+  stageLyricsTimingBoundaryMark(target, "start", start, options.startNote);
+  stageLyricsTimingBoundaryMark(target, "end", end, options.endNote);
+  return { ok: true };
+}
+
+function stageLyricsTimingSegmentBoundaryChanges(segment, original = null, force = false) {
+  if (!segment) return 0;
+  let saved = 0;
+  const startChanged = force || !original || Math.abs(Number(original.start) - Number(segment.start)) > 0.0005;
+  const endChanged = force || !original || Math.abs(Number(original.end) - Number(segment.end)) > 0.0005;
+  if (startChanged) {
+    stageLyricsTimingBoundaryMark(segment, "start", segment.start);
+    saved += 1;
+  }
+  if (endChanged) {
+    stageLyricsTimingBoundaryMark(segment, "end", segment.end);
+    saved += 1;
+  }
+  return saved;
+}
+
+function lyricsTimingSelectedRangeLayout(start, end) {
+  const selected = lyricsTimingSelectedTargets();
+  const target = activeLyricsTimingTarget;
+  if (!selected.length || !target) return { ok: false, message: text("lyricsTimingInvalid"), count: 0 };
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < 0) {
+    return { ok: false, message: text("lyricsTimingInvalid"), count: 0 };
+  }
+  if (end <= start) {
+    return { ok: false, message: text("lyricsTimingRangeInvalid"), count: 0 };
+  }
+  const constrained = constrainLyricsTimingTimes(start, end, lyricsTimingRangeTimeLimits(target));
+  if (!constrained.ok) {
+    return { ...constrained, count: 0 };
+  }
+  start = constrained.start;
+  end = constrained.end;
+  const analysisLine = lyricsAnalysisLine(target.lineIndex);
+  const wordCount = lyricsWordCountForLine(target.lineIndex, analysisLine);
+  const rangeStartBoundary = lyricsTimingRangeBoundary("start");
+  const rangeEndBoundary = lyricsTimingRangeBoundary("end");
+  const lineSegments = lyricsTimingWordSegments(target.lineIndex);
+  const originalSegments = lineSegments.map(item => ({ ...item }));
+  const autoStart = lyricsAutoBoundaryRelativeTime(rangeStartBoundary, analysisLine, wordCount);
+  const autoEnd = lyricsAutoBoundaryRelativeTime(rangeEndBoundary, analysisLine, wordCount);
+  const autoSpan = autoEnd - autoStart;
+  const indexSpan = Math.max(1, rangeEndBoundary - rangeStartBoundary);
+  const segments = selected.map(item => {
+    const itemStartAuto = lyricsAutoBoundaryRelativeTime(item.startBoundaryIndex, analysisLine, wordCount);
+    const itemEndAuto = lyricsAutoBoundaryRelativeTime(item.endBoundaryIndex, analysisLine, wordCount);
+    const startRatio = autoSpan > 0.001
+      ? clamp((itemStartAuto - autoStart) / autoSpan, 0, 1)
+      : clamp((item.startBoundaryIndex - rangeStartBoundary) / indexSpan, 0, 1);
+    const endRatio = autoSpan > 0.001
+      ? clamp((itemEndAuto - autoStart) / autoSpan, 0, 1)
+      : clamp((item.endBoundaryIndex - rangeStartBoundary) / indexSpan, 0, 1);
+    return {
+      ...item,
+      start: start + (end - start) * startRatio,
+      end: start + (end - start) * endRatio
+    };
+  });
+  const sideSegments = [];
+  const previousBlock = lyricsTimingRangeSideBlock(target.lineIndex, rangeStartBoundary, "previous", lineSegments);
+  if (previousBlock) {
+    const previousLayout = layoutLyricsTimingPreviousNeighborsToBoundary(
+      lineSegments,
+      previousBlock.startIndex,
+      previousBlock.endIndex,
+      start
+    );
+    if (!previousLayout.ok) return { ...previousLayout, count: 0 };
+    sideSegments.push(...previousLayout.segments);
+  }
+  const nextBlock = lyricsTimingRangeSideBlock(target.lineIndex, rangeEndBoundary, "next", lineSegments);
+  if (nextBlock) {
+    const nextLayout = layoutLyricsTimingNextNeighborsToBoundary(
+      lineSegments,
+      nextBlock.startIndex,
+      nextBlock.endIndex,
+      end
+    );
+    if (!nextLayout.ok) return { ...nextLayout, count: 0 };
+    sideSegments.push(...nextLayout.segments);
+  }
+  return { ok: true, count: selected.length, corrected: constrained.corrected, start, end, segments, sideSegments, originalSegments };
+}
+
+function stageLyricsTimingSelectedRange(start, end) {
+  const layout = lyricsTimingSelectedRangeLayout(start, end);
+  if (!layout.ok) return layout;
+  const originalByWord = new Map((layout.originalSegments || []).map(item => [item.wordIndex, item]));
+  for (const item of [...layout.segments, ...(layout.sideSegments || [])]) {
+    stageLyricsTimingSegmentBoundaryChanges(item, originalByWord.get(item.wordIndex));
+  }
+  return layout;
+}
+
+function readLyricsTimingInputs(startInput, endInput) {
+  const startRaw = String(startInput?.value || "").trim();
+  const endRaw = String(endInput?.value || "").trim();
+  return {
+    startRaw,
+    endRaw,
+    start: parseLyricsEditorTime(startRaw),
+    end: parseLyricsEditorTime(endRaw)
+  };
+}
+
+function updateLyricsTimingDurationForWord(wordIndex) {
+  const row = els.lyricsTimingEditor?.querySelector(`.lyrics-timing-row[data-word-index="${wordIndex}"]`);
+  if (!row) return;
+  const startInput = row.querySelector(".lyrics-row-time[data-role='start']");
+  const endInput = row.querySelector(".lyrics-row-time[data-role='end']");
+  const duration = row.querySelector(".lyrics-timing-duration");
+  const values = readLyricsTimingInputs(startInput, endInput);
+  const partial = Boolean(values.startRaw || values.endRaw);
+  const invalid = partial && (!Number.isFinite(values.start) || !Number.isFinite(values.end) || values.end <= values.start);
+  row.classList.toggle("invalid", invalid);
+  if (duration) duration.textContent = invalid ? "!" : lyricsTimingDurationTextFromValues(values.startRaw, values.endRaw);
+}
+
+function updateLyricsTimingDurationForSelectedRange() {
+  const values = readLyricsTimingInputs(els.lyricsTimingStartInput, els.lyricsTimingEndInput);
+  const invalid = Boolean(values.startRaw || values.endRaw) && (!Number.isFinite(values.start) || !Number.isFinite(values.end) || values.end <= values.start);
+  els.lyricsTimingEditor?.classList.toggle("lyrics-range-invalid", invalid);
+}
+
+function clearLyricsTimingAutoSave() {
+  if (!lyricsTimingAutoSaveTimer) return;
+  window.clearTimeout(lyricsTimingAutoSaveTimer);
+  lyricsTimingAutoSaveTimer = null;
+}
+
+function lyricsTimingInputCompleteAndValid(startInput, endInput) {
+  const values = readLyricsTimingInputs(startInput, endInput);
+  const complete = Boolean(values.startRaw && values.endRaw);
+  return {
+    ...values,
+    complete,
+    valid: complete && Number.isFinite(values.start) && Number.isFinite(values.end) && values.end > values.start
+  };
+}
+
+function autoSaveLyricsTimingRow(wordIndex, { quiet = true } = {}) {
+  const target = activeLyricsTimingTarget;
+  if (!target || target.path !== musicLyricsTrackPath) return false;
+  const row = els.lyricsTimingEditor?.querySelector(`.lyrics-timing-row[data-word-index="${wordIndex}"]`);
+  const rowTarget = lyricsTimingTargetForLineWord(target.lineIndex, wordIndex);
+  if (!row || !rowTarget) return false;
+  const startInput = row.querySelector(".lyrics-row-time[data-role='start']");
+  const endInput = row.querySelector(".lyrics-row-time[data-role='end']");
+  const values = lyricsTimingInputCompleteAndValid(startInput, endInput);
+  if (!values.startRaw && !values.endRaw) return false;
+  if (!values.valid) {
+    row.classList.toggle("invalid", Boolean(values.startRaw || values.endRaw));
+    if (!quiet) setLyricsMarkStatus(values.complete ? text("lyricsTimingRangeInvalid") : text("lyricsTimingIncomplete"));
+    return false;
+  }
+  const result = stageLyricsTimingTarget(rowTarget, values.start, values.end);
+  if (!result.ok) {
+    row.classList.add("invalid");
+    if (!quiet) setLyricsMarkStatus(result.message);
+    return false;
+  }
+  row.classList.remove("invalid");
+  if (activeLyricsTimingTarget?.wordIndex === rowTarget.wordIndex) {
+    setLyricsEditorInput(els.lyricsTimingStartInput, values.start);
+    setLyricsEditorInput(els.lyricsTimingEndInput, values.end);
+  }
+  renderLyricsTimingEditor();
+  setLyricsMarkStatus(text("lyricsTimingSaved", formatLyricsEditorTime(values.start), formatLyricsEditorTime(values.end)));
+  syncLyricsLineVisualStates(musicLyricsActiveIndex, { instant: true });
+  updateLyricsProgress(Number(els.audioPlayer?.currentTime) || 0);
+  flushPendingMusicLyricMarks();
+  return true;
+}
+
+function autoSaveLyricsTimingInput(input, { quiet = true } = {}) {
+  if (!input?.matches?.(".lyrics-row-time, .lyrics-detail-time")) return false;
+  if (input.classList.contains("lyrics-row-time")) {
+    const wordIndex = Number(input.dataset.wordIndex);
+    return Number.isFinite(wordIndex) ? autoSaveLyricsTimingRow(wordIndex, { quiet }) : false;
+  }
+  const values = lyricsTimingInputCompleteAndValid(els.lyricsTimingStartInput, els.lyricsTimingEndInput);
+  if (!values.startRaw && !values.endRaw) return false;
+  if (!values.valid) {
+    els.lyricsTimingEditor?.classList.toggle("lyrics-range-invalid", Boolean(values.startRaw || values.endRaw));
+    if (!quiet) setLyricsMarkStatus(values.complete ? text("lyricsTimingRangeInvalid") : text("lyricsTimingIncomplete"));
+    return false;
+  }
+  return saveLyricsTimingEditor({ quiet });
+}
+
+function scheduleLyricsTimingAutoSave(input) {
+  clearLyricsTimingAutoSave();
+  if (!input?.matches?.(".lyrics-row-time, .lyrics-detail-time")) return;
+  lyricsTimingAutoSaveTimer = window.setTimeout(() => {
+    lyricsTimingAutoSaveTimer = null;
+    autoSaveLyricsTimingInput(input, { quiet: true });
+  }, 520);
+}
+
+function saveLyricsTimingEditor(options = {}) {
+  const target = activeLyricsTimingTarget;
+  if (!target || target.path !== musicLyricsTrackPath) return;
+  const values = readLyricsTimingInputs(els.lyricsTimingStartInput, els.lyricsTimingEndInput);
+  const result = stageLyricsTimingSelectedRange(values.start, values.end);
+  if (!result.ok) {
+    if (!options.quiet) setLyricsMarkStatus(result.message);
+    return;
+  }
+  setLyricsMarkStatus(
+    result.corrected
+      ? text("lyricsTimingOrderCorrected", result.count)
+      : result.count === 1
+        ? text("lyricsTimingSaved", formatLyricsEditorTime(result.start), formatLyricsEditorTime(result.end))
+      : text("lyricsTimingRangeSaved", result.count)
+  );
+  renderLyricsTimingEditor();
+  syncLyricsLineVisualStates(musicLyricsActiveIndex, { instant: true });
+  updateLyricsProgress(Number(els.audioPlayer?.currentTime) || 0);
+  flushPendingMusicLyricMarks();
+}
+
+function saveLyricsTimingLine() {
+  const target = activeLyricsTimingTarget;
+  if (!target || target.path !== musicLyricsTrackPath) return;
+  const rows = Array.from(els.lyricsTimingEditor?.querySelectorAll(".lyrics-timing-row[data-word-index]") || []);
+  let saved = 0;
+  for (const row of rows) {
+    const wordIndex = Number(row.dataset.wordIndex);
+    const rowTarget = lyricsTimingTargetForLineWord(target.lineIndex, wordIndex);
+    const startInput = row.querySelector(".lyrics-row-time[data-role='start']");
+    const endInput = row.querySelector(".lyrics-row-time[data-role='end']");
+    const values = readLyricsTimingInputs(startInput, endInput);
+    if (!values.startRaw && !values.endRaw) continue;
+    if (!values.startRaw || !values.endRaw) {
+      row.classList.add("invalid");
+      setLyricsMarkStatus(text("lyricsTimingIncomplete"));
+      return;
+    }
+    const result = stageLyricsTimingTarget(rowTarget, values.start, values.end);
+    if (!result.ok) {
+      row.classList.add("invalid");
+      setLyricsMarkStatus(result.message);
+      return;
+    }
+    saved += 1;
+  }
+  if (!saved) {
+    setLyricsMarkStatus(text("lyricsTimingLineEmpty"));
+    return;
+  }
+  setLyricsMarkStatus(text("lyricsTimingLineSaved", saved));
+  renderLyricsTimingEditor();
+  syncLyricsLineVisualStates(musicLyricsActiveIndex, { instant: true });
+  updateLyricsProgress(Number(els.audioPlayer?.currentTime) || 0);
+  flushPendingMusicLyricMarks();
+}
+
+async function clearLyricsTimingEditorMarks() {
+  const target = activeLyricsTimingTarget;
+  if (!target || target.path !== musicLyricsTrackPath) return;
+  for (const item of lyricsTimingSelectedTargets()) {
+    removePendingMusicLyricMarksForTarget(item.path, item.lineIndex, item.startBoundaryIndex, ["start"]);
+    removePendingMusicLyricMarksForTarget(item.path, item.lineIndex, item.endBoundaryIndex, ["end"]);
+  }
+  const selected = selectedTrack();
+  if (selected?.path === musicLyricsTrackPath) {
+    await loadLyricsAnalysisForTrack(selected, musicLyricsLoadToken);
+  }
+  activeLyricsTimingTarget = lyricsTimingTargetForLineWord(target.lineIndex, target.wordIndex);
+  renderLyricsTimingEditor();
+  setLyricsMarkStatus(text("lyricsTimingCleared"));
+  syncLyricsLineVisualStates(musicLyricsActiveIndex, { instant: true });
+  updateLyricsProgress(Number(els.audioPlayer?.currentTime) || 0);
+}
+
+async function clearLyricsTimingLineMarks() {
+  const target = activeLyricsTimingTarget;
+  if (!target || target.path !== musicLyricsTrackPath) return;
+  const targets = lyricsLineTimingTargets(target.lineIndex);
+  for (const item of targets) {
+    removePendingMusicLyricMarksForTarget(item.path, item.lineIndex, item.startBoundaryIndex, ["start"]);
+    removePendingMusicLyricMarksForTarget(item.path, item.lineIndex, item.endBoundaryIndex, ["end"]);
+  }
+  const selected = selectedTrack();
+  if (selected?.path === musicLyricsTrackPath) {
+    await loadLyricsAnalysisForTrack(selected, musicLyricsLoadToken);
+  }
+  activeLyricsTimingTarget = lyricsTimingTargetForLineWord(target.lineIndex, target.wordIndex);
+  renderLyricsTimingEditor();
+  setLyricsMarkStatus(text("lyricsTimingLineCleared"));
+  syncLyricsLineVisualStates(musicLyricsActiveIndex, { instant: true });
+  updateLyricsProgress(Number(els.audioPlayer?.currentTime) || 0);
+}
+
+function handleLyricsTimingEditorDoubleClick(event) {
+  if (!els.lyricsTimingEditor?.contains(event.target)) return;
+  const waveNode = event.target.closest?.(".lyrics-wave-editor");
+  if (!waveNode || !els.lyricsTimingEditor.contains(waveNode)) return;
+  event.preventDefault();
+  seekLyricsTimingWaveToPointer(event, waveNode);
+}
+
+function handleLyricsTimingEditorContextMenu(event) {
+  const waveNode = event.target.closest?.(".lyrics-wave-editor");
+  if (!waveNode || !els.lyricsTimingEditor?.contains(waveNode)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (performance.now() < suppressLyricsTimingContextMenuUntil) return;
+  if (lyricsTimingWaveDrag) return;
+  togglePlayback();
+}
+
+function handleLyricsTimingEditorClick(event) {
+  if (performance.now() < suppressLyricsTimingClickUntil) {
+    event.preventDefault();
+    return;
+  }
+  const actionNode = event.target.closest?.("[data-lyrics-action]");
+  if (!actionNode || !els.lyricsTimingEditor?.contains(actionNode)) {
+    const waveNode = event.target.closest?.(".lyrics-wave-editor");
+    if (
+      waveNode &&
+      els.lyricsTimingEditor?.contains(waveNode) &&
+      !event.target.closest?.("[data-lyrics-wave-handle]")
+    ) {
+      event.preventDefault();
+      seekLyricsTimingWaveToPointer(event, waveNode);
+    }
+    return;
+  }
+  const action = actionNode.dataset.lyricsAction;
+  if (action === "select-word") {
+    event.preventDefault();
+    const lineIndex = activeLyricsTimingTarget?.lineIndex;
+    const wordIndex = Number(actionNode.dataset.wordIndex);
+    selectLyricsTimingWord(lineIndex, wordIndex, { extend: event.shiftKey });
+    return;
+  }
+  event.preventDefault();
+  if (action === "close") closeLyricsTimingEditor();
+  else if (action === "select-line") selectLyricsTimingLine();
+  else if (action === "use-now-start") setLyricsTimingInputToCurrent("start");
+  else if (action === "use-now-end") setLyricsTimingInputToCurrent("end");
+  else if (action === "save-selected") saveLyricsTimingEditor();
+  else if (action === "save-line") saveLyricsTimingLine();
+  else if (action === "clear-selected") clearLyricsTimingEditorMarks();
+  else if (action === "clear-line") clearLyricsTimingLineMarks();
+}
+
+function handleLyricsTimingEditorInput(event) {
+  const input = event.target;
+  if (!input?.matches?.(".lyrics-row-time, .lyrics-detail-time")) return;
+  const role = input.dataset.role;
+  const wordIndex = Number(input.dataset.wordIndex ?? activeLyricsTimingTarget?.wordIndex);
+  if (!Number.isFinite(wordIndex)) return;
+  if (input.classList.contains("lyrics-detail-time")) {
+    if (activeLyricsTimingRangeStart === activeLyricsTimingRangeEnd) {
+      const rowInput = els.lyricsTimingEditor?.querySelector(`.lyrics-row-time[data-word-index="${wordIndex}"][data-role="${role}"]`);
+      if (rowInput) rowInput.value = input.value;
+    }
+    syncLyricsTimingWaveFromDetailInputs();
+    updateLyricsTimingDurationForSelectedRange();
+  } else if (activeLyricsTimingTarget?.wordIndex === wordIndex) {
+    const detailInput = role === "start" ? els.lyricsTimingStartInput : els.lyricsTimingEndInput;
+    if (detailInput) detailInput.value = input.value;
+    syncLyricsTimingWaveFromDetailInputs();
+    updateLyricsTimingDurationForSelectedRange();
+  }
+  updateLyricsTimingDurationForWord(wordIndex);
+  scheduleLyricsTimingAutoSave(input);
+}
+
+function handleLyricsTimingEditorKeydown(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeLyricsTimingEditor();
+    return;
+  }
+  if (event.key !== "Enter" || !event.target?.matches?.(".lyrics-row-time, .lyrics-detail-time")) return;
+  event.preventDefault();
+  clearLyricsTimingAutoSave();
+  autoSaveLyricsTimingInput(event.target, { quiet: false });
+}
+
+function handleLyricsTimingEditorFocusOut(event) {
+  if (!event.target?.matches?.(".lyrics-row-time, .lyrics-detail-time")) return;
+  clearLyricsTimingAutoSave();
+  autoSaveLyricsTimingInput(event.target, { quiet: true });
+}
+
+function setLyricsMarkStatus(message) {
+  musicLyricsStatus = message;
+  if (els.nowPlayingLyricsStatus) {
+    els.nowPlayingLyricsStatus.textContent = musicLyricsStatus;
+    els.nowPlayingLyricsStatus.hidden = false;
+  }
+}
+
+function updateLyricsProgress(time = 0) {
+  updateLyricsTimingWavePlayhead(time);
+  if (!hasMusic || !musicLyricsLines.length) return;
+  const list = els.nowPlayingLyricsList;
+  if (!list) return;
+  if (musicLyricsTrackPath !== selectedTrackPath) {
+    musicLyricsActiveIndex = -1;
+    heldLyricsActiveIndex = -1;
+    heldLyricsActiveUntil = 0;
+    syncLyricsLineVisualStates(-1);
+    return;
+  }
+  let nextIndex = activeLyricsIndexAt(time);
+  if (heldLyricsActiveIndex >= 0) {
+    if (performance.now() < heldLyricsActiveUntil) {
+      nextIndex = heldLyricsActiveIndex;
+    } else {
+      heldLyricsActiveIndex = -1;
+      heldLyricsActiveUntil = 0;
+    }
+  }
+  if (nextIndex === musicLyricsActiveIndex) {
+    updateActiveLyricsWordProgress(time);
+    updateLyricsLineTone(time);
+    return;
+  }
+  musicLyricsActiveIndex = nextIndex;
+  syncLyricsLineVisualStates(nextIndex, { scroll: nextIndex >= 0 });
+  updateActiveLyricsWordProgress(time);
+}
+
+function musicLyricsCachePath(item) {
+  return normalizeMusicTrackPathValue(typeof item === "string" ? item : item?.path);
+}
+
+function musicLyricsCacheType(item) {
+  return String(item?.lyricsType || "lrc");
+}
+
+function getMusicLyricsCacheEntry(item) {
+  const path = musicLyricsCachePath(item);
+  if (!path) return null;
+  const entry = musicLyricsCache.get(path);
+  if (!entry) return null;
+  if (typeof item === "object" && item) {
+    if (entry.lyricsUrl !== item.lyricsUrl || entry.lyricsType !== musicLyricsCacheType(item)) return null;
+  }
+  return entry;
+}
+
+function setMusicLyricsCacheEntry(item, patch = {}) {
+  const path = musicLyricsCachePath(item);
+  if (!path) return null;
+  const current = musicLyricsCache.get(path) || {};
+  const entry = {
+    ...current,
+    path,
+    lyricsUrl: typeof item === "object" && item ? item.lyricsUrl : current.lyricsUrl,
+    lyricsType: typeof item === "object" && item ? musicLyricsCacheType(item) : current.lyricsType,
+    ...patch
+  };
+  musicLyricsCache.set(path, entry);
+  return entry;
+}
+
+async function fetchParsedLyricsForTrack(item) {
+  const path = musicLyricsCachePath(item);
+  if (!item?.lyricsUrl || !path) return null;
+  const cached = getMusicLyricsCacheEntry(item);
+  if (cached?.lines) return cached;
+  const existing = musicLyricsTextPromises.get(path);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const response = await fetch(item.lyricsUrl, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const raw = await response.text();
+    const parsed = parseLyricsText(raw, item.lyricsType || "lrc");
+    return setMusicLyricsCacheEntry(item, {
+      lines: parsed.lines,
+      status: parsed.status,
+      synced: parsed.synced,
+      lyricsLoadedAt: Date.now()
+    });
+  })().finally(() => {
+    if (musicLyricsTextPromises.get(path) === promise) musicLyricsTextPromises.delete(path);
+  });
+  musicLyricsTextPromises.set(path, promise);
+  return promise;
+}
+
+async function fetchLyricsAnalysisForTrack(item) {
+  const path = musicLyricsCachePath(item);
+  if (!path) return null;
+  const cached = getMusicLyricsCacheEntry(item);
+  if (cached?.analysis?.ok) return cached.analysis;
+  const existing = musicLyricsAnalysisPromises.get(path);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const response = await fetch(`/api/music/lyrics/analysis?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const result = await response.json();
+    const analysis = result?.ok ? result : null;
+    if (analysis) setMusicLyricsCacheEntry(item, { analysis, analysisLoadedAt: Date.now() });
+    return analysis;
+  })().finally(() => {
+    if (musicLyricsAnalysisPromises.get(path) === promise) musicLyricsAnalysisPromises.delete(path);
+  });
+  musicLyricsAnalysisPromises.set(path, promise);
+  return promise;
+}
+
+function applyMusicLyricsCacheToPanel(item, entry) {
+  const path = musicLyricsCachePath(item);
+  if (!path || !entry?.lines) return false;
+  musicLyricsTrackPath = path;
+  musicLyricsLines = entry.lines;
+  musicLyricsStatus = entry.status || "";
+  musicLyricsActiveIndex = -1;
+  musicLyricsSynced = Boolean(entry.synced);
+  musicLyricsAnalysis = entry.analysis?.ok ? mergePendingMusicLyricMarksIntoAnalysis(entry.analysis) : null;
+  renderLyricsPanel();
+  updateLyricsProgress(Number.isFinite(els.audioPlayer?.currentTime) ? els.audioPlayer.currentTime : 0);
+  return true;
+}
+
+function applyLyricsAnalysisToActiveTrack(item, analysis) {
+  const path = musicLyricsCachePath(item);
+  if (!path || !analysis?.ok || selectedTrackPath !== path || musicLyricsTrackPath !== path) return false;
+  musicLyricsAnalysis = mergePendingMusicLyricMarksIntoAnalysis(analysis);
+  if (activeLyricsTimingTarget?.path === path && !els.lyricsTimingEditor?.hidden) {
+    renderLyricsTimingEditor();
+  }
+  updateLyricsProgress(Number.isFinite(els.audioPlayer?.currentTime) ? els.audioPlayer.currentTime : 0);
+  return true;
+}
+
+async function ensureLyricsAnalysisWarm(item) {
+  if (!hasMusic || !item?.path || !item.lyricsUrl) return null;
+  const path = musicLyricsCachePath(item);
+  const cached = getMusicLyricsCacheEntry(item);
+  if (cached?.analysis?.ok) {
+    applyLyricsAnalysisToActiveTrack(item, cached.analysis);
+    return cached;
+  }
+  const entry = cached?.lines ? cached : await fetchParsedLyricsForTrack(item);
+  if (!entry?.synced) return entry;
+  const analysis = await fetchLyricsAnalysisForTrack(item);
+  if (analysis?.ok) {
+    setMusicLyricsCacheEntry(item, { analysis, analysisLoadedAt: Date.now() });
+    applyLyricsAnalysisToActiveTrack(item, analysis);
+  }
+  return getMusicLyricsCacheEntry(path);
+}
+
+async function preloadLyricsForTrack(item) {
+  if (!hasMusic || !item?.path || !item.lyricsUrl) return null;
+  try {
+    const entry = await fetchParsedLyricsForTrack(item);
+    if (entry?.synced) {
+      await ensureLyricsAnalysisWarm(item);
+    }
+    return getMusicLyricsCacheEntry(item);
+  } catch {
+    return null;
+  }
+}
+
+function scheduleSelectedLyricsPreload(delay = 80) {
+  if (!hasMusic || !selectedTrackPath || typeof window === "undefined") return;
+  if (musicLyricsPreloadTimer) window.clearTimeout(musicLyricsPreloadTimer);
+  musicLyricsPreloadTimer = window.setTimeout(() => {
+    musicLyricsPreloadTimer = 0;
+    const item = selectedTrack();
+    if (item?.path === selectedTrackPath) preloadLyricsForTrack(item);
+  }, delay);
+}
+
+function preloadLyricsHotspotLine(lineIndex) {
+  if (!hasMusic || !Number.isFinite(Number(lineIndex))) return;
+  const item = selectedTrack();
+  if (!item?.path || item.path !== selectedTrackPath || !item.lyricsUrl) return;
+  ensureLyricsAnalysisWarm(item).catch(() => {});
+}
+
+async function loadLyricsAnalysisForTrack(item, token) {
+  if (!item?.path || !musicLyricsSynced) return;
+  try {
+    const result = await fetchLyricsAnalysisForTrack(item);
+    if (token !== musicLyricsLoadToken || musicLyricsTrackPath !== item.path) return;
+    if (result?.ok) applyLyricsAnalysisToActiveTrack(item, result);
+    else musicLyricsAnalysis = null;
+  } catch {
+    if (token === musicLyricsLoadToken && musicLyricsTrackPath === item.path) {
+      musicLyricsAnalysis = null;
+    }
+  }
+}
+
+async function loadLyricsForTrack(item) {
+  flushPendingMusicLyricMarks();
+  const token = ++musicLyricsLoadToken;
+  musicLyricsLookupPath = "";
+  if (!item?.lyricsUrl) {
+    musicLyricsTrackPath = "";
+    musicLyricsLines = [];
+    musicLyricsStatus = "";
+    musicLyricsActiveIndex = -1;
+    musicLyricsSynced = false;
+    musicLyricsAnalysis = null;
+    renderLyricsPanel();
+    return;
+  }
+  musicLyricsTrackPath = item?.path || "";
+  musicLyricsLines = [];
+  musicLyricsStatus = text("lyricsLoading");
+  musicLyricsActiveIndex = -1;
+  musicLyricsSynced = false;
+  musicLyricsAnalysis = null;
+  renderLyricsPanel();
+
+  let lyricItem = item;
+  if (token !== musicLyricsLoadToken) return;
+
+  if (!lyricItem?.lyricsUrl) {
+    musicLyricsLines = [];
+    musicLyricsStatus = text("lyricsEmpty");
+    musicLyricsActiveIndex = -1;
+    musicLyricsSynced = false;
+    musicLyricsAnalysis = null;
+    renderLyricsPanel();
+    return;
+  }
+
+  const cached = getMusicLyricsCacheEntry(lyricItem);
+  if (cached?.lines) {
+    applyMusicLyricsCacheToPanel(lyricItem, cached);
+    if (cached.synced) {
+      loadLyricsAnalysisForTrack(lyricItem, token);
+    }
+    return;
+  }
+
+  try {
+    const parsed = await fetchParsedLyricsForTrack(lyricItem);
+    if (token !== musicLyricsLoadToken) return;
+    applyMusicLyricsCacheToPanel(lyricItem, parsed);
+    loadLyricsAnalysisForTrack(lyricItem, token);
+  } catch (error) {
+    if (token !== musicLyricsLoadToken) return;
+    musicLyricsLines = [];
+    musicLyricsStatus = text("lyricsLoadFailed", error.message);
+    musicLyricsActiveIndex = -1;
+    musicLyricsSynced = false;
+    musicLyricsAnalysis = null;
+    renderLyricsPanel();
+  }
+}
+
+function closeNowPlayingLyrics() {
+  flushPendingMusicLyricMarks();
+  stopLyricsAnimationLoop();
+  musicLyricsLoadToken += 1;
+  musicLyricsTrackPath = "";
+  musicLyricsLines = [];
+  musicLyricsStatus = "";
+  musicLyricsActiveIndex = -1;
+  musicLyricsSynced = false;
+  musicLyricsAnalysis = null;
+  musicLyricsLookupPath = "";
+  renderLyricsPanel();
+}
+
+function replaceMusicTrackRecord(record) {
+  if (!record?.path) return null;
+  const localIndex = tracks.findIndex(item => item.path === record.path);
+  if (localIndex >= 0) {
+    tracks = tracks.map((item, index) => index === localIndex ? { ...item, ...record } : item);
+    return tracks[localIndex];
+  }
+  const libraryIndex = libraryTracks.findIndex(item => item.path === record.path);
+  if (libraryIndex >= 0) {
+    libraryTracks = libraryTracks.map((item, index) => index === libraryIndex ? { ...item, ...record } : item);
+    return libraryTracks[libraryIndex];
+  }
+  return record;
+}
+
+async function findLyricsForTrack(item) {
+  if (!item?.path) return;
+  const token = ++musicLyricsLoadToken;
+  musicLyricsTrackPath = "";
+  musicLyricsLines = [];
+  musicLyricsStatus = "";
+  musicLyricsActiveIndex = -1;
+  musicLyricsSynced = false;
+  musicLyricsAnalysis = null;
+  musicLyricsLookupPath = item.path;
+  renderLyricsPanel();
+
+  try {
+    const result = await postJson("/api/music/lyrics/fetch", { path: item.path, force: false }, { timeoutMs: 14000 });
+    if (token !== musicLyricsLoadToken) return;
+    musicLyricsLookupPath = "";
+    if (Array.isArray(result.tracks)) {
+      tracks = result.tracks;
+    }
+    const refreshed = replaceMusicTrackRecord(result.track) || selectedTrack();
+    if (refreshed?.lyricsUrl) {
+      musicNotice = "";
+      renderMusic();
+      loadLyricsForTrack(refreshed);
+      return;
+    }
+    musicLyricsTrackPath = "";
+    musicLyricsLines = [];
+    musicLyricsStatus = "";
+    musicLyricsActiveIndex = -1;
+    musicLyricsSynced = false;
+    musicLyricsAnalysis = null;
+    musicNotice = text("lyricsNotFound", displayTrackName(item.name));
+    renderMusic();
+  } catch (error) {
+    if (token !== musicLyricsLoadToken) return;
+    musicLyricsTrackPath = "";
+    musicLyricsLines = [];
+    musicLyricsStatus = "";
+    musicLyricsActiveIndex = -1;
+    musicLyricsSynced = false;
+    musicLyricsAnalysis = null;
+    musicLyricsLookupPath = "";
+    musicNotice = text("lyricsSearchFailed", error.message);
+    renderMusic();
+  }
+}
+
+function toggleNowPlayingLyrics() {
+  const item = selectedTrack();
+  if (!hasMusic || !item?.path) return;
+  if (musicLyricsTrackPath === item.path) {
+    closeNowPlayingLyrics();
+    return;
+  }
+  if (item.lyricsUrl) {
+    loadLyricsForTrack(item);
+    return;
+  }
+  findLyricsForTrack(item);
+}
+
 function renderMusic() {
   if (!hasMusic) return;
   syncMusicTierAssignments();
@@ -5757,8 +10201,7 @@ function renderMusic() {
   els.musicCount.textContent = text("trackCount", tracks.length);
 
   if (!playable.length) {
-    selectedTrackPath = "";
-    localStorage.removeItem(storageKeys.selectedTrack);
+    setSelectedTrackPath("");
     els.currentTrackName.textContent = text("musicNotSelected");
     els.currentTrackMeta.textContent = text("musicEmptyBody");
     els.trackCurrentTime.textContent = "0:00";
@@ -5767,10 +10210,20 @@ function renderMusic() {
     els.playPauseTrack.textContent = "▶";
     els.playPauseTrack.setAttribute("aria-label", text("playTrack"));
     els.playPauseTrack.title = text("playTrack");
+    clearMusicLyrics(text("lyricsEmpty"));
+  }
+
+  if (musicLyricsTrackPath && !playable.some(item => item.path === musicLyricsTrackPath)) {
+    musicLyricsTrackPath = "";
+    musicLyricsLines = [];
+    musicLyricsStatus = "";
+    musicLyricsActiveIndex = -1;
+    musicLyricsSynced = false;
+    musicLyricsAnalysis = null;
   }
 
   if (selected && !selectedTrackPath) {
-    selectedTrackPath = selected.path;
+    setSelectedTrackPath(selected.path, { persist: "soon" });
   }
 
   if (selected) {
@@ -5779,6 +10232,12 @@ function renderMusic() {
   } else {
     els.currentTrackName.textContent = text("musicNotSelected");
     els.currentTrackMeta.textContent = text("musicEmptyBody");
+    musicLyricsTrackPath = "";
+    musicLyricsLines = [];
+    musicLyricsStatus = "";
+    musicLyricsActiveIndex = -1;
+    musicLyricsSynced = false;
+    musicLyricsAnalysis = null;
   }
 
   els.playPauseTrack.textContent = els.audioPlayer.paused ? "▶" : "❚❚";
@@ -5786,6 +10245,7 @@ function renderMusic() {
   els.playPauseTrack.setAttribute("aria-label", playLabel);
   els.playPauseTrack.title = playLabel;
   renderPlaybackMode();
+  renderLyricsPanel();
 
   const tracksByTier = Object.fromEntries(musicTierGroups.map(group => [group.id, []]));
   for (const item of orderedLocalTracks()) {
@@ -6045,6 +10505,113 @@ async function openGithubDownloads() {
   }
 }
 
+function renderConsoleUpdate() {
+  if (!els.consoleUpdateStatus) return;
+  const state = consoleUpdateState || {};
+  const current = String(state.currentVersion || "0.3.0").replace(/^v/i, "");
+  const latest = String(state.latestVersion || "").replace(/^v/i, "");
+  if (els.consoleUpdateCurrent) {
+    els.consoleUpdateCurrent.textContent = `v${current}`;
+  }
+  if (els.consoleUpdateStatus) {
+    els.consoleUpdateStatus.textContent = consoleUpdateBusy
+      ? text("consoleUpdateChecking")
+      : state.available
+        ? text("consoleUpdateAvailable", latest)
+        : latest
+          ? text("consoleUpdateLatest")
+          : text("consoleUpdateNoRelease");
+  }
+  if (els.consoleUpdateAuto) {
+    els.consoleUpdateAuto.checked = state.autoCheck !== false;
+    els.consoleUpdateAuto.disabled = consoleUpdateBusy;
+  }
+  if (els.consoleUpdateRefresh) {
+    els.consoleUpdateRefresh.disabled = consoleUpdateBusy;
+  }
+  if (els.consoleUpdateInstall) {
+    els.consoleUpdateInstall.hidden = !state.available;
+    els.consoleUpdateInstall.disabled = consoleUpdateBusy;
+    els.consoleUpdateInstall.textContent = text(state.canInstall ? "consoleUpdateInstall" : "consoleUpdateDownload");
+  }
+  if (els.consoleUpdateRelease) {
+    els.consoleUpdateRelease.href = state.releaseUrl || "https://github.com/tx74666/CodexControlConsole/releases/latest";
+    els.consoleUpdateRelease.hidden = !state.available;
+  }
+  if (els.consoleUpdateTop) {
+    els.consoleUpdateTop.hidden = !state.available;
+    els.consoleUpdateTop.disabled = consoleUpdateBusy;
+    els.consoleUpdateTop.textContent = state.available ? `v${latest} \u2191` : "";
+    els.consoleUpdateTop.title = state.available ? text("consoleUpdateAvailable", latest) : "";
+  }
+  if (els.consoleUpdateError) {
+    const message = String(state.updateError || state.error || "").trim();
+    els.consoleUpdateError.textContent = message ? text("consoleUpdateFailed", message) : "";
+    els.consoleUpdateError.hidden = !message;
+  }
+}
+
+async function loadConsoleUpdateStatus(options = {}) {
+  if (!els.consoleUpdateStatus || consoleUpdateBusy) return;
+  consoleUpdateBusy = true;
+  renderConsoleUpdate();
+  try {
+    const params = new URLSearchParams();
+    if (options.force) params.set("force", "1");
+    else if (options.check) params.set("check", "auto");
+    const response = await fetch(`/api/console/update${params.size ? `?${params}` : ""}`, { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (options.quiet && payload.error) payload.error = "";
+    consoleUpdateState = payload;
+  } catch (error) {
+    consoleUpdateState = {
+      ...(consoleUpdateState || {}),
+      error: options.quiet ? "" : error.message
+    };
+  } finally {
+    consoleUpdateBusy = false;
+    renderConsoleUpdate();
+  }
+}
+
+async function saveConsoleUpdatePreference() {
+  if (!els.consoleUpdateAuto || consoleUpdateBusy) return;
+  consoleUpdateBusy = true;
+  renderConsoleUpdate();
+  try {
+    consoleUpdateState = await postJson("/api/console/update/config", {
+      autoCheck: els.consoleUpdateAuto.checked
+    });
+  } catch (error) {
+    consoleUpdateState = { ...(consoleUpdateState || {}), error: error.message };
+  } finally {
+    consoleUpdateBusy = false;
+    renderConsoleUpdate();
+  }
+}
+
+async function installConsoleUpdate() {
+  if (!consoleUpdateState?.available || consoleUpdateBusy) return;
+  if (!consoleUpdateState.canInstall) {
+    window.open(consoleUpdateState.releaseUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
+  if (!window.confirm(text("consoleUpdateConfirm", consoleUpdateState.latestVersion))) return;
+  consoleUpdateBusy = true;
+  if (els.consoleUpdateStatus) els.consoleUpdateStatus.textContent = text("consoleUpdateInstalling");
+  if (els.consoleUpdateError) els.consoleUpdateError.hidden = true;
+  try {
+    const payload = await postJson("/api/console/update/install", {});
+    consoleUpdateState = payload;
+    if (els.consoleUpdateStatus) els.consoleUpdateStatus.textContent = text("consoleUpdateRestarting");
+  } catch (error) {
+    consoleUpdateState = { ...(consoleUpdateState || {}), error: error.message };
+    consoleUpdateBusy = false;
+    renderConsoleUpdate();
+  }
+}
+
 function parseLegacyCustomResolution(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return { width: "", length: "" };
@@ -6131,6 +10698,480 @@ function updateRandomRealmArtContext() {
   };
   saveRandomRealmArtContext();
   updateBlenderPromptOutput();
+}
+
+function hasBlenderGithubShare() {
+  return Boolean(els.blenderGithubSharePanel && els.blenderGithubProject);
+}
+
+function blenderGithubCheckedValue(name, fallback = "") {
+  return document.querySelector(`input[name="${name}"]:checked`)?.value || fallback;
+}
+
+function setBlenderGithubCheckedValue(name, value) {
+  for (const input of document.querySelectorAll(`input[name="${name}"]`)) {
+    input.checked = input.value === value;
+  }
+}
+
+function blenderGithubLines(value) {
+  return String(value || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function blenderGithubRepositorySlug(value) {
+  const raw = String(value || "").trim().replace(/\.git\/?$/i, "").replace(/\/$/, "");
+  const match = raw.match(/github\.com(?::|\/)([^/\s:]+)\/([^/\s]+)$/i);
+  return match ? `${match[1]}/${match[2]}`.toLocaleLowerCase() : "";
+}
+
+function blenderGithubStateLabel(state) {
+  const keys = {
+    uninitialized: "blenderGithubStateUninitialized",
+    initialized: "blenderGithubStateInitialized",
+    dirty: "blenderGithubStateDirty",
+    committed: "blenderGithubStateCommitted",
+    pendingPush: "blenderGithubStatePendingPush",
+    behind: "blenderGithubStateBehind",
+    synced: "blenderGithubStateSynced",
+    gitUnavailable: "blenderGithubStateGitUnavailable"
+  };
+  return text(keys[state] || "blenderGithubReady");
+}
+
+function blenderGithubFormPayload(extra = {}) {
+  return {
+    project: els.blenderGithubProject?.value || blenderGithubShareState?.project?.path || randomRealmArtContext.project || "",
+    repositoryUrl: els.blenderGithubRepository?.value.trim() || "",
+    visibility: blenderGithubCheckedValue("blenderGithubVisibility", "private"),
+    scope: blenderGithubCheckedValue("blenderGithubScope", "current"),
+    includePatterns: blenderGithubLines(els.blenderGithubIncludes?.value),
+    excludePatterns: blenderGithubLines(els.blenderGithubExcludes?.value),
+    version: els.blenderGithubVersion?.value.trim() || "v0.1.0",
+    message: els.blenderGithubMessage?.value.trim() || "",
+    confirmPublic: blenderGithubPublicConfirmed,
+    ...extra
+  };
+}
+
+function setBlenderGithubStatus(message) {
+  if (els.blenderGithubStatus) {
+    const value = String(message || "").trim();
+    const passive = !value
+      || value === text("blenderGithubReady")
+      || value === text("blenderGithubLoading");
+    els.blenderGithubStatus.textContent = passive ? "" : value;
+    els.blenderGithubStatus.hidden = passive;
+  }
+}
+
+function renderBlenderGithubProjectOptions(selectedPath = "") {
+  if (!els.blenderGithubProject) return;
+  const projects = [];
+  const seen = new Set();
+  const addProject = project => {
+    const path = String(project?.path || "").trim();
+    if (!path || seen.has(path.toLocaleLowerCase())) return;
+    seen.add(path.toLocaleLowerCase());
+    projects.push({
+      name: project.name || path.split(/[\\/]/).pop()?.replace(/\.blend$/i, "") || path,
+      file: project.file || path.split(/[\\/]/).pop() || path,
+      path,
+      directory: project.directory || path.replace(/[\\/][^\\/]+$/, "")
+    });
+  };
+  addProject(blenderGithubShareState?.project);
+  randomRealmBlenderProjects.forEach(addProject);
+  if (selectedPath && !seen.has(selectedPath.toLocaleLowerCase())) {
+    addProject({ path: selectedPath });
+  }
+
+  const grouped = [];
+  const byDirectory = new Map();
+  for (const project of projects) {
+    const key = project.directory.replace(/\\/g, "/").toLocaleLowerCase();
+    if (!byDirectory.has(key)) {
+      const group = { ...project };
+      byDirectory.set(key, group);
+      grouped.push(group);
+    } else if (project.path === selectedPath) {
+      Object.assign(byDirectory.get(key), project);
+    }
+  }
+
+  els.blenderGithubProject.innerHTML = "";
+  if (!grouped.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = text("blenderGithubSelectProject");
+    els.blenderGithubProject.appendChild(option);
+    return;
+  }
+  for (const project of grouped) {
+    const option = document.createElement("option");
+    option.value = project.path;
+    option.textContent = project.directory.split(/[\\/]/).filter(Boolean).pop() || project.name;
+    option.title = project.directory;
+    els.blenderGithubProject.appendChild(option);
+  }
+  const preferred = selectedPath || blenderGithubShareState?.project?.path || randomRealmArtContext.project || grouped[0].path;
+  const preferredDirectory = projects.find(project => project.path === preferred)?.directory || "";
+  const selectedGroup = grouped.find(project => project.path === preferred)
+    || grouped.find(project => project.directory === preferredDirectory)
+    || grouped[0];
+  els.blenderGithubProject.value = selectedGroup.path;
+}
+
+function blenderGithubVersionText(value) {
+  const version = String(value || "").trim().replace(/^v/i, "");
+  return version ? `V${version}` : "V--";
+}
+
+function renderBlenderGithubBlendCards(state) {
+  if (!els.blenderGithubBlendCards) return;
+  const project = state?.project || {};
+  const selectedPath = String(project.path || "");
+  const selectedKey = selectedPath.replace(/\\/g, "/").toLocaleLowerCase();
+  const paths = Array.from(new Set([
+    ...(Array.isArray(project.blendFiles) ? project.blendFiles : []),
+    selectedPath
+  ].filter(Boolean)));
+  const version = blenderGithubVersionText(state?.git?.lastTag || state?.config?.version);
+
+  els.blenderGithubBlendCards.innerHTML = "";
+  if (!paths.length) {
+    const empty = document.createElement("div");
+    empty.className = "blender-github-empty";
+    empty.textContent = text("blenderGithubNoBlendFiles");
+    els.blenderGithubBlendCards.appendChild(empty);
+    return;
+  }
+
+  for (const path of paths) {
+    const file = path.split(/[\\/]/).pop() || path;
+    const active = path.replace(/\\/g, "/").toLocaleLowerCase() === selectedKey;
+    const card = document.createElement("button");
+    card.className = "blender-github-blend-card";
+    card.type = "button";
+    card.setAttribute("role", "option");
+    card.setAttribute("aria-selected", String(active));
+    card.title = `${text("blenderGithubCardTitle", file)}\n${path}`;
+
+    const mark = document.createElement("span");
+    mark.className = "blender-github-file-mark";
+    mark.textContent = "BL";
+    const copy = document.createElement("span");
+    copy.className = "blender-github-file-copy";
+    const name = document.createElement("strong");
+    name.textContent = file;
+    copy.appendChild(name);
+    const versionBadge = document.createElement("span");
+    versionBadge.className = "blender-github-version";
+    versionBadge.textContent = version;
+    card.append(mark, copy, versionBadge);
+    card.addEventListener("click", () => {
+      if (active || blenderGithubBusy) return;
+      syncBlenderGithubProjectContext(path);
+      loadBlenderGithubShare({ project: path });
+    });
+    els.blenderGithubBlendCards.appendChild(card);
+  }
+}
+
+function syncBlenderGithubProjectContext(projectPath) {
+  if (!projectPath) return;
+  if (randomRealmArtContext.project !== projectPath) {
+    randomRealmLoadedObjectsProject = "";
+    randomRealmBlenderObjects = [];
+  }
+  randomRealmArtContext.project = projectPath;
+  saveRandomRealmArtContext();
+  if (els.randomRealmBlenderProject && Array.from(els.randomRealmBlenderProject.options).some(option => option.value === projectPath)) {
+    els.randomRealmBlenderProject.value = projectPath;
+    updateRandomRealmProjectAddress();
+  }
+}
+
+function renderBlenderGithubTools(state) {
+  if (!els.blenderGithubToolStatus) return;
+  els.blenderGithubToolStatus.innerHTML = "";
+  const tools = state?.tools || {};
+  const gitStatus = document.createElement("span");
+  if (tools.gitAvailable && tools.lfsAvailable) {
+    gitStatus.className = "ready";
+    gitStatus.textContent = text("blenderGithubToolsReady");
+  } else {
+    gitStatus.className = "warning";
+    gitStatus.textContent = tools.gitAvailable
+      ? text("blenderGithubLfsMissing")
+      : text("blenderGithubStateGitUnavailable");
+  }
+  const ghStatus = document.createElement("span");
+  ghStatus.className = tools.ghAuthenticated ? "ready" : "warning";
+  ghStatus.textContent = tools.ghAuthenticated
+    ? text("blenderGithubGhReady")
+    : text("blenderGithubGhFallback");
+  els.blenderGithubToolStatus.append(gitStatus, ghStatus);
+}
+
+function renderBlenderGithubChanges(state) {
+  if (!els.blenderGithubChanges) return;
+  const changes = Array.isArray(state?.git?.changes) ? state.git.changes : [];
+  const count = Number(state?.git?.changedCount || changes.length || 0);
+  if (els.blenderGithubChangesCount) {
+    els.blenderGithubChangesCount.textContent = String(count);
+  }
+  els.blenderGithubChanges.innerHTML = "";
+  if (!changes.length) {
+    const clean = document.createElement("div");
+    clean.className = "blender-github-clean";
+    clean.textContent = text("blenderGithubWorkingTreeClean");
+    els.blenderGithubChanges.appendChild(clean);
+    return;
+  }
+  for (const change of changes.slice(0, 12)) {
+    const row = document.createElement("div");
+    row.className = "blender-github-change";
+    const code = document.createElement("code");
+    code.textContent = change.code || "??";
+    const path = document.createElement("span");
+    path.textContent = change.path || "";
+    path.title = change.path || "";
+    row.append(code, path);
+    els.blenderGithubChanges.appendChild(row);
+  }
+  if (count > 12) {
+    const more = document.createElement("div");
+    more.className = "blender-github-clean";
+    more.textContent = text("blenderGithubMoreChanges", count - 12);
+    els.blenderGithubChanges.appendChild(more);
+  }
+}
+
+function renderBlenderGithubCustomScope() {
+  if (els.blenderGithubCustomScope) {
+    els.blenderGithubCustomScope.hidden = blenderGithubCheckedValue("blenderGithubScope", "current") !== "custom";
+  }
+}
+
+function updateBlenderGithubActionState() {
+  if (!hasBlenderGithubShare()) return;
+  const state = blenderGithubShareState || {};
+  const git = state.git || {};
+  const tools = state.tools || {};
+  const hasProject = Boolean(els.blenderGithubProject?.value || state.project?.path);
+
+  for (const control of els.blenderGithubSharePanel.querySelectorAll("input, select, textarea")) {
+    control.disabled = blenderGithubBusy;
+  }
+  if (els.blenderGithubRefresh) els.blenderGithubRefresh.disabled = blenderGithubBusy;
+  if (els.blenderGithubDesktop) els.blenderGithubDesktop.disabled = blenderGithubBusy || !hasProject;
+  if (els.blenderGithubFolder) els.blenderGithubFolder.disabled = blenderGithubBusy || !hasProject;
+  if (els.blenderGithubInitialize) {
+    els.blenderGithubInitialize.disabled = blenderGithubBusy || !hasProject || !tools.gitAvailable || !tools.lfsAvailable;
+  }
+  if (els.blenderGithubCommit) {
+    els.blenderGithubCommit.disabled = blenderGithubBusy || !hasProject || !git.initialized;
+  }
+  if (els.blenderGithubPush) {
+    els.blenderGithubPush.disabled = blenderGithubBusy || !hasProject || !git.hasCommit || !git.remoteUrl;
+  }
+  if (els.blenderGithubOpen) {
+    els.blenderGithubOpen.disabled = blenderGithubBusy || !hasProject;
+  }
+}
+
+function setBlenderGithubBusy(busy, message = "") {
+  blenderGithubBusy = Boolean(busy);
+  els.blenderGithubSharePanel?.classList.toggle("busy", blenderGithubBusy);
+  if (message) setBlenderGithubStatus(message);
+  updateBlenderGithubActionState();
+}
+
+function renderBlenderGithubShare(state, options = {}) {
+  if (!hasBlenderGithubShare() || !state) return;
+  blenderGithubShareState = state;
+  const project = state.project || {};
+  const config = state.config || {};
+  const git = state.git || {};
+  renderBlenderGithubProjectOptions(project.path || "");
+  syncBlenderGithubProjectContext(project.path || "");
+
+  if (!options.preserveForm) {
+    if (els.blenderGithubRepository) els.blenderGithubRepository.value = config.repositoryUrl || git.remoteUrl || "";
+    if (els.blenderGithubVersion) els.blenderGithubVersion.value = config.version || "v0.1.0";
+    if (els.blenderGithubMessage) els.blenderGithubMessage.value = config.message || "";
+    if (els.blenderGithubIncludes) els.blenderGithubIncludes.value = (config.includePatterns || []).join("\n");
+    if (els.blenderGithubExcludes) els.blenderGithubExcludes.value = (config.excludePatterns || []).join("\n");
+    setBlenderGithubCheckedValue("blenderGithubVisibility", config.visibility || "private");
+    setBlenderGithubCheckedValue("blenderGithubScope", config.scope || "current");
+  }
+  blenderGithubPublicConfirmed = config.visibility === "public";
+  renderBlenderGithubCustomScope();
+
+  if (els.blenderGithubProjectPath) {
+    els.blenderGithubProjectPath.textContent = project.directory || "";
+    els.blenderGithubProjectPath.title = project.directory || "";
+  }
+  if (els.blenderGithubBlendFile) {
+    els.blenderGithubBlendFile.textContent = project.path?.split(/[\\/]/).pop() || "--";
+    els.blenderGithubBlendFile.title = project.path || "";
+  }
+  if (els.blenderGithubBranch) els.blenderGithubBranch.textContent = git.branch || "--";
+  if (els.blenderGithubRemote) {
+    const remote = git.remoteUrl || config.repositoryUrl || "";
+    els.blenderGithubRemote.textContent = remote ? blenderGithubRepositorySlug(remote) || remote : "--";
+    els.blenderGithubRemote.title = remote;
+  }
+  if (els.blenderGithubLastVersion) {
+    els.blenderGithubLastVersion.textContent = blenderGithubVersionText(git.lastTag || config.version);
+  }
+  if (els.blenderGithubCommitMeta) {
+    els.blenderGithubCommitMeta.textContent = git.lastCommit
+      ? text("blenderGithubLastCommit", git.lastCommit.hash || "", git.lastCommit.subject || "")
+      : text("blenderGithubNoCommit");
+  }
+  if (els.blenderGithubState) {
+    els.blenderGithubState.dataset.state = git.state || "uninitialized";
+    els.blenderGithubState.title = blenderGithubStateLabel(git.state);
+  }
+  renderBlenderGithubBlendCards(state);
+  updateBlenderGithubActionState();
+}
+
+async function loadBlenderGithubShare(options = {}) {
+  if (!hasBlenderGithubShare()) return;
+  const sequence = ++blenderGithubLoadSequence;
+  const selectedProject = options.detect
+    ? ""
+    : options.project ?? els.blenderGithubProject?.value ?? blenderGithubShareState?.project?.path ?? "";
+  setBlenderGithubBusy(true, text("blenderGithubLoading"));
+  try {
+    const query = selectedProject ? `?project=${encodeURIComponent(selectedProject)}` : "";
+    const response = await fetch(`/api/randomrealm/blender/github-share/status${query}`, { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (sequence !== blenderGithubLoadSequence) return;
+    renderBlenderGithubShare(payload);
+    setBlenderGithubStatus(text("blenderGithubReady"));
+  } catch (error) {
+    if (sequence !== blenderGithubLoadSequence) return;
+    setBlenderGithubStatus(text("blenderGithubFailed", error.message));
+  } finally {
+    if (sequence === blenderGithubLoadSequence) {
+      setBlenderGithubBusy(false);
+    }
+  }
+}
+
+async function saveBlenderGithubShare(options = {}) {
+  if (!hasBlenderGithubShare() || !blenderGithubShareState) return false;
+  if (blenderGithubBusy) {
+    blenderGithubSaveRequested = true;
+    return false;
+  }
+  blenderGithubSaveRequested = false;
+  setBlenderGithubBusy(true, options.quiet ? "" : text("blenderGithubSaving"));
+  try {
+    const payload = await postJson("/api/randomrealm/blender/github-share/config", blenderGithubFormPayload());
+    renderBlenderGithubShare(payload);
+    if (!options.quiet) setBlenderGithubStatus(text("blenderGithubSaved"));
+    return true;
+  } catch (error) {
+    setBlenderGithubStatus(text("blenderGithubFailed", error.message));
+    return false;
+  } finally {
+    setBlenderGithubBusy(false);
+    if (blenderGithubSaveRequested) {
+      blenderGithubSaveRequested = false;
+      window.queueMicrotask(() => saveBlenderGithubShare(options));
+    }
+  }
+}
+
+function blenderGithubActionStatusKey(action) {
+  return {
+    init: "blenderGithubInitializing",
+    commit: "blenderGithubCommitting",
+    push: "blenderGithubPushing",
+    open: "blenderGithubOpening"
+  }[action] || "blenderGithubLoading";
+}
+
+async function runBlenderGithubAction(action) {
+  if (!hasBlenderGithubShare() || blenderGithubBusy) return;
+  const visibility = blenderGithubCheckedValue("blenderGithubVisibility", "private");
+  if (visibility === "public" && !blenderGithubPublicConfirmed) {
+    if (!window.confirm(text("blenderGithubPublicConfirm"))) {
+      setBlenderGithubCheckedValue("blenderGithubVisibility", "private");
+      return;
+    }
+    blenderGithubPublicConfirmed = true;
+  }
+
+  const repository = els.blenderGithubRepository?.value.trim() || "";
+  const currentRemote = blenderGithubShareState?.git?.remoteUrl || "";
+  const changingRemote = repository
+    && currentRemote
+    && blenderGithubRepositorySlug(repository) !== blenderGithubRepositorySlug(currentRemote);
+  let replaceRemote = false;
+  if (changingRemote) {
+    replaceRemote = window.confirm(text("blenderGithubReplaceRemoteConfirm"));
+    if (!replaceRemote) return;
+  }
+
+  let createGithub = false;
+  if (action === "init" && !repository && blenderGithubShareState?.tools?.ghAuthenticated) {
+    createGithub = window.confirm(text("blenderGithubCreateConfirm", blenderGithubShareState.project?.rootName || blenderGithubShareState.project?.name || "repository"));
+  }
+
+  setBlenderGithubBusy(true, text(blenderGithubActionStatusKey(action)));
+  try {
+    const payload = await postJson(
+      `/api/randomrealm/blender/github-share/${action}`,
+      blenderGithubFormPayload({ replaceRemote, createGithub })
+    );
+    if (action !== "open") {
+      renderBlenderGithubShare(payload);
+    }
+    const successMessage = action === "init"
+      ? text(payload.git?.remoteUrl ? "blenderGithubInitializedReady" : "blenderGithubInitializedNoRemote")
+      : action === "commit"
+        ? text("blenderGithubCommitComplete", payload.action?.tag || els.blenderGithubVersion?.value || "")
+        : action === "push"
+          ? text("blenderGithubPushComplete")
+          : action === "open"
+            ? text("blenderGithubOpenComplete")
+            : payload.message || text("blenderGithubReady");
+    setBlenderGithubStatus(successMessage);
+  } catch (error) {
+    setBlenderGithubStatus(text("blenderGithubFailed", error.message));
+  } finally {
+    setBlenderGithubBusy(false);
+  }
+}
+
+async function openBlenderGithubTarget(target) {
+  if (!hasBlenderGithubShare() || blenderGithubBusy) return;
+  const endpoint = {
+    desktop: "desktop",
+    folder: "folder",
+    github: "open"
+  }[target];
+  if (!endpoint) return;
+  const project = blenderGithubShareState?.project?.path || els.blenderGithubProject?.value || "";
+  setBlenderGithubBusy(true, text("blenderGithubLoading"));
+  try {
+    await postJson(`/api/randomrealm/blender/github-share/${endpoint}`, { project });
+    setBlenderGithubStatus("");
+  } catch (error) {
+    setBlenderGithubStatus(text("blenderGithubFailed", error.message));
+  } finally {
+    setBlenderGithubBusy(false);
+  }
 }
 
 function readBlenderPromptConfigFromForm() {
@@ -6377,6 +11418,7 @@ function renderRandomRealmBlenderProjects() {
     if (els.randomRealmProjectPath) {
       els.randomRealmProjectPath.textContent = "";
     }
+    renderBlenderGithubProjectOptions(blenderGithubShareState?.project?.path || "");
     return;
   }
   for (const project of randomRealmBlenderProjects) {
@@ -6390,6 +11432,7 @@ function renderRandomRealmBlenderProjects() {
     ? saved
     : randomRealmBlenderProjects[0].path;
   updateRandomRealmProjectAddress();
+  renderBlenderGithubProjectOptions(blenderGithubShareState?.project?.path || els.randomRealmBlenderProject.value);
 }
 
 function updateRandomRealmProjectAddress() {
@@ -6507,12 +11550,24 @@ async function syncRandomRealmLiveSelection(options = {}) {
   }
 }
 
-function startRandomRealmLiveSelectionPolling() {
-  if (!hasRandomRealmArtTools() || randomRealmLiveSelectionTimer) return;
-  randomRealmLiveSelectionTimer = window.setInterval(() => {
-    if (document.hidden || activeModuleId !== "blender") return;
-    syncRandomRealmLiveSelection({ quiet: true });
-  }, 1600);
+function stopRandomRealmLiveSelectionPolling() {
+  if (!randomRealmLiveSelectionTimer) return;
+  window.clearTimeout(randomRealmLiveSelectionTimer);
+  randomRealmLiveSelectionTimer = null;
+}
+
+function startRandomRealmLiveSelectionPolling(options = {}) {
+  if (!hasRandomRealmArtTools() || !isModuleForeground("blender")) {
+    stopRandomRealmLiveSelectionPolling();
+    return;
+  }
+  if (randomRealmLiveSelectionTimer) return;
+  randomRealmLiveSelectionTimer = window.setTimeout(async () => {
+    randomRealmLiveSelectionTimer = null;
+    if (!isModuleForeground("blender")) return;
+    await syncRandomRealmLiveSelection({ quiet: true });
+    startRandomRealmLiveSelectionPolling();
+  }, options.immediate ? 0 : 1600);
 }
 
 function isRandomRealmPreviewableTexture(path) {
@@ -7161,10 +12216,20 @@ function scheduleRandomRealmTextureAutoPack(delay = 160) {
   }, delay);
 }
 
+function stopRandomRealmTextureApplyPolling() {
+  if (!randomRealmTextureApplyPollTimer) return;
+  window.clearTimeout(randomRealmTextureApplyPollTimer);
+  randomRealmTextureApplyPollTimer = null;
+}
+
 function scheduleRandomRealmTextureApplyPoll(delay = 2600) {
-  if (!hasRandomRealmArtTools() || !randomRealmPackedPackagePaths().length || randomRealmTextureApplyPollTimer) return;
+  if (!hasRandomRealmArtTools()
+    || !isModuleForeground("blender")
+    || !randomRealmPackedPackagePaths().length
+    || randomRealmTextureApplyPollTimer) return;
   randomRealmTextureApplyPollTimer = window.setTimeout(() => {
     randomRealmTextureApplyPollTimer = null;
+    if (!isModuleForeground("blender")) return;
     pollRandomRealmTextureApplyStatus();
   }, delay);
 }
@@ -7765,9 +12830,13 @@ async function loadRandomRealmBlenderProjects(options = {}) {
   if (!hasRandomRealmArtTools()) return;
   const loadObjects = options.loadObjects !== false;
   const query = (els.randomRealmProjectSearch?.value || "").trim();
+  const limit = Math.max(0, Math.min(100, Number(options.limit) || 0));
   setRandomRealmArtStatus(text("randomRealmBlenderLoading"));
   try {
-    const url = `/api/randomrealm/blender/projects${query ? `?q=${encodeURIComponent(query)}` : ""}`;
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (limit) params.set("limit", String(limit));
+    const url = `/api/randomrealm/blender/projects${params.size ? `?${params}` : ""}`;
     const response = await fetch(url, { cache: "no-store" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
@@ -7810,9 +12879,11 @@ async function loadRandomRealmBlenderObjects() {
   randomRealmNewTexture = null;
   randomRealmStagedTextures = [];
   randomRealmAddMapMode = false;
+  randomRealmLoadedObjectsProject = "";
   try {
     const payload = await postJson("/api/randomrealm/blender/objects", { project });
     randomRealmBlenderObjects = Array.isArray(payload.objects) ? payload.objects : [];
+    randomRealmLoadedObjectsProject = project;
     renderRandomRealmBlenderObjects();
     const synced = await syncRandomRealmLiveSelection({ quiet: true });
     if (!synced) {
@@ -7820,6 +12891,7 @@ async function loadRandomRealmBlenderObjects() {
     }
   } catch (error) {
     randomRealmBlenderObjects = [];
+    randomRealmLoadedObjectsProject = "";
     renderRandomRealmBlenderObjects();
     setRandomRealmArtStatus(text("randomRealmBlenderActionFailed", error.message));
   }
@@ -8166,12 +13238,25 @@ function deleteWorkspaceTodo(groupId, itemId) {
   renderWorkspaceTodos();
 }
 
-async function postJson(path, payload = {}) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
+async function postJson(path, payload = {}, options = {}) {
+  const controller = options.timeoutMs ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), options.timeoutMs) : null;
+  let response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller?.signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("request timed out");
+    }
+    throw error;
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(result.error || `HTTP ${response.status}`);
@@ -8238,10 +13323,15 @@ async function uploadMusicFiles(files) {
     }
     tracks = Array.isArray(result.tracks) ? result.tracks : tracks;
     if (result.files && result.files[0]) {
-      selectedTrackPath = result.files[0].path;
-      localStorage.setItem(storageKeys.selectedTrack, selectedTrackPath);
+      setSelectedTrackPath(result.files[0].path, { persist: "now" });
     }
-    musicNotice = text("musicAdded", result.files.length);
+    const audioCount = Array.isArray(result.files) ? result.files.length : 0;
+    const lyricsCount = Array.isArray(result.lyrics) ? result.lyrics.length : 0;
+    musicNotice = audioCount ? text("musicAdded", audioCount) : text("musicLyricsAdded", lyricsCount);
+    if (selectedTrackPath) {
+      musicLyricsTrackPath = "";
+      musicLyricsAnalysis = null;
+    }
     renderMusic();
   } catch (error) {
     musicNotice = text("musicUploadFailed", error.message);
@@ -8346,8 +13436,7 @@ async function importMusicUrl(url, useBrowserCookies = false) {
     tracks = Array.isArray(result.tracks) ? result.tracks : tracks;
     musicCookieState = result.cookies || musicCookieState;
     if (result.files && result.files[0]) {
-      selectedTrackPath = result.files[0].path;
-      localStorage.setItem(storageKeys.selectedTrack, selectedTrackPath);
+      setSelectedTrackPath(result.files[0].path, { persist: "now" });
       musicNotice = text("musicLinkImported", displayTrackName(result.files[0].name));
     } else {
       musicNotice = text("musicLinkPrepared", provider);
@@ -8449,8 +13538,7 @@ async function promoteLibraryTrack(path, tierId = "third", beforePath = "") {
     if (result.file?.path) {
       markPromotedLibraryTrack(path, result.file.path);
       moveTrackToTier(result.file.path, tierId, beforePath);
-      selectedTrackPath = result.file.path;
-      localStorage.setItem(storageKeys.selectedTrack, selectedTrackPath);
+      setSelectedTrackPath(result.file.path, { persist: "now" });
       musicNotice = text("musicPromoted", displayTrackName(result.file.name));
     }
     libraryTracks = flattenLibraryTracks(musicLibraries);
@@ -8533,11 +13621,9 @@ async function deleteTrack(item) {
         els.audioPlayer.load();
       }
       if (nextTrack) {
-        selectedTrackPath = nextTrack.path;
-        localStorage.setItem(storageKeys.selectedTrack, selectedTrackPath);
+        setSelectedTrackPath(nextTrack.path, { persist: "now" });
       } else {
-        selectedTrackPath = "";
-        localStorage.removeItem(storageKeys.selectedTrack);
+        setSelectedTrackPath("", { persist: "now" });
       }
     }
     musicNotice = text("musicDeleted", displayTrackName(item.name));
@@ -8572,8 +13658,8 @@ async function applyWallpaper(item = selectedWallpaper()) {
 
 async function playTrack(item = selectedTrack()) {
   if (!item) return;
-  selectedTrackPath = item.path;
-  localStorage.setItem(storageKeys.selectedTrack, selectedTrackPath);
+  const shouldRefreshLyrics = Boolean(musicLyricsTrackPath);
+  setSelectedTrackPath(item.path, { persist: "now" });
 
   const nextUrl = new URL(item.url, window.location.href).href;
   if (els.audioPlayer.src !== nextUrl) {
@@ -8585,9 +13671,15 @@ async function playTrack(item = selectedTrack()) {
     await els.audioPlayer.play();
     musicNotice = "";
     renderMusic();
+    if (shouldRefreshLyrics) {
+      loadLyricsForTrack(item);
+    }
   } catch (error) {
     musicNotice = text("musicPlayFailed", error.message);
     renderMusic();
+    if (shouldRefreshLyrics) {
+      loadLyricsForTrack(item);
+    }
   }
 }
 
@@ -8623,8 +13715,26 @@ function playRelativeTrack(offset, { wrap = true } = {}) {
   if (next) playTrack(next);
 }
 
+function resetEndedTrackToStart() {
+  if (!els.audioPlayer) return;
+  pendingSeekRatio = null;
+  try {
+    els.audioPlayer.currentTime = 0;
+  } catch {
+    return;
+  }
+  setTrackSeekVisualRatio(0);
+  updateLyricsProgress(0);
+}
+
 function handleTrackEnded() {
   const item = selectedTrack();
+  if (playbackMode === "playOnce") {
+    resetEndedTrackToStart();
+    renderMusic();
+    updateTrackProgress();
+    return;
+  }
   if (playbackMode === "repeatOne" && item) {
     els.audioPlayer.currentTime = 0;
     playTrack(item);
@@ -8710,6 +13820,64 @@ function commitTrackSeek(ratio = trackSeekRatio()) {
   els.trackSeek.value = String(cleanRatio * 100);
   els.trackCurrentTime.textContent = formatDuration(nextTime);
   els.trackDuration.textContent = formatDuration(duration);
+}
+
+function seekTrackBySeconds(deltaSeconds = 0) {
+  if (!hasMusic || !selectedTrackPath || !els.audioPlayer) return false;
+  const duration = audioDuration();
+  if (duration <= 0) return false;
+  const current = Number.isFinite(els.audioPlayer.currentTime) ? els.audioPlayer.currentTime : 0;
+  const beforeRatio = currentAudioSeekRatio();
+  const nextTime = clamp(current + Number(deltaSeconds || 0), 0, duration);
+  const nextRatio = duration > 0 ? nextTime / duration : 0;
+  cancelSmoothValueAnimation("seek");
+  userSeeking = false;
+  pendingSeekRatio = null;
+  commitTrackSeek(nextRatio);
+  recordTrackSeekChange(beforeRatio, nextRatio);
+  updateTrackProgress();
+  return true;
+}
+
+function shouldIgnoreMusicSeekKeydown(event) {
+  if (!hasMusic || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return true;
+  const target = event.target;
+  if (!target || target === document.body || target === document.documentElement) return false;
+  if (target === els.trackSeek) return false;
+  if (target === els.trackVolume) return true;
+  if (target.isContentEditable) return true;
+  if (target.closest?.("[contenteditable='true']")) return true;
+  if (target.closest?.("input, textarea, select")) return true;
+  return false;
+}
+
+function shouldIgnoreMusicPlaybackKeydown(event) {
+  if (!hasMusic || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return true;
+  const target = event.target;
+  if (!target || target === document.body || target === document.documentElement) return false;
+  if (target.isContentEditable) return true;
+  if (target.closest?.("[contenteditable='true']")) return true;
+  if (target.closest?.("input, textarea, select")) return true;
+  if (target.closest?.(".lyrics-timing-editor")) return false;
+  if (target.closest?.("button, a, [role='button'], [role='link']")) return true;
+  return false;
+}
+
+function handleMusicPlaybackKeydown(event) {
+  if (event.key !== " " && event.key !== "Spacebar" && event.code !== "Space") return false;
+  if (shouldIgnoreMusicPlaybackKeydown(event)) return false;
+  event.preventDefault();
+  if (!event.repeat) togglePlayback();
+  return true;
+}
+
+function handleMusicSeekKeydown(event) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return false;
+  if (shouldIgnoreMusicSeekKeydown(event)) return false;
+  const direction = event.key === "ArrowRight" ? 1 : -1;
+  if (!seekTrackBySeconds(direction * musicKeyboardSeekSeconds)) return false;
+  event.preventDefault();
+  return true;
 }
 
 function animateNumberValue(key, from, to, duration, onValue, onFinish) {
@@ -8940,6 +14108,7 @@ function updateTrackProgress() {
   els.trackCurrentTime.textContent = formatDuration(current);
   els.trackDuration.textContent = formatDuration(duration);
   els.trackSeek.value = duration > 0 ? String((current / duration) * 100) : "0";
+  updateLyricsProgress(current);
 }
 
 async function loadWallpapers() {
@@ -8961,23 +14130,24 @@ async function loadWallpapers() {
 
 async function loadMusic() {
   try {
+    const preferredSelectedTrackPath = normalizeMusicTrackPathValue(localStorage.getItem(storageKeys.selectedTrack) || selectedTrackPath);
     const response = await fetch("/api/music", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();
     tracks = Array.isArray(payload.tracks) ? payload.tracks : [];
     musicLibraries = Array.isArray(payload.libraries) ? payload.libraries : musicLibraries;
     musicCookieState = payload.cookies || { available: false };
-    applyMusicState(payload.state);
+    applyMusicState(payload.state, { preferredSelectedTrackPath });
     libraryTracks = flattenLibraryTracks(musicLibraries);
     if (selectedTrackPath && !tracks.some(item => item.path === selectedTrackPath)) {
       const stillExists = libraryTracks.some(item => item.path === selectedTrackPath);
       if (!stillExists) {
-        selectedTrackPath = "";
-        localStorage.removeItem(storageKeys.selectedTrack);
+        setSelectedTrackPath("", { persist: "now" });
       }
     }
     renderMusic();
     renderMusicLibraries();
+    scheduleSelectedLyricsPreload(40);
     scheduleMusicLibraryPoll();
   } catch (error) {
     musicNotice = text("musicLoadFailed", error.message);
@@ -9078,6 +14248,9 @@ function randomRealmResourceButtons() {
     els.openSteamworkPublishFolder,
     els.openSteamworkGameContent,
     els.openSteamworkPublishTool,
+    els.openSteamworkPublishToolTip,
+    els.openSteamworkBuildsTip,
+    els.locateSteamworkPublishTool,
     els.openSteamworkArtAsset,
     els.openRandomRealmProject,
     els.openRandomRealmPromo,
@@ -9095,6 +14268,33 @@ async function openRandomRealmResource(id, labelKey) {
 
   try {
     await postJson("/api/randomrealm/open-resource", { id });
+    setRandomRealmReleaseStatus(text("randomRealmOpened", label));
+    setSteamworkStatus(text("randomRealmOpened", label));
+  } catch (error) {
+    const message = id === "publishToolFolder"
+      ? text("steamworkPublishToolMissing")
+      : text("randomRealmOpenFailed", error.message);
+    setRandomRealmReleaseStatus(message);
+    setSteamworkStatus(message);
+  } finally {
+    for (const button of buttons) button.disabled = false;
+  }
+}
+
+function openSteamworksWebLink(url, labelKey) {
+  const label = text(labelKey);
+  const buttons = randomRealmResourceButtons();
+  setRandomRealmReleaseStatus(text("randomRealmOpening", label));
+  setSteamworkStatus(text("randomRealmOpening", label));
+  for (const button of buttons) button.disabled = true;
+  try {
+    const opened = window.open(url, "_blank");
+    if (!opened) throw new Error("popup blocked");
+    try {
+      opened.opener = null;
+    } catch {
+      // Some browsers block touching the opened window; the link is already open.
+    }
     setRandomRealmReleaseStatus(text("randomRealmOpened", label));
     setSteamworkStatus(text("randomRealmOpened", label));
   } catch (error) {
@@ -9510,15 +14710,6 @@ function steamworkCandidateDisplay(item, allFiles = []) {
   };
 }
 
-function steamworkAssetMeta(file) {
-  if (!file) return text("steamworkAssetNoFile");
-  const pieces = [];
-  const dimensions = steamworkAssetDimensions(file);
-  if (dimensions) pieces.push(dimensions);
-  if (Number.isFinite(Number(file.size))) pieces.push(formatBytes(Number(file.size)));
-  return pieces.join(" · ");
-}
-
 function createSteamworkAssetThumb(file, status) {
   const thumb = document.createElement("div");
   thumb.className = "steamwork-asset-thumb";
@@ -9544,116 +14735,6 @@ function createSteamworkAssetThumb(file, status) {
     thumb.textContent = file?.type === "video" ? "MP4" : status === "missing" ? "..." : "IMG";
   }
   return thumb;
-}
-
-function renderSteamworkAssetsLegacyTableUnused(state) {
-  if (!hasSteamwork || !els.steamworkAssetTableBody) return;
-  const summary = state?.summary || {};
-  const items = Array.isArray(state?.items) ? state.items : [];
-
-  renderSteamworkAssetSummaryPills(summary, items.length);
-
-  els.steamworkAssetTableBody.innerHTML = "";
-  if (!items.length) {
-    const row = document.createElement("tr");
-    const cell = document.createElement("td");
-    cell.colSpan = 4;
-    cell.textContent = text("steamworkAssetNoFile");
-    row.appendChild(cell);
-    els.steamworkAssetTableBody.appendChild(row);
-    return;
-  }
-
-  for (const item of items) {
-    const row = document.createElement("tr");
-    row.className = `steamwork-asset-row status-${item.status || "missing"}`;
-    const primaryFile = Array.isArray(item.files) ? item.files[0] : null;
-
-    const assetCell = document.createElement("td");
-    const asset = document.createElement("div");
-    asset.className = "steamwork-asset-namecell";
-    asset.appendChild(createSteamworkAssetThumb(primaryFile, item.status));
-
-    const assetText = document.createElement("div");
-    assetText.className = "steamwork-asset-titlewrap";
-    const title = document.createElement("strong");
-    title.textContent = item.name || "";
-    const category = document.createElement("span");
-    category.textContent = steamworkCategoryLabel(item.category || "");
-    assetText.append(title, category);
-    asset.appendChild(assetText);
-    assetCell.appendChild(asset);
-    row.appendChild(assetCell);
-
-    const specCell = document.createElement("td");
-    const status = document.createElement("span");
-    status.className = `steamwork-status-badge ${item.status || "missing"}`;
-    status.textContent = steamworkAssetStatusLabel(item.status);
-    const spec = document.createElement("div");
-    spec.className = "steamwork-spec-text";
-    spec.textContent = steamworkAssetSpecText(item.spec);
-    specCell.append(status, spec);
-    if (item.issue) {
-      const issue = document.createElement("div");
-      issue.className = "steamwork-current-meta";
-      issue.textContent = steamworkAssetIssueText(item.issue);
-      specCell.appendChild(issue);
-    }
-    row.appendChild(specCell);
-
-    const currentCell = document.createElement("td");
-    if (Array.isArray(item.files) && item.files.length) {
-      const fileList = document.createElement("div");
-      fileList.className = "steamwork-current-list";
-      item.files.slice(0, 5).forEach((file, index) => {
-        fileList.appendChild(renderSteamworkAssetFileV2(file, { compact: index > 0 }));
-      });
-      if (item.files.length > 5) {
-        const more = document.createElement("div");
-        more.className = "steamwork-current-meta";
-        more.textContent = `+${item.files.length - 5}`;
-        fileList.appendChild(more);
-      }
-      if (primaryFile?.path) {
-        const openButton = document.createElement("button");
-        openButton.className = "mini-button steamwork-open-asset";
-        openButton.type = "button";
-        openButton.dataset.path = primaryFile.path;
-        openButton.textContent = text("steamworkAssetOpen");
-        fileList.appendChild(openButton);
-      }
-      currentCell.appendChild(fileList);
-    } else {
-      currentCell.textContent = text("steamworkAssetNoFile");
-    }
-    row.appendChild(currentCell);
-
-    const targetCell = document.createElement("td");
-    targetCell.textContent = steamworkAssetTargetText(item.target);
-    row.appendChild(targetCell);
-
-    els.steamworkAssetTableBody.appendChild(row);
-  }
-}
-
-async function loadSteamworkAssetsLegacyTableUnused() {
-  if (!hasSteamwork || !els.steamworkAssetTableBody) return;
-  if (els.steamworkAssetSummary) {
-    els.steamworkAssetSummary.textContent = text("steamworkAssetLoading");
-  }
-  try {
-    const response = await fetch("/api/steamwork/assets", { cache: "no-store" });
-    const state = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(state.error || `HTTP ${response.status}`);
-    renderSteamworkAssetsLegacyTableUnused(state);
-    setSteamworkStatus(text("steamworkAssetSource", state.root || "D:\\ArtAsset"));
-  } catch (error) {
-    const message = text("steamworkAssetLoadFailed", error.message);
-    setSteamworkStatus(message);
-    if (els.steamworkAssetSummary) {
-      els.steamworkAssetSummary.textContent = message;
-    }
-  }
 }
 
 function steamworkAssetMetaV2(file) {
@@ -10426,7 +15507,22 @@ async function uploadRenderTextureFiles(files) {
 
 function tick() {
   if (!els.localTime) return;
-  els.localTime.textContent = formatClock(new Date());
+  const nextClock = formatClock(new Date());
+  if (els.localTime.textContent !== nextClock) {
+    els.localTime.textContent = nextClock;
+  }
+}
+
+function scheduleClockTick() {
+  if (clockTickTimer) {
+    window.clearTimeout(clockTickTimer);
+    clockTickTimer = 0;
+  }
+  tick();
+  if (!els.localTime || document.hidden) return;
+  const now = new Date();
+  const nextMinuteDelay = 60000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 30;
+  clockTickTimer = window.setTimeout(scheduleClockTick, Math.max(500, nextMinuteDelay));
 }
 
 if (els.languageToggle) els.languageToggle.addEventListener("click", () => {
@@ -10437,6 +15533,7 @@ if (els.languageToggle) els.languageToggle.addEventListener("click", () => {
 if (els.themeToggle) els.themeToggle.addEventListener("click", () => {
   setTheme(nextTheme(theme));
 });
+if (els.tutorialModeToggle) els.tutorialModeToggle.addEventListener("click", toggleTutorialMode);
 if (els.moduleArchiveDrop) els.moduleArchiveDrop.addEventListener("click", event => {
   event.stopPropagation();
   const nextView = event.ctrlKey || event.metaKey ? "deep" : "main";
@@ -10477,7 +15574,7 @@ if (hasMusic && els.musicCookieFileInput) {
   els.musicCookieFileInput.addEventListener("change", event => uploadMusicCookieFile(event.target.files));
 }
 if (hasSteamwork && els.openSteamworkDashboard) {
-  els.openSteamworkDashboard.addEventListener("click", () => openRandomRealmResource("steamworks", "steamworkDashboard"));
+  els.openSteamworkDashboard.addEventListener("click", () => openSteamworksWebLink(steamworksAppUrl, "steamworkDashboard"));
 }
 if (hasSteamwork && els.openSteamworkPublishFolder) {
   els.openSteamworkPublishFolder.addEventListener("click", () => openRandomRealmResource("publishFolder", "steamworkPublishRoot"));
@@ -10487,6 +15584,19 @@ if (hasSteamwork && els.openSteamworkGameContent) {
 }
 if (hasSteamwork && els.openSteamworkPublishTool) {
   els.openSteamworkPublishTool.addEventListener("click", () => openRandomRealmResource("publishToolFolder", "steamworkPublishTool"));
+}
+if (hasSteamwork && els.openSteamworkPublishToolTip) {
+  els.openSteamworkPublishToolTip.addEventListener("click", () => openRandomRealmResource("publishToolFolder", "steamworkPublishTool"));
+}
+if (hasSteamwork && els.openSteamworkBuildsTip) {
+  els.openSteamworkBuildsTip.addEventListener("click", () => openSteamworksWebLink(steamworksBuildsUrl, "steamworkBuildsLink"));
+}
+if (hasSteamwork && els.locateSteamworkPublishTool) {
+  els.locateSteamworkPublishTool.addEventListener("click", () => {
+    setRandomRealmReleaseStatus(text("steamworkPublishToolChoose"));
+    setSteamworkStatus(text("steamworkPublishToolChoose"));
+    els.steamworkPublishToolFileInput?.click();
+  });
 }
 if (hasSteamwork && els.openSteamworkArtAsset) {
   els.openSteamworkArtAsset.addEventListener("click", () => openRandomRealmResource("steamworkAssetFolder", "steamworkArtAssets"));
@@ -10543,9 +15653,28 @@ bindSteamworkDropzone("publishTool", els.steamworkPublishToolDropzone, els.steam
 if (hasMusic) els.musicDock.addEventListener("dragover", handleLocalMusicDragOver);
 if (hasMusic) els.musicDock.addEventListener("dragleave", handleLocalMusicDragLeave);
 if (hasMusic) els.musicDock.addEventListener("drop", handleLocalMusicDrop);
-if (hasMusic) window.addEventListener("beforeunload", flushMusicStateBeforeUnload);
-if (hasMusic) document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") flushMusicStateBeforeUnload();
+if (hasMusic && els.nowPlayingArt) els.nowPlayingArt.addEventListener("dblclick", toggleNowPlayingLyrics);
+if (hasMusic && els.nowPlayingLyricsPanel) {
+  els.nowPlayingLyricsPanel.addEventListener("pointerdown", beginLyricsPanelResize);
+  els.nowPlayingLyricsPanel.addEventListener("pointermove", setLyricsPanelResizeHover);
+  els.nowPlayingLyricsPanel.addEventListener("pointerleave", clearLyricsPanelResizeHover);
+  window.addEventListener("resize", resizeLyricsPanelToViewport);
+}
+if (hasMusic && els.nowPlayingLyricsList) {
+  els.nowPlayingLyricsList.addEventListener("contextmenu", openLyricsTimingEditorFromContext);
+}
+if (hasMusic && els.lyricsTimingEditor) bindLyricsTimingEditorEvents(els.lyricsTimingEditor);
+if (hasMusic) window.addEventListener("beforeunload", () => {
+  flushPendingMusicLyricMarks({ beacon: true });
+  flushMusicStateBeforeUnload();
+});
+document.addEventListener("visibilitychange", () => {
+  if (hasMusic && document.visibilityState === "hidden") {
+    flushPendingMusicLyricMarks({ beacon: true });
+    flushMusicStateBeforeUnload();
+  }
+  scheduleClockTick();
+  syncRuntimeActivity({ resume: document.visibilityState === "visible" });
 });
 if (hasMusic) els.previousTrack.addEventListener("click", () => playRelativeTrack(-1));
 if (hasMusic) els.playPauseTrack.addEventListener("click", togglePlayback);
@@ -10577,18 +15706,24 @@ if (hasMusic) els.audioPlayer.addEventListener("timeupdate", updateTrackProgress
 if (hasMusic) els.audioPlayer.addEventListener("play", () => {
   renderMusic();
   renderMusicLibraries();
+  syncLyricsAnimationLoop();
 });
 if (hasMusic) els.audioPlayer.addEventListener("pause", () => {
+  stopLyricsAnimationLoop();
   renderMusic();
   renderMusicLibraries();
 });
-if (hasMusic) els.audioPlayer.addEventListener("ended", handleTrackEnded);
+if (hasMusic) els.audioPlayer.addEventListener("ended", () => {
+  stopLyricsAnimationLoop();
+  handleTrackEnded();
+});
 if (hasMusic) els.audioPlayer.addEventListener("error", () => {
+  stopLyricsAnimationLoop();
   musicNotice = text("musicPlayFailed", "unsupported or unavailable audio");
   renderMusic();
 });
 if (els.openSteamworks) {
-  els.openSteamworks.addEventListener("click", () => openRandomRealmResource("steamworks", "randomRealmSteamworks"));
+  els.openSteamworks.addEventListener("click", () => openSteamworksWebLink(steamworksAppUrl, "randomRealmSteamworks"));
 }
 if (els.openSteamPublishFolder) {
   els.openSteamPublishFolder.addEventListener("click", () => openRandomRealmResource("publishFolder", "randomRealmPublishFolder"));
@@ -10604,6 +15739,96 @@ if (els.openUnityProjectFolder) {
 }
 if (els.openUnityPromoFolder) {
   els.openUnityPromoFolder.addEventListener("click", () => openRandomRealmResource("promoFolder", "randomRealmPromoFolder"));
+}
+for (const button of document.querySelectorAll("[data-blender-view-target]")) {
+  button.addEventListener("click", () => setBlenderWorkspaceView(button.dataset.blenderViewTarget));
+  button.addEventListener("keydown", event => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const buttons = Array.from(document.querySelectorAll("[data-blender-view-target]"));
+    const currentIndex = buttons.indexOf(button);
+    if (currentIndex < 0) return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const next = buttons[(currentIndex + direction + buttons.length) % buttons.length];
+    next?.focus();
+    setBlenderWorkspaceView(next?.dataset.blenderViewTarget);
+  });
+}
+for (const trigger of document.querySelectorAll("[data-blender-view-jump]")) {
+  trigger.addEventListener("click", () => setBlenderWorkspaceView(trigger.dataset.blenderViewJump));
+}
+for (const trigger of document.querySelectorAll("[data-blender-helper-jump]")) {
+  trigger.addEventListener("click", () => {
+    const target = document.getElementById(trigger.dataset.blenderHelperJump);
+    target?.scrollIntoView({
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth",
+      block: "start"
+    });
+    window.setTimeout(() => els.blenderGithubProject?.focus({ preventScroll: true }), 260);
+  });
+}
+if (els.blenderGithubProject) {
+  els.blenderGithubProject.addEventListener("change", () => {
+    syncBlenderGithubProjectContext(els.blenderGithubProject.value);
+    loadBlenderGithubShare({ project: els.blenderGithubProject.value });
+  });
+}
+if (els.blenderGithubRefresh) {
+  els.blenderGithubRefresh.addEventListener("click", () => loadBlenderGithubShare({
+    project: els.blenderGithubProject?.value || blenderGithubShareState?.project?.path || ""
+  }));
+}
+for (const input of document.querySelectorAll('input[name="blenderGithubVisibility"]')) {
+  input.addEventListener("change", () => {
+    if (!input.checked) return;
+    if (input.value === "public" && !blenderGithubPublicConfirmed) {
+      if (!window.confirm(text("blenderGithubPublicConfirm"))) {
+        setBlenderGithubCheckedValue("blenderGithubVisibility", "private");
+        return;
+      }
+      blenderGithubPublicConfirmed = true;
+    } else if (input.value === "private") {
+      blenderGithubPublicConfirmed = false;
+    }
+    saveBlenderGithubShare();
+  });
+}
+for (const input of document.querySelectorAll('input[name="blenderGithubScope"]')) {
+  input.addEventListener("change", () => {
+    if (!input.checked) return;
+    renderBlenderGithubCustomScope();
+    saveBlenderGithubShare();
+  });
+}
+for (const field of [
+  els.blenderGithubRepository,
+  els.blenderGithubVersion,
+  els.blenderGithubMessage,
+  els.blenderGithubIncludes,
+  els.blenderGithubExcludes
+].filter(Boolean)) {
+  field.addEventListener("change", () => saveBlenderGithubShare());
+}
+if (els.blenderGithubRepository) {
+  els.blenderGithubRepository.addEventListener("input", updateBlenderGithubActionState);
+}
+if (els.blenderGithubInitialize) {
+  els.blenderGithubInitialize.addEventListener("click", () => runBlenderGithubAction("init"));
+}
+if (els.blenderGithubCommit) {
+  els.blenderGithubCommit.addEventListener("click", () => runBlenderGithubAction("commit"));
+}
+if (els.blenderGithubPush) {
+  els.blenderGithubPush.addEventListener("click", () => runBlenderGithubAction("push"));
+}
+if (els.blenderGithubOpen) {
+  els.blenderGithubOpen.addEventListener("click", () => openBlenderGithubTarget("github"));
+}
+if (els.blenderGithubDesktop) {
+  els.blenderGithubDesktop.addEventListener("click", () => openBlenderGithubTarget("desktop"));
+}
+if (els.blenderGithubFolder) {
+  els.blenderGithubFolder.addEventListener("click", () => openBlenderGithubTarget("folder"));
 }
 for (const field of [
   els.randomRealmArtType
@@ -10655,11 +15880,15 @@ if (els.randomRealmProjectSearch) {
 if (els.randomRealmBlenderProject) {
   els.randomRealmBlenderProject.addEventListener("change", () => {
     randomRealmArtContext.project = els.randomRealmBlenderProject.value;
+    randomRealmLoadedObjectsProject = "";
     randomRealmLastLiveObject = "";
     randomRealmLiveSelectedObjects = [];
     updateRandomRealmProjectAddress();
     saveRandomRealmArtContext();
     loadRandomRealmBlenderObjects();
+    if (hasBlenderGithubShare()) {
+      loadBlenderGithubShare({ project: els.randomRealmBlenderProject.value });
+    }
   });
 }
 if (els.randomRealmSyncLiveSelection) {
@@ -10830,6 +16059,18 @@ if (hasWorkspace && els.githubDownloadsLink) {
     }
   });
 }
+if (els.consoleUpdateAuto) {
+  els.consoleUpdateAuto.addEventListener("change", saveConsoleUpdatePreference);
+}
+if (els.consoleUpdateRefresh) {
+  els.consoleUpdateRefresh.addEventListener("click", () => loadConsoleUpdateStatus({ force: true }));
+}
+if (els.consoleUpdateInstall) {
+  els.consoleUpdateInstall.addEventListener("click", installConsoleUpdate);
+}
+if (els.consoleUpdateTop) {
+  els.consoleUpdateTop.addEventListener("click", installConsoleUpdate);
+}
 if (hasWorkspace && els.addWorkspaceTodo) {
   els.addWorkspaceTodo.addEventListener("click", addWorkspaceTodo);
 }
@@ -10871,6 +16112,8 @@ document.addEventListener("click", event => {
 
 document.addEventListener("keydown", event => {
   if (handleConsoleUndoRedoKeydown(event)) return;
+  if (handleMusicPlaybackKeydown(event)) return;
+  if (handleMusicSeekKeydown(event)) return;
   if (event.key === "Escape" && hasMusic && els.musicAddMenu && !els.musicAddMenu.hidden) {
     setMusicAddMenuOpen(false);
     els.addMusic?.focus();
@@ -10893,23 +16136,12 @@ if (hasMusic) {
 
 applyConsoleEdition(consoleEdition, { activate: false, forceRender: true });
 applyLanguage();
+setBlenderWorkspaceView(activeBlenderView, { persist: false });
 loadConsoleConfig();
 restoreInitialModuleUrl();
-if (hasWallpaper) loadWallpapers();
-if (hasMusic) loadMusic();
-if (hasWorkspace) loadGithubDownloadsInfo();
-if (hasSteamwork) loadSteamworkAssets();
-if (hasMaterialWorkspace && downloadIntakeEnabled) {
-  loadMaterialCandidates();
-} else if (hasMaterialWorkspace) {
-  renderDownloadIntake();
-}
 renderRandomRealmArtContext();
 renderBlenderPromptBuilder();
-loadUnityBridgeStatus();
-if (hasRandomRealmArtTools()) {
-  loadRandomRealmBlenderProjects();
-  startRandomRealmLiveSelectionPolling();
-}
-tick();
-setInterval(tick, 1000);
+runtimeActivityReady = true;
+syncRuntimeActivity({ resume: true });
+loadConsoleUpdateStatus({ check: true, quiet: true });
+scheduleClockTick();

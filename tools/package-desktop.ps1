@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.1.0",
+  [string]$Version = "0.3.0",
   [string]$OutputDir = "dist",
   [ValidateSet("all", "developer", "lite")]
   [string]$Edition = "all"
@@ -23,6 +23,9 @@ $Items = @(
   "styles.css",
   "app.js",
   "world_console.py",
+  "blender_github_share.py",
+  "console_update.py",
+  "app-manifest.json",
   "site.webmanifest",
   "favicon.ico",
   "codex-resource-icon.ico",
@@ -50,6 +53,7 @@ $Items = @(
   "tools/NativeFileDrag.exe",
   "tools/NativeFileDrag.cs",
   "tools/blender_live_selection_bridge.py",
+  "tools/apply_update.py",
   "wallpapers/README.txt",
   "wallpapers/SOURCES.md"
 )
@@ -109,6 +113,15 @@ function New-DesktopPackage {
     Copy-Item -LiteralPath (Join-Path $ProjectRoot "Start-ControlConsole-LAN-Lite.vbs") -Destination (Join-Path $StageDir "Start-ControlConsole-LAN.vbs") -Force
   }
 
+  $ManifestPath = Join-Path $StageDir "app-manifest.json"
+  $Manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+  $Manifest.version = $Version.TrimStart("v")
+  $Manifest.installMode = "portable"
+  $Manifest.edition = $PackageEdition
+  $ManifestJson = $Manifest | ConvertTo-Json -Depth 8
+  $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($ManifestPath, $ManifestJson + [Environment]::NewLine, $Utf8NoBom)
+
   New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "cache") | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "music") | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "wallpapers") | Out-Null
@@ -116,7 +129,8 @@ function New-DesktopPackage {
   @"
 This folder is intentionally empty in the public release.
 
-Put your local music files here or set CODEX_CONTROL_MUSIC_DIR to another folder.
+Use Add in the Music panel for per-user files under LOCALAPPDATA.
+To share one library between users, put music here or set CODEX_CONTROL_MUSIC_DIR.
 "@ | Set-Content -LiteralPath (Join-Path $StageDir "music\README.txt") -Encoding UTF8
 
   $EditionLabel = if ($IsLite) { "Lite edition: Wallpaper and Music only." } else { "Developer edition: all console modules enabled." }

@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" sizes="48x48" href="codex-resource-icon-48.png?v=codex-clear-4">
   <link rel="icon" type="image/png" sizes="32x32" href="codex-resource-icon-32.png?v=codex-clear-4">
   <link rel="manifest" href="site.webmanifest?v=codex-clear-4">
-  <link rel="stylesheet" href="styles.css?v=control-console-479">
+  <link rel="stylesheet" href="styles.css?v=control-console-643">
 </head>
 <body>
   <main class="app-shell music-shell">
@@ -63,10 +63,12 @@
 
         <div class="music-player">
           <div class="music-now">
-            <div class="track-art" aria-hidden="true">♫</div>
-            <div>
+            <button id="nowPlayingArt" class="track-art" type="button" aria-label="Lyrics" aria-expanded="false">♫</button>
+            <div class="music-now-body">
               <span data-i18n="nowPlayingLabel">当前播放</span>
-              <strong id="currentTrackName">未选择</strong>
+              <div class="music-now-title-row">
+                <strong id="currentTrackName">未选择</strong>
+              </div>
               <p id="currentTrackMeta" data-i18n="musicEmptyBody">加入 mp3、wav、m4a、flac、ogg、opus。</p>
             </div>
           </div>
@@ -90,6 +92,30 @@
             <span data-i18n="volumeLabel">音量</span>
             <input id="trackVolume" type="range" min="0" max="1" step="0.01" value="0.8">
           </label>
+
+          <section id="nowPlayingLyricsPanel" class="now-playing-lyrics-panel" hidden>
+            <div id="nowPlayingLyricsList" class="music-lyrics-list"></div>
+            <p id="nowPlayingLyricsStatus" class="music-lyrics-status" data-i18n="lyricsEmpty">这首歌还没有歌词文件。</p>
+            <div id="lyricsTimingEditor" class="lyrics-timing-editor" hidden>
+              <div class="lyrics-timing-head">
+          <span id="lyricsTimingTarget" class="lyrics-timing-target" data-i18n="lyricsTimingPick">Triple right-click the same lyric line to open timing editor (WIP).</span>
+                <button id="lyricsTimingClose" class="lyrics-timing-close" type="button" data-i18n-aria="lyricsTimingClose">x</button>
+              </div>
+              <div class="lyrics-timing-fields">
+                <label>
+                  <span data-i18n="lyricsTimingStartLabel">Start</span>
+                  <input id="lyricsTimingStartInput" type="text" inputmode="decimal" autocomplete="off" data-i18n-placeholder="lyricsTimingTimePlaceholder">
+                </label>
+                <label>
+                  <span data-i18n="lyricsTimingEndLabel">End</span>
+                  <input id="lyricsTimingEndInput" type="text" inputmode="decimal" autocomplete="off" data-i18n-placeholder="lyricsTimingTimePlaceholder">
+                </label>
+              </div>
+              <div class="lyrics-timing-actions">
+                <button type="button" data-lyrics-action="select-line" data-i18n="lyricsTimingSelectLine">Select line</button>
+              </div>
+            </div>
+          </section>
         </div>
 
       </article>
@@ -118,10 +144,10 @@
     </section>
   </main>
 
-  <input id="musicFileInput" class="visually-hidden" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus" multiple>
+  <input id="musicFileInput" class="visually-hidden" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.lrc,.txt,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus,text/plain" multiple>
   <input id="musicCookieFileInput" class="visually-hidden" type="file" accept=".txt,text/plain">
   <audio id="audioPlayer" preload="metadata"></audio>
 
-  <script src="app.js?v=control-console-479"></script>
+<script src="app.js?v=control-console-643"></script>
 </body>
 </html>

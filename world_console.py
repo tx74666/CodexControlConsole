@@ -1,4 +1,5 @@
 import argparse
+import array
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
@@ -22,10 +23,15 @@ import time
 import unicodedata
 import urllib.request
 import urllib.parse
+import urllib.error
+import uuid
 import webbrowser
 import xml.etree.ElementTree as ET
 import zipfile
 import zlib
+
+from blender_github_share import BlenderGithubShareService
+from console_update import ConsoleUpdateService
 
 
 def hidden_subprocess_kwargs():
@@ -37,26 +43,129 @@ def hidden_subprocess_kwargs():
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8898
-WORLD_CACHE = APP_DIR / "cache" / "world.geojson"
-TRANSLATION_CACHE = APP_DIR / "cache" / "translations.json"
-WALLPAPER_DIR = APP_DIR / "wallpapers"
-DEFAULT_MUSIC_DIR = Path(r"D:\MyMP3s") if Path(r"D:\MyMP3s").exists() else APP_DIR / "music"
+
+
+def read_app_manifest():
+    manifest_file = APP_DIR / "app-manifest.json"
+    try:
+        payload = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+APP_MANIFEST = read_app_manifest()
+APP_VERSION = str(APP_MANIFEST.get("version") or "0.0.0-dev").strip()
+APP_REPOSITORY = str(APP_MANIFEST.get("repository") or "tx74666/CodexControlConsole").strip()
+APP_INSTALL_MODE = str(APP_MANIFEST.get("installMode") or "source").strip().lower()
+APP_IS_PORTABLE = APP_INSTALL_MODE == "portable"
+
+
+def default_user_data_dir():
+    configured = os.environ.get("CODEX_CONTROL_DATA_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    if not APP_IS_PORTABLE:
+        return APP_DIR
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+    return base / "CodexControlConsole"
+
+
+USER_DATA_DIR = default_user_data_dir().resolve()
+CACHE_DIR = USER_DATA_DIR / "cache" if USER_DATA_DIR != APP_DIR else APP_DIR / "cache"
+INSTALLATION_STATE_FILE = CACHE_DIR / "installation.json"
+
+
+def migrate_legacy_user_cache():
+    legacy_cache = APP_DIR / "cache"
+    marker = USER_DATA_DIR / ".cache-migrated-v0.3"
+    if CACHE_DIR == legacy_cache or marker.exists():
+        return
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    if legacy_cache.is_dir():
+        for source in legacy_cache.rglob("*"):
+            if source.is_symlink() or not source.is_file():
+                continue
+            try:
+                relative = source.relative_to(legacy_cache)
+                target = CACHE_DIR / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if not target.exists():
+                    shutil.copy2(source, target)
+            except OSError:
+                continue
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(APP_VERSION + "\n", encoding="utf-8")
+
+
+def installation_state():
+    try:
+        payload = json.loads(INSTALLATION_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    installation_id = str(payload.get("installationId") or "").strip()
+    if not installation_id:
+        installation_id = str(uuid.uuid4())
+        payload = {
+            "installationId": installation_id,
+            "created": datetime.now(timezone.utc).isoformat(),
+        }
+        INSTALLATION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = INSTALLATION_STATE_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, INSTALLATION_STATE_FILE)
+    return payload
+
+
+def media_directory(name, extensions):
+    configured = os.environ.get(f"CODEX_CONTROL_{name.upper()}_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    legacy = APP_DIR / name
+    if not APP_IS_PORTABLE:
+        return legacy
+    try:
+        if legacy.is_dir() and any(item.is_file() and item.suffix.lower() in extensions for item in legacy.iterdir()):
+            return legacy
+    except OSError:
+        pass
+    target = USER_DATA_DIR / name
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+migrate_legacy_user_cache()
+INSTALLATION_STATE = installation_state()
+
+WORLD_CACHE = CACHE_DIR / "world.geojson"
+TRANSLATION_CACHE = CACHE_DIR / "translations.json"
+WALLPAPER_DIR = media_directory("wallpapers", {".jpg", ".jpeg", ".png", ".bmp", ".webp"})
+if APP_IS_PORTABLE:
+    DEFAULT_MUSIC_DIR = media_directory("music", {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"})
+else:
+    DEFAULT_MUSIC_DIR = Path(r"D:\MyMP3s") if Path(r"D:\MyMP3s").exists() else APP_DIR / "music"
 MUSIC_DIR = Path(os.environ.get("CODEX_CONTROL_MUSIC_DIR", str(DEFAULT_MUSIC_DIR)))
 MUSIC_LIBRARY_DIR = MUSIC_DIR / "libraries"
-MUSIC_LIBRARY_FILE = APP_DIR / "cache" / "music_libraries.json"
-MUSIC_STATE_FILE = APP_DIR / "cache" / "music_state.json"
-MUSIC_STATE_BACKUP_FILE = APP_DIR / "cache" / "music_state.previous.json"
-CONSOLE_STATE_FILE = APP_DIR / "cache" / "console_state.json"
-YOUTUBE_COOKIE_DIR = APP_DIR / "cache" / "cookies"
+MUSIC_LIBRARY_FILE = CACHE_DIR / "music_libraries.json"
+MUSIC_STATE_FILE = CACHE_DIR / "music_state.json"
+MUSIC_STATE_BACKUP_FILE = CACHE_DIR / "music_state.previous.json"
+MUSIC_ANALYSIS_DIR = CACHE_DIR / "music_analysis"
+MUSIC_LYRIC_MARKS_FILE = CACHE_DIR / "music_lyric_marks.json"
+CONSOLE_STATE_FILE = CACHE_DIR / "console_state.json"
+YOUTUBE_COOKIE_DIR = CACHE_DIR / "cookies"
 YOUTUBE_COOKIE_FILE = YOUTUBE_COOKIE_DIR / "youtube.cookies.txt"
 MATERIAL_SOURCE_DIR = Path(os.environ.get("CODEX_CONTROL_MATERIAL_SOURCE_DIR", str(Path.home() / "Downloads")))
-CODEX_TEMP_DIR = Path(os.environ.get("CODEX_CONTROL_TEMP_DIR", str(APP_DIR.parent / "Temp")))
+CODEX_TEMP_DIR = Path(os.environ.get("CODEX_CONTROL_TEMP_DIR", str(USER_DATA_DIR / "temp" if APP_IS_PORTABLE else APP_DIR.parent / "Temp")))
 BUILDER_TEXTURE_DIR = Path(os.environ.get("CODEX_CONTROL_BUILDER_TEXTURE_DIR", r"D:\Unity Projects\RandomRealm2\Assets\Art\Generated\BuildMaterials\Textures"))
 BLENDER_REPLACEMENT_TEXTURE_DIR = Path(os.environ.get("CODEX_CONTROL_BLENDER_REPLACEMENT_TEXTURE_DIR", str(BUILDER_TEXTURE_DIR / "_codex_replacements")))
 BLENDER_TEXTURE_PACKAGE_DIR = Path(os.environ.get("CODEX_CONTROL_BLENDER_TEXTURE_PACKAGE_DIR", r"D:\Blender\~Import-Export\TexturePackages"))
 BLENDER_PROJECT_TEXTURE_PACKAGE_DIRNAME = "_codex_packages"
 BLENDER_TEXTURE_PACKAGE_APPLIED_FILENAME = "applied.json"
-BLENDER_LIVE_SELECTION_FILE = APP_DIR / "cache" / "blender_live_selection.json"
+BLENDER_LIVE_SELECTION_FILE = CACHE_DIR / "blender_live_selection.json"
+BLENDER_GITHUB_SHARE_CONFIG_FILE = CACHE_DIR / "blender_github_share.json"
 BLENDER_LIVE_SELECTION_MAX_AGE_SECONDS = 8
 NATIVE_FILE_DRAG_SOURCE = APP_DIR / "tools" / "NativeFileDrag.cs"
 NATIVE_FILE_DRAG_EXE = APP_DIR / "tools" / "NativeFileDrag.exe"
@@ -82,7 +191,7 @@ STEAMWORK_ASSET_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_ASSET_DIR", r
 STEAMWORK_STORE_ASSET_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_STORE_ASSET_DIR", str(STEAMWORK_ASSET_DIR / "Game" / "Store Assets")))
 STEAMWORK_SCREENSHOT_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_SCREENSHOT_DIR", str(STEAMWORK_ASSET_DIR / "Game" / "ScreenShots Assets")))
 STEAMWORK_VIDEO_DIR = Path(os.environ.get("CODEX_CONTROL_STEAMWORK_VIDEO_DIR", str(STEAMWORK_ASSET_DIR / "Game" / "Demo vedio")))
-STEAMWORK_THUMB_DIR = APP_DIR / "cache" / "steamwork_thumbs"
+STEAMWORK_THUMB_DIR = CACHE_DIR / "steamwork_thumbs"
 DEFAULT_BLENDER_PROJECT_ROOTS = [
     Path(r"D:\Blender\Projects"),
     Path(r"D:\ArtAsset"),
@@ -100,15 +209,41 @@ BLENDER_PROJECT_FILES = [
     for item in os.environ.get("CODEX_CONTROL_BLENDER_PROJECTS", "").split(";")
     if item.strip()
 ]
-STEAMWORKS_URL = os.environ.get("CODEX_CONTROL_STEAMWORKS_URL", "https://partner.steamgames.com/")
+BLENDER_GITHUB_SHARE = BlenderGithubShareService(
+    BLENDER_GITHUB_SHARE_CONFIG_FILE,
+    project_roots=BLENDER_PROJECT_ROOTS,
+    live_selection_file=BLENDER_LIVE_SELECTION_FILE,
+    live_selection_max_age=BLENDER_LIVE_SELECTION_MAX_AGE_SECONDS,
+)
+STEAMWORKS_APP_ID = os.environ.get("CODEX_CONTROL_STEAMWORKS_APP_ID", "3983670").strip() or "3983670"
+STEAMWORKS_URL = os.environ.get("CODEX_CONTROL_STEAMWORKS_URL", f"https://partner.steamgames.com/apps/landing/{STEAMWORKS_APP_ID}")
+STEAMWORKS_BUILDS_URL = os.environ.get("CODEX_CONTROL_STEAMWORKS_BUILDS_URL", f"https://partner.steamgames.com/apps/builds/{STEAMWORKS_APP_ID}")
 WORLD_CONSOLE_DIR = Path(os.environ.get("CODEX_CONTROL_WORLD_CONSOLE_DIR", str(APP_DIR.parent / "WorldConsole")))
 WORLD_CONSOLE_RELEASES_URL = os.environ.get("CODEX_WORLD_CONSOLE_RELEASES_URL", "").strip()
-ORIGINAL_WALLPAPER_RECORD = APP_DIR / "cache" / "original_wallpaper.json"
-WALLPAPER_ORDER_FILE = APP_DIR / "cache" / "wallpaper_order.json"
+ORIGINAL_WALLPAPER_RECORD = CACHE_DIR / "original_wallpaper.json"
+WALLPAPER_ORDER_FILE = CACHE_DIR / "wallpaper_order.json"
 STARTUP_SCRIPT_NAME = "Codex-Control-Hotkey.vbs"
 HOTKEY_LAUNCHER = APP_DIR / "Start-WorldConsole-Hotkey.vbs"
 WALLPAPER_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 MUSIC_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
+LYRICS_EXTENSIONS = {".lrc", ".txt"}
+LYRICS_AUTO_DOWNLOAD = os.environ.get("CODEX_CONTROL_AUTO_LYRICS", "1").strip().lower() not in {"0", "false", "no", "off"}
+LYRICS_USER_AGENT = os.environ.get(
+    "CODEX_CONTROL_LYRICS_USER_AGENT",
+    "CodexControlConsole/0.1 (local lyrics cache)",
+)
+LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
+LRCLIB_GET_URL = "https://lrclib.net/api/get"
+LRCLIB_GET_BY_ID_URL = "https://lrclib.net/api/get/{id}"
+LYRICS_OVH_URL = "https://api.lyrics.ovh/v1"
+LYRICS_LRCLIB_ID_OVERRIDES = {
+    "Never Be Alone": 9113899,
+    "Aaron Smith - Dancin KRONO Remix - Lyrics": 6728649,
+    "Panic At The Disco - House of Memories": 9026572,
+    "BoyWithUke - Toxic": 9038154,
+    "Daft Punk - Get Lucky Official Audio ft. Pharrell Williams Nile Rodgers": 8922186,
+    "A Touch Of Class - Around the World La La La La La Official Video": 29000245,
+}
 MATERIAL_PACKAGE_EXTENSIONS = {".zip"}
 MATERIAL_TEXTURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tga", ".tif", ".tiff", ".bmp", ".webp", ".exr", ".hdr"}
 PREVIEWABLE_TEXTURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
@@ -171,7 +306,31 @@ def console_edition_payload():
         "edition": edition,
         "modules": module_ids,
         "hrefs": {module_id: CONSOLE_MODULE_HREFS[module_id] for module_id in module_ids if module_id in CONSOLE_MODULE_HREFS},
+        "runtime": {
+            "version": APP_VERSION,
+            "portable": APP_IS_PORTABLE,
+            "dataDirectory": str(USER_DATA_DIR),
+            "installationId": INSTALLATION_STATE.get("installationId", ""),
+        },
     }
+
+
+ACTIVE_SERVER = None
+
+
+def shutdown_active_server():
+    server = ACTIVE_SERVER
+    if server:
+        server.shutdown()
+
+
+CONSOLE_UPDATE = ConsoleUpdateService(
+    APP_DIR,
+    USER_DATA_DIR,
+    APP_MANIFEST,
+    current_console_edition,
+    shutdown_callback=shutdown_active_server,
+)
 
 
 def console_edition_query(edition=None):
@@ -497,6 +656,35 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 "directory": str(MUSIC_LIBRARY_DIR),
             })
             return
+        if parsed.path == "/api/music/lyrics":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                lyrics_path = lyrics_path_from_music_relative(query.get("path", [""])[0])
+                self.send_file_response(lyrics_path, "text/plain; charset=utf-8", filename=lyrics_path.name)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=404)
+            return
+        if parsed.path == "/api/music/lyrics/analysis":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                self.send_json(music_lyrics_analysis(query.get("path", [""])[0]))
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=404)
+            except RuntimeError as error:
+                self.send_json({"error": str(error)}, status=503)
+            return
+        if parsed.path == "/api/music/lyrics/marks":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                path = music_path_from_relative(query.get("path", [""])[0])
+                self.send_json({
+                    "ok": True,
+                    "path": path.relative_to(MUSIC_DIR).as_posix(),
+                    "marks": music_lyric_marks_for_path(path),
+                })
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=404)
+            return
         if parsed.path == "/api/material-import/candidates":
             self.send_json({
                 "source": str(MATERIAL_SOURCE_DIR),
@@ -505,13 +693,22 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             })
             return
         if parsed.path == "/api/randomrealm/blender/projects":
-            query = urllib.parse.parse_qs(parsed.query).get("q", [""])[0]
+            query_params = urllib.parse.parse_qs(parsed.query)
+            query = query_params.get("q", [""])[0]
+            try:
+                limit = max(1, min(100, int(query_params.get("limit", ["0"])[0] or 0))) or None
+            except (TypeError, ValueError):
+                limit = None
             self.send_json({
-                "projects": list_blender_projects(query=query),
+                "projects": list_blender_projects(limit=limit, query=query),
                 "query": query,
                 "roots": [str(path) for path in BLENDER_PROJECT_ROOTS if path.exists()],
                 "blender": str(find_blender_executable() or ""),
             })
+            return
+        if parsed.path == "/api/randomrealm/blender/github-share/status":
+            query = urllib.parse.parse_qs(parsed.query)
+            self.send_json(BLENDER_GITHUB_SHARE.status(query.get("project", [""])[0]))
             return
         if parsed.path == "/api/randomrealm/blender/live-selection":
             query = urllib.parse.parse_qs(parsed.query)
@@ -531,6 +728,13 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/console/config":
             self.send_json(console_edition_payload())
+            return
+        if parsed.path == "/api/console/update":
+            query = urllib.parse.parse_qs(parsed.query)
+            self.send_json(CONSOLE_UPDATE.status(
+                check=query.get("check", [""])[0].lower() in {"1", "true", "yes", "auto"},
+                force=query.get("force", [""])[0].lower() in {"1", "true", "yes"},
+            ))
             return
         if parsed.path == "/api/workspace/github-downloads":
             self.send_json(github_downloads_state())
@@ -640,6 +844,19 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/music/import-url":
                 self.send_json(import_music_url(payload.get("url", ""), bool(payload.get("useBrowserCookies"))))
                 return
+            if parsed.path == "/api/music/lyrics/fetch":
+                self.send_json(fetch_music_lyrics(
+                    payload.get("path", ""),
+                    bool(payload.get("force")),
+                    bool(payload.get("preferSynced")),
+                ))
+                return
+            if parsed.path == "/api/music/lyrics/mark":
+                self.send_json(save_music_lyric_mark(payload))
+                return
+            if parsed.path == "/api/music/lyrics/marks/batch":
+                self.send_json(save_music_lyric_marks_batch(payload))
+                return
             if parsed.path == "/api/music/library/import":
                 self.send_json(import_music_library(payload.get("url", ""), payload.get("name", "")))
                 return
@@ -657,6 +874,27 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/randomrealm/blender/objects":
                 self.send_json(load_blender_project_objects(payload.get("project", "")))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/config":
+                self.send_json(BLENDER_GITHUB_SHARE.save(payload))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/init":
+                self.send_json(BLENDER_GITHUB_SHARE.initialize(payload))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/commit":
+                self.send_json(BLENDER_GITHUB_SHARE.commit(payload))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/push":
+                self.send_json(BLENDER_GITHUB_SHARE.push(payload))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/open":
+                self.send_json(BLENDER_GITHUB_SHARE.open_repository(payload))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/desktop":
+                self.send_json(BLENDER_GITHUB_SHARE.open_desktop(payload))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/folder":
+                self.send_json(BLENDER_GITHUB_SHARE.open_folder(payload))
                 return
             if parsed.path == "/api/randomrealm/blender/native-drag":
                 self.send_json(start_native_file_drag(payload.get("path", "")))
@@ -706,6 +944,15 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/console/state":
                 self.send_json(write_console_state(payload))
                 return
+            if parsed.path == "/api/console/update/config":
+                self.send_json(CONSOLE_UPDATE.configure(payload))
+                return
+            if parsed.path == "/api/console/update/install":
+                self.send_json(CONSOLE_UPDATE.install())
+                return
+            if parsed.path == "/api/console/update/open":
+                self.send_json(CONSOLE_UPDATE.open_release())
+                return
             if parsed.path == "/api/hotkey/start":
                 self.send_json(start_hotkey_listener())
                 return
@@ -722,7 +969,23 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         self.send_json({"error": "not found"}, status=404)
 
     def end_headers(self):
-        self.send_header("Cache-Control", "no-store")
+        has_cache_control = any(
+            header.lower().startswith(b"cache-control:")
+            for header in getattr(self, "_headers_buffer", [])
+        )
+        if not has_cache_control:
+            parsed = urllib.parse.urlparse(self.path)
+            suffix = Path(parsed.path).suffix.lower()
+            versioned = bool(urllib.parse.parse_qs(parsed.query).get("v"))
+            immutable_suffixes = {
+                ".css", ".js", ".ico", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".woff", ".woff2"
+            }
+            if versioned and suffix in immutable_suffixes:
+                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            elif parsed.path.startswith("/api/") or suffix in {".html", ".htm"} or parsed.path in CONSOLE_PAGE_PATHS:
+                self.send_header("Cache-Control", "no-store")
+            else:
+                self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
     def log_message(self, fmt, *args):
@@ -1029,17 +1292,105 @@ def set_windows_wallpaper(path):
         raise ValueError("wallpaper switching is only available on Windows")
 
     import ctypes
+    import uuid
+    from ctypes import wintypes
+
+    resolved = Path(path).resolve()
+    if not resolved.exists() or not resolved.is_file():
+        raise ValueError("wallpaper file was not found")
+
+    class GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", ctypes.c_ulong),
+            ("Data2", ctypes.c_ushort),
+            ("Data3", ctypes.c_ushort),
+            ("Data4", ctypes.c_ubyte * 8),
+        ]
+
+        def __init__(self, value):
+            value = uuid.UUID(str(value))
+            data4 = value.bytes[8:]
+            super().__init__(
+                value.time_low,
+                value.time_mid,
+                value.time_hi_version,
+                (ctypes.c_ubyte * 8).from_buffer_copy(data4),
+            )
+
+    def hresult_failed(result):
+        return ctypes.c_long(result).value < 0
+
+    def format_hresult(result):
+        return f"0x{ctypes.c_ulong(result).value:08X}"
+
+    def set_desktop_wallpaper_com(target):
+        CLSID_DesktopWallpaper = GUID("C2CF3110-460E-4FC1-B9D0-8A1C0C9CC4BD")
+        IID_IDesktopWallpaper = GUID("B92B56A9-8B55-4E14-9A89-0199BBB6F93B")
+        CLSCTX_ALL = 0x17
+        COINIT_APARTMENTTHREADED = 0x2
+        RPC_E_CHANGED_MODE = 0x80010106
+        ole32 = ctypes.OleDLL("ole32")
+        initialized = False
+        instance = ctypes.c_void_p()
+
+        ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        ole32.CoInitializeEx.restype = ctypes.c_long
+        init_result = ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+        if init_result in (0, 1):
+            initialized = True
+        elif ctypes.c_ulong(init_result).value != RPC_E_CHANGED_MODE:
+            raise RuntimeError(f"Desktop wallpaper COM init failed: {format_hresult(init_result)}")
+
+        try:
+            ole32.CoCreateInstance.argtypes = [
+                ctypes.POINTER(GUID),
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                ctypes.POINTER(GUID),
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            ole32.CoCreateInstance.restype = ctypes.c_long
+            result = ole32.CoCreateInstance(
+                ctypes.byref(CLSID_DesktopWallpaper),
+                None,
+                CLSCTX_ALL,
+                ctypes.byref(IID_IDesktopWallpaper),
+                ctypes.byref(instance),
+            )
+            if hresult_failed(result) or not instance.value:
+                raise RuntimeError(f"Desktop wallpaper COM create failed: {format_hresult(result)}")
+
+            vtable = ctypes.cast(instance, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            set_wallpaper = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p)(vtable[3])
+            result = set_wallpaper(instance, None, str(target))
+            if hresult_failed(result):
+                raise RuntimeError(f"Desktop wallpaper COM apply failed: {format_hresult(result)}")
+        finally:
+            if instance.value:
+                vtable = ctypes.cast(instance, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+                release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtable[2])
+                release(instance)
+            if initialized:
+                ole32.CoUninitialize()
 
     SPI_SETDESKWALLPAPER = 20
     SPIF_UPDATEINIFILE = 1
     SPIF_SENDCHANGE = 2
+    com_error = None
+    try:
+        set_desktop_wallpaper_com(resolved)
+    except Exception as error:
+        com_error = error
+
     ok = ctypes.windll.user32.SystemParametersInfoW(
         SPI_SETDESKWALLPAPER,
         0,
-        str(path),
+        str(resolved),
         SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
     )
     if not ok:
+        if com_error:
+            raise RuntimeError(f"Windows rejected the wallpaper change; COM also failed: {com_error}") from com_error
         raise RuntimeError("Windows rejected the wallpaper change")
 
 
@@ -1111,7 +1462,12 @@ def apply_wallpaper(relative_path):
     path = wallpaper_path_from_relative(relative_path)
     capture_original_wallpaper(force=False)
     set_windows_wallpaper(path)
-    return {"ok": True, "path": str(path), "original": original_wallpaper_state()}
+    return {
+        "ok": True,
+        "path": str(path),
+        "current": get_current_wallpaper(),
+        "original": original_wallpaper_state(),
+    }
 
 
 def upload_wallpapers(files):
@@ -1277,6 +1633,7 @@ def open_github_downloads():
 def open_randomrealm_resource(resource_id):
     resources = {
         "steamworks": ("url", STEAMWORKS_URL),
+        "steamworksBuilds": ("url", STEAMWORKS_BUILDS_URL),
         "publishFolder": ("folder", RANDOMREALM_PUBLISH_DIR),
         "gameContentFolder": ("folder", STEAMWORK_GAMECONTENT_DIR),
         "publishToolFolder": ("file", STEAMWORK_PUBLISH_TOOL_EXE),
@@ -1575,7 +1932,8 @@ def blender_project_query_score(project, query):
 
 def list_blender_projects(limit=None, max_depth=8, query=""):
     query = str(query or "").strip()
-    limit = 5 if not query else 40 if limit is None else limit
+    if limit is None:
+        limit = 40 if query else 5
     seen = set()
     projects = []
     existing_roots = [root.expanduser() for root in BLENDER_PROJECT_ROOTS if root.expanduser().exists() and root.expanduser().is_dir()]
@@ -2128,7 +2486,7 @@ def build_blender_texture_package_manifest(
 ):
     comparison = texture_comparison_record(old_texture, copied_texture)
     return {
-        "version": 1,
+        "version": 3,
         "mode": "preview-package",
         "workflow": {
             "stage": "console-texture-intake",
@@ -2186,7 +2544,7 @@ def build_blender_texture_removal_manifest(
 ):
     old_record = texture_file_record(old_texture)
     return {
-        "version": 1,
+        "version": 2,
         "mode": "preview-package",
         "operation": "remove-texture",
         "workflow": {
@@ -3651,6 +4009,25 @@ def music_path_from_relative(relative_path):
     return candidate
 
 
+def lyrics_path_from_music_path(path):
+    path = Path(path).resolve()
+    if not is_path_inside(path, MUSIC_DIR):
+        raise ValueError("music path is outside the music folder")
+    for suffix in (".lrc", ".txt"):
+        candidate = path.with_suffix(suffix)
+        if candidate.exists() and candidate.is_file() and is_path_inside(candidate.resolve(), MUSIC_DIR):
+            return candidate.resolve()
+    return None
+
+
+def lyrics_path_from_music_relative(relative_path):
+    music_path = music_path_from_relative(relative_path)
+    lyrics_path = lyrics_path_from_music_path(music_path)
+    if not lyrics_path:
+        raise ValueError("lyrics file was not found")
+    return lyrics_path
+
+
 def safe_music_filename(filename):
     raw_name = Path(str(filename or "").replace("\\", "/")).name
     suffix = Path(raw_name).suffix.lower()
@@ -3679,6 +4056,3011 @@ def unique_music_path(filename):
     if not is_path_inside(candidate, MUSIC_DIR):
         raise ValueError("music path is outside the music folder")
     return candidate
+
+
+def safe_lyrics_filename(filename):
+    raw_name = Path(str(filename or "").replace("\\", "/")).name
+    suffix = Path(raw_name).suffix.lower()
+    if suffix not in LYRICS_EXTENSIONS:
+        raise ValueError("only lrc and txt lyric files can be added")
+
+    stem = Path(raw_name).stem.strip()
+    stem = re.sub(r"[^\w .()\-]+", "-", stem, flags=re.UNICODE).strip(" .-_")
+    if not stem:
+        stem = "lyrics"
+    return f"{stem}{suffix}"
+
+
+def lyrics_upload_path(filename):
+    ensure_music_dir()
+    safe_name = safe_lyrics_filename(filename)
+    candidate = (MUSIC_DIR / safe_name).resolve()
+    if not is_path_inside(candidate, MUSIC_DIR):
+        raise ValueError("lyrics path is outside the music folder")
+    return candidate
+
+
+def lyrics_file_record(music_path, lyrics_path, source="", downloaded=False):
+    music_path = Path(music_path).resolve()
+    lyrics_path = Path(lyrics_path).resolve()
+    return {
+        "name": lyrics_path.name,
+        "path": lyrics_path.relative_to(MUSIC_DIR).as_posix(),
+        "musicPath": music_path.relative_to(MUSIC_DIR).as_posix(),
+        "type": lyrics_path.suffix.lower().lstrip("."),
+        "source": source,
+        "downloaded": bool(downloaded),
+    }
+
+
+def clean_lyrics_query_text(value):
+    text = clean_music_stem(value)
+    text = re.sub(r"(?i)\s*\[[^\]]*(?:official|video|audio|lyrics?|visualizer|soundtrack|ost)[^\]]*\]\s*", " ", text)
+    text = re.sub(r"(?i)\s*\([^)]*(?:official|video|audio|lyrics?|visualizer|soundtrack|ost)[^)]*\)\s*", " ", text)
+    text = re.sub(r"(?i)\b(?:official|video|audio|lyrics?|visualizer|soundtrack|ost|hd|hq)\b", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" -")
+
+
+def split_music_artist_title(name):
+    clean = clean_lyrics_query_text(name)
+    parts = re.split(r"\s+-\s+", clean, maxsplit=1)
+    if len(parts) == 2:
+        artist = parts[0].strip()
+        title = parts[1].strip()
+        if artist.casefold() == "a8":
+            artist = ""
+        if title:
+            return artist, title
+    return "", clean
+
+
+def compact_lyrics_match_text(value):
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return re.sub(r"[\W_]+", "", normalized, flags=re.UNICODE)
+
+
+def lyrics_search_score(query_artist, query_title, item):
+    if not isinstance(item, dict):
+        return -1
+    synced = str(item.get("syncedLyrics") or "").strip()
+    plain = str(item.get("plainLyrics") or "").strip()
+    if not synced and not plain:
+        return -1
+
+    score = 40 if synced else 10
+    query_title_key = compact_lyrics_match_text(query_title)
+    item_title_key = compact_lyrics_match_text(item.get("trackName"))
+    if query_title_key:
+        if not item_title_key:
+            return -1
+        if query_title_key == item_title_key:
+            score += 40
+        elif query_title_key in item_title_key or item_title_key in query_title_key:
+            score += 20
+        else:
+            return -1
+
+    query_artist_key = compact_lyrics_match_text(query_artist)
+    item_artist_key = compact_lyrics_match_text(item.get("artistName"))
+    if query_artist_key and item_artist_key:
+        if query_artist_key == item_artist_key:
+            score += 30
+        elif query_artist_key in item_artist_key or item_artist_key in query_artist_key:
+            score += 12
+        else:
+            score -= 30
+    elif query_artist_key:
+        score -= 10
+    return score
+
+
+def lrc_search_payload_for_music(path):
+    name = display_music_name(path.stem)
+    artist, title = split_music_artist_title(name)
+    params = {"track_name": title or name}
+    if artist:
+        params["artist_name"] = artist
+    return params, artist, title or name
+
+
+def request_lrclib_json(url, params, timeout=6):
+    query = urllib.parse.urlencode(params)
+    request = urllib.request.Request(
+        f"{url}?{query}",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": LYRICS_USER_AGENT,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+def request_lrclib_id_json(item_id, timeout=6):
+    request = urllib.request.Request(
+        LRCLIB_GET_BY_ID_URL.format(id=urllib.parse.quote(str(item_id))),
+        headers={
+            "Accept": "application/json",
+            "User-Agent": LYRICS_USER_AGENT,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+def lrclib_id_override_for_music(path):
+    name = display_music_name(Path(path).stem)
+    return LYRICS_LRCLIB_ID_OVERRIDES.get(name)
+
+
+def lyrics_payload_from_lrclib_item(item, synced_only=False):
+    if not isinstance(item, dict):
+        return None
+    synced = str(item.get("syncedLyrics") or "").strip()
+    if synced:
+        return synced, ".lrc", "LRCLIB"
+    if synced_only:
+        return None
+    plain = str(item.get("plainLyrics") or "").strip()
+    if plain:
+        return plain, ".txt", "LRCLIB"
+    return None
+
+
+def query_lrclib_lyrics(path, synced_only=False):
+    override_id = lrclib_id_override_for_music(path)
+    if override_id:
+        item = request_lrclib_id_json(override_id, timeout=15)
+        result = lyrics_payload_from_lrclib_item(item, synced_only=synced_only)
+        if result:
+            return result
+
+    params, artist, title = lrc_search_payload_for_music(path)
+    try:
+        exact = request_lrclib_json(LRCLIB_GET_URL, params, timeout=4)
+        result = lyrics_payload_from_lrclib_item(exact, synced_only=synced_only)
+        if result:
+            return result
+    except urllib.error.HTTPError as error:
+        if error.code not in {400, 404}:
+            raise
+    except (OSError, TimeoutError):
+        pass
+
+    payload = request_lrclib_json(LRCLIB_SEARCH_URL, params, timeout=5)
+    if not isinstance(payload, list):
+        return None
+    candidates = [
+        (lyrics_search_score(artist, title, item), item)
+        for item in payload
+        if isinstance(item, dict)
+    ]
+    candidates = [item for item in candidates if item[0] >= 0]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    minimum_score = 70 if artist else 90
+    if candidates[0][0] < minimum_score:
+        return None
+    best = candidates[0][1]
+    return lyrics_payload_from_lrclib_item(best, synced_only=synced_only)
+
+
+def query_lyrics_ovh(path):
+    _, artist, title = lrc_search_payload_for_music(path)
+    if not artist or not title:
+        return None
+    artist_part = urllib.parse.quote(artist.strip("/ "))
+    title_part = urllib.parse.quote(title.strip("/ "))
+    if not artist_part or not title_part:
+        return None
+    request = urllib.request.Request(
+        f"{LYRICS_OVH_URL}/{artist_part}/{title_part}",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": LYRICS_USER_AGENT,
+        },
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    if not isinstance(payload, dict):
+        return None
+    lyrics = str(payload.get("lyrics") or "").strip()
+    if not lyrics:
+        return None
+    return lyrics, ".txt", "lyrics.ovh"
+
+
+def query_internet_lyrics(path, synced_only=False):
+    if synced_only:
+        try:
+            return query_lrclib_lyrics(path, synced_only=True)
+        except Exception:
+            return None
+    for finder in (query_lrclib_lyrics, query_lyrics_ovh):
+        try:
+            result = finder(path)
+        except Exception:
+            result = None
+        if result:
+            return result
+    return None
+
+
+def write_downloaded_lyrics(path, lyrics_text, suffix, source):
+    suffix = suffix if suffix in LYRICS_EXTENSIONS else ".txt"
+    target = path.with_suffix(suffix).resolve()
+    if not is_path_inside(target, MUSIC_DIR):
+        raise ValueError("lyrics path is outside the music folder")
+    text = str(lyrics_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return None
+    target.write_text(text + "\n", encoding="utf-8")
+    return lyrics_file_record(path, target, source=source, downloaded=True)
+
+
+def download_lyrics_for_music_path(path, force=False, prefer_synced=False):
+    path = Path(path).resolve()
+    if not is_path_inside(path, MUSIC_DIR):
+        raise ValueError("music path is outside the music folder")
+    if not path.exists() or path.suffix.lower() not in MUSIC_EXTENSIONS:
+        raise ValueError("music file was not found")
+
+    existing = lyrics_path_from_music_path(path)
+    if existing and existing.suffix.lower() == ".lrc" and not force:
+        return lyrics_file_record(path, existing, source="local", downloaded=False)
+    if existing and not force and not prefer_synced:
+        return lyrics_file_record(path, existing, source="local", downloaded=False)
+    if not LYRICS_AUTO_DOWNLOAD:
+        return None
+
+    if prefer_synced:
+        result = query_internet_lyrics(path, synced_only=True)
+        if result:
+            lyrics_text, suffix, source = result
+            return write_downloaded_lyrics(path, lyrics_text, suffix, source)
+        if existing and not force:
+            return lyrics_file_record(path, existing, source="local", downloaded=False)
+
+    result = query_internet_lyrics(path)
+    if not result:
+        return None
+    lyrics_text, suffix, source = result
+    return write_downloaded_lyrics(path, lyrics_text, suffix, source)
+
+
+def cache_lyrics_for_music_paths(paths):
+    records = []
+    for path in paths:
+        try:
+            record = download_lyrics_for_music_path(path)
+        except Exception:
+            continue
+        if record and record.get("downloaded"):
+            records.append(record)
+    return records
+
+
+def refresh_track_records_for_paths(paths, tracks):
+    by_path = {item.get("path"): item for item in tracks if isinstance(item, dict)}
+    refreshed = []
+    for path in paths:
+        rel = Path(path).resolve().relative_to(MUSIC_DIR).as_posix()
+        item = by_path.get(rel)
+        if item:
+            refreshed.append(item)
+    return refreshed
+
+
+def fetch_music_lyrics(relative_path, force=False, prefer_synced=False):
+    path = music_path_from_relative(relative_path)
+    record = download_lyrics_for_music_path(path, force=force, prefer_synced=prefer_synced)
+    tracks = list_music()
+    return {
+        "ok": True,
+        "lyrics": record if record and record.get("downloaded") else None,
+        "track": music_track_from_path(path),
+        "tracks": tracks,
+    }
+
+
+def read_music_lyric_marks():
+    try:
+        payload = json.loads(MUSIC_LYRIC_MARKS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"tracks": {}}
+    if not isinstance(payload, dict):
+        return {"tracks": {}}
+    tracks = payload.get("tracks")
+    if not isinstance(tracks, dict):
+        payload["tracks"] = {}
+    return payload
+
+
+def write_music_lyric_marks(payload):
+    MUSIC_LYRIC_MARKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MUSIC_LYRIC_MARKS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def music_lyric_marks_for_path(path):
+    try:
+        relative = Path(path).resolve().relative_to(MUSIC_DIR).as_posix()
+    except ValueError:
+        return []
+    payload = read_music_lyric_marks()
+    marks = payload.get("tracks", {}).get(relative, [])
+    if not isinstance(marks, list):
+        return []
+    clean_marks = []
+    for mark in marks:
+        if not isinstance(mark, dict):
+            continue
+        if mark.get("kind") != "boundary":
+            continue
+        time_value = mark.get("time")
+        line_index = mark.get("lineIndex")
+        boundary_index = mark.get("boundaryIndex")
+        if not isinstance(time_value, (int, float)) or not isinstance(line_index, int):
+            continue
+        if not isinstance(boundary_index, int):
+            continue
+        clean = dict(mark)
+        clean["role"] = normalize_music_lyric_mark_role(clean.get("role"))
+        clean_marks.append(clean)
+    clean_marks.sort(key=music_lyric_mark_sort_key)
+    return clean_marks
+
+
+def music_lyric_mark_sort_key(item):
+    return (
+        item.get("lineIndex", 0),
+        item.get("boundaryIndex", item.get("wordIndex", -1)),
+        0 if normalize_music_lyric_mark_role(item.get("role")) == "start" else 1,
+        item.get("time", 0),
+    )
+
+
+def normalize_music_lyric_mark_role(value):
+    return "start" if str(value or "").strip().lower() == "start" else "end"
+
+
+def build_music_lyric_mark(payload):
+    time_value = float(payload.get("time", math.nan))
+    line_index = int(payload.get("lineIndex", -1))
+    raw_boundary_index = payload.get("boundaryIndex")
+    boundary_index = int(raw_boundary_index) if raw_boundary_index is not None else None
+    role = normalize_music_lyric_mark_role(payload.get("role"))
+    if not math.isfinite(time_value) or time_value < 0:
+        raise ValueError("invalid lyric mark time")
+    if line_index < 0:
+        raise ValueError("invalid lyric line")
+    if boundary_index is None:
+        raise ValueError("invalid lyric boundary")
+    if boundary_index is not None and boundary_index < 0:
+        boundary_index = 0
+
+    mark = {
+        "time": round(time_value, 3),
+        "lineIndex": line_index,
+        "kind": "boundary",
+        "role": role,
+        "boundaryIndex": boundary_index,
+        "wordIndex": None,
+        "word": str(payload.get("word") or "")[:120],
+        "previousWord": str(payload.get("previousWord") or "")[:120],
+        "nextWord": str(payload.get("nextWord") or "")[:120],
+        "wordCount": max(0, int(payload.get("wordCount", 0) or 0)),
+        "lineText": str(payload.get("lineText") or "")[:500],
+        "note": str(payload.get("note") or "")[:160],
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    return mark
+
+
+def same_music_lyric_mark_slot(item, mark):
+    return (
+        isinstance(item, dict)
+        and item.get("lineIndex") == mark["lineIndex"]
+        and item.get("kind", "word") == mark["kind"]
+        and item.get("boundaryIndex") == mark["boundaryIndex"]
+        and normalize_music_lyric_mark_role(item.get("role")) == mark["role"]
+    )
+
+
+def invalidate_music_analysis_cache(path):
+    try:
+        cache_path = music_analysis_cache_path(path)
+        if cache_path.exists():
+            cache_path.unlink()
+    except OSError:
+        pass
+
+
+def save_music_lyric_mark(payload):
+    path = music_path_from_relative(payload.get("path", ""))
+    relative = path.relative_to(MUSIC_DIR).as_posix()
+    mark = build_music_lyric_mark(payload)
+    marks_payload = read_music_lyric_marks()
+    tracks = marks_payload.setdefault("tracks", {})
+    marks = tracks.setdefault(relative, [])
+    if not isinstance(marks, list):
+        marks = []
+        tracks[relative] = marks
+    marks = [item for item in marks if not same_music_lyric_mark_slot(item, mark)]
+    marks.append(mark)
+    marks.sort(key=music_lyric_mark_sort_key)
+    tracks[relative] = marks
+    write_music_lyric_marks(marks_payload)
+    invalidate_music_analysis_cache(path)
+    return {
+        "ok": True,
+        "path": relative,
+        "mark": mark,
+        "marks": music_lyric_marks_for_path(path),
+    }
+
+
+def save_music_lyric_marks_batch(payload):
+    marks = payload.get("marks")
+    if not isinstance(marks, list):
+        raise ValueError("invalid lyric marks")
+    parsed = []
+    marks_by_path = {}
+    for item in marks:
+        if not isinstance(item, dict):
+            continue
+        path = music_path_from_relative(item.get("path", ""))
+        relative = path.relative_to(MUSIC_DIR).as_posix()
+        parsed.append((path, relative, build_music_lyric_mark(item)))
+
+    marks_payload = read_music_lyric_marks()
+    tracks = marks_payload.setdefault("tracks", {})
+    changed_paths = {}
+    for path, relative, mark in parsed:
+        stored = tracks.setdefault(relative, [])
+        if not isinstance(stored, list):
+            stored = []
+        stored = [item for item in stored if not same_music_lyric_mark_slot(item, mark)]
+        stored.append(mark)
+        stored.sort(key=music_lyric_mark_sort_key)
+        tracks[relative] = stored
+        changed_paths[relative] = path
+
+    if parsed:
+        write_music_lyric_marks(marks_payload)
+        for path in changed_paths.values():
+            invalidate_music_analysis_cache(path)
+
+    for relative, path in changed_paths.items():
+        marks_by_path[relative] = music_lyric_marks_for_path(path)
+    return {
+        "ok": True,
+        "count": len(marks),
+        "marksByPath": marks_by_path,
+    }
+
+
+def ensure_music_analysis_dir():
+    MUSIC_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def ffmpeg_executable():
+    location = ffmpeg_location()
+    if location:
+        candidate = Path(location) / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
+        if candidate.exists():
+            return str(candidate)
+    ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    return ffmpeg or ""
+
+
+def parse_lrc_timestamp(raw):
+    match = re.match(r"^(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?$", str(raw or "").strip())
+    if not match:
+        return None
+    minutes = int(match.group(1))
+    seconds = int(match.group(2))
+    fraction = (match.group(3) or "0").ljust(3, "0")[:3]
+    return minutes * 60 + seconds + int(fraction) / 1000
+
+
+def parsed_timed_lyrics(lyrics_path):
+    try:
+        raw_lines = lyrics_path.read_text(encoding="utf-8").replace("\r", "").split("\n")
+    except OSError as error:
+        raise ValueError(f"lyrics file could not be read: {error}") from error
+
+    rows = []
+    for raw_line in raw_lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if re.match(r"^\[(?:ar|al|ti|by|offset|length|re):", line, flags=re.IGNORECASE):
+            continue
+        tags = re.findall(r"\[([0-9]{1,2}:[0-9]{2}(?:[.:][0-9]{1,3})?)\]", line)
+        if not tags:
+            continue
+        lyric = re.sub(r"\[[^\]]+\]", "", line).strip()
+        is_rest = not lyric
+        for tag in tags:
+            timestamp = parse_lrc_timestamp(tag)
+            if timestamp is None:
+                continue
+            rows.append({"time": timestamp, "text": lyric, "rest": is_rest})
+
+    rows.sort(key=lambda item: item["time"])
+    if not rows:
+        raise ValueError("timed lyrics were not found")
+    return rows
+
+
+def music_analysis_cache_path(path):
+    ensure_music_analysis_dir()
+    digest = hashlib.sha1(str(Path(path).resolve()).encode("utf-8", errors="ignore")).hexdigest()
+    return MUSIC_ANALYSIS_DIR / f"{digest}.json"
+
+
+def music_analysis_cache_meta(path, lyrics_path):
+    path = Path(path)
+    lyrics_path = Path(lyrics_path)
+    music_stat = path.stat()
+    lyrics_stat = lyrics_path.stat()
+    return {
+        "version": 88,
+        "musicPath": path.resolve().as_posix(),
+        "musicMtime": music_stat.st_mtime,
+        "musicSize": music_stat.st_size,
+        "lyricsPath": lyrics_path.resolve().as_posix(),
+        "lyricsMtime": lyrics_stat.st_mtime,
+        "lyricsSize": lyrics_stat.st_size,
+    }
+
+
+def read_music_analysis_cache(path, lyrics_path):
+    cache_path = music_analysis_cache_path(path)
+    if not cache_path.exists():
+        return None
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if payload.get("meta") != music_analysis_cache_meta(path, lyrics_path):
+        return None
+    return payload.get("analysis")
+
+
+def write_music_analysis_cache(path, lyrics_path, analysis):
+    cache_path = music_analysis_cache_path(path)
+    payload = {
+        "meta": music_analysis_cache_meta(path, lyrics_path),
+        "analysis": analysis,
+    }
+    try:
+        cache_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clamp_number(value, minimum, maximum):
+    return max(minimum, min(maximum, value))
+
+
+def percentile(values, percent):
+    clean = sorted(value for value in values if math.isfinite(value))
+    if not clean:
+        return 0
+    index = int(round((len(clean) - 1) * clamp_number(percent, 0, 100) / 100))
+    return clean[index]
+
+
+def moving_average(values, radius=2):
+    if not values:
+        return []
+    averaged = []
+    for index in range(len(values)):
+        start = max(0, index - radius)
+        end = min(len(values), index + radius + 1)
+        averaged.append(sum(values[start:end]) / max(1, end - start))
+    return averaged
+
+
+def normalized_feature(values, percent=92):
+    scale = percentile(values, percent)
+    if scale <= 0:
+        return [0.0 for _ in values]
+    return [clamp_number(value / scale, 0.0, 2.0) for value in values]
+
+
+def decoded_music_flux(path, sample_rate=8000, frame_seconds=0.03, hop_seconds=0.015):
+    executable = ffmpeg_executable()
+    if not executable:
+        raise RuntimeError("ffmpeg was not found")
+
+    completed = subprocess.run(
+        [
+            executable,
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-ac",
+            "1",
+            "-ar",
+            str(sample_rate),
+            "-f",
+            "s16le",
+            "pipe:1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=45,
+        **hidden_subprocess_kwargs(),
+    )
+    if completed.returncode != 0 or not completed.stdout:
+        message = completed.stderr.decode("utf-8", errors="replace").strip() or "audio decode failed"
+        raise RuntimeError(message)
+
+    samples = array.array("h")
+    samples.frombytes(completed.stdout)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        raise RuntimeError("audio decode returned no samples")
+
+    frame_size = max(32, int(sample_rate * frame_seconds))
+    hop_size = max(16, int(sample_rate * hop_seconds))
+    square_prefix = [0.0]
+    edge_square_prefix = [0.0]
+    total = 0.0
+    edge_total = 0.0
+    previous_sample = 0.0
+    for index, sample in enumerate(samples):
+        current_sample = float(sample)
+        total += current_sample * current_sample
+        edge = 0.0 if index == 0 else current_sample - previous_sample
+        edge_total += edge * edge
+        square_prefix.append(total)
+        edge_square_prefix.append(edge_total)
+        previous_sample = current_sample
+
+    rms = []
+    edge_rms = []
+    last_start = max(0, len(samples) - frame_size)
+    for start in range(0, last_start + 1, hop_size):
+        end = start + frame_size
+        mean_square = (square_prefix[end] - square_prefix[start]) / frame_size
+        edge_mean_square = (edge_square_prefix[end] - edge_square_prefix[start]) / frame_size
+        rms.append(math.log1p(math.sqrt(mean_square) / 32768 * 32))
+        edge_rms.append(math.log1p(math.sqrt(edge_mean_square) / 32768 * 18))
+
+    smooth = moving_average(rms, radius=2)
+    edge_smooth = moving_average(edge_rms, radius=1)
+    flux = []
+    edge_flux = []
+    previous = smooth[0] if smooth else 0
+    previous_edge = edge_smooth[0] if edge_smooth else 0
+    for index, value in enumerate(smooth):
+        flux.append(max(0.0, value - previous))
+        previous = value
+        edge_value = edge_smooth[index] if index < len(edge_smooth) else 0.0
+        edge_flux.append(max(0.0, edge_value - previous_edge))
+        previous_edge = edge_value
+
+    articulation = moving_average([
+        flux_value * 0.42 + edge_value * 0.58
+        for flux_value, edge_value in zip(normalized_feature(flux), normalized_feature(edge_flux))
+    ], radius=1)
+    sustained = normalized_feature(smooth, 88)
+    edge_body = normalized_feature(edge_smooth, 88)
+    speech_flow = moving_average([
+        articulation_value * 0.58 + sustained_value * 0.30 + edge_value * 0.12
+        for articulation_value, sustained_value, edge_value in zip(articulation, sustained, edge_body)
+    ], radius=2)
+
+    return {
+        "sampleRate": sample_rate,
+        "hopSeconds": hop_seconds,
+        "rms": smooth,
+        "edgeRms": edge_smooth,
+        "flux": flux,
+        "edgeFlux": edge_flux,
+        "articulation": articulation,
+        "speechFlow": speech_flow,
+        "duration": len(samples) / sample_rate,
+    }
+
+
+def lyrics_waveform_window(feature, fallback, start, end, hop_seconds, duration, max_points=160):
+    if not math.isfinite(start) or not math.isfinite(end):
+        return {"start": 0.0, "end": 0.0, "samples": []}
+    clean_start = clamp_number(start, 0.0, max(0.0, duration))
+    clean_end = clamp_number(end, clean_start + 0.08, max(clean_start + 0.08, duration))
+    source = feature if feature else fallback
+    if not source or hop_seconds <= 0:
+        return {"start": round(clean_start, 3), "end": round(clean_end, 3), "samples": []}
+    frame_start = max(0, int(clean_start / hop_seconds))
+    frame_end = min(len(source), max(frame_start + 1, int(math.ceil(clean_end / hop_seconds)) + 1))
+    local = [max(0.0, float(value)) for value in source[frame_start:frame_end]]
+    if not local:
+        return {"start": round(clean_start, 3), "end": round(clean_end, 3), "samples": []}
+    bucket_size = max(1, int(math.ceil(len(local) / max_points)))
+    samples = []
+    for offset in range(0, len(local), bucket_size):
+        bucket = local[offset:offset + bucket_size]
+        if not bucket:
+            continue
+        samples.append(max(bucket) * 0.68 + (sum(bucket) / len(bucket)) * 0.32)
+    peak = max(samples) if samples else 0.0
+    if peak > 0:
+        samples = [round(clamp_number(value / peak, 0.0, 1.0), 3) for value in samples]
+    return {
+        "start": round(clean_start, 3),
+        "end": round(clean_end, 3),
+        "samples": samples,
+    }
+
+
+def lyrics_word_tokens(text):
+    return re.findall(r"\S+", str(text or "..."))
+
+
+def lyrics_clean_word(token):
+    return re.sub(r"[^A-Za-z0-9']", "", str(token or "")).lower()
+
+
+def lyrics_light_word(clean):
+    return clean in {"the", "a", "an", "of", "to", "we", "are", "is", "it", "i", "im", "i'm", "up", "and", "or", "in", "on", "at"}
+
+
+def lyrics_word_weight(token):
+    clean = lyrics_clean_word(token)
+    letters = re.sub(r"[^A-Za-z]", "", clean)
+    syllables = lyrics_word_syllable_count(clean)
+    consonants = len(re.findall(r"[bcdfghjklmnpqrstvwxz]", letters))
+    long_tail = max(0, len(letters) - 6)
+    weight = 0.14 + syllables * 0.26 + min(len(letters), 8) * 0.026 + consonants * 0.012
+    if "'" in clean:
+        weight += 0.04
+    if re.search(r"(ing|tion|sion|ly|ness|ment)$", clean):
+        weight += 0.08
+    if long_tail > 0:
+        weight += min(0.16, long_tail * 0.018)
+    if lyrics_light_word(clean):
+        weight *= 0.62
+    elif clean in {"you", "your", "me", "my", "our", "us", "he", "she", "they", "that", "this", "with", "for"}:
+        weight *= 0.78
+    if re.search(r"[,;:!?)]$", str(token or "")):
+        weight += 0.16
+    return max(0.12, weight)
+
+
+def lyrics_base_fill_duration(text, gap):
+    words = lyrics_word_tokens(text)
+    characters = len(re.sub(r"\s+", "", str(text or "")))
+    weights = [lyrics_word_weight(word) for word in words]
+    weighted = sum(weights) or max(1, len(words)) * 0.35
+    quick_estimate = 0.18 + weighted * 0.58 + characters * 0.006
+    long_estimate = 0.24 + len(words) * 0.26 + characters * 0.014
+    if math.isfinite(gap) and gap >= 5 and len(words) >= 8:
+        estimate = long_estimate * 0.72 + quick_estimate * 0.28
+    elif math.isfinite(gap) and gap >= 3:
+        estimate = quick_estimate * 0.78 + long_estimate * 0.22
+    else:
+        estimate = quick_estimate
+    if re.search(r"[.!?]$", str(text or "").strip()):
+        estimate += 0.1
+    if not math.isfinite(gap):
+        return clamp_number(estimate, 0.72, 3.8)
+    hold_before_next = 1.0 if gap >= 4 else 0.72 if gap >= 3 else 0.24
+    gap_cap = max(0.72, gap - hold_before_next)
+    ratio_cap = max(0.72, gap * (0.56 if gap >= 4 else 0.66 if gap >= 3 else 0.86))
+    return clamp_number(min(estimate, gap_cap, ratio_cap), 0.72, gap_cap)
+
+
+def lyrics_duration_probe_window(gap, duration):
+    if not math.isfinite(gap):
+        return max(duration + 0.7, duration * 1.35)
+    available = max(0.72, gap - 0.16)
+    return clamp_number(max(duration + 0.62, duration * 1.35), duration, available)
+
+
+def lyrics_adjust_fill_duration_with_valleys(duration, gap, valleys):
+    if not valleys or duration <= 0:
+        return duration
+    available = gap - 0.16 if math.isfinite(gap) else duration + 0.7
+    low = max(0.52, duration * 0.62)
+    high = max(low, min(available, max(duration + 0.68, duration * 1.32)))
+    candidates = [
+        item
+        for item in valleys
+        if low <= item.get("time", -999) <= high and item.get("depth", 0) >= 0.42
+    ]
+    if not candidates:
+        return duration
+    target = min(
+        candidates,
+        key=lambda item: abs(item.get("time", duration) - duration) - item.get("depth", 0) * 0.12,
+    )
+    pull = 0.28 + clamp_number(target.get("depth", 0), 0, 1) * 0.24
+    return clamp_number(duration * (1 - pull) + target.get("time", duration) * pull, 0.72, max(0.72, available))
+
+
+def lyrics_adjust_fill_duration_with_activity(text, duration, gap, feature_samples):
+    if duration <= 0.72 or not feature_samples:
+        return duration
+    available = gap - 0.14 if math.isfinite(gap) else duration + 0.5
+    if available <= 0.72:
+        return duration
+
+    probe_end = min(max(duration + 0.38, duration * 1.18), max(duration, available))
+    shaped = lyrics_shaped_feature_window(0.0, probe_end, feature_samples, 0.0)
+    if len(shaped) < 5:
+        return duration
+
+    segments = []
+    current = None
+    for item in shaped:
+        active = item.get("active", 0.0) >= 0.09 or item.get("value", 0.0) >= 0.018
+        if active:
+            if current is None:
+                current = {
+                    "start": item["time"],
+                    "end": item["time"],
+                    "peak": item.get("active", 0.0),
+                }
+            else:
+                current["end"] = item["time"]
+                current["peak"] = max(current["peak"], item.get("active", 0.0))
+        elif current is not None:
+            if current["end"] - current["start"] >= 0.035:
+                segments.append(current)
+            current = None
+    if current is not None and current["end"] - current["start"] >= 0.035:
+        segments.append(current)
+    if not segments:
+        return duration
+
+    last_segment = segments[-1]
+    if last_segment["end"] > duration - 0.2:
+        return duration
+    if any(segment["start"] > last_segment["end"] + 0.12 and segment["start"] < duration + 0.08 for segment in segments):
+        return duration
+
+    tail = clamp_number(duration * 0.055, 0.055, 0.12)
+    target = last_segment["end"] + tail
+    minimum = max(0.72, duration * 0.58, len(lyrics_word_tokens(text)) * 0.13 + 0.22)
+    target = clamp_number(target, minimum, max(0.72, available))
+    if duration - target < 0.24:
+        return duration
+    pull = clamp_number(0.56 + (duration - target) * 0.22, 0.58, 0.78)
+    return clamp_number(duration * (1 - pull) + target * pull, minimum, duration)
+
+
+def line_flux_peaks(flux, line_start, duration, hop_seconds, threshold_percent=74, min_distance_seconds=0.14):
+    frame_start = max(0, int((line_start - 0.08) / hop_seconds))
+    frame_end = min(len(flux), int((line_start + duration + 0.18) / hop_seconds))
+    local = flux[frame_start:frame_end]
+    if len(local) < 3:
+        return []
+    threshold = percentile(local, threshold_percent)
+    peaks = []
+    last_peak = -999
+    min_distance_frames = max(3, int(min_distance_seconds / hop_seconds))
+    for index in range(1, len(local) - 1):
+        value = local[index]
+        if value < threshold or value < local[index - 1] or value < local[index + 1]:
+            continue
+        if index - last_peak < min_distance_frames:
+            if peaks and value > peaks[-1]["strength"]:
+                peaks[-1] = {
+                    "time": (frame_start + index) * hop_seconds - line_start,
+                    "strength": value,
+                }
+                last_peak = index
+            continue
+        peaks.append({
+            "time": (frame_start + index) * hop_seconds - line_start,
+            "strength": value,
+        })
+        last_peak = index
+    return peaks
+
+
+def line_energy_valleys(rms, line_start, duration, hop_seconds):
+    frame_start = max(0, int((line_start - 0.02) / hop_seconds))
+    frame_end = min(len(rms), int((line_start + duration + 0.08) / hop_seconds))
+    local = rms[frame_start:frame_end]
+    if len(local) < 5:
+        return []
+    threshold = percentile(local, 38)
+    high = percentile(local, 86)
+    depth_scale = max(0.001, high - threshold)
+    valleys = []
+    last_valley = -999
+    min_distance_frames = max(5, int(0.13 / hop_seconds))
+    for index in range(1, len(local) - 1):
+        value = local[index]
+        if value > threshold or value > local[index - 1] or value > local[index + 1]:
+            continue
+        depth = clamp_number((threshold - value) / depth_scale + 0.35, 0.0, 1.0)
+        if index - last_valley < min_distance_frames:
+            if valleys and depth > valleys[-1]["depth"]:
+                valleys[-1] = {
+                    "time": (frame_start + index) * hop_seconds - line_start,
+                    "depth": depth,
+                }
+                last_valley = index
+            continue
+        valleys.append({
+            "time": (frame_start + index) * hop_seconds - line_start,
+            "depth": depth,
+        })
+        last_valley = index
+    return valleys
+
+
+def line_feature_valleys(feature, line_start, duration, hop_seconds):
+    frame_start = max(0, int((line_start - 0.02) / hop_seconds))
+    frame_end = min(len(feature), int((line_start + duration + 0.08) / hop_seconds))
+    local = feature[frame_start:frame_end]
+    if len(local) < 5:
+        return []
+    smooth = moving_average(local, radius=1)
+    threshold = percentile(smooth, 42)
+    high = percentile(smooth, 88)
+    depth_scale = max(0.001, high - threshold)
+    valleys = []
+    last_valley = -999
+    min_distance_frames = max(4, int(0.095 / hop_seconds))
+    for index in range(1, len(smooth) - 1):
+        value = smooth[index]
+        if value > threshold or value > smooth[index - 1] or value > smooth[index + 1]:
+            continue
+        left_high = max(smooth[max(0, index - 4):index] or [value])
+        right_high = max(smooth[index + 1:min(len(smooth), index + 5)] or [value])
+        local_contrast = max(0.0, min(left_high, right_high) - value)
+        depth = clamp_number((threshold - value + local_contrast * 0.8) / depth_scale + 0.22, 0.0, 1.0)
+        if index - last_valley < min_distance_frames:
+            if valleys and depth > valleys[-1]["depth"]:
+                valleys[-1] = {
+                    "time": (frame_start + index) * hop_seconds - line_start,
+                    "depth": depth,
+                    "source": "speechFlow",
+                }
+                last_valley = index
+            continue
+        valleys.append({
+            "time": (frame_start + index) * hop_seconds - line_start,
+            "depth": depth,
+            "source": "speechFlow",
+        })
+        last_valley = index
+    return valleys
+
+
+def line_start_offset(articulation, speech_flow, line_start, rough_duration, hop_seconds):
+    search_before = 0.16
+    search_after = clamp_number(max(0.14, rough_duration * 0.14), 0.16, 0.26)
+    frame_start = max(0, int((line_start - search_before) / hop_seconds))
+    frame_end = min(len(speech_flow), int((line_start + search_after) / hop_seconds) + 1)
+    if frame_end - frame_start < 5:
+        return 0.0
+
+    local_flow = speech_flow[frame_start:frame_end]
+    local_art = articulation[frame_start:frame_end]
+    if not local_flow or not local_art:
+        return 0.0
+    flow_scale = max(0.001, percentile(local_flow, 88))
+    art_scale = max(0.001, percentile(local_art, 88))
+    best = None
+    for local_index in range(1, min(len(local_flow), len(local_art))):
+        absolute_index = frame_start + local_index
+        offset = absolute_index * hop_seconds - line_start
+        if offset < -search_before or offset > search_after:
+            continue
+        previous_flow = sum(local_flow[max(0, local_index - 3):local_index]) / max(1, local_index - max(0, local_index - 3))
+        previous_art = sum(local_art[max(0, local_index - 3):local_index]) / max(1, local_index - max(0, local_index - 3))
+        flow = local_flow[local_index] / flow_scale
+        art = local_art[local_index] / art_scale
+        rise = max(0.0, (local_flow[local_index] - previous_flow) / flow_scale)
+        art_rise = max(0.0, (local_art[local_index] - previous_art) / art_scale)
+        proximity_penalty = abs(offset) * (0.85 if offset >= 0 else 1.2)
+        early_penalty = 0.12 if offset < -0.08 else 0.0
+        score = flow * 0.34 + art * 0.3 + rise * 0.52 + art_rise * 0.62 - proximity_penalty - early_penalty
+        if best is None or score > best["score"]:
+            best = {"score": score, "offset": offset}
+    if not best or best["score"] < 0.56:
+        return 0.0
+    damped = best["offset"] * (0.62 if best["offset"] > 0 else 0.74)
+    return round(clamp_number(damped, -0.1, 0.16), 3)
+
+
+def line_feature_samples(feature, line_start, duration, hop_seconds):
+    frame_start = max(0, int((line_start - 0.02) / hop_seconds))
+    frame_end = min(len(feature), int((line_start + duration + 0.08) / hop_seconds) + 1)
+    samples = []
+    for index in range(frame_start, frame_end):
+        samples.append({
+            "time": index * hop_seconds - line_start,
+            "value": feature[index],
+        })
+    return samples
+
+
+def lyrics_word_syllable_count(token):
+    clean = re.sub(r"[^A-Za-z]", "", str(token or "")).lower()
+    if not clean:
+        return 1
+    groups = re.findall(r"[aeiouy]+", clean)
+    count = len(groups)
+    if clean.endswith("e") and count > 1 and not clean.endswith(("le", "ye")):
+        count -= 1
+    return max(1, min(4, count))
+
+
+def lyrics_word_center_ratio(token):
+    clean = lyrics_clean_word(token)
+    syllables = lyrics_word_syllable_count(token)
+    if lyrics_light_word(clean):
+        return 0.43
+    if clean in {"you", "your", "me", "my", "our", "us", "he", "she", "they", "that", "this", "with", "for"}:
+        return 0.47
+    if syllables >= 3:
+        return 0.56
+    if syllables >= 2:
+        return 0.53
+    return 0.5
+
+
+def lyrics_fill_targets_for_word(word, syllables):
+    clean = lyrics_clean_word(word)
+    if lyrics_light_word(clean):
+        return [0.38, 0.72]
+    if syllables >= 3:
+        return [0.22, 0.42, 0.64, 0.84]
+    if syllables >= 2:
+        return [0.26, 0.5, 0.74]
+    return [0.32, 0.7]
+
+
+def lyrics_shaped_feature_window(start, end, feature_samples, valley_depth=0.0):
+    duration = end - start
+    if duration <= 0.055:
+        return []
+    window = [
+        {
+            "time": clamp_number(float(item.get("time", start)), start, end),
+            "raw": max(0.0, float(item.get("value", 0.0))),
+        }
+        for item in feature_samples or []
+        if start <= item.get("time", -999) <= end
+    ]
+    if len(window) < 3:
+        return []
+    window.sort(key=lambda item: item["time"])
+    if window[0]["time"] > start:
+        window.insert(0, {"time": start, "raw": window[0]["raw"]})
+    if window[-1]["time"] < end:
+        window.append({"time": end, "raw": window[-1]["raw"]})
+
+    smoothed = moving_average([item["raw"] for item in window], radius=1)
+    low = percentile(smoothed, 30)
+    body = percentile(smoothed, 58)
+    high = max(percentile(smoothed, 90), max(smoothed, default=0.0))
+    if high <= 0:
+        return []
+    gate = low + max(0.0, body - low) * (0.52 + clamp_number(valley_depth, 0.0, 1.0) * 0.16)
+    if high > gate:
+        gate = min(gate, high * (0.78 + clamp_number(valley_depth, 0.0, 1.0) * 0.06))
+    else:
+        gate = high * 0.45
+    scale = max(0.001, high - gate)
+
+    shaped = []
+    previous = smoothed[0]
+    for item, smooth_value in zip(window, smoothed):
+        time_ratio = (item["time"] - start) / max(0.055, duration)
+        edge_taper = 0.7 + 0.3 * math.sin(math.pi * clamp_number(time_ratio, 0.0, 1.0))
+        active = clamp_number((smooth_value - gate) / scale, 0.0, 1.75)
+        rise = clamp_number((smooth_value - previous) / scale, 0.0, 1.0)
+        if active <= 0:
+            value = 0.0
+        else:
+            gate_taper = clamp_number((active - 0.04) / 0.22, 0.0, 1.0)
+            value = (math.pow(active, 1.52) + rise * 0.18) * edge_taper * gate_taper
+        shaped.append({
+            "time": item["time"],
+            "value": value,
+            "active": active,
+            "raw": item["raw"],
+        })
+        previous = smooth_value
+    return shaped
+
+
+def lyrics_feature_activity_segments(start, end, feature_samples, valley_depth=0.0):
+    shaped = lyrics_shaped_feature_window(start, end, feature_samples, valley_depth)
+    if not shaped:
+        return []
+    segments = []
+    current = None
+    for item in shaped:
+        active = item.get("active", 0.0) >= 0.09 or item.get("value", 0.0) >= 0.018
+        if active:
+            if current is None:
+                current = {
+                    "start": item["time"],
+                    "end": item["time"],
+                    "peak": item.get("active", 0.0),
+                    "valuePeak": item.get("value", 0.0),
+                    "peakTime": item["time"],
+                }
+            else:
+                current["end"] = item["time"]
+                if item.get("value", 0.0) > current.get("valuePeak", 0.0):
+                    current["valuePeak"] = item.get("value", 0.0)
+                    current["peakTime"] = item["time"]
+                current["peak"] = max(current["peak"], item.get("active", 0.0))
+        elif current is not None:
+            if current["end"] - current["start"] >= 0.025 or current.get("peak", 0.0) >= 0.34:
+                segments.append(current)
+            current = None
+    if current is not None and (current["end"] - current["start"] >= 0.025 or current.get("peak", 0.0) >= 0.34):
+        segments.append(current)
+    return segments
+
+
+def lyrics_activity_bounds_from_segments(segments):
+    if not segments:
+        return None
+    return {
+        "start": segments[0]["start"],
+        "end": segments[-1]["end"],
+        "peak": max((item.get("peak", 0.0) for item in segments), default=0.0),
+    }
+
+
+def lyrics_feature_activity_bounds(start, end, feature_samples, valley_depth=0.0):
+    return lyrics_activity_bounds_from_segments(
+        lyrics_feature_activity_segments(start, end, feature_samples, valley_depth)
+    )
+
+
+def lyrics_first_activity_time(feature_samples, duration):
+    shaped = lyrics_shaped_feature_window(0.0, min(max(0.42, duration * 0.42), duration), feature_samples, 0.0)
+    if not shaped:
+        return math.nan
+    for item in shaped:
+        if item.get("active", 0.0) >= 0.09 or item.get("value", 0.0) >= 0.018:
+            return item.get("time", math.nan)
+    return math.nan
+
+
+def line_activity_start_offset(text, speech_flow, line_start, current_offset, rough_duration, hop_seconds):
+    if not re.search(r"[A-Za-z0-9]", str(text or "")):
+        return current_offset
+    search_duration = clamp_number(max(0.58, rough_duration * 0.2), 0.58, 0.9)
+    probe_start = line_start + current_offset
+    feature_samples = line_feature_samples(speech_flow, probe_start, search_duration, hop_seconds)
+    shaped = lyrics_shaped_feature_window(0.0, search_duration, feature_samples, 0.0)
+    if len(shaped) < 5:
+        return current_offset
+
+    segments = []
+    current = None
+    for item in shaped:
+        active = item.get("active", 0.0) >= 0.09 or item.get("value", 0.0) >= 0.018
+        if active:
+            if current is None:
+                current = {
+                    "start": item["time"],
+                    "end": item["time"],
+                    "peak": item.get("active", 0.0),
+                    "valuePeak": item.get("value", 0.0),
+                }
+            else:
+                current["end"] = item["time"]
+                current["peak"] = max(current["peak"], item.get("active", 0.0))
+                current["valuePeak"] = max(current["valuePeak"], item.get("value", 0.0))
+        elif current is not None:
+            if current["end"] - current["start"] >= 0.035:
+                segments.append(current)
+            current = None
+    if current is not None and current["end"] - current["start"] >= 0.035:
+        segments.append(current)
+    if not segments:
+        return current_offset
+
+    first = None
+    for segment in segments:
+        if segment["start"] < 0.12 and segment["peak"] < 0.72:
+            continue
+        if segment["peak"] >= 0.34 or segment.get("valuePeak", 0.0) >= 0.16:
+            first = segment
+            break
+    if first is None:
+        first = segments[0]
+    if first["start"] < 0.145 or first["peak"] < 0.34:
+        return current_offset
+
+    lead = clamp_number(first["start"] * 0.54, 0.085, 0.18)
+    adjusted = current_offset + first["start"] - lead
+    if adjusted <= current_offset + 0.045:
+        return current_offset
+    return round(clamp_number(adjusted, -0.1, 0.18), 3)
+
+
+def lyrics_feature_pause_boundaries(feature_samples, duration):
+    shaped = lyrics_shaped_feature_window(0.0, duration, feature_samples, 0.0)
+    if len(shaped) < 5:
+        return []
+    segments = []
+    current = None
+    for item in shaped:
+        active = item.get("active", 0.0) >= 0.09 or item.get("value", 0.0) >= 0.018
+        if active:
+            if current is None:
+                current = {
+                    "start": item["time"],
+                    "end": item["time"],
+                    "peak": item.get("active", 0.0),
+                }
+            else:
+                current["end"] = item["time"]
+                current["peak"] = max(current["peak"], item.get("active", 0.0))
+        elif current is not None:
+            if current["end"] - current["start"] >= 0.035:
+                segments.append(current)
+            current = None
+    if current is not None and current["end"] - current["start"] >= 0.035:
+        segments.append(current)
+    if len(segments) < 2:
+        return []
+
+    boundaries = []
+    for previous, current in zip(segments, segments[1:]):
+        gap = current["start"] - previous["end"]
+        if gap < 0.045:
+            continue
+        middle = previous["end"] + gap * 0.5
+        depth = clamp_number(0.34 + gap * 3.2 + min(previous["peak"], current["peak"]) * 0.16, 0.0, 1.0)
+        boundaries.append({
+            "time": middle,
+            "depth": depth,
+            "source": "pauseGap",
+            "gap": gap,
+            "left": previous["end"],
+            "right": current["start"],
+        })
+    return boundaries
+
+
+def lyrics_active_boundary_penalty(shaped, time_value):
+    if not shaped or not math.isfinite(time_value):
+        return 0.0
+    best = 0.0
+    for item in shaped:
+        item_time = item.get("time", math.nan)
+        if not math.isfinite(item_time):
+            continue
+        distance = abs(item_time - time_value)
+        if distance > 0.055:
+            continue
+        weight = 1.0 - distance / 0.055
+        active = item.get("active", 0.0)
+        value = item.get("value", 0.0)
+        best = max(best, (active * 0.62 + value * 0.38) * weight)
+    return clamp_number(max(0.0, best - 0.12) * 0.18, 0.0, 0.22)
+
+
+def lyrics_add_pause_hold_points(points, shaped, start, end):
+    if len(points) < 2 or len(shaped) < 3:
+        return points
+    clean_points = sorted(points, key=lambda item: item.get("time", start))
+    result = [clean_points[0]]
+    for point in clean_points[1:]:
+        previous = result[-1]
+        previous_time = float(previous.get("time", start))
+        point_time = float(point.get("time", end))
+        gap = point_time - previous_time
+        fill_delta = float(point.get("fill", 0.0)) - float(previous.get("fill", 0.0))
+        if gap > 0.075 and fill_delta > 0.06:
+            segment = [
+                item
+                for item in shaped
+                if previous_time <= item.get("time", -999) <= point_time
+            ]
+            active_segment = [
+                item
+                for item in segment
+                if item.get("active", 0.0) >= 0.09 or item.get("value", 0.0) >= 0.018
+            ]
+            hold_time = None
+            if active_segment:
+                first_active = active_segment[0]["time"]
+                if first_active > previous_time + max(0.03, gap * 0.22):
+                    hold_time = min(point_time - min(0.028, gap * 0.22), first_active - 0.006)
+                last_active = active_segment[-1]["time"]
+                if last_active < point_time - max(0.028, gap * 0.18):
+                    settle_time = max(previous_time + 0.024, min(point_time - 0.024, last_active + min(0.024, gap * 0.12)))
+                    if previous_time + 0.024 <= settle_time <= point_time - 0.024:
+                        result.append({
+                            "time": settle_time,
+                            "fill": point.get("fill", 0.0),
+                        })
+                        point = {
+                            **point,
+                            "hold": True,
+                        }
+            elif gap > 0.12:
+                hold_time = point_time - clamp_number(gap * 0.28, 0.035, 0.085)
+            if hold_time is not None and previous_time + 0.026 <= hold_time <= point_time - 0.026:
+                result.append({
+                    "time": hold_time,
+                    "fill": previous.get("fill", 0.0),
+                    "hold": True,
+                })
+        result.append(point)
+    return result
+
+
+def lyrics_cumulative_fill_at_time(shaped, cumulative, total, time_value):
+    if total <= 0 or len(shaped) < 2 or len(cumulative) != len(shaped):
+        return 0.0
+    if time_value <= shaped[0]["time"]:
+        return 0.0
+    if time_value >= shaped[-1]["time"]:
+        return 1.0
+    for index in range(1, len(shaped)):
+        previous = shaped[index - 1]
+        current = shaped[index]
+        if time_value > current["time"]:
+            continue
+        span = max(0.001, current["time"] - previous["time"])
+        ratio = clamp_number((time_value - previous["time"]) / span, 0.0, 1.0)
+        previous_value = previous.get("value", 0.0)
+        current_value = current.get("value", 0.0)
+        interpolated_value = previous_value + (current_value - previous_value) * ratio
+        partial_area = (previous_value + interpolated_value) * 0.5 * span * ratio
+        return clamp_number((cumulative[index - 1] + partial_area) / total, 0.0, 1.0)
+    return 1.0
+
+
+def lyrics_cumulative_time_for_fill(shaped, cumulative, total, target):
+    if total <= 0 or len(shaped) < 2 or len(cumulative) != len(shaped):
+        return math.nan
+    wanted = total * clamp_number(target, 0.0, 1.0)
+    cursor = 1
+    while cursor < len(cumulative) - 1 and cumulative[cursor] < wanted:
+        cursor += 1
+    previous_index = max(0, cursor - 1)
+    previous_total = cumulative[previous_index]
+    current_total = cumulative[cursor]
+    previous_time = shaped[previous_index]["time"]
+    current_time = shaped[cursor]["time"]
+    ratio = 0.0 if current_total <= previous_total else (wanted - previous_total) / (current_total - previous_total)
+    return previous_time + (current_time - previous_time) * clamp_number(ratio, 0.0, 1.0)
+
+
+def lyrics_wave_curve_points(start, fill_end, word, shaped, cumulative, total, strength, valley_depth):
+    duration = fill_end - start
+    if duration <= 0.11 or total <= 0 or len(shaped) < 4:
+        return []
+
+    clean = lyrics_clean_word(word)
+    syllables = lyrics_word_syllable_count(word)
+    if duration < 0.22:
+        targets = [0.34, 0.68]
+    elif duration < 0.36:
+        targets = [0.18, 0.38, 0.62, 0.84]
+    elif duration < 0.58:
+        targets = [0.12, 0.26, 0.42, 0.58, 0.74, 0.9]
+    else:
+        targets = [0.09, 0.18, 0.29, 0.4, 0.52, 0.64, 0.76, 0.88, 0.95]
+    if syllables >= 3 and duration >= 0.44:
+        targets.extend([0.34, 0.47, 0.6, 0.73])
+    elif syllables >= 2 and duration >= 0.34:
+        targets.extend([0.36, 0.56, 0.78])
+    if lyrics_light_word(clean) and duration < 0.34:
+        targets = [target for target in targets if target not in {0.18, 0.34, 0.38}]
+
+    points = []
+    for target in sorted({round(clamp_number(value, 0.04, 0.97), 3) for value in targets}):
+        time_value = lyrics_cumulative_time_for_fill(shaped, cumulative, total, target)
+        if not math.isfinite(time_value):
+            continue
+        if time_value <= start + 0.018 or time_value >= fill_end - 0.018:
+            continue
+        fill_value = clamp_number(target + strength * 0.01 - valley_depth * 0.008, 0.035, 0.965)
+        points.append({
+            "time": time_value,
+            "fill": fill_value,
+            "wave": True,
+        })
+    return points
+
+
+def lyrics_split_large_wave_segments(points, shaped, cumulative, total, start, fill_end):
+    if len(points) < 2 or len(shaped) < 4 or total <= 0:
+        return points
+    sorted_points = sorted(points, key=lambda item: item.get("time", start))
+    result = [sorted_points[0]]
+    for point in sorted_points[1:]:
+        previous = result[-1]
+        previous_time = float(previous.get("time", start))
+        point_time = float(point.get("time", fill_end))
+        previous_fill = float(previous.get("fill", 0.0))
+        point_fill = float(point.get("fill", 0.0))
+        gap = point_time - previous_time
+        fill_delta = point_fill - previous_fill
+        if gap > 0.15 and fill_delta > 0.22:
+            split_count = int(math.ceil(max(gap / 0.105, fill_delta / 0.18))) - 1
+            split_count = max(1, min(5, split_count))
+            for split_index in range(1, split_count + 1):
+                ratio = split_index / (split_count + 1)
+                target_fill = previous_fill + fill_delta * ratio
+                time_value = lyrics_cumulative_time_for_fill(shaped, cumulative, total, target_fill)
+                if not math.isfinite(time_value) or time_value <= previous_time + 0.026 or time_value >= point_time - 0.026:
+                    time_value = previous_time + gap * ratio
+                if time_value <= previous_time + 0.024 or time_value >= point_time - 0.024:
+                    continue
+                result.append({
+                    "time": time_value,
+                    "fill": clamp_number(target_fill, 0.0, 1.0),
+                    "wave": True,
+                })
+        result.append(point)
+    return sorted(result, key=lambda item: item.get("time", start))
+
+
+def lyrics_wave_follow_points(points, shaped, cumulative, total, start, end, strength, valley_depth):
+    if len(points) < 2 or len(shaped) < 5 or total <= 0:
+        return points
+    duration = end - start
+    segments = []
+    current = None
+    for item in shaped:
+        active = item.get("active", 0.0) >= 0.12 or item.get("value", 0.0) >= 0.026
+        if active:
+            if current is None:
+                current = {
+                    "start": item["time"],
+                    "end": item["time"],
+                    "peakTime": item["time"],
+                    "peakValue": item.get("value", 0.0),
+                }
+            else:
+                current["end"] = item["time"]
+                if item.get("value", 0.0) > current["peakValue"]:
+                    current["peakValue"] = item.get("value", 0.0)
+                    current["peakTime"] = item["time"]
+        elif current is not None:
+            if current["end"] - current["start"] >= 0.035:
+                segments.append(current)
+            current = None
+    if current is not None and current["end"] - current["start"] >= 0.035:
+        segments.append(current)
+    if not segments:
+        return points
+
+    result = list(points)
+    max_extra = 5 if duration < 0.34 else 8 if duration < 0.82 else 10
+    extras = []
+
+    def fill_at(time_value):
+        return lyrics_cumulative_fill_at_time(shaped, cumulative, total, time_value)
+
+    def add_extra(time_value, fill_value=None, hold=False, priority=1):
+        if not math.isfinite(time_value):
+            return
+        clean_time = clamp_number(float(time_value), start, end)
+        if clean_time <= start + 0.018 or clean_time >= end - 0.018:
+            return
+        clean_fill = fill_at(clean_time) if fill_value is None else clamp_number(float(fill_value), 0.0, 1.0)
+        if clean_fill <= 0.02 or clean_fill >= 0.975:
+            return
+        extras.append({
+            "time": clean_time,
+            "fill": clean_fill,
+            "hold": bool(hold),
+            "priority": priority,
+        })
+
+    for index, segment in enumerate(segments):
+        segment_start = float(segment["start"])
+        segment_end = float(segment["end"])
+        segment_peak = float(segment["peakTime"])
+        start_fill = fill_at(segment_start)
+        end_fill = fill_at(segment_end)
+        if segment_start > start + 0.03:
+            lead = min(0.018, max(0.006, duration * 0.035))
+            add_extra(segment_start - lead, start_fill, hold=True, priority=0)
+            add_extra(segment_start, start_fill, hold=True, priority=0)
+        if segment_peak > start + 0.026 and segment_peak < end - 0.024:
+            add_extra(segment_peak, None, hold=False, priority=2)
+        if segment_end < end - 0.026:
+            add_extra(segment_end, end_fill, hold=False, priority=2)
+            tail = segment_end + min(0.026, max(0.008, duration * 0.05))
+            add_extra(tail, end_fill, hold=True, priority=0)
+        if index + 1 < len(segments):
+            next_start = float(segments[index + 1]["start"])
+            gap = next_start - segment_end
+            if gap >= 0.052:
+                add_extra(segment_end + min(gap * 0.36, 0.038), end_fill, hold=True, priority=0)
+                add_extra(next_start - min(gap * 0.24, 0.026), end_fill, hold=True, priority=0)
+
+    accepted = 0
+    ranked_extras = sorted(
+        extras,
+        key=lambda item: (
+            item["time"],
+            -item["priority"],
+            0 if item["hold"] else 1,
+        ),
+    )
+    for item in ranked_extras:
+        if accepted >= max_extra:
+            break
+        time_value = item["time"]
+        if time_value <= start + 0.024 or time_value >= end - 0.024:
+            continue
+        fill_value = item["fill"]
+        if not item["hold"]:
+            fill_value = clamp_number(fill_value + strength * 0.012 - valley_depth * 0.012, 0.0, 0.96)
+        if fill_value <= 0.035 or fill_value >= 0.965:
+            continue
+        if any(abs(float(point.get("time", start)) - time_value) < 0.022 for point in result):
+            continue
+        next_point = {
+            "time": time_value,
+            "fill": fill_value,
+            "hold": item["hold"],
+        }
+        if not item["hold"]:
+            next_point["wave"] = True
+        result.append(next_point)
+        accepted += 1
+    return sorted(result, key=lambda item: item.get("time", start))
+
+
+def lyrics_wave_pulse_points(points, shaped, cumulative, total, start, fill_end, word, strength, valley_depth):
+    if len(points) < 2 or len(shaped) < 5 or total <= 0:
+        return points
+    duration = fill_end - start
+    if duration <= 0.12:
+        return points
+
+    weighted = [
+        max(0.0, item.get("value", 0.0)) + max(0.0, item.get("active", 0.0)) * 0.016
+        for item in shaped
+    ]
+    peak_ceiling = max(weighted, default=0.0)
+    if peak_ceiling <= 0.018:
+        return points
+
+    syllables = lyrics_word_syllable_count(word)
+    local_floor = max(0.014, percentile(weighted, 54) * 0.82, peak_ceiling * (0.16 + valley_depth * 0.04))
+    min_distance = 0.046 if duration < 0.34 else 0.058 if duration < 0.7 else 0.072
+    candidates = []
+    for index in range(1, len(shaped) - 1):
+        current = weighted[index]
+        if current < local_floor:
+            continue
+        previous = weighted[index - 1]
+        following = weighted[index + 1]
+        if current < previous or current < following:
+            continue
+        time_value = shaped[index]["time"]
+        if time_value <= start + 0.018 or time_value >= fill_end - 0.018:
+            continue
+        left_floor = min(weighted[max(0, index - 4):index] or [current])
+        right_floor = min(weighted[index + 1:min(len(weighted), index + 5)] or [current])
+        prominence = current - max(left_floor, right_floor)
+        if prominence < max(0.012, peak_ceiling * 0.045):
+            continue
+        candidates.append({
+            "index": index,
+            "time": time_value,
+            "value": current,
+            "prominence": prominence,
+            "score": current * 0.35 + prominence,
+        })
+
+    peaks = []
+    for item in sorted(candidates, key=lambda candidate: candidate["time"]):
+        if peaks and item["time"] - peaks[-1]["time"] < min_distance:
+            if item["score"] > peaks[-1]["score"]:
+                peaks[-1] = item
+            continue
+        peaks.append(item)
+
+    if not peaks:
+        return points
+
+    max_extra = 4 if duration < 0.34 else 7 if duration < 0.7 else 10
+    max_extra += min(2, max(0, syllables - 1))
+    existing = [
+        {
+            "time": clamp_number(float(point.get("time", start)), start, fill_end),
+            "fill": clamp_number(float(point.get("fill", 0.0)), 0.0, 1.0),
+            "hold": bool(point.get("hold")),
+            "wave": bool(point.get("wave")),
+        }
+        for point in points
+    ]
+    extras = []
+
+    def fill_at(time_value):
+        return lyrics_cumulative_fill_at_time(shaped, cumulative, total, time_value)
+
+    def add_extra(time_value, hold=False, priority=1):
+        if not math.isfinite(time_value):
+            return
+        clean_time = clamp_number(float(time_value), start, fill_end)
+        if clean_time <= start + 0.018 or clean_time >= fill_end - 0.018:
+            return
+        if any(abs(item["time"] - clean_time) < 0.018 for item in existing):
+            return
+        if any(abs(item["time"] - clean_time) < 0.018 for item in extras):
+            return
+        fill_value = fill_at(clean_time)
+        if fill_value <= 0.025 or fill_value >= 0.975:
+            return
+        extras.append({
+            "time": clean_time,
+            "fill": fill_value,
+            "hold": bool(hold),
+            "priority": priority,
+        })
+
+    last_peak_index = 0
+    for peak in peaks:
+        peak_index = peak["index"]
+        if peak["time"] - start >= 0.045:
+            search_start = max(last_peak_index, 0)
+            valley_items = list(range(search_start, peak_index))
+            if valley_items:
+                valley_index = min(valley_items, key=lambda item_index: weighted[item_index])
+                valley_time = shaped[valley_index]["time"]
+                valley_value = weighted[valley_index]
+                if (
+                    peak["time"] - valley_time >= 0.045
+                    and valley_value <= peak["value"] * (0.58 + valley_depth * 0.08)
+                ):
+                    add_extra(valley_time, hold=True, priority=0)
+        add_extra(peak["time"], hold=False, priority=2)
+        last_peak_index = peak_index
+
+    accepted = 0
+    result = list(existing)
+    for item in sorted(extras, key=lambda extra: (extra["time"], -extra["priority"], 0 if extra["hold"] else 1)):
+        if accepted >= max_extra:
+            break
+        if any(abs(float(point.get("time", start)) - item["time"]) < 0.018 for point in result):
+            continue
+        next_point = {
+            "time": item["time"],
+            "fill": item["fill"],
+        }
+        if item["hold"]:
+            next_point["hold"] = True
+        else:
+            next_point["wave"] = True
+        result.append(next_point)
+        accepted += 1
+    return sorted(result, key=lambda item: item.get("time", start))
+
+
+def lyrics_cumulative_fill_points(start, fill_end, word, feature_samples, valley_depth, strength):
+    duration = fill_end - start
+    if duration <= 0.055:
+        return []
+    shaped = lyrics_shaped_feature_window(start, fill_end, feature_samples, valley_depth)
+    if len(shaped) < 3:
+        return []
+
+    cumulative = [0.0]
+    total = 0.0
+    for index in range(1, len(shaped)):
+        previous = shaped[index - 1]
+        current = shaped[index]
+        delta = max(0.001, current["time"] - previous["time"])
+        area = (previous["value"] + current["value"]) * 0.5 * delta
+        total += area
+        cumulative.append(total)
+    if total <= 0:
+        return []
+
+    syllables = lyrics_word_syllable_count(word)
+    targets = lyrics_fill_targets_for_word(word, syllables)
+    points = [{"time": start, "fill": 0.0}]
+    for target in targets:
+        time_value = lyrics_cumulative_time_for_fill(shaped, cumulative, total, target)
+        if not math.isfinite(time_value):
+            continue
+        fill_value = clamp_number(target + strength * 0.018 - valley_depth * 0.014, 0.12, 0.9)
+        points.append({"time": time_value, "fill": fill_value, "wave": True})
+    points.extend(lyrics_wave_curve_points(start, fill_end, word, shaped, cumulative, total, strength, valley_depth))
+    points.append({"time": fill_end, "fill": 1.0})
+    points = lyrics_wave_follow_points(points, shaped, cumulative, total, start, fill_end, strength, valley_depth)
+    points = lyrics_wave_pulse_points(points, shaped, cumulative, total, start, fill_end, word, strength, valley_depth)
+    points = lyrics_add_pause_hold_points(points, shaped, start, fill_end)
+    points = lyrics_split_large_wave_segments(points, shaped, cumulative, total, start, fill_end)
+    return points
+
+
+def lyrics_soften_fill_point_jumps(points, start, fill_end):
+    if len(points) < 3:
+        return points
+    duration = max(0.055, fill_end - start)
+    if duration < 0.12:
+        return points
+
+    max_rate = max(8.4, 1.1 / duration)
+    if duration < 0.22:
+        max_rate = max(max_rate, 11.5)
+    elif duration < 0.34:
+        max_rate = max(max_rate, 9.8)
+
+    shaped = []
+    for point in sorted(points, key=lambda item: item.get("time", start)):
+        shaped.append({
+            "time": clamp_number(float(point.get("time", start)), start, fill_end),
+            "fill": clamp_number(float(point.get("fill", 0.0)), 0.0, 1.0),
+            "hold": bool(point.get("hold")),
+            "wave": bool(point.get("wave")),
+        })
+    if len(shaped) < 3:
+        return points
+
+    fills = [item["fill"] for item in shaped]
+    fills[0] = 0.0
+    fills[-1] = 1.0
+
+    for index in range(1, len(fills) - 1):
+        delta_time = max(0.0, shaped[index]["time"] - shaped[index - 1]["time"])
+        fills[index] = min(fills[index], fills[index - 1] + max_rate * delta_time)
+        fills[index] = max(fills[index], fills[index - 1])
+
+    for index in range(len(fills) - 2, 0, -1):
+        if shaped[index].get("hold") and shaped[index].get("fill", 0.0) <= 0.001:
+            fills[index] = 0.0
+            continue
+        delta_time = max(0.0, shaped[index + 1]["time"] - shaped[index]["time"])
+        needed = fills[index + 1] - max_rate * delta_time
+        if fills[index] < needed:
+            relief = 0.08 if shaped[index].get("hold") else 0.0
+            fills[index] = max(fills[index], needed - relief)
+        early_ratio = (shaped[index]["time"] - start) / duration
+        if early_ratio < 0.3 and shaped[index]["time"] <= start + 0.08:
+            fills[index] = min(fills[index], 0.5)
+        fills[index] = min(max(fills[index], fills[index - 1]), fills[index + 1])
+
+    for index in range(1, len(fills) - 1):
+        if shaped[index].get("hold") and shaped[index].get("fill", 0.0) <= 0.001:
+            fills[index] = 0.0
+            continue
+        delta_time = max(0.0, shaped[index]["time"] - shaped[index - 1]["time"])
+        cap = fills[index - 1] + max_rate * delta_time
+        early_ratio = (shaped[index]["time"] - start) / duration
+        if early_ratio < 0.3 and shaped[index]["time"] <= start + 0.08:
+            cap = min(cap, 0.5)
+        fills[index] = max(fills[index], fills[index - 1])
+        fills[index] = min(fills[index], cap)
+
+    softened = []
+    for item, fill_value in zip(shaped, fills):
+        next_item = {
+            "time": round(item["time"], 3),
+            "fill": round(clamp_number(fill_value, 0.0, 1.0), 3),
+        }
+        if item.get("hold"):
+            next_item["hold"] = True
+        if item.get("wave"):
+            next_item["wave"] = True
+        softened.append(next_item)
+    return softened
+
+
+def lyrics_split_final_fill_segments(points, start, fill_end, first_activity=math.nan):
+    if len(points) < 2:
+        return points
+    result = []
+    sorted_points = sorted(points, key=lambda item: item.get("time", start))
+    for point in sorted_points:
+        if not result:
+            result.append(point)
+            continue
+        previous = result[-1]
+        previous_time = float(previous.get("time", start))
+        point_time = float(point.get("time", fill_end))
+        previous_fill = float(previous.get("fill", 0.0))
+        point_fill = float(point.get("fill", 0.0))
+        gap = point_time - previous_time
+        fill_delta = point_fill - previous_fill
+        if gap > 0.145 and fill_delta > 0.16:
+            split_count = int(math.ceil(max(gap / 0.095, fill_delta / 0.18))) - 1
+            split_count = max(1, min(4, split_count))
+            for split_index in range(1, split_count + 1):
+                ratio = split_index / (split_count + 1)
+                eased = ratio * ratio * (3 - 2 * ratio)
+                time_value = previous_time + gap * ratio
+                if time_value <= previous_time + 0.026 or time_value >= point_time - 0.026:
+                    continue
+                if math.isfinite(first_activity) and time_value < first_activity - 0.012:
+                    continue
+                result.append({
+                    "time": round(time_value, 3),
+                    "fill": round(clamp_number(previous_fill + fill_delta * eased, 0.0, 1.0), 3),
+                    "wave": True,
+                })
+        result.append(point)
+    return result
+
+
+def lyrics_split_fast_fill_jumps(points, start, fill_end):
+    if len(points) < 2:
+        return points
+    result = []
+    sorted_points = sorted(points, key=lambda item: item.get("time", start))
+    for point in sorted_points:
+        if not result:
+            result.append(point)
+            continue
+        previous = result[-1]
+        previous_time = float(previous.get("time", start))
+        point_time = float(point.get("time", fill_end))
+        previous_fill = float(previous.get("fill", 0.0))
+        point_fill = float(point.get("fill", 0.0))
+        gap = point_time - previous_time
+        fill_delta = point_fill - previous_fill
+        if gap >= 0.006 and fill_delta > 0.42:
+            rate = fill_delta / max(0.008, gap)
+            should_split = (
+                rate > 15.5
+                or (gap <= 0.045 and fill_delta > 0.54)
+                or (previous.get("hold") and gap <= 0.06 and fill_delta >= 0.5)
+            )
+            if should_split:
+                min_step = 0.0025
+                wanted_splits = max(1, min(4, int(math.ceil(fill_delta / 0.24)) - 1))
+                available_splits = max(0, int(gap / min_step) - 1)
+                split_count = min(wanted_splits, available_splits)
+                if split_count < 1 and point_fill < 0.985 and fill_delta > 0.55 and gap <= 0.014:
+                    point = {
+                        **point,
+                        "fill": round(clamp_number(previous_fill + min(0.52, fill_delta * 0.72), 0.0, 0.96), 3),
+                    }
+                    point_fill = float(point.get("fill", point_fill))
+                    fill_delta = point_fill - previous_fill
+                elif split_count >= 1:
+                    inserted_split = False
+                    for split_index in range(1, split_count + 1):
+                        ratio = split_index / (split_count + 1)
+                        eased = ratio * ratio * (3 - 2 * ratio)
+                        time_value = previous_time + gap * ratio
+                        if time_value < previous_time + min_step or time_value > point_time - min_step:
+                            continue
+                        result.append({
+                            "time": round(time_value, 3),
+                            "fill": round(clamp_number(previous_fill + fill_delta * eased, 0.0, 1.0), 3),
+                            "wave": True,
+                        })
+                        inserted_split = True
+                    if not inserted_split and point_fill < 0.985 and fill_delta > 0.55 and gap <= 0.014:
+                        point = {
+                            **point,
+                            "fill": round(clamp_number(previous_fill + min(0.52, fill_delta * 0.72), 0.0, 0.96), 3),
+                        }
+        result.append(point)
+    return result
+
+
+def lyrics_delay_line_start_fill_points(points, start, fill_end, first_activity):
+    if not math.isfinite(first_activity) or first_activity <= 0.045 or fill_end <= start + 0.045:
+        return points
+    lead_hold = clamp_number(first_activity - start, 0.0, 1.0)
+    start_guard = clamp_number(lead_hold * 0.22, 0.018, 0.035)
+    if first_activity >= fill_end - 0.012:
+        hold_time = fill_end - clamp_number((fill_end - start) * 0.26, 0.026, 0.046)
+    else:
+        hold_time = first_activity - start_guard
+    hold_time = clamp_number(hold_time, start + 0.028, fill_end - 0.026)
+    if hold_time <= start + 0.024 or hold_time >= fill_end - 0.022:
+        return points
+    delayed = []
+    inserted = False
+    for point in sorted(points, key=lambda item: item.get("time", start)):
+        time_value = float(point.get("time", start))
+        next_point = dict(point)
+        if time_value <= hold_time:
+            next_point["fill"] = 0.0
+            next_point["hold"] = True
+        if not inserted and time_value > hold_time:
+            delayed.append({
+                "time": round(hold_time, 3),
+                "fill": 0.0,
+                "hold": True,
+            })
+            inserted = True
+        delayed.append(next_point)
+    if not inserted:
+        delayed.append({
+            "time": round(hold_time, 3),
+            "fill": 0.0,
+            "hold": True,
+        })
+    normalized = []
+    for point in sorted(delayed, key=lambda item: item.get("time", start)):
+        time_value = round(clamp_number(float(point.get("time", start)), start, fill_end), 3)
+        fill_value = round(clamp_number(float(point.get("fill", 0.0)), 0.0, 1.0), 3)
+        if normalized and time_value <= normalized[-1]["time"] + 0.006:
+            previous_fill = float(normalized[-1].get("fill", 0.0))
+            keep_separate = (
+                fill_value - previous_fill > 0.04
+                and (normalized[-1].get("hold") or point.get("hold") or point.get("wave"))
+                and time_value > normalized[-1]["time"]
+            )
+            if keep_separate:
+                next_point = {
+                    "time": time_value,
+                    "fill": fill_value,
+                }
+                if point.get("hold"):
+                    next_point["hold"] = True
+                if point.get("wave"):
+                    next_point["wave"] = True
+                normalized.append(next_point)
+                continue
+            normalized[-1]["time"] = max(normalized[-1]["time"], time_value)
+            normalized[-1]["fill"] = max(normalized[-1]["fill"], fill_value)
+            if point.get("hold"):
+                normalized[-1]["hold"] = True
+            if point.get("wave"):
+                normalized[-1]["wave"] = True
+            continue
+        next_point = {
+            "time": time_value,
+            "fill": fill_value,
+        }
+        if point.get("hold"):
+            next_point["hold"] = True
+        if point.get("wave"):
+            next_point["wave"] = True
+        normalized.append(next_point)
+    return normalized
+
+
+def lyrics_insert_fallback_wave_point(points, start, fill_end, feature_samples, valley_depth, strength):
+    if len(points) < 2 or any(point.get("wave") for point in points):
+        return points
+    duration = fill_end - start
+    if duration <= 0.075 or not feature_samples:
+        return points
+    shaped = lyrics_shaped_feature_window(start, fill_end, feature_samples, valley_depth)
+    if len(shaped) < 3:
+        return points
+    active_items = [
+        item
+        for item in shaped
+        if item.get("active", 0.0) >= 0.08 or item.get("value", 0.0) >= 0.016
+    ]
+    if not active_items:
+        return points
+
+    peak = max(active_items, key=lambda item: item.get("value", 0.0) + item.get("active", 0.0) * 0.018)
+    first_active = active_items[0]["time"]
+    peak_time = peak["time"]
+    if peak_time <= start + 0.018:
+        peak_time = first_active + min(0.035, max(0.018, duration * 0.24))
+    wave_time = clamp_number(
+        peak_time,
+        start + min(0.052, max(0.018, duration * 0.16)),
+        fill_end - min(0.022, max(0.012, duration * 0.12)),
+    )
+    if not math.isfinite(wave_time) or wave_time <= start + 0.014 or wave_time >= fill_end - 0.012:
+        return points
+    if any(abs(float(point.get("time", start)) - wave_time) < 0.014 for point in points):
+        return points
+
+    time_ratio = (wave_time - start) / max(0.055, duration)
+    fill_value = clamp_number(
+        0.28 + time_ratio * 0.46 + strength * 0.055 - valley_depth * 0.04,
+        0.28,
+        0.82,
+    )
+    result = list(points)
+    result.append({
+        "time": round(wave_time, 3),
+        "fill": round(fill_value, 3),
+        "wave": True,
+    })
+    return sorted(result, key=lambda item: item.get("time", start))
+
+
+def lyrics_fill_value_from_points(points, time_value, start, fill_end):
+    clean = sorted(
+        (
+            {
+                "time": clamp_number(float(point.get("time", start)), start, fill_end),
+                "fill": clamp_number(float(point.get("fill", 0.0)), 0.0, 1.0),
+            }
+            for point in points or []
+        ),
+        key=lambda item: item["time"],
+    )
+    if not clean:
+        return 0.0
+    if time_value <= clean[0]["time"]:
+        return clean[0]["fill"]
+    if time_value >= clean[-1]["time"]:
+        return clean[-1]["fill"]
+    for previous, current in zip(clean, clean[1:]):
+        if time_value > current["time"]:
+            continue
+        span = max(0.001, current["time"] - previous["time"])
+        ratio = clamp_number((time_value - previous["time"]) / span, 0.0, 1.0)
+        return clamp_number(previous["fill"] + (current["fill"] - previous["fill"]) * ratio, 0.0, 1.0)
+    return clean[-1]["fill"]
+
+
+def lyrics_add_explicit_pause_hold_points(points, start, fill_end, pause_items=None):
+    if len(points) < 2 or not pause_items:
+        return points
+
+    hold_ranges = []
+    for item in pause_items or []:
+        time_value = float(item.get("time", math.nan))
+        left = float(item.get("left", math.nan))
+        right = float(item.get("right", math.nan))
+        gap = float(item.get("gap", math.nan))
+        depth = float(item.get("depth", 0.0))
+        if not math.isfinite(time_value):
+            continue
+        if not math.isfinite(left) or not math.isfinite(right):
+            if math.isfinite(gap):
+                left = time_value - gap * 0.5
+                right = time_value + gap * 0.5
+            else:
+                continue
+        if not math.isfinite(gap):
+            gap = right - left
+        if gap < 0.052 or (depth < 0.42 and gap < 0.075):
+            continue
+        hold_start = clamp_number(left + min(0.014, gap * 0.16), start + 0.018, fill_end - 0.018)
+        hold_end = clamp_number(right - min(0.012, gap * 0.12), hold_start + 0.022, fill_end - 0.012)
+        if hold_end <= hold_start + 0.02:
+            continue
+        if hold_start >= fill_end - 0.014 or hold_end <= start + 0.014:
+            continue
+        fill_value = lyrics_fill_value_from_points(points, hold_start, start, fill_end)
+        release_floor = 0.032 if left < start < right else 0.055
+        if fill_end - hold_end < release_floor and fill_value < 0.74:
+            adjusted_end = fill_end - release_floor
+            if adjusted_end <= hold_start + 0.022:
+                continue
+            hold_end = adjusted_end
+        hold_ranges.append({
+            "start": hold_start,
+            "end": hold_end,
+            "fill": fill_value,
+            "depth": depth,
+            "releaseFloor": release_floor,
+        })
+
+    if not hold_ranges:
+        return points
+
+    result = []
+    for point in points:
+        point_time = float(point.get("time", start))
+        inside_hold = any(
+            item["start"] - 0.006 < point_time < item["end"] + max(0.006, item.get("releaseFloor", 0.04) * 0.45)
+            for item in hold_ranges
+        )
+        if not inside_hold:
+            result.append(point)
+
+    for item in hold_ranges:
+        fill_value = round(clamp_number(item["fill"], 0.0, 1.0), 3)
+        result.append({
+            "time": round(item["start"], 3),
+            "fill": fill_value,
+            "hold": True,
+        })
+        result.append({
+            "time": round(item["end"], 3),
+            "fill": fill_value,
+            "hold": True,
+        })
+
+    return sorted(result, key=lambda point: point.get("time", start))
+
+
+def lyrics_add_activity_gap_hold_points(points, start, fill_end, feature_samples=None, valley_depth=0.0, activity_segments=None):
+    if len(points or []) < 2 or not feature_samples:
+        return points
+
+    raw_segments = activity_segments
+    if raw_segments is None:
+        raw_segments = lyrics_feature_activity_segments(start, fill_end, feature_samples, valley_depth)
+    segments = []
+    for segment in raw_segments:
+        segment_start = float(segment.get("start", fill_end))
+        segment_end = float(segment.get("end", segment_start))
+        segment_peak = float(segment.get("peak", 0.0))
+        if segment_end < start - 0.001 or segment_start > fill_end + 0.05:
+            continue
+        has_pulse = segment_end - segment_start >= 0.001 and segment_peak >= 0.24
+        has_body = segment_end > start + 0.012
+        inside_fill = segment_start < fill_end - 0.012
+        near_tail = fill_end - 0.012 <= segment_start <= fill_end + 0.05
+        if (has_pulse or has_body) and (inside_fill or near_tail):
+            segments.append(segment)
+    segments.sort(key=lambda item: float(item.get("start", start)))
+    if len(segments) < 2:
+        return points
+
+    hold_ranges = []
+    for previous, current in zip(segments, segments[1:]):
+        previous_end = float(previous.get("end", start))
+        current_start = float(current.get("start", fill_end))
+        gap = current_start - previous_end
+        if gap < 0.055:
+            continue
+        hold_start = clamp_number(
+            previous_end + min(0.014, gap * 0.22),
+            start + 0.016,
+            fill_end - 0.014,
+        )
+        hold_end_target = min(current_start - min(0.018, gap * 0.24), fill_end - 0.008)
+        hold_end = clamp_number(
+            hold_end_target,
+            hold_start + 0.024,
+            fill_end - 0.008,
+        )
+        if hold_end <= hold_start + 0.024:
+            continue
+        fill_value = lyrics_fill_value_from_points(points, hold_start, start, fill_end)
+        hold_ranges.append({
+            "start": hold_start,
+            "end": hold_end,
+            "fill": fill_value,
+        })
+
+    if not hold_ranges:
+        return points
+
+    result = []
+    for point in points:
+        point_time = float(point.get("time", start))
+        if any(item["start"] - 0.004 < point_time < item["end"] + 0.004 for item in hold_ranges):
+            continue
+        result.append(point)
+
+    for item in hold_ranges:
+        fill_value = round(clamp_number(item["fill"], 0.0, 1.0), 3)
+        result.append({
+            "time": round(item["start"], 3),
+            "fill": fill_value,
+            "hold": True,
+        })
+        result.append({
+            "time": round(item["end"], 3),
+            "fill": fill_value,
+            "hold": True,
+        })
+
+    return sorted(result, key=lambda point: point.get("time", start))
+
+
+def lyrics_normalize_fill_points(points, start, fill_end):
+    normalized = []
+    for point in sorted(points or [], key=lambda item: item.get("time", start)):
+        time_value = round(clamp_number(float(point.get("time", start)), start, fill_end), 3)
+        fill_value = round(clamp_number(float(point.get("fill", 0.0)), 0.0, 1.0), 3)
+        if normalized and time_value <= normalized[-1]["time"] + 0.006:
+            previous_fill = float(normalized[-1].get("fill", 0.0))
+            keep_separate = (
+                fill_value - previous_fill > 0.04
+                and (normalized[-1].get("hold") or point.get("hold") or point.get("wave"))
+                and time_value > normalized[-1]["time"]
+            )
+            if keep_separate:
+                next_point = {
+                    "time": time_value,
+                    "fill": fill_value,
+                }
+                if point.get("hold"):
+                    next_point["hold"] = True
+                if point.get("wave"):
+                    next_point["wave"] = True
+                normalized.append(next_point)
+                continue
+            normalized[-1]["fill"] = max(normalized[-1]["fill"], fill_value)
+            if point.get("hold"):
+                normalized[-1]["hold"] = True
+            if point.get("wave"):
+                normalized[-1]["wave"] = True
+            continue
+        if normalized and fill_value < normalized[-1]["fill"]:
+            fill_value = normalized[-1]["fill"]
+        next_point = {
+            "time": time_value,
+            "fill": fill_value,
+        }
+        if point.get("hold"):
+            next_point["hold"] = True
+        if point.get("wave"):
+            next_point["wave"] = True
+        normalized.append(next_point)
+    if normalized:
+        normalized[0]["time"] = round(start, 3)
+        normalized[0]["fill"] = 0.0
+        normalized[-1]["time"] = round(fill_end, 3)
+        normalized[-1]["fill"] = 1.0
+    return normalized
+
+
+def lyrics_mark_motion_fill_points(points):
+    if not points:
+        return points
+    marked = [dict(point) for point in points]
+    if len(marked) < 2:
+        return marked
+
+    for index in range(1, len(marked)):
+        previous_fill = float(marked[index - 1].get("fill", 0.0))
+        current_fill = float(marked[index].get("fill", 0.0))
+        incoming_motion = current_fill - previous_fill
+        if incoming_motion >= 0.075:
+            marked[index]["wave"] = True
+        if marked[index - 1].get("hold") and marked[index].get("hold") and incoming_motion > 0.08:
+            marked[index].pop("hold", None)
+            marked[index]["wave"] = True
+
+    for index in range(1, len(marked) - 1):
+        current_fill = float(marked[index].get("fill", 0.0))
+        next_fill = float(marked[index + 1].get("fill", current_fill))
+        if next_fill - current_fill >= 0.12:
+            marked[index]["wave"] = True
+    return marked
+
+
+def lyrics_word_fill_points(start, fill_end, word, peak_items, valley_depth, strength, feature_samples=None, line_first_activity=math.nan, pause_items=None, activity_segments=None):
+    start = float(start)
+    fill_end = float(fill_end)
+    if fill_end <= start + 0.055:
+        return [{"time": round(start, 3), "fill": 0.0}, {"time": round(fill_end, 3), "fill": 1.0}]
+
+    duration = fill_end - start
+    syllables = lyrics_word_syllable_count(word)
+    cumulative_points = lyrics_cumulative_fill_points(start, fill_end, word, feature_samples, valley_depth, strength)
+    used_cumulative_points = bool(cumulative_points)
+    if cumulative_points:
+        points = cumulative_points
+    else:
+        points = [{"time": start, "fill": 0.0}]
+        usable_peaks = sorted(
+            (
+                item
+                for item in peak_items
+                if start + min(0.035, duration * 0.35) <= item.get("time", -999) <= fill_end - min(0.018, duration * 0.18)
+            ),
+            key=lambda item: item.get("time", 0),
+        )
+        max_points = max(1, min(4, syllables + 1))
+        if len(usable_peaks) > max_points:
+            usable_peaks = sorted(usable_peaks, key=lambda item: item.get("strength", 0), reverse=True)[:max_points]
+            usable_peaks.sort(key=lambda item: item.get("time", 0))
+
+        if usable_peaks:
+            total_strength = sum(max(0.14, item.get("strength", 0.0)) for item in usable_peaks) or 1.0
+            progress = 0.0
+            for index, item in enumerate(usable_peaks):
+                portion = max(0.14, item.get("strength", 0.0)) / total_strength
+                progress += portion
+                time_ratio = clamp_number((item.get("time", start) - start) / max(0.055, duration), 0.0, 1.0)
+                fill = 0.12 + time_ratio * 0.56 + progress * 0.2 + strength * 0.045
+                if index == 0:
+                    fill = min(fill, 0.42 + time_ratio * 0.26 + max(0, syllables - 1) * 0.03)
+                fill = clamp_number(fill, 0.2 + index * 0.06, 0.9)
+                points.append({"time": item.get("time", start), "fill": fill, "wave": True})
+        else:
+            count = max(1, syllables)
+            for index in range(count):
+                ratio = (index + 1) / (count + 1)
+                time_ratio = 0.34 + ratio * 0.44
+                fill_ratio = 0.18 + ratio * (0.52 + min(0.08, strength * 0.08))
+                if count == 1:
+                    time_ratio = 0.42 - min(0.08, valley_depth * 0.05)
+                    fill_ratio = 0.48 + min(0.08, strength * 0.06)
+                points.append({
+                    "time": start + duration * clamp_number(time_ratio, 0.22, 0.86),
+                    "fill": clamp_number(fill_ratio, 0.18, 0.9),
+                })
+
+        if duration >= 0.13:
+            late_time = start + duration * (0.76 if valley_depth < 0.56 else 0.68)
+            if all(abs(point.get("time", start) - late_time) > duration * 0.12 for point in points):
+                points.append({
+                    "time": late_time,
+                    "fill": clamp_number(0.76 + strength * 0.08 - valley_depth * 0.06, 0.62, 0.88),
+                    "wave": True,
+                })
+
+        points.append({"time": fill_end, "fill": 1.0})
+    if not used_cumulative_points and feature_samples:
+        shaped_points = lyrics_shaped_feature_window(start, fill_end, feature_samples, valley_depth)
+        if len(shaped_points) >= 3:
+            points = lyrics_add_pause_hold_points(points, shaped_points, start, fill_end)
+    clean = []
+    last_fill = -1.0
+    close_merge_window = 0.022
+    for point in sorted(points, key=lambda item: item.get("time", start)):
+        time_value = clamp_number(float(point.get("time", start)), start, fill_end)
+        fill_value = clamp_number(float(point.get("fill", 0)), 0, 1)
+        is_hold_point = bool(point.get("hold"))
+        is_wave_point = bool(point.get("wave"))
+        if clean and time_value <= clean[-1]["time"] + close_merge_window:
+            if (
+                len(clean) == 1
+                and clean[-1]["time"] <= round(start, 3) + 0.002
+                and clean[-1]["fill"] <= 0.001
+                and fill_value > 0.02
+            ):
+                delayed_time = min(fill_end, start + max(0.035, duration * 0.18))
+                if delayed_time > clean[-1]["time"] + 0.014:
+                    time_value = delayed_time
+                    fill_value = min(fill_value, 0.42 + min(0.05, strength * 0.05))
+                else:
+                    continue
+            else:
+                clean[-1]["fill"] = round(max(clean[-1]["fill"], fill_value), 3)
+                if fill_value >= 1:
+                    clean[-1]["time"] = round(fill_end, 3)
+                if is_wave_point:
+                    clean[-1]["wave"] = True
+                continue
+        if clean and time_value <= clean[-1]["time"] + close_merge_window:
+            clean[-1]["fill"] = round(max(clean[-1]["fill"], fill_value), 3)
+            if fill_value >= 1:
+                clean[-1]["time"] = round(fill_end, 3)
+            if is_wave_point:
+                clean[-1]["wave"] = True
+            continue
+        if clean and is_hold_point and fill_value < last_fill:
+            fill_value = last_fill
+        elif clean and not is_hold_point and fill_value < last_fill + 0.018:
+            fill_value = min(1.0, last_fill + 0.018)
+        clean_point = {"time": round(time_value, 3), "fill": round(fill_value, 3)}
+        if is_hold_point:
+            clean_point["hold"] = True
+        if is_wave_point:
+            clean_point["wave"] = True
+        clean.append(clean_point)
+        last_fill = fill_value
+    if not clean or clean[-1]["time"] < round(fill_end, 3) - 0.014:
+        clean.append({"time": round(fill_end, 3), "fill": 1.0})
+    else:
+        clean[-1] = {"time": round(fill_end, 3), "fill": 1.0}
+    clean = lyrics_insert_fallback_wave_point(clean, start, fill_end, feature_samples, valley_depth, strength)
+    clean = lyrics_add_explicit_pause_hold_points(clean, start, fill_end, pause_items)
+    clean = lyrics_normalize_fill_points(clean, start, fill_end)
+    clean = lyrics_insert_fallback_wave_point(clean, start, fill_end, feature_samples, valley_depth, strength)
+    clean = lyrics_normalize_fill_points(clean, start, fill_end)
+    if len(clean) >= 2:
+        first_gap = clean[1]["time"] - clean[0]["time"]
+        first_is_final = clean[1]["fill"] >= 0.985 and clean[1]["time"] >= round(fill_end, 3) - 0.002
+        if first_is_final and first_gap >= 0.056:
+            softened = round(0.42 + min(0.06, strength * 0.05), 3)
+            insert_time = clean[0]["time"] + clamp_number(first_gap * 0.55, 0.032, 0.052)
+            if insert_time <= clean[1]["time"] - 0.018:
+                clean.insert(1, {"time": round(insert_time, 3), "fill": softened})
+            else:
+                clean[1]["fill"] = softened
+        early_cap_time = start + max(0.12, duration * 0.4)
+        if clean[1]["time"] <= early_cap_time and clean[1]["fill"] > 0.52:
+            softened = round(0.42 + min(0.06, strength * 0.05), 3)
+            if first_is_final and first_gap >= 0.056:
+                insert_time = clean[0]["time"] + clamp_number(first_gap * 0.55, 0.032, 0.052)
+                if insert_time <= clean[1]["time"] - 0.018:
+                    clean.insert(1, {"time": round(insert_time, 3), "fill": softened})
+                else:
+                    clean[1]["fill"] = softened
+            else:
+                clean[1]["fill"] = softened
+    clean = lyrics_delay_line_start_fill_points(clean, start, fill_end, line_first_activity)
+    clean = lyrics_soften_fill_point_jumps(clean, start, fill_end)
+    clean = lyrics_split_final_fill_segments(clean, start, fill_end, line_first_activity)
+    clean = lyrics_split_fast_fill_jumps(clean, start, fill_end)
+    clean = lyrics_add_explicit_pause_hold_points(clean, start, fill_end, pause_items)
+    clean = lyrics_add_activity_gap_hold_points(clean, start, fill_end, feature_samples, valley_depth, activity_segments)
+    clean = lyrics_normalize_fill_points(clean, start, fill_end)
+    clean = lyrics_split_fast_fill_jumps(clean, start, fill_end)
+    clean = lyrics_add_activity_gap_hold_points(clean, start, fill_end, feature_samples, valley_depth, activity_segments)
+    clean = lyrics_normalize_fill_points(clean, start, fill_end)
+    clean = lyrics_split_fast_fill_jumps(clean, start, fill_end)
+    clean = lyrics_add_activity_gap_hold_points(clean, start, fill_end, feature_samples, valley_depth, activity_segments)
+    clean = lyrics_split_fast_fill_jumps(clean, start, fill_end)
+    return lyrics_mark_motion_fill_points(clean)
+
+
+def lyric_feature_near_time(items, time_value, radius, key):
+    best = 0.0
+    if radius <= 0:
+        return best
+    for item in items or []:
+        item_time = item.get("time", math.nan)
+        if not math.isfinite(item_time):
+            continue
+        distance = abs(item_time - time_value)
+        if distance > radius:
+            continue
+        weight = 1.0 - distance / radius
+        best = max(best, item.get(key, 0.0) * weight)
+    return best
+
+
+def lyrics_word_center_peak_bonus(word, start, end, peak_items, peak_scale):
+    slot = end - start
+    if slot <= 0 or not peak_items:
+        return 0.0
+    center = start + slot * lyrics_word_center_ratio(word)
+    radius = clamp_number(slot * 0.56, 0.075, 0.17)
+    near_peak = lyric_feature_near_time(peak_items, center, radius, "strength") / max(peak_scale, 0.0001)
+    syllables = lyrics_word_syllable_count(word)
+    weight = 0.16 + min(0.04, max(0, syllables - 1) * 0.018)
+    if lyrics_light_word(lyrics_clean_word(word)):
+        weight *= 0.72
+    return near_peak * weight
+
+
+def lyrics_feature_boundary_targets(feature_samples, duration, ratios):
+    if not feature_samples or not ratios:
+        return []
+    window = [
+        {
+            "time": clamp_number(float(item.get("time", 0.0)), 0.0, duration),
+            "value": max(0.0, float(item.get("value", 0.0))),
+        }
+        for item in feature_samples
+        if 0 <= item.get("time", -999) <= duration
+    ]
+    if len(window) < 3:
+        return []
+    window.sort(key=lambda item: item["time"])
+    if window[0]["time"] > 0:
+        window.insert(0, {"time": 0.0, "value": window[0]["value"]})
+    if window[-1]["time"] < duration:
+        window.append({"time": duration, "value": window[-1]["value"]})
+
+    shaped = []
+    for item in window:
+        time_ratio = item["time"] / max(0.055, duration)
+        taper = 0.78 + 0.22 * math.sin(math.pi * clamp_number(time_ratio, 0.0, 1.0))
+        shaped.append({
+            "time": item["time"],
+            "value": 0.035 + math.pow(item["value"], 1.02) * taper,
+        })
+
+    cumulative = [0.0]
+    total = 0.0
+    for index in range(1, len(shaped)):
+        previous = shaped[index - 1]
+        current = shaped[index]
+        delta = max(0.001, current["time"] - previous["time"])
+        total += (previous["value"] + current["value"]) * 0.5 * delta
+        cumulative.append(total)
+    if total <= 0:
+        return []
+
+    targets = []
+    cursor = 1
+    for ratio in ratios:
+        wanted = total * clamp_number(ratio, 0.0, 1.0)
+        while cursor < len(cumulative) - 1 and cumulative[cursor] < wanted:
+            cursor += 1
+        previous_index = max(0, cursor - 1)
+        previous_total = cumulative[previous_index]
+        current_total = cumulative[cursor]
+        previous_time = shaped[previous_index]["time"]
+        current_time = shaped[cursor]["time"]
+        local_ratio = 0.0 if current_total <= previous_total else (wanted - previous_total) / (current_total - previous_total)
+        targets.append(previous_time + (current_time - previous_time) * clamp_number(local_ratio, 0.0, 1.0))
+    return targets
+
+
+def lyrics_boundary_candidates(target, duration, min_time, max_time, peaks, valleys, extra_targets=None):
+    candidates = {round(clamp_number(target, min_time, max_time), 4)}
+    for item in extra_targets or []:
+        if math.isfinite(item) and abs(item - target) <= max(0.18, duration * 0.12):
+            candidates.add(round(clamp_number(item, min_time, max_time), 4))
+    for item in valleys or []:
+        time_value = item.get("time", math.nan)
+        if math.isfinite(time_value) and abs(time_value - target) <= 0.26:
+            candidates.add(round(clamp_number(time_value, min_time, max_time), 4))
+    for item in peaks or []:
+        time_value = item.get("time", math.nan)
+        if math.isfinite(time_value) and abs(time_value - target) <= 0.2:
+            candidates.add(round(clamp_number(time_value - 0.018, min_time, max_time), 4))
+            candidates.add(round(clamp_number(time_value, min_time, max_time), 4))
+    return sorted(candidates)
+
+
+def lyrics_word_boundaries(text, duration, peaks, valleys=None, feature_samples=None):
+    words = lyrics_word_tokens(text)
+    if not words:
+        return [0.0, round(duration, 3)]
+    weights = [lyrics_word_weight(word) for word in words]
+    total_weight = sum(weights) or 1
+    min_gap = min(0.12, max(0.055, duration / max(1, len(words) * 2.1)))
+    expected_slots = [duration * weight / total_weight for weight in weights]
+    target_boundaries = []
+    target_ratios = []
+    cumulative = 0.0
+    valleys = valleys or []
+    pause_items = lyrics_feature_pause_boundaries(feature_samples, duration)
+    active_boundary_shape = lyrics_shaped_feature_window(0.0, duration, feature_samples, 0.0)
+    first_activity = lyrics_first_activity_time(feature_samples, duration)
+    valley_items = [
+        item
+        for item in valleys
+        if math.isfinite(item.get("time", math.nan)) and 0 < item.get("time", 0) < duration
+    ] + [
+        item
+        for item in pause_items
+        if math.isfinite(item.get("time", math.nan)) and 0 < item.get("time", 0) < duration
+    ]
+    peak_items = [
+        item
+        for item in peaks or []
+        if math.isfinite(item.get("time", math.nan)) and 0 < item.get("time", 0) < duration
+    ]
+    peak_scale = max((item.get("strength", 0) for item in peak_items), default=1.0) or 1.0
+
+    for weight in weights[:-1]:
+        cumulative += weight
+        target_ratios.append(cumulative / total_weight)
+        target_boundaries.append(duration * cumulative / total_weight)
+
+    if not target_boundaries:
+        return [0.0, round(duration, 3)]
+
+    audio_targets = lyrics_feature_boundary_targets(feature_samples, duration, target_ratios)
+    if len(audio_targets) != len(target_boundaries):
+        audio_targets = [math.nan for _ in target_boundaries]
+    blended_targets = []
+    for text_target, audio_target in zip(target_boundaries, audio_targets):
+        if not math.isfinite(audio_target):
+            blended_targets.append(text_target)
+            continue
+        delta = abs(audio_target - text_target)
+        audio_pull = 0.42 if delta <= max(0.16, duration * 0.08) else 0.28
+        blended_targets.append(text_target * (1 - audio_pull) + audio_target * audio_pull)
+
+    candidate_sets = []
+    for index, target in enumerate(blended_targets, start=1):
+        min_time = min_gap * index
+        max_time = duration - min_gap * (len(words) - index)
+        if index == 1 and math.isfinite(first_activity) and first_activity > 0.055:
+            min_time = max(min_time, first_activity + clamp_number(expected_slots[0] * 0.18, 0.035, 0.075))
+            min_time = min(min_time, max_time)
+        extras = [target_boundaries[index - 1], audio_targets[index - 1]]
+        candidate_sets.append(lyrics_boundary_candidates(target, duration, min_time, max_time, peak_items, valley_items, extras))
+
+    states = [{"time": 0.0, "cost": 0.0, "path": [0.0]}]
+    for boundary_index, candidates in enumerate(candidate_sets, start=1):
+        next_states = []
+        target = blended_targets[boundary_index - 1]
+        text_target = target_boundaries[boundary_index - 1]
+        audio_target = audio_targets[boundary_index - 1]
+        expected = expected_slots[boundary_index - 1]
+        for candidate in candidates:
+            best_state = None
+            for state in states:
+                previous_time = state["time"]
+                if candidate <= previous_time + min_gap * 0.92:
+                    continue
+                slot = candidate - previous_time
+                slot_scale = max(0.055, expected * 0.62)
+                slot_cost = ((slot - expected) / slot_scale) ** 2
+                target_scale = max(0.06, expected * 0.9)
+                target_cost = ((candidate - target) / target_scale) ** 2 * 0.36
+                text_cost = ((candidate - text_target) / max(0.07, expected * 1.15)) ** 2 * 0.12
+                audio_cost = 0.0
+                if math.isfinite(audio_target):
+                    audio_cost = ((candidate - audio_target) / max(0.08, expected * 1.2)) ** 2 * 0.16
+                valley_bonus = lyric_feature_near_time(valley_items, candidate, 0.13, "depth") * 0.78
+                pause_bonus = lyric_feature_near_time(pause_items, candidate, 0.16, "depth") * 0.42
+                active_penalty = lyrics_active_boundary_penalty(active_boundary_shape, candidate)
+                peak_bonus = lyric_feature_near_time(peak_items, candidate + 0.018, 0.11, "strength") / peak_scale * 0.36
+                center_bonus = lyrics_word_center_peak_bonus(
+                    words[boundary_index - 1],
+                    previous_time,
+                    candidate,
+                    peak_items,
+                    peak_scale,
+                )
+                cost = (
+                    state["cost"]
+                    + slot_cost
+                    + target_cost
+                    + text_cost
+                    + audio_cost
+                    + active_penalty
+                    - valley_bonus
+                    - pause_bonus
+                    - peak_bonus
+                    - center_bonus
+                )
+                if best_state is None or cost < best_state["cost"]:
+                    best_state = {"time": candidate, "cost": cost, "path": state["path"] + [candidate]}
+            if best_state:
+                next_states.append(best_state)
+        states = sorted(next_states, key=lambda item: item["cost"])[:24] or states
+
+    best_final = None
+    for state in states:
+        final_slot = duration - state["time"]
+        if final_slot < min_gap * 0.92:
+            continue
+        expected = expected_slots[-1]
+        slot_scale = max(0.055, expected * 0.62)
+        center_bonus = lyrics_word_center_peak_bonus(
+            words[-1],
+            state["time"],
+            duration,
+            peak_items,
+            peak_scale,
+        )
+        cost = state["cost"] + ((final_slot - expected) / slot_scale) ** 2 - center_bonus
+        if best_final is None or cost < best_final["cost"]:
+            best_final = {"cost": cost, "path": state["path"] + [duration]}
+
+    boundaries = best_final["path"] if best_final else [0.0, *blended_targets, duration]
+    return [round(value, 3) for value in boundaries]
+
+
+def lyrics_word_spans(text, duration, boundaries, peaks, valleys=None, feature_samples=None, pause_items=None):
+    words = lyrics_word_tokens(text)
+    if not words:
+        return []
+    valleys = valleys or []
+    peak_strengths = [item.get("strength", 0) for item in peaks if math.isfinite(item.get("strength", math.nan))]
+    max_peak = max(peak_strengths) if peak_strengths else 0
+    line_first_activity = lyrics_first_activity_time(feature_samples, duration)
+    spans = []
+    for index, word in enumerate(words):
+        start = float(boundaries[index]) if index < len(boundaries) else 0.0
+        end = float(boundaries[index + 1]) if index + 1 < len(boundaries) else float(duration)
+        if end <= start:
+            end = start + 0.08
+        slot = end - start
+        punctuation_pause = 0.0
+        if re.search(r"[.!?]$", word):
+            punctuation_pause = 0.22
+        elif re.search(r"[,;:]$", word):
+            punctuation_pause = 0.16
+        elif re.search(r"[)]$", word):
+            punctuation_pause = 0.08
+
+        slot_peak_items = [
+            item
+            for item in peaks
+            if start - 0.04 <= item.get("time", -999) <= end + 0.04
+        ]
+        slot_valleys = [
+            item
+            for item in valleys
+            if start + slot * 0.42 <= item.get("time", -999) <= end + 0.08
+        ]
+        slot_pause_items = [
+            item
+            for item in pause_items or []
+            if (
+                start + 0.035 <= item.get("time", -999) <= end - 0.025
+                or start + 0.035 <= item.get("left", -999) <= end - 0.025
+                or start + 0.035 <= item.get("right", -999) <= end - 0.025
+            )
+        ]
+        valley_depth = max((item.get("depth", 0) for item in slot_valleys), default=0.0)
+        strength = max((item.get("strength", 0) for item in slot_peak_items), default=0) / max_peak if max_peak > 0 and slot_peak_items else 0.48
+        strength = clamp_number(strength, 0.18, 1.0)
+        activity_segments = lyrics_feature_activity_segments(start, end, feature_samples, valley_depth)
+        activity_bounds = lyrics_activity_bounds_from_segments(activity_segments)
+        activity_end = None
+        if activity_bounds:
+            activity_end = clamp_number(
+                activity_bounds.get("end", end) + min(0.06, max(0.024, slot * 0.11)),
+                start + 0.055,
+                end,
+            )
+
+        syllables = lyrics_word_syllable_count(word)
+        fill_ratio = 0.78 + min(0.1, max(0, syllables - 1) * 0.04)
+        clean = lyrics_clean_word(word)
+        if lyrics_light_word(clean):
+            fill_ratio = min(fill_ratio, 0.62)
+        if len(slot_peak_items) >= 2:
+            fill_ratio = max(fill_ratio, 0.84)
+        if punctuation_pause > 0:
+            fill_ratio = min(fill_ratio, 0.7)
+        if strength > 0.72:
+            fill_ratio = max(0.62, fill_ratio - 0.08)
+        if valley_depth > 0.55:
+            fill_ratio = max(0.58, fill_ratio - min(0.14, valley_depth * 0.12))
+
+        fill_end = start + slot * fill_ratio
+        fill_end = min(fill_end, end - min(0.025, slot * 0.16))
+        if punctuation_pause > 0:
+            fill_end = min(fill_end, end - min(slot * 0.28, punctuation_pause))
+        if valley_depth > 0.55:
+            fill_end = min(fill_end, end - min(slot * 0.22, 0.08 + valley_depth * 0.08))
+        minimum_fill = min(slot * 0.88, max(0.09, slot * 0.58))
+        if lyrics_light_word(clean):
+            minimum_fill = min(slot * 0.78, max(0.07, slot * 0.52))
+        if activity_end is not None:
+            voiced_floor = max(0.075, min(slot * 0.94, activity_end - start + min(0.018, slot * 0.07)))
+            ratio_floor = slot * (0.34 if lyrics_light_word(clean) else 0.4)
+            activity_floor = max(voiced_floor, ratio_floor)
+            activity_progress = (activity_end - start) / max(0.055, slot)
+            if activity_progress < 0.48 and len(activity_segments) <= 1:
+                minimum_fill = min(minimum_fill, activity_floor)
+            else:
+                minimum_fill = max(minimum_fill, activity_floor)
+        fill_end = max(start + minimum_fill, fill_end)
+        fill_end = min(fill_end, end)
+        if activity_end is not None:
+            adjust_threshold = max(0.018, slot * 0.045)
+            if activity_end < fill_end - adjust_threshold:
+                fill_end = max(start + minimum_fill, activity_end)
+            elif activity_end > fill_end + max(0.026, slot * 0.065):
+                latest_fill_end = end - min(0.008, slot * 0.045)
+                if latest_fill_end > fill_end:
+                    pull = 0.88 if strength >= 0.48 else 0.72
+                    target = clamp_number(activity_end, fill_end, latest_fill_end)
+                    fill_end = fill_end * (1 - pull) + target * pull
+        if activity_segments:
+            tail_segment = activity_segments[-1]
+            tail_start = float(tail_segment.get("start", end))
+            tail_end = float(tail_segment.get("end", tail_start))
+            if tail_end > fill_end and tail_start >= fill_end - max(0.035, slot * 0.08):
+                tail_target = min(end - min(0.004, slot * 0.025), tail_end)
+                if tail_target > fill_end:
+                    fill_end = tail_target
+        if index == 0 and math.isfinite(line_first_activity) and line_first_activity > start + 0.045:
+            latest_fill_end = end - min(0.018, slot * 0.12)
+            if line_first_activity < latest_fill_end:
+                guarded_fill_end = line_first_activity + clamp_number(slot * 0.16, 0.024, 0.055)
+                fill_end = max(fill_end, min(guarded_fill_end, latest_fill_end))
+        attack = clamp_number(0.42 + strength * 0.42 - valley_depth * 0.12, 0.28, 0.92)
+        curve = "strong" if strength > 0.72 else "soft"
+        if valley_depth > 0.58 or punctuation_pause > 0:
+            curve = "punctuated"
+        word_first_activity = math.nan
+        if activity_bounds:
+            word_first_activity = activity_bounds.get("start", math.nan)
+        if index == 0 and not math.isfinite(word_first_activity) and math.isfinite(line_first_activity):
+            word_first_activity = line_first_activity
+        fill_points = lyrics_word_fill_points(
+            start,
+            fill_end,
+            word,
+            slot_peak_items,
+            valley_depth,
+            strength,
+            feature_samples,
+            word_first_activity,
+            slot_pause_items,
+            activity_segments,
+        )
+        if len(fill_points) > 2:
+            curve = "articulated"
+
+        hold_duration = max(0.0, end - fill_end)
+        hold_strength = clamp_number(
+            (hold_duration - max(0.055, slot * 0.16)) / max(0.075, slot * 0.42),
+            0.0,
+            1.0,
+        )
+        hold_gate = clamp_number(
+            (hold_duration - max(0.025, slot * 0.055)) / max(0.055, slot * 0.24),
+            0.0,
+            1.0,
+        )
+        valley_break_strength = clamp_number((valley_depth - 0.78) / 0.22, 0.0, 1.0) * (0.28 + hold_gate * 0.72)
+        punctuation_strength = clamp_number(punctuation_pause / 0.22, 0.0, 1.0)
+        pause_strength = max(
+            (
+                clamp_number(item.get("depth", 0.0), 0.0, 1.0)
+                for item in slot_pause_items
+                if item.get("gap", 0.0) >= 0.052
+            ),
+            default=0.0,
+        )
+        break_strength = max(punctuation_strength, hold_strength, valley_break_strength, pause_strength)
+
+        spans.append({
+            "word": word,
+            "start": round(start, 3),
+            "fillEnd": round(fill_end, 3),
+            "end": round(end, 3),
+            "strength": round(strength, 3),
+            "valley": round(valley_depth, 3),
+            "attack": round(attack, 3),
+            "curve": curve,
+            "profile": "gated-cumulative" if feature_samples else "peak",
+            "syllables": syllables,
+            "fillPoints": fill_points,
+            "hold": round(hold_duration, 3),
+            "breakStrength": round(break_strength, 3),
+            "groupBreak": bool(break_strength >= 0.28),
+        })
+        if activity_bounds:
+            spans[-1]["activityStart"] = round(activity_bounds.get("start", start), 3)
+            spans[-1]["activityEnd"] = round(activity_bounds.get("end", end), 3)
+            spans[-1]["activitySegments"] = [
+                {
+                    "start": round(segment.get("start", start), 3),
+                    "end": round(segment.get("end", end), 3),
+                    "peakTime": round(segment.get("peakTime", segment.get("start", start)), 3),
+                    "peak": round(segment.get("peak", 0.0), 3),
+                }
+                for segment in activity_segments[:10]
+            ]
+    return spans
+
+
+def music_lyrics_analysis(relative_path):
+    path = music_path_from_relative(relative_path)
+    lyrics_path = lyrics_path_from_music_path(path)
+    if not lyrics_path:
+        raise ValueError("lyrics file was not found")
+
+    cached = read_music_analysis_cache(path, lyrics_path)
+    if cached:
+        cached = dict(cached)
+        cached["manualMarks"] = music_lyric_marks_for_path(path)
+        return cached
+
+    rows = parsed_timed_lyrics(lyrics_path)
+    audio = decoded_music_flux(path)
+    hop_seconds = audio["hopSeconds"]
+    rms = audio["rms"]
+    flux = audio["flux"]
+    articulation = audio.get("articulation", flux)
+    speech_flow = audio.get("speechFlow", articulation)
+    line_timings = []
+    for index, row in enumerate(rows):
+        start = float(row["time"])
+        next_time = float(rows[index + 1]["time"]) if index + 1 < len(rows) else math.nan
+        initial_gap = next_time - start if math.isfinite(next_time) else math.nan
+        rough_duration = 0.24 if row.get("rest") else lyrics_base_fill_duration(row["text"], initial_gap)
+        start_offset = 0.0 if row.get("rest") else line_start_offset(articulation, speech_flow, start, rough_duration, hop_seconds)
+        if not row.get("rest"):
+            start_offset = line_activity_start_offset(row["text"], speech_flow, start, start_offset, rough_duration, hop_seconds)
+        analysis_start = start + start_offset
+        if math.isfinite(next_time) and analysis_start > next_time - 0.18:
+            analysis_start = start
+            start_offset = 0.0
+        line_timings.append({
+            "start": start,
+            "nextRawTime": next_time,
+            "analysisStart": analysis_start,
+            "startOffset": start_offset,
+            "roughDuration": rough_duration,
+        })
+
+    for index in range(len(line_timings) - 1):
+        next_analysis_start = line_timings[index + 1]["analysisStart"]
+        if math.isfinite(next_analysis_start) and line_timings[index]["analysisStart"] > next_analysis_start - 0.18:
+            line_timings[index]["analysisStart"] = line_timings[index]["start"]
+            line_timings[index]["startOffset"] = 0.0
+
+    lines = []
+    for index, row in enumerate(rows):
+        timing = line_timings[index]
+        start = timing["start"]
+        analysis_start = timing["analysisStart"]
+        start_offset = timing["startOffset"]
+        next_time = line_timings[index + 1]["analysisStart"] if index + 1 < len(line_timings) else math.nan
+        if not math.isfinite(next_time):
+            next_time = timing["nextRawTime"]
+        gap = next_time - analysis_start if math.isfinite(next_time) else math.nan
+        if row.get("rest"):
+            duration = clamp_number(gap if math.isfinite(gap) else 0.4, 0.18, 1.2)
+            wave_end = next_time if math.isfinite(next_time) else min(audio["duration"], analysis_start + duration + 0.4)
+            lines.append({
+                "index": index,
+                "text": "",
+                "rest": True,
+                "time": round(start, 3),
+                "analysisTime": round(analysis_start, 3),
+                "startOffset": round(start_offset, 3),
+                "duration": round(duration, 3),
+                "wordTimes": [],
+                "wordSpans": [],
+                "peakTimes": [],
+                "energyPeakTimes": [],
+                "valleyTimes": [],
+                "flowValleyTimes": [],
+                "pauseBoundaryTimes": [],
+                "waveform": lyrics_waveform_window(speech_flow, rms, start - 0.2, wave_end + 0.2, hop_seconds, audio["duration"]),
+                "confidence": 1.0,
+                "feature": "rest",
+            })
+            continue
+        duration = lyrics_base_fill_duration(row["text"], gap)
+        probe_duration = lyrics_duration_probe_window(gap, duration)
+        probe_valleys = line_energy_valleys(rms, analysis_start, probe_duration, hop_seconds)
+        duration = lyrics_adjust_fill_duration_with_valleys(duration, gap, probe_valleys)
+        probe_duration = lyrics_duration_probe_window(gap, duration)
+        probe_feature_samples = line_feature_samples(speech_flow, analysis_start, probe_duration, hop_seconds)
+        duration = lyrics_adjust_fill_duration_with_activity(row["text"], duration, gap, probe_feature_samples)
+        peaks = line_flux_peaks(articulation, analysis_start, duration, hop_seconds, threshold_percent=66, min_distance_seconds=0.075)
+        energy_peaks = line_flux_peaks(flux, analysis_start, duration, hop_seconds)
+        valleys = line_energy_valleys(rms, analysis_start, duration, hop_seconds)
+        flow_valleys = line_feature_valleys(speech_flow, analysis_start, duration, hop_seconds)
+        boundary_valleys = sorted([*valleys, *flow_valleys], key=lambda item: item.get("time", 0))
+        feature_samples = line_feature_samples(speech_flow, analysis_start, duration, hop_seconds)
+        pause_boundaries = lyrics_feature_pause_boundaries(feature_samples, duration)
+        boundaries = lyrics_word_boundaries(row["text"], duration, peaks, boundary_valleys, feature_samples)
+        word_spans = lyrics_word_spans(row["text"], duration, boundaries, peaks, boundary_valleys, feature_samples, pause_boundaries)
+        wave_end = next_time if math.isfinite(next_time) else min(audio["duration"], analysis_start + duration + 0.8)
+        waveform = lyrics_waveform_window(
+            speech_flow,
+            rms,
+            min(start, analysis_start) - 0.25,
+            max(wave_end, analysis_start + duration) + 0.25,
+            hop_seconds,
+            audio["duration"]
+        )
+        lines.append({
+            "index": index,
+            "text": row["text"],
+            "time": round(start, 3),
+            "analysisTime": round(analysis_start, 3),
+            "startOffset": round(start_offset, 3),
+            "duration": round(duration, 3),
+            "wordTimes": boundaries,
+            "wordSpans": word_spans,
+            "peakTimes": [round(item["time"], 3) for item in peaks[:16]],
+            "energyPeakTimes": [round(item["time"], 3) for item in energy_peaks[:16]],
+            "valleyTimes": [round(item["time"], 3) for item in valleys[:16]],
+            "flowValleyTimes": [round(item["time"], 3) for item in flow_valleys[:16]],
+            "pauseBoundaryTimes": [round(item["time"], 3) for item in pause_boundaries[:16]],
+            "pauseBoundaryDetails": [
+                {
+                    "time": round(item.get("time", 0.0), 3),
+                    "depth": round(item.get("depth", 0.0), 3),
+                    "gap": round(item.get("gap", 0.0), 3),
+                    "left": round(item.get("left", item.get("time", 0.0)), 3),
+                    "right": round(item.get("right", item.get("time", 0.0)), 3),
+                }
+                for item in pause_boundaries[:16]
+            ],
+            "waveform": waveform,
+            "confidence": round(clamp_number(len(peaks) / max(1, len(lyrics_word_tokens(row["text"]))), 0, 1), 3),
+            "feature": "speechFlow",
+        })
+
+    analysis = {
+        "ok": True,
+        "path": Path(path).relative_to(MUSIC_DIR).as_posix(),
+        "lyricsPath": Path(lyrics_path).relative_to(MUSIC_DIR).as_posix(),
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "method": "rms-edge-speechflow-first-word-pulse-fill-v88",
+        "sampleRate": audio["sampleRate"],
+        "hopSeconds": hop_seconds,
+        "duration": round(audio["duration"], 3),
+        "lines": lines,
+    }
+    write_music_analysis_cache(path, lyrics_path, analysis)
+    analysis = dict(analysis)
+    analysis["manualMarks"] = music_lyric_marks_for_path(path)
+    return analysis
 
 
 def clean_music_stem(stem):
@@ -3751,18 +7133,38 @@ def list_music():
 
 def upload_music(files):
     saved = []
+    saved_paths = []
+    saved_lyrics = []
     for item in files:
-        target = unique_music_path(item.get("filename", ""))
+        filename = item.get("filename", "")
         data = item.get("data", b"")
         if not data:
             continue
+        suffix = Path(str(filename or "")).suffix.lower()
+        if suffix in LYRICS_EXTENSIONS:
+            target = lyrics_upload_path(filename)
+            target.write_bytes(data)
+            saved_lyrics.append({
+                "name": target.name,
+                "path": target.relative_to(MUSIC_DIR).as_posix(),
+                "type": target.suffix.lower().lstrip("."),
+            })
+            continue
+
+        target = unique_music_path(filename)
         target.write_bytes(data)
+        saved_paths.append(target)
         saved.append(music_track_from_path(target))
 
-    if not saved:
-        raise ValueError("no music files were uploaded")
+    if not saved and not saved_lyrics:
+        raise ValueError("no music or lyric files were uploaded")
 
-    return {"ok": True, "files": saved, "tracks": list_music()}
+    downloaded_lyrics = cache_lyrics_for_music_paths(saved_paths)
+    tracks = list_music()
+    if saved_paths:
+        saved = refresh_track_records_for_paths(saved_paths, tracks)
+
+    return {"ok": True, "files": saved, "lyrics": saved_lyrics + downloaded_lyrics, "tracks": tracks}
 
 
 def sanitize_console_module_id(value):
@@ -3832,6 +7234,10 @@ def sanitize_string_list(value):
     return result
 
 
+def sanitize_state_path(value):
+    return str(value or "").replace("\\", "/").lstrip("/").strip()
+
+
 def read_music_state():
     try:
         raw = json.loads(MUSIC_STATE_FILE.read_text(encoding="utf-8"))
@@ -3839,11 +7245,14 @@ def read_music_state():
         raw = {}
     if not isinstance(raw, dict):
         raw = {}
-    return {
+    state = {
         "tiers": sanitize_string_map(raw.get("tiers")),
         "order": sanitize_string_list(raw.get("order")),
         "promotedLibraryTracks": sanitize_string_map(raw.get("promotedLibraryTracks")),
     }
+    if "selectedTrackPath" in raw:
+        state["selectedTrackPath"] = sanitize_state_path(raw.get("selectedTrackPath"))
+    return state
 
 
 def music_state_payload_version(payload):
@@ -3856,22 +7265,30 @@ def music_state_payload_version(payload):
 def write_music_state(payload):
     previous = read_music_state()
     current = dict(previous)
+    stale_client = False
     if isinstance(payload, dict):
         if "tiers" in payload:
             next_tiers = sanitize_string_map(payload.get("tiers"))
             if previous.get("tiers") and not next_tiers:
-                return {"ok": False, "staleClient": True, "state": previous}
-            current["tiers"] = next_tiers
+                stale_client = True
+            else:
+                current["tiers"] = next_tiers
         if "order" in payload:
-            current["order"] = sanitize_string_list(payload.get("order"))
+            next_order = sanitize_string_list(payload.get("order"))
+            if previous.get("order") and not next_order:
+                stale_client = True
+            else:
+                current["order"] = next_order
         if "promotedLibraryTracks" in payload:
             current["promotedLibraryTracks"] = sanitize_string_map(payload.get("promotedLibraryTracks"))
+        if "selectedTrackPath" in payload:
+            current["selectedTrackPath"] = sanitize_state_path(payload.get("selectedTrackPath"))
 
     MUSIC_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     if previous != current:
         MUSIC_STATE_BACKUP_FILE.write_text(json.dumps(previous, ensure_ascii=False, indent=2), encoding="utf-8")
     MUSIC_STATE_FILE.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"ok": True, "state": current}
+    return {"ok": not stale_client, "staleClient": stale_client, "state": current}
 
 
 def local_music_path_for_display_name(display_name):
@@ -4207,12 +7624,18 @@ def import_music_url(url, use_browser_cookies=False):
         raise ValueError(friendly_yt_dlp_error(str(error))) from error
 
     files, tracks = imported_music_files(before)
+    imported_paths = [(MUSIC_DIR / item["path"]).resolve() for item in files if item.get("path")]
+    downloaded_lyrics = cache_lyrics_for_music_paths(imported_paths)
+    if downloaded_lyrics:
+        tracks = list_music()
+        files = refresh_track_records_for_paths(imported_paths, tracks)
 
     return {
         "ok": True,
         "provider": music_url_provider(clean_url),
         "url": clean_url,
         "files": files,
+        "lyrics": downloaded_lyrics,
         "tracks": tracks,
         "directory": str(MUSIC_DIR),
         "cookies": youtube_cookie_state(),
@@ -4248,7 +7671,8 @@ def write_music_library_records(records):
 def music_track_from_path(path):
     stat = path.stat()
     rel = path.relative_to(MUSIC_DIR).as_posix()
-    return {
+    lyrics_path = lyrics_path_from_music_path(path)
+    record = {
         "name": display_music_name(path.stem),
         "path": rel,
         "url": "/music/" + urllib.parse.quote(rel),
@@ -4256,6 +7680,11 @@ def music_track_from_path(path):
         "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
         "type": path.suffix.lower().lstrip("."),
     }
+    if lyrics_path:
+        record["lyrics"] = True
+        record["lyricsType"] = lyrics_path.suffix.lower().lstrip(".")
+        record["lyricsUrl"] = "/api/music/lyrics?path=" + urllib.parse.quote(rel)
+    return record
 
 
 def library_tracks_for_record(record, hide_local_duplicates=True):
@@ -5987,6 +9416,7 @@ def open_console_window(url):
 
 
 def main():
+    global ACTIVE_SERVER
     parser = argparse.ArgumentParser(description="Codex Console")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -6006,6 +9436,7 @@ def main():
     port = pick_port(args.port)
     url = console_start_url(port).replace("127.0.0.1", local_host, 1)
     server = ThreadingHTTPServer((args.host, port), ConsoleHandler)
+    ACTIVE_SERVER = server
 
     if sys.stdout:
         print()
@@ -6025,6 +9456,7 @@ def main():
         pass
     finally:
         server.server_close()
+        ACTIVE_SERVER = None
 
 
 if __name__ == "__main__":

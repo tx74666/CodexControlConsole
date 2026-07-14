@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -12,7 +12,14 @@
   <link rel="icon" type="image/png" sizes="48x48" href="codex-resource-icon-48.png?v=codex-clear-4">
   <link rel="icon" type="image/png" sizes="32x32" href="codex-resource-icon-32.png?v=codex-clear-4">
   <link rel="manifest" href="site.webmanifest?v=codex-clear-4">
-  <link rel="stylesheet" href="styles.css?v=control-console-479">
+  <script>
+    (() => {
+      if (window.localStorage.getItem("codexControl.tutorialMode.v1") === "true") {
+        document.documentElement.classList.add("tutorial-mode");
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css?v=control-console-643">
 </head>
 <body>
   <main class="app-shell workspace-shell">
@@ -37,10 +44,13 @@
             <div class="section-label">GitHub</div>
             <h2 id="workspaceTitle" data-i18n="githubDownloadsTitle">GitHub 下载</h2>
           </div>
-          <span id="githubDownloadsStatus" class="workspace-pill" data-i18n="githubDownloadsStatus">待连接</span>
+          <div class="panel-actions">
+            <button id="tutorialModeToggle" class="ghost-button tutorial-toggle" type="button" aria-pressed="false" data-i18n="tutorialModeToggle">教程模式</button>
+            <span id="githubDownloadsStatus" class="workspace-pill" data-i18n="githubDownloadsStatus">待连接</span>
+          </div>
         </div>
 
-        <p class="github-download-copy" data-i18n="githubDownloadsBody">
+        <p class="github-download-copy tutorial-only" data-i18n="githubDownloadsBody">
           打开 Codex World 的 GitHub Releases 下载页。
         </p>
 
@@ -69,6 +79,6 @@
     </section>
   </main>
 
-  <script src="app.js?v=control-console-479"></script>
+<script src="app.js?v=control-console-643"></script>
 </body>
 </html>

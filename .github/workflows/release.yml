@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v0.2.1
+        description: Release version, for example v0.3.0
         required: true
-        default: v0.2.1
+        default: v0.3.0
   push:
     tags:
       - "v*"
@@ -27,7 +27,7 @@ jobs:
         run: |
           $tag = "${{ github.event.inputs.version || github.ref_name }}"
           if ([string]::IsNullOrWhiteSpace($tag)) {
-            $tag = "v0.2.1"
+            $tag = "v0.3.0"
           }
           if (-not $tag.StartsWith("v")) {
             $tag = "v$tag"
@@ -63,6 +63,32 @@ jobs:
       - name: Collect Android APK
         run: cp android/app/build/outputs/apk/debug/app-debug.apk dist/CodexControlConsole-android.apk
 
+      - name: Create SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist -File | Where-Object { $_.Extension -in ".zip", ".apk" }
+          foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)" | Set-Content -LiteralPath "$($file.FullName).sha256" -Encoding utf8
+          }
+
+          $assets = foreach ($file in $files) {
+            [ordered]@{
+              name = $file.Name
+              url = "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/$($file.Name)"
+              size = $file.Length
+              sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            }
+          }
+          $manifest = [ordered]@{
+            version = $env:RELEASE_VERSION
+            tag = $env:RELEASE_TAG
+            releaseUrl = "https://github.com/${{ github.repository }}/releases/tag/$env:RELEASE_TAG"
+            publishedAt = (Get-Date).ToUniversalTime().ToString("o")
+            assets = @($assets)
+          }
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath dist/update-manifest.json -Encoding utf8
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -73,6 +99,8 @@ jobs:
             dist/CodexControlConsole-developer-windows.zip
             dist/CodexControlConsole-lite-windows.zip
             dist/CodexControlConsole-android.apk
+            dist/*.sha256
+            dist/update-manifest.json
           body: |
             ## Start Here
 
@@ -91,3 +119,5 @@ jobs:
             3. Double-click `Start-ControlConsole.vbs`.
 
             For Android, run `Start-ControlConsole-LAN.vbs` on the PC first, then open the APK and enter the PC LAN URL.
+
+            Windows portable builds now check GitHub automatically. Updates are verified with the attached SHA-256 files before installation, and each Windows user keeps separate local data.

@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -43,9 +43,12 @@
       if (page === "index.html" && href && href !== page && allowedModules.has(lastModule) && !deletedModules.includes(lastModule)) {
         window.history.replaceState({ moduleId: lastModule }, "", href + window.location.search + window.location.hash);
       }
+      if (window.localStorage.getItem("codexControl.tutorialMode.v1") === "true") {
+        document.documentElement.classList.add("tutorial-mode");
+      }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-479">
+  <link rel="stylesheet" href="styles.css?v=control-console-643">
 </head>
 <body>
   <main class="app-shell">
@@ -57,6 +60,7 @@
         </div>
       </div>
       <div class="top-actions" aria-label="Console status">
+        <button id="consoleUpdateTop" class="status-button console-update-top" type="button" hidden></button>
         <button id="languageToggle" class="status-button" type="button">EN</button>
         <button id="themeToggle" class="status-button" type="button">暗色</button>
         <div class="time-stack">
@@ -129,7 +133,7 @@
             <span data-i18n="managerDesktopLayoutValue">待接入桌面图标快照</span>
           </button>
         </div>
-        <p class="manager-hint" data-i18n="managerLayoutHint">拖动 tab 改变顺序，拖到 Archive 只会收纳，不会删除。</p>
+        <p class="manager-hint tutorial-only" data-i18n="managerLayoutHint">拖动 tab 改变顺序，拖到 Archive 只会收纳，不会删除。</p>
       </section>
     </section>
 
@@ -140,12 +144,32 @@
             <div class="section-label">GitHub</div>
             <h2 id="workspaceTitle" data-i18n="githubDownloadsTitle">GitHub 下载</h2>
           </div>
+          <div class="panel-actions">
+            <button id="tutorialModeToggle" class="ghost-button tutorial-toggle" type="button" aria-pressed="false" data-i18n="tutorialModeToggle">教程模式</button>
+          </div>
         </div>
 
         <div class="github-download-actions">
           <a class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer">Codex Console</a>
           <a class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer">Codex World</a>
         </div>
+
+        <div class="console-update-bar">
+          <div class="console-update-copy">
+            <span id="consoleUpdateCurrent" class="workspace-pill">v0.3.0</span>
+            <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
+            <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
+          </div>
+          <div class="console-update-controls">
+            <label class="console-update-toggle">
+              <input id="consoleUpdateAuto" type="checkbox" checked>
+              <span data-i18n="consoleUpdateAuto">自动</span>
+            </label>
+            <button id="consoleUpdateRefresh" class="icon-button console-update-refresh" type="button" title="检查更新" aria-label="检查更新" data-i18n-aria="consoleUpdateRefresh">&#x21bb;</button>
+            <button id="consoleUpdateInstall" class="ghost-button primary-action" type="button" hidden data-i18n="consoleUpdateInstall">更新</button>
+          </div>
+        </div>
+        <p id="consoleUpdateError" class="console-update-error" role="status" aria-live="polite" hidden></p>
       </article>
 
       <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
@@ -207,7 +231,7 @@
           <span id="randomRealmReleaseStatusText" class="workspace-pill" data-i18n="randomRealmOpenReady">就绪</span>
         </div>
 
-        <p class="randomrealm-note" data-i18n="randomRealmReleaseBody">Steamworks、发布包、宣传素材和工程入口。</p>
+        <p class="randomrealm-note tutorial-only" data-i18n="randomRealmReleaseBody">Steamworks、发布包、宣传素材和工程入口。</p>
 
         <div class="randomrealm-release-actions">
           <button id="openSteamworks" class="ghost-button primary-action" type="button" data-i18n="randomRealmSteamworks">Steamworks 后台</button>
@@ -226,7 +250,7 @@
           <span class="workspace-pill" data-i18n="randomRealmSurfaceStatus">Reserved</span>
         </div>
 
-        <p class="randomrealm-note" data-i18n="randomRealmSurfaceBody">Reserved for ground pages, building placement, scene checks, and export actions.</p>
+        <p class="randomrealm-note tutorial-only" data-i18n="randomRealmSurfaceBody">Reserved for ground pages, building placement, scene checks, and export actions.</p>
 
         <div class="tool-slot-grid">
           <div class="tool-slot">
@@ -278,7 +302,16 @@
     </section>
 
     <section class="blender-workspace" data-module-panel="blender" aria-label="Blender" hidden>
-      <article class="panel randomrealm-art-panel">
+      <div class="blender-shell">
+        <div class="blender-subnav" role="tablist" aria-label="Blender workspace">
+          <span class="blender-subtab-drop" aria-hidden="true"></span>
+          <button id="blenderHelperTab" class="blender-subtab active" type="button" role="tab" aria-selected="true" aria-controls="blenderHelperView" data-blender-view-target="helper" data-i18n="blenderHelperTab">Helper</button>
+          <button id="blenderBuilderTab" class="blender-subtab" type="button" role="tab" aria-selected="false" aria-controls="blenderBuilderView" data-blender-view-target="builder" data-i18n="blenderBuilderTab">Builder</button>
+        </div>
+
+        <div class="blender-view-stage">
+        <section id="blenderBuilderView" class="blender-subview" data-blender-view="builder" role="tabpanel" aria-labelledby="blenderBuilderTab" hidden>
+          <article class="panel randomrealm-art-panel">
         <div class="panel-head">
           <div>
             <div class="section-label" data-i18n="blenderSectionLabel">Blender</div>
@@ -394,9 +427,9 @@
           </div>
           <p id="randomRealmArtStatus" class="tool-status wide" data-i18n="randomRealmArtReady">Ready</p>
         </div>
-      </article>
+          </article>
 
-      <article id="blenderPromptPanel" class="panel blender-prompt-panel" hidden>
+          <article id="blenderPromptPanel" class="panel blender-prompt-panel">
         <div class="panel-head">
           <div>
             <div class="section-label" data-i18n="blenderSectionLabel">Blender</div>
@@ -446,7 +479,79 @@
           </label>
           <p id="blenderPromptStatus" class="tool-status wide" data-i18n="randomRealmArtReady">Ready</p>
         </div>
-      </article>
+          </article>
+        </section>
+
+        <section id="blenderHelperView" class="blender-subview active" data-blender-view="helper" role="tabpanel" aria-labelledby="blenderHelperTab">
+          <article class="panel blender-helper-panel">
+            <div class="panel-head">
+              <div>
+                <div class="section-label" data-i18n="blenderSectionLabel">Blender</div>
+                <h2 data-i18n="blenderHelperTitle">Helper Hub</h2>
+              </div>
+              <span class="workspace-pill" data-i18n="blenderHelperBadge">Map</span>
+            </div>
+
+            <div class="blender-hub-grid">
+              <button class="blender-hub-card active" type="button" data-blender-view-jump="builder">
+                <span class="blender-hub-kicker" data-i18n="blenderHubReady">Ready</span>
+                <strong data-i18n="blenderHubBuilderTitle">Builder Workbench</strong>
+                <small data-i18n="blenderHubBuilderBody">Textures, prompt building, selected object.</small>
+              </button>
+              <article class="blender-hub-card">
+                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
+                <strong data-i18n="blenderHubBuildingTitle">Building Projects</strong>
+                <small data-i18n="blenderHubBuildingBody">Blocks, modules, placement rules.</small>
+              </article>
+              <article class="blender-hub-card">
+                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
+                <strong data-i18n="blenderHubCharacterTitle">Character Lab</strong>
+                <small data-i18n="blenderHubCharacterBody">Characters, outfits, material checks.</small>
+              </article>
+              <article class="blender-hub-card">
+                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
+                <strong data-i18n="blenderHubAnimationTitle">Animation</strong>
+                <small data-i18n="blenderHubAnimationBody">Actions, timeline, export rhythm.</small>
+              </article>
+              <article class="blender-hub-card">
+                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
+                <strong data-i18n="blenderHubTextureTitle">Texture Lab</strong>
+                <small data-i18n="blenderHubTextureBody">PBR, size checks, replacement packs.</small>
+              </article>
+              <article class="blender-hub-card">
+                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
+                <strong data-i18n="blenderHubBridgeTitle">Unity Bridge</strong>
+                <small data-i18n="blenderHubBridgeBody">Export, temp folder, import checks.</small>
+              </article>
+            </div>
+          </article>
+
+          <article id="blenderGithubSharePanel" class="panel blender-github-panel">
+            <div class="panel-head blender-github-head">
+              <h2>
+                <span data-i18n="blenderGithubTitle">GitHub Coop</span>
+                <span id="blenderGithubState" class="blender-github-state-dot" data-state="loading" title="Loading"></span>
+              </h2>
+              <div class="blender-github-head-tools">
+                <select id="blenderGithubProject" class="blender-github-project-picker" aria-label="Blender project" data-i18n-aria="blenderGithubProjectLabel"></select>
+                <button id="blenderGithubRefresh" class="icon-button blender-github-refresh" type="button" title="Refresh Git status" aria-label="Refresh Git status" data-i18n-aria="blenderGithubRefreshTitle">&#x21bb;</button>
+              </div>
+            </div>
+
+            <div id="blenderGithubBlendCards" class="blender-github-blend-cards" role="listbox" aria-label="Blend files" data-i18n-aria="blenderGithubBlendFilesLabel"></div>
+
+            <div class="blender-github-dock">
+              <nav class="blender-github-links" aria-label="Project links" data-i18n-aria="blenderGithubLinksLabel">
+                <button id="blenderGithubDesktop" class="blender-github-link" type="button" data-i18n="blenderGithubDesktop">GitHub Desktop</button>
+                <button id="blenderGithubFolder" class="blender-github-link" type="button" data-i18n="blenderGithubFolder">Files</button>
+                <button id="blenderGithubOpen" class="blender-github-link" type="button" data-i18n="blenderGithubOpenShort">GitHub</button>
+              </nav>
+            </div>
+            <p id="blenderGithubStatus" class="blender-github-notice" role="status" aria-live="polite" hidden></p>
+          </article>
+        </section>
+        </div>
+      </div>
     </section>
 
     <section class="unity-workspace" data-module-panel="unity" aria-labelledby="unityTitle" hidden>
@@ -459,7 +564,7 @@
           <span id="unityStatusText" class="workspace-pill" data-i18n="randomRealmOpenReady">Ready</span>
         </div>
 
-        <p class="randomrealm-note" data-i18n="unityControlBody">RandomRealm2 project entry points, promo assets, and Unity-side pre-release checks.</p>
+        <p class="randomrealm-note tutorial-only" data-i18n="unityControlBody">RandomRealm2 project entry points, promo assets, and Unity-side pre-release checks.</p>
 
         <div class="randomrealm-focus">
           <div>
@@ -493,7 +598,7 @@
             <span data-i18n="unityBridgeTempLabel">Temp</span>
             <strong id="unityBridgeTempPath">Assets/~Temp/BlenderBridge</strong>
           </div>
-          <p class="randomrealm-note" data-i18n="unityBridgeBody">Blender exports into Unity temp; the RandomRealm importer consumes that temp output and categorizes it into Builder assets.</p>
+          <p class="randomrealm-note tutorial-only" data-i18n="unityBridgeBody">Blender exports into Unity temp; the RandomRealm importer consumes that temp output and categorizes it into Builder assets.</p>
         </div>
       </article>
     </section>
@@ -510,30 +615,33 @@
         <div class="randomrealm-release-actions steamwork-actions">
           <button id="openSteamworkDashboard" class="ghost-button primary-action" type="button" data-i18n="steamworkDashboard">Steamworks</button>
           <button id="openSteamworkGameContent" class="ghost-button" type="button" data-i18n="steamworkGameContent">Content</button>
-          <button id="openSteamworkPublishTool" class="ghost-button" type="button" data-i18n="steamworkPublishTool">SteamPipeGUI</button>
+          <button id="openSteamworkPublishTool" class="ghost-button" type="button" data-i18n="steamworkPublishTool">SteamPipe GUI</button>
           <button id="openSteamworkArtAsset" class="ghost-button" type="button" data-i18n="steamworkArtAssets">Assets</button>
         </div>
 
-        <div class="steamwork-assets" aria-label="Steamwork asset checklist">
-          <div class="steamwork-assets-head">
+        <details class="steamwork-assets" aria-label="Steamwork asset checklist">
+          <summary class="steamwork-assets-head">
             <div>
               <span data-i18n="steamworkAssetsLabel">Assets</span>
               <h3 data-i18n="steamworkAssetsTitle">Steam asset checklist</h3>
               <small id="steamworkAssetRoot" class="steamwork-asset-root"></small>
             </div>
             <span id="steamworkAssetSummary" class="workspace-pill" data-i18n="steamworkAssetLoading">Loading assets</span>
-          </div>
+          </summary>
           <div id="steamworkAssetList" class="steamwork-asset-list">
             <div class="steamwork-empty" data-i18n="steamworkAssetLoading">Loading assets</div>
           </div>
-        </div>
+        </details>
 
-        <details class="steamwork-tips" aria-label="Steamwork publish tips">
+        <details class="steamwork-tips" aria-label="Steamwork publish tips" open>
           <summary>
             <span data-i18n="steamworkTipsLabel">Tips</span>
           </summary>
+          <div class="steamwork-tip-section-head">
+            <span data-i18n="steamworkStepsSection">Steps</span>
+          </div>
           <div class="steamwork-table-wrap">
-            <table class="steamwork-tip-table">
+            <table class="steamwork-tip-table tutorial-aware">
               <thead>
                 <tr>
                   <th data-i18n="steamworkStepColumn">Step</th>
@@ -549,12 +657,25 @@
                 </tr>
                 <tr>
                   <td data-i18n="steamworkStepUpload">2. Upload</td>
-                  <td data-i18n="steamworkTipPipe">Open SteamPipe Build Uploader, fill fields, then upload.</td>
+                  <td>
+                    <span class="steamwork-tip-action">
+                      <span data-i18n="steamworkTipOpenPrefix">Use </span>
+                      <button id="openSteamworkPublishToolTip" class="steamwork-inline-link" type="button" data-i18n="steamworkPublishTool">SteamPipe GUI</button>
+                      <span data-i18n="steamworkTipPipe">to fill fields and upload.</span>
+                      <button id="locateSteamworkPublishTool" class="steamwork-inline-link secondary tutorial-only" type="button" data-i18n="steamworkPublishToolLocate">Locate .exe</button>
+                    </span>
+                  </td>
                   <td data-i18n="steamworkUploadNote">PC + Mobile confirmation.</td>
                 </tr>
                 <tr>
                   <td data-i18n="steamworkStepRenewDepot">3. Renew Depot</td>
-                  <td data-i18n="steamworkTipRenewDepot">In Steamworks web, renew/update the depot and set the generated build live.</td>
+                  <td>
+                    <span class="steamwork-tip-action">
+                      <span data-i18n="steamworkTipOpenPrefix">Use </span>
+                      <button id="openSteamworkBuildsTip" class="steamwork-inline-link" type="button" data-i18n="steamworkBuildsLink">Steamworks Builds</button>
+                      <span data-i18n="steamworkTipRenewDepot">to set the uploaded build live.</span>
+                    </span>
+                  </td>
                   <td data-i18n="steamworkRenewDepotNote">PC + Mobile confirmation.</td>
                 </tr>
                 <tr>
@@ -566,6 +687,9 @@
             </table>
           </div>
 
+          <div class="steamwork-tip-section-head info">
+            <span data-i18n="steamworkAppInfoSection">App Info</span>
+          </div>
           <div class="steamwork-table-wrap">
             <table class="steamwork-tip-table compact">
               <thead>
@@ -672,10 +796,12 @@
 
         <div class="music-player">
           <div class="music-now">
-            <div class="track-art" aria-hidden="true">♫</div>
-            <div>
+            <button id="nowPlayingArt" class="track-art" type="button" aria-label="Lyrics" aria-expanded="false">♫</button>
+            <div class="music-now-body">
               <span data-i18n="nowPlayingLabel">当前播放</span>
-              <strong id="currentTrackName">未选择</strong>
+              <div class="music-now-title-row">
+                <strong id="currentTrackName">未选择</strong>
+              </div>
               <p id="currentTrackMeta" data-i18n="musicEmptyBody">加入 mp3、wav、m4a、flac、ogg、opus。</p>
             </div>
           </div>
@@ -699,6 +825,30 @@
             <span data-i18n="volumeLabel">音量</span>
             <input id="trackVolume" type="range" min="0" max="1" step="0.01" value="0.8">
           </label>
+
+          <section id="nowPlayingLyricsPanel" class="now-playing-lyrics-panel" hidden>
+            <div id="nowPlayingLyricsList" class="music-lyrics-list"></div>
+            <p id="nowPlayingLyricsStatus" class="music-lyrics-status" data-i18n="lyricsEmpty">这首歌还没有歌词文件。</p>
+            <div id="lyricsTimingEditor" class="lyrics-timing-editor" hidden>
+              <div class="lyrics-timing-head">
+                <span id="lyricsTimingTarget" class="lyrics-timing-target" data-i18n="lyricsTimingPick">Triple right-click the same lyric line to open timing editor (WIP).</span>
+                <button id="lyricsTimingClose" class="lyrics-timing-close" type="button" data-i18n-aria="lyricsTimingClose">x</button>
+              </div>
+              <div class="lyrics-timing-fields">
+                <label>
+                  <span data-i18n="lyricsTimingStartLabel">Start</span>
+                  <input id="lyricsTimingStartInput" type="text" inputmode="decimal" autocomplete="off" data-i18n-placeholder="lyricsTimingTimePlaceholder">
+                </label>
+                <label>
+                  <span data-i18n="lyricsTimingEndLabel">End</span>
+                  <input id="lyricsTimingEndInput" type="text" inputmode="decimal" autocomplete="off" data-i18n-placeholder="lyricsTimingTimePlaceholder">
+                </label>
+              </div>
+              <div class="lyrics-timing-actions">
+                <button type="button" data-lyrics-action="select-line" data-i18n="lyricsTimingSelectLine">Select line</button>
+              </div>
+            </div>
+          </section>
         </div>
 
       </article>
@@ -729,7 +879,7 @@
   </main>
 
   <input id="wallpaperFileInput" class="visually-hidden" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp" multiple>
-  <input id="musicFileInput" class="visually-hidden" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus" multiple>
+  <input id="musicFileInput" class="visually-hidden" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.lrc,.txt,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus,text/plain" multiple>
   <input id="musicCookieFileInput" class="visually-hidden" type="file" accept=".txt,text/plain">
   <input id="workzoneFileInput" class="visually-hidden" type="file" accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp" multiple>
   <input id="randomRealmTextureFileInput" class="visually-hidden" type="file" multiple accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp">
@@ -738,6 +888,6 @@
   <input id="steamworkAssetFileInput" class="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
   <audio id="audioPlayer" preload="metadata"></audio>
 
-  <script src="app.js?v=control-console-479"></script>
+<script src="app.js?v=control-console-643"></script>
 </body>
 </html>
