@@ -10,6 +10,11 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - main
+    paths:
+      - app-manifest.json
+      - .github/workflows/release.yml
 
 permissions:
   contents: write
@@ -25,7 +30,14 @@ jobs:
       - name: Resolve version
         shell: pwsh
         run: |
-          $tag = "${{ github.event.inputs.version || github.ref_name }}"
+          $tag = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($tag) -and "${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $manifest = Get-Content -Raw app-manifest.json | ConvertFrom-Json
+            $tag = "v$($manifest.version)"
+          }
           if ([string]::IsNullOrWhiteSpace($tag)) {
             $tag = "v0.3.1"
           }
@@ -93,6 +105,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
           name: Codex Console ${{ env.RELEASE_TAG }}
           files: |
             dist/CodexControlConsole-windows.zip
