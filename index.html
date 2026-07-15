@@ -48,7 +48,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-647">
+  <link rel="stylesheet" href="styles.css?v=control-console-648">
 </head>
 <body>
   <main class="app-shell">
@@ -156,7 +156,7 @@
 
         <div class="console-update-bar">
           <div class="console-update-copy">
-            <span id="consoleUpdateCurrent" class="workspace-pill">v0.3.0</span>
+            <span id="consoleUpdateCurrent" class="workspace-pill">v0.3.2</span>
             <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
             <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
           </div>
@@ -170,6 +170,31 @@
           </div>
         </div>
         <p id="consoleUpdateError" class="console-update-error" role="status" aria-live="polite" hidden></p>
+      </article>
+
+      <article class="panel desktop-layout-panel" aria-labelledby="desktopLayoutTitle">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Windows</div>
+            <h2 id="desktopLayoutTitle" data-i18n="desktopLayoutTitle">桌面布局</h2>
+          </div>
+          <span id="desktopLayoutLocalOnly" class="workspace-pill" data-i18n="desktopLayoutLocalOnly">仅本机</span>
+        </div>
+
+        <div class="desktop-layout-controls">
+          <select id="desktopLayoutPlan" aria-label="桌面布局方案" data-i18n-aria="desktopLayoutPlanLabel" disabled></select>
+          <button id="desktopLayoutRestore" class="ghost-button primary-action" type="button" data-i18n="desktopLayoutRestore" disabled>恢复</button>
+          <button id="desktopLayoutSave" class="ghost-button" type="button" data-i18n="desktopLayoutSave" disabled>保存当前版</button>
+          <button id="desktopLayoutImport" class="ghost-button" type="button" data-i18n="desktopLayoutImport">导入</button>
+          <input id="desktopLayoutFileInput" type="file" accept="application/json,.json" multiple hidden>
+        </div>
+
+        <div class="desktop-layout-summary">
+          <strong id="desktopLayoutMeta" data-i18n="desktopLayoutLoading">正在读取本机方案</strong>
+          <span id="desktopLayoutStatus" role="status" aria-live="polite"></span>
+        </div>
+        <p id="desktopLayoutPath" class="desktop-layout-path tutorial-only"></p>
+        <p class="desktop-layout-guide tutorial-only" data-i18n="desktopLayoutGuide">恢复后会自动检查重叠、缺失和位置偏差。保存当前版会先备份原 JSON；方案与备份不会上传。</p>
       </article>
 
       <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
@@ -892,6 +917,6 @@
   <input id="steamworkAssetFileInput" class="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
   <audio id="audioPlayer" preload="metadata"></audio>
 
-<script src="app.js?v=control-console-647"></script>
+<script src="app.js?v=control-console-648"></script>
 </body>
 </html>

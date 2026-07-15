@@ -24,7 +24,7 @@ Lite opens with only Wallpaper and Music. Developer opens with Manager, Console,
 
 ## Updates
 
-Portable Windows builds check the latest GitHub release in the background. When a newer version is available, choose **Update** in Console; Codex Console downloads the matching Lite or Developer ZIP, verifies its SHA-256 checksum and app manifest, installs it, and restarts.
+Portable Windows builds check the latest GitHub release in the background. When a newer version is available, a prominent **Update vX.X.X** control appears in the top bar. Codex Console downloads the matching Lite or Developer ZIP, verifies its SHA-256 checksum and app manifest, installs it, and restarts.
 
 Updates are never installed silently. A source checkout opens the release page instead of overwriting the repository.
 
@@ -37,6 +37,10 @@ Each Windows account keeps its own settings, indexes, cookies, and update files 
 ```
 
 The extracted program folder can therefore be shared without mixing users' runtime data. Set `CODEX_CONTROL_DATA_DIR` to use a different per-user location. No installation identifier or usage data is sent anywhere.
+
+## Desktop Layouts
+
+Console can save, import, and restore Windows desktop icon layouts. Every plan is local to the current device under `%LOCALAPPDATA%\CodexControlConsole\desktop-layout`; layout JSON and backups are excluded from source control and release packages. Saving a plan always creates a timestamped backup first, and restoring checks for missing, shifted, or overlapping icons.
 
 ## Android
 
@@ -59,7 +63,7 @@ Use LAN mode only on a trusted network.
 ## Build Locally
 
 ```powershell
-.\tools\package-desktop.ps1 -Version 0.3.0 -OutputDir dist
+.\tools\package-desktop.ps1 -Version 0.3.2 -OutputDir dist
 ```
 
 The package script builds the developer ZIP, the lite ZIP, and the compatibility Windows ZIP. Runtime cache, cookies, downloaded music, and local browser profiles are not included.
@@ -84,6 +88,12 @@ To verify archive validation, rollback, and per-user update storage:
 
 ```powershell
 python .\tools\check-console-update.py
+```
+
+To verify desktop layout isolation, backup behavior, imports, and restore checks without moving real desktop icons:
+
+```powershell
+python .\tools\check-desktop-layout.py
 ```
 
 Blender > Helper > GitHub Coop lists the repositories in `github-coop.json`, even before they exist locally. Double-clicking a cloud card opens GitHub Desktop's Clone flow; double-clicking a downloaded card opens its local repository. After cloning to a custom location, use `+` once to select the `.blend` file so Console can bind the cloud card to that local checkout. GitHub Desktop handles authentication, Fetch/Pull, commits, and Push; tutorial mode shows the short collaboration sequence. The Files link is enabled only after a local checkout exists, while the GitHub link always opens the repository page.

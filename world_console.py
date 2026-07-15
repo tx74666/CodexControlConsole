@@ -7,6 +7,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import html
 import io
+import ipaddress
 import json
 import math
 import mimetypes
@@ -36,6 +37,7 @@ from blender_github_share import (
     is_blender_discovery_file,
 )
 from console_update import ConsoleUpdateService
+from desktop_layout import DesktopLayoutService
 
 
 def hidden_subprocess_kwargs():
@@ -221,6 +223,7 @@ BLENDER_GITHUB_SHARE = BlenderGithubShareService(
     live_selection_file=BLENDER_LIVE_SELECTION_FILE,
     live_selection_max_age=BLENDER_LIVE_SELECTION_MAX_AGE_SECONDS,
 )
+DESKTOP_LAYOUT = DesktopLayoutService(APP_DIR)
 STEAMWORKS_APP_ID = os.environ.get("CODEX_CONTROL_STEAMWORKS_APP_ID", "3983670").strip() or "3983670"
 STEAMWORKS_URL = os.environ.get("CODEX_CONTROL_STEAMWORKS_URL", f"https://partner.steamgames.com/apps/landing/{STEAMWORKS_APP_ID}")
 STEAMWORKS_BUILDS_URL = os.environ.get("CODEX_CONTROL_STEAMWORKS_BUILDS_URL", f"https://partner.steamgames.com/apps/builds/{STEAMWORKS_APP_ID}")
@@ -359,6 +362,7 @@ MAX_MUSIC_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_WORKZONE_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_STEAMWORK_UPLOAD_BYTES = 1024 * 1024 * 1024
 MAX_COOKIE_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_DESKTOP_LAYOUT_UPLOAD_BYTES = 8 * 1024 * 1024
 GOOGLE_TRANSLATE_ENDPOINT = "https://translation.googleapis.com/language/translate/v2"
 TRANSLATION_TARGET = "zh-TW"
 MUSIC_LIBRARY_LOCK = threading.Lock()
@@ -636,6 +640,18 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(APP_DIR), **kwargs)
 
+    def require_local_request(self):
+        try:
+            address = ipaddress.ip_address(str(self.client_address[0]).split("%", 1)[0])
+            if getattr(address, "ipv4_mapped", None):
+                address = address.ipv4_mapped
+            allowed = address.is_loopback
+        except ValueError:
+            allowed = False
+        if not allowed:
+            self.send_json({"error": "Desktop layouts are available on this PC only."}, status=403)
+        return allowed
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path.startswith("/api/wallpapers"):
@@ -742,6 +758,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 force=query.get("force", [""])[0].lower() in {"1", "true", "yes"},
             ))
             return
+        if parsed.path == "/api/console/desktop-layout":
+            if not self.require_local_request():
+                return
+            self.send_json(DESKTOP_LAYOUT.status())
+            return
         if parsed.path == "/api/workspace/github-downloads":
             self.send_json(github_downloads_state())
             return
@@ -813,6 +834,13 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/steamwork/publish-tool/upload":
                 self.send_json(import_steamwork_files("publishTool", self.read_multipart_files(MAX_STEAMWORK_UPLOAD_BYTES)))
+                return
+            if parsed.path == "/api/console/desktop-layout/import":
+                if not self.require_local_request():
+                    return
+                self.send_json(DESKTOP_LAYOUT.import_layouts(
+                    self.read_multipart_files(MAX_DESKTOP_LAYOUT_UPLOAD_BYTES)
+                ))
                 return
             if parsed.path.startswith("/api/steamwork/assets/stage/"):
                 requirement_id = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1])
@@ -964,6 +992,21 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/console/update/open":
                 self.send_json(CONSOLE_UPDATE.open_release())
+                return
+            if parsed.path == "/api/console/desktop-layout/select":
+                if not self.require_local_request():
+                    return
+                self.send_json(DESKTOP_LAYOUT.select(payload))
+                return
+            if parsed.path == "/api/console/desktop-layout/save":
+                if not self.require_local_request():
+                    return
+                self.send_json(DESKTOP_LAYOUT.save(payload))
+                return
+            if parsed.path == "/api/console/desktop-layout/restore":
+                if not self.require_local_request():
+                    return
+                self.send_json(DESKTOP_LAYOUT.restore(payload))
                 return
             if parsed.path == "/api/hotkey/start":
                 self.send_json(start_hotkey_listener())

@@ -190,6 +190,32 @@ const i18n = {
     tutorialModeToggle: "教程模式",
     tutorialModeOn: "教程模式已打开：显示说明和辅助入口",
     tutorialModeOff: "教程模式已关闭：只保留关键入口",
+    desktopLayoutTitle: "\u684c\u9762\u5e03\u5c40",
+    desktopLayoutLocalOnly: "\u4ec5\u672c\u673a",
+    desktopLayoutPlanLabel: "\u684c\u9762\u5e03\u5c40\u65b9\u6848",
+    desktopLayoutRememberedPlan: "\u5f53\u524d\u6b63\u5f0f\u5e03\u5c40",
+    desktopLayoutDevicePlan: "\u672c\u673a\u5f53\u524d\u684c\u9762",
+    desktopLayoutRestore: "\u6062\u590d",
+    desktopLayoutSave: "\u4fdd\u5b58\u5f53\u524d\u7248",
+    desktopLayoutImport: "\u5bfc\u5165",
+    desktopLayoutLoading: "\u6b63\u5728\u8bfb\u53d6\u672c\u673a\u65b9\u6848",
+    desktopLayoutEmpty: "\u8fd8\u6ca1\u6709\u5e03\u5c40\u65b9\u6848",
+    desktopLayoutMeta: (icons, plans) => `${icons} \u4e2a\u56fe\u6807 \u00b7 ${plans} \u4e2a\u65b9\u6848`,
+    desktopLayoutReady: "\u5c31\u7eea",
+    desktopLayoutNotSaved: "\u5c1a\u672a\u4fdd\u5b58",
+    desktopLayoutInvalid: "JSON \u4e0d\u53ef\u7528",
+    desktopLayoutToolMissing: "\u672a\u627e\u5230\u5e03\u5c40\u5de5\u5177",
+    desktopLayoutImporting: "\u6b63\u5728\u5bfc\u5165",
+    desktopLayoutImported: count => `\u5df2\u5bfc\u5165 ${count} \u4e2a\u65b9\u6848`,
+    desktopLayoutRestoring: "\u6b63\u5728\u6062\u590d\u5e76\u68c0\u67e5",
+    desktopLayoutRestored: "\u5df2\u6062\u590d\uff0c\u68c0\u67e5\u901a\u8fc7",
+    desktopLayoutRestoreIssues: (missing, mismatches, overlaps) => `\u5df2\u6062\u590d \u00b7 \u7f3a\u5931 ${missing} \u00b7 \u504f\u5dee ${mismatches} \u00b7 \u91cd\u53e0 ${overlaps}`,
+    desktopLayoutSaving: "\u6b63\u5728\u5907\u4efd\u5e76\u4fdd\u5b58",
+    desktopLayoutSaved: "\u5df2\u5907\u4efd\u5e76\u4fdd\u5b58",
+    desktopLayoutFailed: message => `\u684c\u9762\u5e03\u5c40\u5931\u8d25\uff1a${message}`,
+    desktopLayoutConfirmRestore: name => `\u4f7f\u7528\u201c${name}\u201d\u6062\u590d\u684c\u9762\u56fe\u6807\u4f4d\u7f6e\uff1f`,
+    desktopLayoutConfirmSave: name => `\u5148\u5907\u4efd\u539f JSON\uff0c\u518d\u7528\u5f53\u524d\u684c\u9762\u8986\u76d6\u201c${name}\u201d\uff1f`,
+    desktopLayoutGuide: "\u6062\u590d\u540e\u4f1a\u81ea\u52a8\u68c0\u67e5\u91cd\u53e0\u3001\u7f3a\u5931\u548c\u4f4d\u7f6e\u504f\u5dee\u3002\u4fdd\u5b58\u5f53\u524d\u7248\u4f1a\u5148\u5907\u4efd\u539f JSON\uff1b\u65b9\u6848\u4e0e\u5907\u4efd\u4e0d\u4f1a\u4e0a\u4f20\u3002",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
     blenderHelperTab: "Helper",
@@ -746,6 +772,7 @@ const i18n = {
     consoleUpdateInstall: "更新",
     consoleUpdateDownload: "下载",
     consoleUpdateRelease: "Release",
+    consoleUpdateTop: version => `Update v${version}`,
     consoleUpdateInstalling: "正在下载并校验",
     consoleUpdateRestarting: "即将重启",
     consoleUpdateConfirm: version => `更新到 v${version} 后 Codex Console 会自动重启。现在更新？`,
@@ -830,6 +857,32 @@ const i18n = {
     tutorialModeToggle: "Tutorial Mode",
     tutorialModeOn: "Tutorial mode is on: showing guidance and helper actions",
     tutorialModeOff: "Tutorial mode is off: showing only key actions",
+    desktopLayoutTitle: "Desktop Layout",
+    desktopLayoutLocalOnly: "This device",
+    desktopLayoutPlanLabel: "Desktop layout plan",
+    desktopLayoutRememberedPlan: "Remembered current",
+    desktopLayoutDevicePlan: "Current desktop",
+    desktopLayoutRestore: "Restore",
+    desktopLayoutSave: "Save current",
+    desktopLayoutImport: "Import",
+    desktopLayoutLoading: "Reading local plans",
+    desktopLayoutEmpty: "No desktop layout plans yet",
+    desktopLayoutMeta: (icons, plans) => `${icons} icons · ${plans} plans`,
+    desktopLayoutReady: "Ready",
+    desktopLayoutNotSaved: "Not saved yet",
+    desktopLayoutInvalid: "Invalid JSON",
+    desktopLayoutToolMissing: "Layout tool not found",
+    desktopLayoutImporting: "Importing",
+    desktopLayoutImported: count => `Imported ${count} plans`,
+    desktopLayoutRestoring: "Restoring and checking",
+    desktopLayoutRestored: "Restored; checks passed",
+    desktopLayoutRestoreIssues: (missing, mismatches, overlaps) => `Restored · ${missing} missing · ${mismatches} shifted · ${overlaps} overlaps`,
+    desktopLayoutSaving: "Backing up and saving",
+    desktopLayoutSaved: "Backed up and saved",
+    desktopLayoutFailed: message => `Desktop layout failed: ${message}`,
+    desktopLayoutConfirmRestore: name => `Restore desktop icon positions from “${name}”?`,
+    desktopLayoutConfirmSave: name => `Back up the JSON, then replace “${name}” with the current desktop?`,
+    desktopLayoutGuide: "Restore checks overlaps, missing icons, and position drift. Save current always backs up the existing JSON first. Plans and backups are never uploaded.",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
     blenderHelperTab: "Helper",
@@ -1386,6 +1439,7 @@ const i18n = {
     consoleUpdateInstall: "Update",
     consoleUpdateDownload: "Download",
     consoleUpdateRelease: "Release",
+    consoleUpdateTop: version => `Update v${version}`,
     consoleUpdateInstalling: "Downloading and verifying",
     consoleUpdateRestarting: "Restarting",
     consoleUpdateConfirm: version => `Codex Console will restart after updating to v${version}. Update now?`,
@@ -1494,6 +1548,14 @@ const els = {
   managerArchivedTabs: document.getElementById("managerArchivedTabs"),
   managerLayoutOrder: document.getElementById("managerLayoutOrder"),
   tutorialModeToggle: document.getElementById("tutorialModeToggle"),
+  desktopLayoutPlan: document.getElementById("desktopLayoutPlan"),
+  desktopLayoutRestore: document.getElementById("desktopLayoutRestore"),
+  desktopLayoutSave: document.getElementById("desktopLayoutSave"),
+  desktopLayoutImport: document.getElementById("desktopLayoutImport"),
+  desktopLayoutFileInput: document.getElementById("desktopLayoutFileInput"),
+  desktopLayoutMeta: document.getElementById("desktopLayoutMeta"),
+  desktopLayoutStatus: document.getElementById("desktopLayoutStatus"),
+  desktopLayoutPath: document.getElementById("desktopLayoutPath"),
   localTime: document.getElementById("localTime"),
   languageToggle: document.getElementById("languageToggle"),
   themeToggle: document.getElementById("themeToggle"),
@@ -1789,6 +1851,11 @@ let blenderGithubDropCommitted = false;
 let githubDownloadsInfo = null;
 let consoleUpdateState = null;
 let consoleUpdateBusy = false;
+let desktopLayoutState = null;
+let desktopLayoutBusy = false;
+let desktopLayoutNotice = "";
+let desktopLayoutNoticeTone = "";
+let desktopLayoutDetail = "";
 let pendingSteamworkAssetSlot = "";
 let steamworkThumbsEnabled = false;
 let workspaceTodoGroups = loadWorkspaceTodos();
@@ -2057,6 +2124,7 @@ async function loadModuleData(id) {
     case "workspace":
       if (hasWorkspace) await loadGithubDownloadsInfo();
       if (els.consoleUpdateStatus) await loadConsoleUpdateStatus({ check: true, quiet: true });
+      if (els.desktopLayoutPlan) await loadDesktopLayout({ quiet: true });
       if (hasMaterialWorkspace && downloadIntakeEnabled) await loadMaterialCandidates();
       break;
     case "blender":
@@ -3717,6 +3785,7 @@ function applyLanguage() {
   if (hasWorkspace) {
     renderGithubDownloads();
     renderConsoleUpdate();
+    renderDesktopLayout();
     renderWorkspaceTodos();
   }
   if (hasRandomRealmArtTools()) {
@@ -10538,7 +10607,7 @@ async function openGithubDownloads() {
 function renderConsoleUpdate() {
   if (!els.consoleUpdateStatus) return;
   const state = consoleUpdateState || {};
-  const current = String(state.currentVersion || "0.3.0").replace(/^v/i, "");
+  const current = String(state.currentVersion || "0.3.2").replace(/^v/i, "");
   const latest = String(state.latestVersion || "").replace(/^v/i, "");
   if (els.consoleUpdateCurrent) {
     els.consoleUpdateCurrent.textContent = `v${current}`;
@@ -10571,7 +10640,7 @@ function renderConsoleUpdate() {
   if (els.consoleUpdateTop) {
     els.consoleUpdateTop.hidden = !state.available;
     els.consoleUpdateTop.disabled = consoleUpdateBusy;
-    els.consoleUpdateTop.textContent = state.available ? `v${latest} \u2191` : "";
+    els.consoleUpdateTop.textContent = state.available ? text("consoleUpdateTop", latest) : "";
     els.consoleUpdateTop.title = state.available ? text("consoleUpdateAvailable", latest) : "";
   }
   if (els.consoleUpdateError) {
@@ -10639,6 +10708,215 @@ async function installConsoleUpdate() {
     consoleUpdateState = { ...(consoleUpdateState || {}), error: error.message };
     consoleUpdateBusy = false;
     renderConsoleUpdate();
+  }
+}
+
+function selectedDesktopLayoutPlan() {
+  const plans = Array.isArray(desktopLayoutState?.plans) ? desktopLayoutState.plans : [];
+  const selectedId = els.desktopLayoutPlan?.value || desktopLayoutState?.selectedPlan || "";
+  return plans.find(plan => plan.id === selectedId) || plans.find(plan => plan.selected) || plans[0] || null;
+}
+
+function desktopLayoutPlanName(plan) {
+  if (plan?.source === "remembered") return text("desktopLayoutRememberedPlan");
+  if (plan?.source === "device") return text("desktopLayoutDevicePlan");
+  return plan?.name || "";
+}
+
+function renderDesktopLayout() {
+  if (!els.desktopLayoutPlan) return;
+  const plans = Array.isArray(desktopLayoutState?.plans) ? desktopLayoutState.plans : [];
+  const selectedId = desktopLayoutState?.selectedPlan || plans.find(plan => plan.selected)?.id || "";
+  const currentIds = Array.from(els.desktopLayoutPlan.options).map(option => option.value).join("\n");
+  const nextIds = plans.map(plan => plan.id).join("\n");
+  if (currentIds !== nextIds) {
+    els.desktopLayoutPlan.replaceChildren(...plans.map(plan => {
+      const option = document.createElement("option");
+      option.value = plan.id;
+      option.textContent = desktopLayoutPlanName(plan);
+      return option;
+    }));
+  } else {
+    Array.from(els.desktopLayoutPlan.options).forEach((option, index) => {
+      if (plans[index]) option.textContent = desktopLayoutPlanName(plans[index]);
+    });
+  }
+  if (selectedId && plans.some(plan => plan.id === selectedId)) {
+    els.desktopLayoutPlan.value = selectedId;
+  }
+
+  const selected = selectedDesktopLayoutPlan();
+  const toolAvailable = desktopLayoutState?.tool?.available !== false;
+  const canRestore = Boolean(selected?.exists && selected?.valid && toolAvailable && !desktopLayoutBusy);
+  const canSave = Boolean(selected && toolAvailable && !desktopLayoutBusy);
+  els.desktopLayoutPlan.disabled = desktopLayoutBusy || !plans.length;
+  if (els.desktopLayoutRestore) els.desktopLayoutRestore.disabled = !canRestore;
+  if (els.desktopLayoutSave) els.desktopLayoutSave.disabled = !canSave;
+  if (els.desktopLayoutImport) els.desktopLayoutImport.disabled = desktopLayoutBusy;
+
+  if (els.desktopLayoutMeta) {
+    els.desktopLayoutMeta.textContent = selected
+      ? text("desktopLayoutMeta", selected.iconCount || 0, plans.length)
+      : text("desktopLayoutEmpty");
+  }
+  if (els.desktopLayoutPath) {
+    els.desktopLayoutPath.textContent = desktopLayoutDetail || selected?.path || desktopLayoutState?.dataDirectory || "";
+    els.desktopLayoutPath.title = els.desktopLayoutPath.textContent;
+  }
+  if (els.desktopLayoutStatus) {
+    let status = desktopLayoutNotice;
+    let tone = desktopLayoutNoticeTone;
+    if (!status) {
+      if (!toolAvailable) {
+        status = text("desktopLayoutToolMissing");
+        tone = "warning";
+      } else if (selected && !selected.exists) {
+        status = text("desktopLayoutNotSaved");
+      } else if (selected && !selected.valid) {
+        status = text("desktopLayoutInvalid");
+        tone = "warning";
+      } else if (selected) {
+        status = text("desktopLayoutReady");
+        tone = "success";
+      }
+    }
+    els.desktopLayoutStatus.textContent = status;
+    els.desktopLayoutStatus.classList.toggle("success", tone === "success");
+    els.desktopLayoutStatus.classList.toggle("warning", tone === "warning");
+  }
+}
+
+async function loadDesktopLayout(options = {}) {
+  if (!els.desktopLayoutPlan || desktopLayoutBusy) return;
+  desktopLayoutBusy = true;
+  if (!options.quiet) {
+    desktopLayoutNotice = text("desktopLayoutLoading");
+    desktopLayoutNoticeTone = "";
+  }
+  renderDesktopLayout();
+  try {
+    const response = await fetch("/api/console/desktop-layout", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    desktopLayoutState = payload;
+    desktopLayoutNotice = "";
+    desktopLayoutNoticeTone = "";
+  } catch (error) {
+    desktopLayoutNotice = text("desktopLayoutFailed", error.message);
+    desktopLayoutNoticeTone = "warning";
+  } finally {
+    desktopLayoutBusy = false;
+    renderDesktopLayout();
+  }
+}
+
+async function selectDesktopLayoutPlan() {
+  if (!els.desktopLayoutPlan || desktopLayoutBusy) return;
+  desktopLayoutBusy = true;
+  desktopLayoutNotice = "";
+  renderDesktopLayout();
+  try {
+    desktopLayoutState = await postJson("/api/console/desktop-layout/select", {
+      planId: els.desktopLayoutPlan.value
+    });
+    desktopLayoutDetail = "";
+  } catch (error) {
+    desktopLayoutNotice = text("desktopLayoutFailed", error.message);
+    desktopLayoutNoticeTone = "warning";
+  } finally {
+    desktopLayoutBusy = false;
+    renderDesktopLayout();
+  }
+}
+
+async function restoreDesktopLayout() {
+  const plan = selectedDesktopLayoutPlan();
+  if (!plan || desktopLayoutBusy) return;
+  if (!window.confirm(text("desktopLayoutConfirmRestore", desktopLayoutPlanName(plan)))) return;
+  desktopLayoutBusy = true;
+  desktopLayoutNotice = text("desktopLayoutRestoring");
+  desktopLayoutNoticeTone = "";
+  desktopLayoutDetail = plan.path;
+  renderDesktopLayout();
+  try {
+    desktopLayoutState = await postJson("/api/console/desktop-layout/restore", {
+      planId: plan.id
+    }, { timeoutMs: 180000 });
+    const verification = desktopLayoutState.verification || {};
+    if (verification.healthy) {
+      desktopLayoutNotice = text("desktopLayoutRestored");
+      desktopLayoutNoticeTone = "success";
+    } else {
+      desktopLayoutNotice = text(
+        "desktopLayoutRestoreIssues",
+        verification.missing?.length || 0,
+        verification.mismatches?.length || 0,
+        verification.overlaps?.length || 0
+      );
+      desktopLayoutNoticeTone = "warning";
+    }
+    desktopLayoutDetail = verification.snapshot || plan.path;
+  } catch (error) {
+    desktopLayoutNotice = text("desktopLayoutFailed", error.message);
+    desktopLayoutNoticeTone = "warning";
+  } finally {
+    desktopLayoutBusy = false;
+    renderDesktopLayout();
+  }
+}
+
+async function saveDesktopLayout() {
+  const plan = selectedDesktopLayoutPlan();
+  if (!plan || desktopLayoutBusy) return;
+  if (!window.confirm(text("desktopLayoutConfirmSave", desktopLayoutPlanName(plan)))) return;
+  desktopLayoutBusy = true;
+  desktopLayoutNotice = text("desktopLayoutSaving");
+  desktopLayoutNoticeTone = "";
+  desktopLayoutDetail = plan.path;
+  renderDesktopLayout();
+  try {
+    desktopLayoutState = await postJson("/api/console/desktop-layout/save", {
+      planId: plan.id
+    }, { timeoutMs: 180000 });
+    desktopLayoutNotice = text("desktopLayoutSaved");
+    desktopLayoutNoticeTone = "success";
+    desktopLayoutDetail = desktopLayoutState.backup || desktopLayoutState.saved || plan.path;
+  } catch (error) {
+    desktopLayoutNotice = text("desktopLayoutFailed", error.message);
+    desktopLayoutNoticeTone = "warning";
+  } finally {
+    desktopLayoutBusy = false;
+    renderDesktopLayout();
+  }
+}
+
+async function importDesktopLayouts(files) {
+  const selectedFiles = Array.from(files || []);
+  if (!selectedFiles.length || desktopLayoutBusy) return;
+  desktopLayoutBusy = true;
+  desktopLayoutNotice = text("desktopLayoutImporting");
+  desktopLayoutNoticeTone = "";
+  renderDesktopLayout();
+  try {
+    const formData = new FormData();
+    selectedFiles.forEach(file => formData.append("files", file, file.name));
+    const response = await fetch("/api/console/desktop-layout/import", {
+      method: "POST",
+      body: formData
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    desktopLayoutState = payload;
+    desktopLayoutNotice = text("desktopLayoutImported", payload.imported?.length || 0);
+    desktopLayoutNoticeTone = "success";
+    desktopLayoutDetail = payload.plans?.find(plan => plan.id === payload.selectedPlan)?.path || "";
+  } catch (error) {
+    desktopLayoutNotice = text("desktopLayoutFailed", error.message);
+    desktopLayoutNoticeTone = "warning";
+  } finally {
+    desktopLayoutBusy = false;
+    if (els.desktopLayoutFileInput) els.desktopLayoutFileInput.value = "";
+    renderDesktopLayout();
   }
 }
 
@@ -16245,6 +16523,21 @@ if (els.consoleUpdateInstall) {
 if (els.consoleUpdateTop) {
   els.consoleUpdateTop.addEventListener("click", installConsoleUpdate);
 }
+if (els.desktopLayoutPlan) {
+  els.desktopLayoutPlan.addEventListener("change", selectDesktopLayoutPlan);
+}
+if (els.desktopLayoutRestore) {
+  els.desktopLayoutRestore.addEventListener("click", restoreDesktopLayout);
+}
+if (els.desktopLayoutSave) {
+  els.desktopLayoutSave.addEventListener("click", saveDesktopLayout);
+}
+if (els.desktopLayoutImport) {
+  els.desktopLayoutImport.addEventListener("click", () => els.desktopLayoutFileInput?.click());
+}
+if (els.desktopLayoutFileInput) {
+  els.desktopLayoutFileInput.addEventListener("change", event => importDesktopLayouts(event.target.files));
+}
 if (hasWorkspace && els.addWorkspaceTodo) {
   els.addWorkspaceTodo.addEventListener("click", addWorkspaceTodo);
 }
@@ -16318,4 +16611,5 @@ renderBlenderPromptBuilder();
 runtimeActivityReady = true;
 syncRuntimeActivity({ resume: true });
 loadConsoleUpdateStatus({ check: true, quiet: true });
+loadDesktopLayout({ quiet: true });
 scheduleClockTick();

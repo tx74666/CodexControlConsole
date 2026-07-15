@@ -3,6 +3,10 @@ cache/
 __pycache__/
 *.pyc
 
+# Per-device desktop icon layouts must never enter source or release archives
+desktop-layout/
+desktop-layout*.json
+
 # Local media libraries and private downloads
 music/
 wallpapers/*

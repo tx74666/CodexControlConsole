@@ -11,6 +11,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, "..");
 const baseUrl = new URL(process.argv[2] || "http://127.0.0.1:8898/");
 const delay = milliseconds => new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
+let expectedAppVersion = "";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -42,8 +43,11 @@ function staticChecks() {
   );
   assert(existsSync(join(projectRoot, "console_update.py")), "console updater backend is missing");
   assert(existsSync(join(projectRoot, "tools", "apply_update.py")), "portable update helper is missing");
+  assert(existsSync(join(projectRoot, "desktop_layout.py")), "desktop layout backend is missing");
+  assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.3.1", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.3.2", `unexpected app version: ${manifest.version}`);
+  expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   return Array.from(versions)[0];
 }
@@ -225,7 +229,7 @@ async function runBrowserChecks(client) {
 
   await waitForValue(
     () => evaluate(client, "document.querySelector('#consoleUpdateCurrent')?.textContent?.trim() || ''"),
-    value => value === "v0.3.0",
+    value => value === `v${expectedAppVersion}`,
     "update status did not load the current version",
     25000,
     120
@@ -236,8 +240,83 @@ async function runBrowserChecks(client) {
     controls: Boolean(document.querySelector('#consoleUpdateRefresh') && document.querySelector('#consoleUpdateInstall')),
     topVisible: document.querySelector('#consoleUpdateTop')?.getBoundingClientRect().width > 0
   })`);
-  assert(updateState.current === "v0.3.0" && typeof updateState.auto === "boolean" && updateState.controls, `update controls are incomplete: ${JSON.stringify(updateState)}`);
+  assert(updateState.current === `v${expectedAppVersion}` && typeof updateState.auto === "boolean" && updateState.controls, `update controls are incomplete: ${JSON.stringify(updateState)}`);
   assert(!updateState.topVisible, `inactive update control still occupies the top bar: ${JSON.stringify(updateState)}`);
+
+  const updateBannerState = await evaluate(client, `(() => {
+    const original = consoleUpdateState;
+    consoleUpdateState = {
+      currentVersion: '0.3.1',
+      latestVersion: '0.3.2',
+      available: true,
+      autoCheck: true,
+      canInstall: false,
+      releaseUrl: 'https://github.com/tx74666/CodexControlConsole/releases/tag/v0.3.2'
+    };
+    renderConsoleUpdate();
+    const button = document.querySelector('#consoleUpdateTop');
+    const available = {
+      visible: !button?.hidden && button?.getBoundingClientRect().width > 0,
+      text: button?.textContent?.trim() || '',
+      width: button?.getBoundingClientRect().width || 0,
+      releaseVisible: !document.querySelector('#consoleUpdateRelease')?.hidden
+    };
+    consoleUpdateState = { ...consoleUpdateState, latestVersion: '0.3.1', available: false };
+    renderConsoleUpdate();
+    const hiddenWhenCurrent = Boolean(button?.hidden);
+    consoleUpdateState = original;
+    renderConsoleUpdate();
+    return { available, hiddenWhenCurrent };
+  })()`);
+  assert(
+    updateBannerState.available.visible
+      && /^Update v0\.3\.2$/i.test(updateBannerState.available.text)
+      && updateBannerState.available.width >= 120
+      && updateBannerState.available.releaseVisible
+      && updateBannerState.hiddenWhenCurrent,
+    `top update area does not reflect version availability: ${JSON.stringify(updateBannerState)}`
+  );
+
+  await clickModule(client, "workspace");
+  await waitForValue(
+    () => evaluate(client, `({
+      plans: document.querySelectorAll('#desktopLayoutPlan option').length,
+      busy: document.querySelector('#desktopLayoutImport')?.disabled || false
+    })`),
+    value => value.plans > 0 && !value.busy,
+    "device-local desktop layout plan did not load",
+    10000,
+    100
+  );
+  const desktopLayoutUi = await evaluate(client, `(async () => {
+    const response = await fetch('/api/console/desktop-layout', { cache: 'no-store' });
+    const api = await response.json();
+    const panel = document.querySelector('.desktop-layout-panel');
+    return {
+      visible: Boolean(panel && !panel.closest('[data-module-panel]')?.hidden && panel.getBoundingClientRect().height > 0),
+      localOnly: api.localOnly,
+      plans: api.plans?.length || 0,
+      selected: document.querySelector('#desktopLayoutPlan')?.value || '',
+      saveDisabled: document.querySelector('#desktopLayoutSave')?.disabled,
+      importDisabled: document.querySelector('#desktopLayoutImport')?.disabled,
+      controls: ['desktopLayoutRestore', 'desktopLayoutSave', 'desktopLayoutImport'].every(id => Boolean(document.getElementById(id))),
+      localLabel: document.querySelector('#desktopLayoutLocalOnly')?.textContent?.trim() || '',
+      dataDirectory: api.dataDirectory || ''
+    };
+  })()`, true);
+  assert(
+    desktopLayoutUi.visible
+      && desktopLayoutUi.localOnly
+      && desktopLayoutUi.plans >= 1
+      && desktopLayoutUi.selected
+      && !desktopLayoutUi.saveDisabled
+      && !desktopLayoutUi.importDisabled
+      && desktopLayoutUi.controls
+      && desktopLayoutUi.localLabel
+      && /CodexControlConsole[\\/]desktop-layout/i.test(desktopLayoutUi.dataDirectory),
+    `desktop layout UI is incomplete or not device-local: ${JSON.stringify(desktopLayoutUi)}`
+  );
+  await clickModule(client, "blender");
 
   await waitForValue(
     () => evaluate(client, `({

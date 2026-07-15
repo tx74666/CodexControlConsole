@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.3.1",
+  [string]$Version = "0.3.2",
   [string]$OutputDir = "dist",
   [ValidateSet("all", "developer", "lite")]
   [string]$Edition = "all"
@@ -23,6 +23,7 @@ $Items = @(
   "styles.css",
   "app.js",
   "world_console.py",
+  "desktop_layout.py",
   "blender_github_share.py",
   "github-coop.json",
   "console_update.py",
@@ -55,6 +56,7 @@ $Items = @(
   "tools/NativeFileDrag.cs",
   "tools/blender_live_selection_bridge.py",
   "tools/apply_update.py",
+  "tools/DesktopLayout.ps1",
   "wallpapers/README.txt",
   "wallpapers/SOURCES.md"
 )
