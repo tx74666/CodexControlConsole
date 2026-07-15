@@ -2124,7 +2124,7 @@ async function loadModuleData(id) {
     case "workspace":
       if (hasWorkspace) await loadGithubDownloadsInfo();
       if (els.consoleUpdateStatus) await loadConsoleUpdateStatus({ check: true, quiet: true });
-      if (els.desktopLayoutPlan) await loadDesktopLayout({ quiet: true });
+      if (els.desktopLayoutPlan && !desktopLayoutState) await loadDesktopLayout({ quiet: true });
       if (hasMaterialWorkspace && downloadIntakeEnabled) await loadMaterialCandidates();
       break;
     case "blender":
@@ -10607,7 +10607,7 @@ async function openGithubDownloads() {
 function renderConsoleUpdate() {
   if (!els.consoleUpdateStatus) return;
   const state = consoleUpdateState || {};
-  const current = String(state.currentVersion || "0.3.2").replace(/^v/i, "");
+  const current = String(state.currentVersion || "0.3.3").replace(/^v/i, "");
   const latest = String(state.latestVersion || "").replace(/^v/i, "");
   if (els.consoleUpdateCurrent) {
     els.consoleUpdateCurrent.textContent = `v${current}`;

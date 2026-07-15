@@ -37,16 +37,16 @@ function staticChecks() {
   const coopCatalog = JSON.parse(readFileSync(join(projectRoot, "github-coop.json"), "utf8"));
   assert(
     coopCatalog.repositories?.length === 1
-      && coopCatalog.repositories[0]?.name === "X"
-      && coopCatalog.repositories[0]?.repositoryUrl === "https://github.com/tx74666/X.git",
-    "GitHub Coop catalog must contain only the X repository"
+      && coopCatalog.repositories[0]?.name === "Blender Projects"
+      && coopCatalog.repositories[0]?.repositoryUrl === "https://github.com/tx74666/Blender-projects.git",
+    "GitHub Coop catalog must contain only the unified Blender Projects repository"
   );
   assert(existsSync(join(projectRoot, "console_update.py")), "console updater backend is missing");
   assert(existsSync(join(projectRoot, "tools", "apply_update.py")), "portable update helper is missing");
   assert(existsSync(join(projectRoot, "desktop_layout.py")), "desktop layout backend is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.3.2", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.3.3", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   return Array.from(versions)[0];
@@ -246,12 +246,12 @@ async function runBrowserChecks(client) {
   const updateBannerState = await evaluate(client, `(() => {
     const original = consoleUpdateState;
     consoleUpdateState = {
-      currentVersion: '0.3.1',
-      latestVersion: '0.3.2',
+      currentVersion: '0.3.2',
+      latestVersion: '0.3.3',
       available: true,
       autoCheck: true,
       canInstall: false,
-      releaseUrl: 'https://github.com/tx74666/CodexControlConsole/releases/tag/v0.3.2'
+      releaseUrl: 'https://github.com/tx74666/CodexControlConsole/releases/tag/v0.3.3'
     };
     renderConsoleUpdate();
     const button = document.querySelector('#consoleUpdateTop');
@@ -261,7 +261,7 @@ async function runBrowserChecks(client) {
       width: button?.getBoundingClientRect().width || 0,
       releaseVisible: !document.querySelector('#consoleUpdateRelease')?.hidden
     };
-    consoleUpdateState = { ...consoleUpdateState, latestVersion: '0.3.1', available: false };
+    consoleUpdateState = { ...consoleUpdateState, latestVersion: '0.3.2', available: false };
     renderConsoleUpdate();
     const hiddenWhenCurrent = Boolean(button?.hidden);
     consoleUpdateState = original;
@@ -270,7 +270,7 @@ async function runBrowserChecks(client) {
   })()`);
   assert(
     updateBannerState.available.visible
-      && /^Update v0\.3\.2$/i.test(updateBannerState.available.text)
+      && /^Update v0\.3\.3$/i.test(updateBannerState.available.text)
       && updateBannerState.available.width >= 120
       && updateBannerState.available.releaseVisible
       && updateBannerState.hiddenWhenCurrent,

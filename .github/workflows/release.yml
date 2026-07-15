@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v0.3.2
+        description: Release version, for example v0.3.3
         required: true
-        default: v0.3.2
+        default: v0.3.3
   push:
     tags:
       - "v*"
@@ -39,7 +39,7 @@ jobs:
             $tag = "v$($manifest.version)"
           }
           if ([string]::IsNullOrWhiteSpace($tag)) {
-            $tag = "v0.3.2"
+            $tag = "v0.3.3"
           }
           if (-not $tag.StartsWith("v")) {
             $tag = "v$tag"

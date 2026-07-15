@@ -63,7 +63,7 @@ Use LAN mode only on a trusted network.
 ## Build Locally
 
 ```powershell
-.\tools\package-desktop.ps1 -Version 0.3.2 -OutputDir dist
+.\tools\package-desktop.ps1 -Version 0.3.3 -OutputDir dist
 ```
 
 The package script builds the developer ZIP, the lite ZIP, and the compatibility Windows ZIP. Runtime cache, cookies, downloaded music, and local browser profiles are not included.
