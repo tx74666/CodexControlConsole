@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "repositories": [
+    {
+      "name": "X",
+      "repositoryUrl": "https://github.com/tx74666/X.git",
+      "blendFile": "X.blend",
+      "defaultBranch": "main",
+      "version": "v0.1.0",
+      "visibility": "private"
+    }
+  ]
+}

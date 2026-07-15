@@ -33,10 +33,17 @@ function staticChecks() {
   const appSource = readFileSync(join(projectRoot, "app.js"), "utf8");
   new Function(appSource);
   assert(existsSync(join(projectRoot, "blender_github_share.py")), "Blender GitHub Share backend is missing");
+  const coopCatalog = JSON.parse(readFileSync(join(projectRoot, "github-coop.json"), "utf8"));
+  assert(
+    coopCatalog.repositories?.length === 1
+      && coopCatalog.repositories[0]?.name === "X"
+      && coopCatalog.repositories[0]?.repositoryUrl === "https://github.com/tx74666/X.git",
+    "GitHub Coop catalog must contain only the X repository"
+  );
   assert(existsSync(join(projectRoot, "console_update.py")), "console updater backend is missing");
   assert(existsSync(join(projectRoot, "tools", "apply_update.py")), "portable update helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.3.0", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.3.1", `unexpected app version: ${manifest.version}`);
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   return Array.from(versions)[0];
 }
@@ -232,27 +239,38 @@ async function runBrowserChecks(client) {
   assert(updateState.current === "v0.3.0" && typeof updateState.auto === "boolean" && updateState.controls, `update controls are incomplete: ${JSON.stringify(updateState)}`);
   assert(!updateState.topVisible, `inactive update control still occupies the top bar: ${JSON.stringify(updateState)}`);
 
-  const selectedX = await evaluate(client, `(() => {
+  await waitForValue(
+    () => evaluate(client, `({
+      count: Array.from(document.querySelectorAll('#blenderGithubProject option')).filter(option => option.value).length,
+      busy: document.querySelector('#blenderGithubSharePanel')?.classList.contains('busy') || false
+    })`),
+    value => value.count > 0 && !value.busy,
+    "Pinned Blender projects did not load",
+    30000,
+    120
+  );
+
+  const selectedPinned = await evaluate(client, `(() => {
     const select = document.querySelector('#blenderGithubProject');
     if (!select) return { found: false, values: [] };
     const options = Array.from(select.options);
-    const target = options.find(option => option.value.replace(/\\\\/g, '/').toLowerCase().endsWith('/character/x/x.blend'));
+    const target = options.find(option => option.value);
     if (!target) return { found: false, values: options.map(option => option.value) };
     select.value = target.value;
     select.dispatchEvent(new Event('change', { bubbles: true }));
     return { found: true, value: target.value };
   })()`);
-  assert(selectedX.found, `X Blender project was not listed: ${JSON.stringify(selectedX.values)}`);
+  assert(selectedPinned.found, `No pinned Blender project was listed: ${JSON.stringify(selectedPinned.values)}`);
   await waitForValue(
     () => evaluate(client, `({
       project: document.querySelector('#blenderGithubProject')?.value || '',
       state: document.querySelector('#blenderGithubState')?.dataset.state || '',
       busy: document.querySelector('#blenderGithubSharePanel')?.classList.contains('busy') || false
     })`),
-    value => value.project.replace(/\\/g, "/").toLowerCase().endsWith("/character/x/x.blend")
-      && ["initialized", "dirty", "committed", "pendingPush", "behind", "synced"].includes(value.state)
+    value => value.project === selectedPinned.value
+      && ["cloud", "uninitialized", "initialized", "dirty", "committed", "pendingPush", "behind", "synced", "gitUnavailable"].includes(value.state)
       && !value.busy,
-    "Blender GitHub Share did not load X",
+    "Blender GitHub Coop did not load the pinned project",
     20000,
     120
   );
@@ -263,7 +281,15 @@ async function runBrowserChecks(client) {
     cards: document.querySelectorAll('#blenderGithubBlendCards .blender-github-blend-card').length,
     selectedCards: document.querySelectorAll('#blenderGithubBlendCards .blender-github-blend-card[aria-selected="true"]').length,
     currentFile: document.querySelector('#blenderGithubBlendCards .blender-github-blend-card[aria-selected="true"] strong')?.textContent?.trim() || '',
+    currentFileTitle: document.querySelector('#blenderGithubBlendCards .blender-github-blend-card[aria-selected="true"] strong')?.title || '',
+    repositoryMarks: Array.from(document.querySelectorAll('#blenderGithubBlendCards .blender-github-file-mark')).map(mark => mark.textContent?.trim() || ''),
     version: document.querySelector('#blenderGithubBlendCards .blender-github-blend-card[aria-selected="true"] .blender-github-version')?.textContent?.trim() || '',
+    optionCount: document.querySelectorAll('#blenderGithubProject option[value]').length,
+    collectionCount: blenderGithubShareState?.collection?.projects?.length || 0,
+    generatedOptions: Array.from(document.querySelectorAll('#blenderGithubProject option')).filter(option => /[\\/](?:assets|records|blend_backups|roundtrip|unityexports)[\\/]/i.test(option.value)).map(option => option.value),
+    addVisible: document.querySelector('#blenderGithubAdd')?.getBoundingClientRect().width > 0,
+    allDraggable: Array.from(document.querySelectorAll('#blenderGithubBlendCards .blender-github-blend-card')).every(card => card.draggable),
+    doubleClickHint: document.querySelector('#blenderGithubBlendCards .blender-github-blend-card')?.title || '',
     refreshText: document.querySelector('#blenderGithubRefresh')?.textContent?.trim() || '',
     refreshFontSize: parseFloat(getComputedStyle(document.querySelector('#blenderGithubRefresh')).fontSize) || 0,
     desktopDisabled: document.querySelector('#blenderGithubDesktop')?.disabled,
@@ -275,12 +301,136 @@ async function runBrowserChecks(client) {
   assert(shareState.visible, "Blender GitHub Share panel is hidden");
   assert(shareState.title === "GitHub Coop", `GitHub Coop title is missing: ${JSON.stringify(shareState)}`);
   assert(shareState.cards >= 1 && shareState.selectedCards === 1, `blend cards are not ready: ${JSON.stringify(shareState)}`);
-  assert(shareState.currentFile === "X.blend", `X blend card was not selected: ${JSON.stringify(shareState)}`);
+  assert(shareState.currentFile && /^https:\/\/github\.com\//i.test(shareState.currentFileTitle), `repository card does not point to GitHub: ${JSON.stringify(shareState)}`);
+  assert(shareState.repositoryMarks.length === shareState.cards && shareState.repositoryMarks.every(mark => mark === "GH"), `repository cards have the wrong marker: ${JSON.stringify(shareState)}`);
+  assert(shareState.optionCount === shareState.collectionCount, `project picker contains projects outside the saved collection: ${JSON.stringify(shareState)}`);
+  assert(shareState.generatedOptions.length === 0, `generated Blender folders entered the project picker: ${JSON.stringify(shareState.generatedOptions)}`);
+  assert(shareState.addVisible && shareState.allDraggable && /double-click|双击/i.test(shareState.doubleClickHint), `GitHub Coop project shelf interactions are incomplete: ${JSON.stringify(shareState)}`);
   assert(/^V(?:\d|--)/.test(shareState.version), `compact version is invalid: ${JSON.stringify(shareState)}`);
   assert(shareState.refreshText && shareState.refreshFontSize >= 16, `refresh control is not visible: ${JSON.stringify(shareState)}`);
   assert(!shareState.desktopDisabled && !shareState.folderDisabled && !shareState.openDisabled, `project links are unavailable: ${JSON.stringify(shareState)}`);
   assert(shareState.noticeHidden, `passive Ready text is still visible: ${JSON.stringify(shareState)}`);
   assert(shareState.removedControls === 0, `verbose Git controls are still mounted: ${JSON.stringify(shareState)}`);
+
+  const doubleClickOpen = await evaluate(client, `(async () => {
+    const card = document.querySelector('#blenderGithubBlendCards .blender-github-blend-card');
+    if (!card) return { found: false };
+    const originalFetch = window.fetch;
+    let request = null;
+    window.fetch = async (input, init = {}) => {
+      const url = String(input || '');
+      if (url.includes('/api/randomrealm/blender/github-share/desktop')) {
+        request = { url, body: JSON.parse(init.body || '{}') };
+        return new Response(JSON.stringify({ ok: true, url: card.dataset.repositoryUrl }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      card.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 80));
+      return {
+        found: true,
+        request,
+        path: card.dataset.projectPath || '',
+        repositoryUrl: card.dataset.repositoryUrl || ''
+      };
+    } finally {
+      window.fetch = originalFetch;
+    }
+  })()`, true);
+  assert(
+    doubleClickOpen.found
+      && doubleClickOpen.request?.url.endsWith('/api/randomrealm/blender/github-share/desktop')
+      && doubleClickOpen.request?.body?.project === doubleClickOpen.path
+      && doubleClickOpen.request?.body?.repositoryUrl === doubleClickOpen.repositoryUrl
+      && /^https:\/\/github\.com\//i.test(doubleClickOpen.repositoryUrl),
+    `repository card double-click is not wired to GitHub Desktop: ${JSON.stringify(doubleClickOpen)}`
+  );
+
+  const cloudCardState = await evaluate(client, `(async () => {
+    const originalState = blenderGithubShareState;
+    const originalRepository = originalState?.collection?.projects?.[0];
+    if (!originalRepository?.repositoryUrl) return { found: false };
+    const cloudRepository = {
+      ...originalRepository,
+      path: '',
+      directory: '',
+      downloaded: false,
+      state: 'cloud'
+    };
+    const cloudState = {
+      ...originalState,
+      collection: { projects: [cloudRepository] },
+      project: {
+        ...originalState.project,
+        name: cloudRepository.name,
+        path: '',
+        directory: '',
+        repositoryUrl: cloudRepository.repositoryUrl,
+        downloaded: false
+      },
+      git: {
+        ...originalState.git,
+        state: 'cloud',
+        repositoryWebUrl: cloudRepository.repositoryUrl,
+        remoteUrl: cloudRepository.remoteUrl || cloudRepository.repositoryUrl
+      }
+    };
+    const originalFetch = window.fetch;
+    let request = null;
+    try {
+      renderBlenderGithubShare(cloudState);
+      const card = document.querySelector('#blenderGithubBlendCards .blender-github-blend-card');
+      window.fetch = async (input, init = {}) => {
+        const url = String(input || '');
+        if (url.includes('/api/randomrealm/blender/github-share/desktop')) {
+          request = { url, body: JSON.parse(init.body || '{}') };
+          return new Response(JSON.stringify({ ok: true, action: 'clone' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        return originalFetch(input, init);
+      };
+      card?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 80));
+      return {
+        found: Boolean(card),
+        cloud: card?.dataset.downloaded === 'false' && card?.classList.contains('cloud'),
+        cloudLabel: card?.querySelector('small')?.textContent?.trim() || '',
+        folderDisabled: document.querySelector('#blenderGithubFolder')?.disabled,
+        request,
+        repositoryUrl: cloudRepository.repositoryUrl,
+        guideMounted: Boolean(document.querySelector('.blender-github-guide.tutorial-only'))
+      };
+    } finally {
+      window.fetch = originalFetch;
+      renderBlenderGithubShare(originalState);
+    }
+  })()`, true);
+  assert(
+    cloudCardState.found
+      && cloudCardState.cloud
+      && cloudCardState.cloudLabel
+      && cloudCardState.folderDisabled
+      && cloudCardState.guideMounted
+      && cloudCardState.request?.url.endsWith('/api/randomrealm/blender/github-share/desktop')
+      && cloudCardState.request?.body?.project === cloudCardState.repositoryUrl,
+    `cloud repository card is not clone-ready: ${JSON.stringify(cloudCardState)}`
+  );
+
+  const collapseState = await evaluate(client, `(() => {
+    const toggle = document.querySelector('#blenderGithubToggle');
+    const body = document.querySelector('#blenderGithubBody');
+    toggle?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    const collapsed = Boolean(body?.hidden) && toggle?.getAttribute('aria-expanded') === 'false';
+    toggle?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    return { collapsed, expanded: !body?.hidden && toggle?.getAttribute('aria-expanded') === 'true' };
+  })()`);
+  assert(collapseState.collapsed && collapseState.expanded, `GitHub Coop collapse behavior is broken: ${JSON.stringify(collapseState)}`);
 
   if (process.env.CONSOLE_UI_SCREENSHOT) {
     const screenshotModule = process.env.CONSOLE_UI_SCREENSHOT_MODULE || "blender";
@@ -291,6 +441,38 @@ async function runBrowserChecks(client) {
         if (document.documentElement.dataset.theme !== target) document.querySelector('#themeToggle')?.click();
       })()`);
       await delay(120);
+    }
+    if (process.env.CONSOLE_UI_TUTORIAL === "true") {
+      await evaluate(client, `(() => {
+        if (!document.documentElement.classList.contains('tutorial-mode')) {
+          document.querySelector('#tutorialModeToggle')?.click();
+        }
+      })()`);
+    }
+    if (process.env.CONSOLE_UI_SCREENSHOT_CLOUD === "true") {
+      await evaluate(client, `(() => {
+        const repository = blenderGithubShareState?.collection?.projects?.[0];
+        if (!repository) return;
+        const cloudRepository = { ...repository, path: '', directory: '', downloaded: false, state: 'cloud' };
+        renderBlenderGithubShare({
+          ...blenderGithubShareState,
+          collection: { projects: [cloudRepository] },
+          project: {
+            ...blenderGithubShareState.project,
+            name: cloudRepository.name,
+            path: '',
+            directory: '',
+            repositoryUrl: cloudRepository.repositoryUrl,
+            downloaded: false
+          },
+          git: {
+            ...blenderGithubShareState.git,
+            state: 'cloud',
+            repositoryWebUrl: cloudRepository.repositoryUrl,
+            remoteUrl: cloudRepository.remoteUrl || cloudRepository.repositoryUrl
+          }
+        });
+      })()`);
     }
     const screenshotSelector = process.env.CONSOLE_UI_SCREENSHOT_SELECTOR || "#blenderGithubSharePanel";
     await evaluate(client, `document.querySelector(${JSON.stringify(screenshotSelector)})?.scrollIntoView({ block: 'start' })`);
@@ -360,7 +542,7 @@ async function runBrowserChecks(client) {
   await clickModule(client, "blender");
   await waitForValue(
     () => evaluate(client, "document.querySelector('#blenderGithubState')?.dataset.state || ''"),
-    value => ["initialized", "dirty", "committed", "pendingPush", "behind", "synced"].includes(value),
+    value => ["cloud", "uninitialized", "initialized", "dirty", "committed", "pendingPush", "behind", "synced", "gitUnavailable"].includes(value),
     "Blender GitHub Share did not restore after returning to Blender",
     10000
   );

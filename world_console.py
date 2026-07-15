@@ -30,7 +30,11 @@ import xml.etree.ElementTree as ET
 import zipfile
 import zlib
 
-from blender_github_share import BlenderGithubShareService
+from blender_github_share import (
+    BlenderGithubShareService,
+    filter_blender_discovery_directories,
+    is_blender_discovery_file,
+)
 from console_update import ConsoleUpdateService
 
 
@@ -166,6 +170,7 @@ BLENDER_PROJECT_TEXTURE_PACKAGE_DIRNAME = "_codex_packages"
 BLENDER_TEXTURE_PACKAGE_APPLIED_FILENAME = "applied.json"
 BLENDER_LIVE_SELECTION_FILE = CACHE_DIR / "blender_live_selection.json"
 BLENDER_GITHUB_SHARE_CONFIG_FILE = CACHE_DIR / "blender_github_share.json"
+BLENDER_GITHUB_COOP_CATALOG_FILE = APP_DIR / "github-coop.json"
 BLENDER_LIVE_SELECTION_MAX_AGE_SECONDS = 8
 NATIVE_FILE_DRAG_SOURCE = APP_DIR / "tools" / "NativeFileDrag.cs"
 NATIVE_FILE_DRAG_EXE = APP_DIR / "tools" / "NativeFileDrag.exe"
@@ -212,6 +217,7 @@ BLENDER_PROJECT_FILES = [
 BLENDER_GITHUB_SHARE = BlenderGithubShareService(
     BLENDER_GITHUB_SHARE_CONFIG_FILE,
     project_roots=BLENDER_PROJECT_ROOTS,
+    catalog_file=BLENDER_GITHUB_COOP_CATALOG_FILE,
     live_selection_file=BLENDER_LIVE_SELECTION_FILE,
     live_selection_max_age=BLENDER_LIVE_SELECTION_MAX_AGE_SECONDS,
 )
@@ -877,6 +883,12 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/randomrealm/blender/github-share/config":
                 self.send_json(BLENDER_GITHUB_SHARE.save(payload))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/add":
+                self.send_json(BLENDER_GITHUB_SHARE.add_project(payload))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/order":
+                self.send_json(BLENDER_GITHUB_SHARE.reorder_projects(payload))
                 return
             if parsed.path == "/api/randomrealm/blender/github-share/init":
                 self.send_json(BLENDER_GITHUB_SHARE.initialize(payload))
@@ -1969,13 +1981,11 @@ def list_blender_projects(limit=None, max_depth=8, query=""):
             current_path = Path(current)
             if len(current_path.resolve().parts) - root_depth >= max_depth:
                 dirs[:] = []
-            dirs[:] = [
-                name for name in dirs
-                if name.lower() not in {"node_modules", ".git", "__pycache__", "library", "temp", "obj", "packages"}
-            ]
+            dirs[:] = filter_blender_discovery_directories(dirs)
             for name in files:
-                if Path(name).suffix.lower() in BLENDER_PROJECT_EXTENSIONS:
-                    add_project(current_path / name)
+                path = current_path / name
+                if is_blender_discovery_file(path, root):
+                    add_project(path)
 
     if query:
         scored = []

@@ -48,7 +48,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-643">
+  <link rel="stylesheet" href="styles.css?v=control-console-647">
 </head>
 <body>
   <main class="app-shell">
@@ -528,26 +528,30 @@
 
           <article id="blenderGithubSharePanel" class="panel blender-github-panel">
             <div class="panel-head blender-github-head">
-              <h2>
+              <h2 id="blenderGithubToggle" role="button" tabindex="0" aria-expanded="true" aria-controls="blenderGithubBody" aria-label="Collapse or expand GitHub Coop" data-i18n-aria="blenderGithubToggleTitle">
                 <span data-i18n="blenderGithubTitle">GitHub Coop</span>
                 <span id="blenderGithubState" class="blender-github-state-dot" data-state="loading" title="Loading"></span>
               </h2>
               <div class="blender-github-head-tools">
+                <button id="blenderGithubAdd" class="icon-button blender-github-add" type="button" title="Add Blender project" aria-label="Add Blender project" data-i18n-aria="blenderGithubAddTitle">+</button>
                 <select id="blenderGithubProject" class="blender-github-project-picker" aria-label="Blender project" data-i18n-aria="blenderGithubProjectLabel"></select>
                 <button id="blenderGithubRefresh" class="icon-button blender-github-refresh" type="button" title="Refresh Git status" aria-label="Refresh Git status" data-i18n-aria="blenderGithubRefreshTitle">&#x21bb;</button>
               </div>
             </div>
 
-            <div id="blenderGithubBlendCards" class="blender-github-blend-cards" role="listbox" aria-label="Blend files" data-i18n-aria="blenderGithubBlendFilesLabel"></div>
+            <div id="blenderGithubBody" class="blender-github-body">
+              <div id="blenderGithubBlendCards" class="blender-github-blend-cards" role="listbox" aria-label="Blend files" data-i18n-aria="blenderGithubBlendFilesLabel"></div>
 
-            <div class="blender-github-dock">
-              <nav class="blender-github-links" aria-label="Project links" data-i18n-aria="blenderGithubLinksLabel">
-                <button id="blenderGithubDesktop" class="blender-github-link" type="button" data-i18n="blenderGithubDesktop">GitHub Desktop</button>
-                <button id="blenderGithubFolder" class="blender-github-link" type="button" data-i18n="blenderGithubFolder">Files</button>
-                <button id="blenderGithubOpen" class="blender-github-link" type="button" data-i18n="blenderGithubOpenShort">GitHub</button>
-              </nav>
+              <div class="blender-github-dock">
+                <p class="blender-github-guide tutorial-only" data-i18n="blenderGithubGuide">Not downloaded: double-click the card to Clone, then use + to select the .blend file. Fetch/Pull before editing; Commit + Push when finished.</p>
+                <nav class="blender-github-links" aria-label="Project links" data-i18n-aria="blenderGithubLinksLabel">
+                  <button id="blenderGithubDesktop" class="blender-github-link" type="button" data-i18n="blenderGithubDesktop">GitHub Desktop</button>
+                  <button id="blenderGithubFolder" class="blender-github-link" type="button" data-i18n="blenderGithubFolder">Files</button>
+                  <button id="blenderGithubOpen" class="blender-github-link" type="button" data-i18n="blenderGithubOpenShort">GitHub</button>
+                </nav>
+              </div>
+              <p id="blenderGithubStatus" class="blender-github-notice" role="status" aria-live="polite" hidden></p>
             </div>
-            <p id="blenderGithubStatus" class="blender-github-notice" role="status" aria-live="polite" hidden></p>
           </article>
         </section>
         </div>
@@ -888,6 +892,6 @@
   <input id="steamworkAssetFileInput" class="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
   <audio id="audioPlayer" preload="metadata"></audio>
 
-<script src="app.js?v=control-console-643"></script>
+<script src="app.js?v=control-console-647"></script>
 </body>
 </html>

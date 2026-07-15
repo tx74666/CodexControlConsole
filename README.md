@@ -86,4 +86,4 @@ To verify archive validation, rollback, and per-user update storage:
 python .\tools\check-console-update.py
 ```
 
-Blender > Helper > GitHub Coop lists the `.blend` files in the selected project as compact cards. Use the three links to open that project in GitHub Desktop, its local folder, or its GitHub repository. When no remote exists yet, the GitHub link opens the new-repository page. The underlying share service still supports Git, Git LFS, per-project settings, version commits, and pushes.
+Blender > Helper > GitHub Coop lists the repositories in `github-coop.json`, even before they exist locally. Double-clicking a cloud card opens GitHub Desktop's Clone flow; double-clicking a downloaded card opens its local repository. After cloning to a custom location, use `+` once to select the `.blend` file so Console can bind the cloud card to that local checkout. GitHub Desktop handles authentication, Fetch/Pull, commits, and Push; tutorial mode shows the short collaboration sequence. The Files link is enabled only after a local checkout exists, while the GitHub link always opens the repository page.

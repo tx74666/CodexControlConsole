@@ -1123,6 +1123,27 @@ button.blender-hub-card:active {
   display: flex;
   align-items: center;
   gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.blender-github-head h2:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--green) 72%, transparent);
+  outline-offset: 4px;
+}
+
+.blender-github-panel.collapsed {
+  gap: 0;
+}
+
+.blender-github-body {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.blender-github-body[hidden] {
+  display: none;
 }
 
 .panel-head > .blender-github-head-tools {
@@ -1140,12 +1161,18 @@ button.blender-hub-card:active {
   padding-block: 0;
 }
 
+.icon-button.blender-github-add,
 .icon-button.blender-github-refresh {
   flex: 0 0 36px;
   width: 36px;
   height: 36px;
   min-height: 36px;
   font-size: 20px;
+}
+
+.icon-button.blender-github-add {
+  font-size: 22px;
+  line-height: 1;
 }
 
 .blender-github-blend-cards {
@@ -1168,8 +1195,9 @@ button.blender-hub-card:active {
   background: var(--button-bg);
   color: var(--text);
   text-align: left;
-  cursor: pointer;
-  transition: border-color 140ms ease, background-color 140ms ease;
+  cursor: grab;
+  user-select: none;
+  transition: border-color 140ms ease, background-color 140ms ease, opacity 120ms ease;
 }
 
 .blender-github-blend-card:hover {
@@ -1179,6 +1207,16 @@ button.blender-hub-card:active {
 .blender-github-blend-card[aria-selected="true"] {
   border-color: color-mix(in srgb, var(--green) 58%, var(--line));
   background: color-mix(in srgb, var(--green) 8%, var(--button-bg));
+}
+
+.blender-github-blend-card.cloud .blender-github-file-mark {
+  border-style: dashed;
+  color: var(--soft);
+}
+
+.blender-github-blend-card.dragging {
+  opacity: 0.34;
+  cursor: grabbing;
 }
 
 .blender-github-file-mark {
@@ -1280,6 +1318,18 @@ button.blender-hub-card:active {
 .blender-github-state-dot[data-state="committed"],
 .blender-github-state-dot[data-state="synced"] {
   background: var(--green);
+}
+
+.blender-github-state-dot[data-state="cloud"] {
+  background: #6aa9e9;
+}
+
+.blender-github-guide {
+  min-width: 0;
+  margin: 0 auto 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .blender-github-links {

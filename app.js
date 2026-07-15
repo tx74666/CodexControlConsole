@@ -212,16 +212,25 @@ const i18n = {
     blenderGithubHubTitle: "GitHub Coop",
     blenderGithubHubBody: "Blender 项目入口",
     blenderGithubTitle: "GitHub Coop",
-    blenderGithubBlendFilesLabel: "Blend 文件",
+    blenderGithubToggleTitle: "双击收起或展开 GitHub Coop",
+    blenderGithubAddTitle: "添加已发布的 Blender GitHub 项目",
+    blenderGithubBlendFilesLabel: "GitHub 仓库",
     blenderGithubLinksLabel: "项目入口",
     blenderGithubDesktop: "GitHub Desktop",
+    blenderGithubCloud: "\u4e91\u7aef",
+    blenderGithubCardLocalTitle: name => `\u5355\u51fb\u9009\u62e9\uff0c\u53cc\u51fb\u5728 GitHub Desktop \u6253\u5f00\uff1a${name}`,
+    blenderGithubCardCloudTitle: name => `\u5355\u51fb\u9009\u62e9\uff0c\u53cc\u51fb\u7528 GitHub Desktop \u514b\u9686\uff1a${name}`,
+    blenderGithubDesktopOpenTitle: "\u5728 GitHub Desktop \u6253\u5f00\u672c\u5730\u4ed3\u5e93",
+    blenderGithubDesktopCloneTitle: "\u7528 GitHub Desktop \u514b\u9686\u8fd9\u4e2a\u4ed3\u5e93",
+    blenderGithubGuide: "\u672a\u4e0b\u8f7d\uff1a\u53cc\u51fb\u5361\u7247\u5b8c\u6210 Clone\uff0c\u7136\u540e\u70b9 + \u9009\u62e9 .blend\u3002\u4fee\u6539\u524d\u5148 Fetch/Pull\uff0c\u5b8c\u6210\u540e Commit + Push\u3002",
+    blenderGithubStateCloud: "\u4e91\u7aef\uff0c\u5c1a\u672a\u4e0b\u8f7d",
     blenderGithubFolder: "文件",
     blenderGithubOpenShort: "GitHub",
-    blenderGithubNoBlendFiles: "没有找到 .blend 文件",
-    blenderGithubCardTitle: file => `选中 ${file}`,
+    blenderGithubNoBlendFiles: "还没有加入已发布的 GitHub 仓库",
+    blenderGithubCardTitle: name => `单击选择，双击打开 GitHub：${name}`,
     blenderGithubLoading: "读取中",
     blenderGithubReady: "就绪",
-    blenderGithubProjectLabel: "Blender 项目",
+    blenderGithubProjectLabel: "GitHub 仓库",
     blenderGithubRefreshTitle: "刷新 Git 状态",
     blenderGithubBlendFileLabel: "Blend 文件",
     blenderGithubBranchLabel: "分支",
@@ -278,6 +287,9 @@ const i18n = {
     blenderGithubCreateConfirm: name => `没有填写仓库 URL。要使用 GitHub CLI 创建 ${name} 吗？`,
     blenderGithubReplaceRemoteConfirm: "当前 origin 指向另一个仓库。确认替换它？",
     blenderGithubSelectProject: "选择 Blender 项目",
+    blenderGithubAddingProject: "正在选择 GitHub 项目",
+    blenderGithubProjectAdded: "GitHub 仓库已加入",
+    blenderGithubOrderFailed: message => `排序保存失败：${message}`,
     unitySectionLabel: "Unity",
     unityControlTitle: "Unity Control",
     unityControlBody: "RandomRealm2 工程入口、素材入口和 Unity 侧发布前检查。",
@@ -840,16 +852,25 @@ const i18n = {
     blenderGithubHubTitle: "GitHub Coop",
     blenderGithubHubBody: "Blender project access",
     blenderGithubTitle: "GitHub Coop",
-    blenderGithubBlendFilesLabel: "Blend files",
+    blenderGithubToggleTitle: "Double-click to collapse or expand GitHub Coop",
+    blenderGithubAddTitle: "Add a published Blender GitHub project",
+    blenderGithubBlendFilesLabel: "GitHub repositories",
     blenderGithubLinksLabel: "Project links",
     blenderGithubDesktop: "GitHub Desktop",
+    blenderGithubCloud: "Cloud",
+    blenderGithubCardLocalTitle: name => `Click to select; double-click to open in GitHub Desktop: ${name}`,
+    blenderGithubCardCloudTitle: name => `Click to select; double-click to clone with GitHub Desktop: ${name}`,
+    blenderGithubDesktopOpenTitle: "Open the local repository in GitHub Desktop",
+    blenderGithubDesktopCloneTitle: "Clone this repository with GitHub Desktop",
+    blenderGithubGuide: "Not downloaded: double-click the card to Clone, then use + to select the .blend file. Fetch/Pull before editing; Commit + Push when finished.",
+    blenderGithubStateCloud: "Cloud, not downloaded",
     blenderGithubFolder: "Files",
     blenderGithubOpenShort: "GitHub",
-    blenderGithubNoBlendFiles: "No .blend files found",
-    blenderGithubCardTitle: file => `Select ${file}`,
+    blenderGithubNoBlendFiles: "No published GitHub repositories added",
+    blenderGithubCardTitle: name => `Click to select; double-click to open GitHub: ${name}`,
     blenderGithubLoading: "Loading",
     blenderGithubReady: "Ready",
-    blenderGithubProjectLabel: "Blender Project",
+    blenderGithubProjectLabel: "GitHub Repository",
     blenderGithubRefreshTitle: "Refresh Git status",
     blenderGithubBlendFileLabel: "Blend File",
     blenderGithubBranchLabel: "Branch",
@@ -906,6 +927,9 @@ const i18n = {
     blenderGithubCreateConfirm: name => `No repository URL is set. Create ${name} with GitHub CLI?`,
     blenderGithubReplaceRemoteConfirm: "Origin points to another repository. Replace it?",
     blenderGithubSelectProject: "Select Blender project",
+    blenderGithubAddingProject: "Selecting a GitHub project",
+    blenderGithubProjectAdded: "GitHub repository added",
+    blenderGithubOrderFailed: message => `Could not save order: ${message}`,
     unitySectionLabel: "Unity",
     unityControlTitle: "Unity Control",
     unityControlBody: "RandomRealm2 project entry points, promo assets, and Unity-side pre-release checks.",
@@ -1583,7 +1607,10 @@ const els = {
   openUnityProjectFolder: document.getElementById("openUnityProjectFolder"),
   openUnityPromoFolder: document.getElementById("openUnityPromoFolder"),
   blenderGithubSharePanel: document.getElementById("blenderGithubSharePanel"),
+  blenderGithubToggle: document.getElementById("blenderGithubToggle"),
+  blenderGithubBody: document.getElementById("blenderGithubBody"),
   blenderGithubState: document.getElementById("blenderGithubState"),
+  blenderGithubAdd: document.getElementById("blenderGithubAdd"),
   blenderGithubProject: document.getElementById("blenderGithubProject"),
   blenderGithubBlendCards: document.getElementById("blenderGithubBlendCards"),
   blenderGithubProjectPath: document.getElementById("blenderGithubProjectPath"),
@@ -1756,6 +1783,9 @@ let blenderGithubBusy = false;
 let blenderGithubPublicConfirmed = false;
 let blenderGithubSaveRequested = false;
 let blenderGithubLoadSequence = 0;
+let blenderGithubCardClickTimer = null;
+let blenderGithubDraggedPath = "";
+let blenderGithubDropCommitted = false;
 let githubDownloadsInfo = null;
 let consoleUpdateState = null;
 let consoleUpdateBusy = false;
@@ -10730,6 +10760,7 @@ function blenderGithubRepositorySlug(value) {
 
 function blenderGithubStateLabel(state) {
   const keys = {
+    cloud: "blenderGithubStateCloud",
     uninitialized: "blenderGithubStateUninitialized",
     initialized: "blenderGithubStateInitialized",
     dirty: "blenderGithubStateDirty",
@@ -10770,37 +10801,9 @@ function setBlenderGithubStatus(message) {
 
 function renderBlenderGithubProjectOptions(selectedPath = "") {
   if (!els.blenderGithubProject) return;
-  const projects = [];
-  const seen = new Set();
-  const addProject = project => {
-    const path = String(project?.path || "").trim();
-    if (!path || seen.has(path.toLocaleLowerCase())) return;
-    seen.add(path.toLocaleLowerCase());
-    projects.push({
-      name: project.name || path.split(/[\\/]/).pop()?.replace(/\.blend$/i, "") || path,
-      file: project.file || path.split(/[\\/]/).pop() || path,
-      path,
-      directory: project.directory || path.replace(/[\\/][^\\/]+$/, "")
-    });
-  };
-  addProject(blenderGithubShareState?.project);
-  randomRealmBlenderProjects.forEach(addProject);
-  if (selectedPath && !seen.has(selectedPath.toLocaleLowerCase())) {
-    addProject({ path: selectedPath });
-  }
-
-  const grouped = [];
-  const byDirectory = new Map();
-  for (const project of projects) {
-    const key = project.directory.replace(/\\/g, "/").toLocaleLowerCase();
-    if (!byDirectory.has(key)) {
-      const group = { ...project };
-      byDirectory.set(key, group);
-      grouped.push(group);
-    } else if (project.path === selectedPath) {
-      Object.assign(byDirectory.get(key), project);
-    }
-  }
+  const grouped = Array.isArray(blenderGithubShareState?.collection?.projects)
+    ? blenderGithubShareState.collection.projects.filter(project => project?.repositoryUrl || project?.path)
+    : [];
 
   els.blenderGithubProject.innerHTML = "";
   if (!grouped.length) {
@@ -10812,17 +10815,18 @@ function renderBlenderGithubProjectOptions(selectedPath = "") {
   }
   for (const project of grouped) {
     const option = document.createElement("option");
-    option.value = project.path;
-    option.textContent = project.directory.split(/[\\/]/).filter(Boolean).pop() || project.name;
-    option.title = project.directory;
+    option.value = project.repositoryUrl || project.path;
+    option.textContent = project.name || blenderGithubRepositorySlug(project.repositoryUrl) || project.path;
+    option.title = project.downloaded ? project.directory : project.repositoryUrl;
     els.blenderGithubProject.appendChild(option);
   }
-  const preferred = selectedPath || blenderGithubShareState?.project?.path || randomRealmArtContext.project || grouped[0].path;
-  const preferredDirectory = projects.find(project => project.path === preferred)?.directory || "";
-  const selectedGroup = grouped.find(project => project.path === preferred)
-    || grouped.find(project => project.directory === preferredDirectory)
+  const currentProject = blenderGithubShareState?.project || {};
+  const preferred = selectedPath || currentProject.repositoryUrl || currentProject.path || grouped[0].repositoryUrl || grouped[0].path;
+  const preferredSlug = blenderGithubRepositorySlug(preferred);
+  const selectedGroup = grouped.find(project => preferredSlug && blenderGithubRepositorySlug(project.repositoryUrl) === preferredSlug)
+    || grouped.find(project => project.path === preferred)
     || grouped[0];
-  els.blenderGithubProject.value = selectedGroup.path;
+  els.blenderGithubProject.value = selectedGroup.repositoryUrl || selectedGroup.path;
 }
 
 function blenderGithubVersionText(value) {
@@ -10830,19 +10834,22 @@ function blenderGithubVersionText(value) {
   return version ? `V${version}` : "V--";
 }
 
+function clearBlenderGithubCardClick() {
+  if (blenderGithubCardClickTimer) {
+    window.clearTimeout(blenderGithubCardClickTimer);
+    blenderGithubCardClickTimer = null;
+  }
+}
+
 function renderBlenderGithubBlendCards(state) {
   if (!els.blenderGithubBlendCards) return;
   const project = state?.project || {};
-  const selectedPath = String(project.path || "");
-  const selectedKey = selectedPath.replace(/\\/g, "/").toLocaleLowerCase();
-  const paths = Array.from(new Set([
-    ...(Array.isArray(project.blendFiles) ? project.blendFiles : []),
-    selectedPath
-  ].filter(Boolean)));
-  const version = blenderGithubVersionText(state?.git?.lastTag || state?.config?.version);
+  const selectedRepositoryKey = blenderGithubRepositorySlug(project.repositoryUrl || state?.git?.repositoryWebUrl || state?.config?.repositoryUrl);
+  const selectedDirectoryKey = String(project.directory || "").replace(/\\/g, "/").toLocaleLowerCase();
+  const repositories = Array.isArray(state?.collection?.projects) ? state.collection.projects : [];
 
   els.blenderGithubBlendCards.innerHTML = "";
-  if (!paths.length) {
+  if (!repositories.length) {
     const empty = document.createElement("div");
     empty.className = "blender-github-empty";
     empty.textContent = text("blenderGithubNoBlendFiles");
@@ -10850,39 +10857,93 @@ function renderBlenderGithubBlendCards(state) {
     return;
   }
 
-  for (const path of paths) {
-    const file = path.split(/[\\/]/).pop() || path;
-    const active = path.replace(/\\/g, "/").toLocaleLowerCase() === selectedKey;
+  for (const repository of repositories) {
+    const path = String(repository.path || "");
+    const repositoryUrl = String(repository.repositoryUrl || "");
+    const identifier = repositoryUrl || path;
+    const downloaded = repository.downloaded !== false && Boolean(path && repository.directory);
+    const label = repository.name || path.split(/[\\/]/).pop()?.replace(/\.blend$/i, "") || path;
+    const directoryKey = String(repository.directory || "").replace(/\\/g, "/").toLocaleLowerCase();
+    const repositoryKey = blenderGithubRepositorySlug(repositoryUrl);
+    const active = Boolean(
+      (selectedRepositoryKey && repositoryKey === selectedRepositoryKey)
+      || (selectedDirectoryKey && directoryKey === selectedDirectoryKey)
+    );
     const card = document.createElement("button");
     card.className = "blender-github-blend-card";
+    card.classList.toggle("cloud", !downloaded);
     card.type = "button";
+    card.draggable = true;
+    card.dataset.projectPath = identifier;
+    card.dataset.localPath = path;
+    card.dataset.repositoryUrl = repositoryUrl;
+    card.dataset.downloaded = String(downloaded);
     card.setAttribute("role", "option");
     card.setAttribute("aria-selected", String(active));
-    card.title = `${text("blenderGithubCardTitle", file)}\n${path}`;
+    card.title = `${text(downloaded ? "blenderGithubCardLocalTitle" : "blenderGithubCardCloudTitle", label)}\n${repositoryUrl || path}`;
 
     const mark = document.createElement("span");
     mark.className = "blender-github-file-mark";
-    mark.textContent = "BL";
+    mark.textContent = "GH";
     const copy = document.createElement("span");
     copy.className = "blender-github-file-copy";
     const name = document.createElement("strong");
-    name.textContent = file;
+    name.textContent = label;
+    name.title = repositoryUrl || label;
     copy.appendChild(name);
+    if (!downloaded) {
+      const location = document.createElement("small");
+      location.textContent = text("blenderGithubCloud");
+      copy.appendChild(location);
+    }
     const versionBadge = document.createElement("span");
     versionBadge.className = "blender-github-version";
-    versionBadge.textContent = version;
+    versionBadge.textContent = blenderGithubVersionText(repository.version);
     card.append(mark, copy, versionBadge);
     card.addEventListener("click", () => {
-      if (active || blenderGithubBusy) return;
-      syncBlenderGithubProjectContext(path);
-      loadBlenderGithubShare({ project: path });
+      if (blenderGithubDraggedPath || blenderGithubBusy) return;
+      clearBlenderGithubCardClick();
+      blenderGithubCardClickTimer = window.setTimeout(() => {
+        blenderGithubCardClickTimer = null;
+        if (active || blenderGithubBusy) return;
+        syncBlenderGithubProjectContext(path);
+        loadBlenderGithubShare({ project: identifier });
+      }, 220);
+    });
+    card.addEventListener("dblclick", event => {
+      event.preventDefault();
+      clearBlenderGithubCardClick();
+      openBlenderGithubTarget("desktop", identifier, repositoryUrl);
     });
     els.blenderGithubBlendCards.appendChild(card);
   }
 }
 
+function blenderGithubCardOrderFromDom() {
+  return Array.from(els.blenderGithubBlendCards?.querySelectorAll(".blender-github-blend-card") || [])
+    .map(card => card.dataset.projectPath || "")
+    .filter(Boolean);
+}
+
+async function saveBlenderGithubCardOrder() {
+  if (!blenderGithubShareState) return;
+  const order = blenderGithubCardOrderFromDom();
+  if (!order.length) return;
+  try {
+    const payload = await postJson("/api/randomrealm/blender/github-share/order", {
+      project: blenderGithubShareState.project?.path || els.blenderGithubProject?.value || "",
+      order
+    });
+    renderBlenderGithubShare(payload, { preserveForm: true });
+    setBlenderGithubStatus("");
+  } catch (error) {
+    renderBlenderGithubBlendCards(blenderGithubShareState);
+    setBlenderGithubStatus(text("blenderGithubOrderFailed", error.message));
+  }
+}
+
 function syncBlenderGithubProjectContext(projectPath) {
-  if (!projectPath) return;
+  if (!projectPath || blenderGithubRepositorySlug(projectPath)) return;
   if (randomRealmArtContext.project !== projectPath) {
     randomRealmLoadedObjectsProject = "";
     randomRealmBlenderObjects = [];
@@ -10962,14 +11023,21 @@ function updateBlenderGithubActionState() {
   const state = blenderGithubShareState || {};
   const git = state.git || {};
   const tools = state.tools || {};
-  const hasProject = Boolean(els.blenderGithubProject?.value || state.project?.path);
+  const hasProject = Boolean(els.blenderGithubProject?.value || state.project?.path || state.project?.repositoryUrl);
+  const downloaded = state.project?.downloaded !== false && Boolean(state.project?.path && state.project?.directory);
 
   for (const control of els.blenderGithubSharePanel.querySelectorAll("input, select, textarea")) {
     control.disabled = blenderGithubBusy;
   }
+  if (els.blenderGithubAdd) els.blenderGithubAdd.disabled = blenderGithubBusy;
   if (els.blenderGithubRefresh) els.blenderGithubRefresh.disabled = blenderGithubBusy;
   if (els.blenderGithubDesktop) els.blenderGithubDesktop.disabled = blenderGithubBusy || !hasProject;
-  if (els.blenderGithubFolder) els.blenderGithubFolder.disabled = blenderGithubBusy || !hasProject;
+  if (els.blenderGithubDesktop) {
+    const label = text(downloaded ? "blenderGithubDesktopOpenTitle" : "blenderGithubDesktopCloneTitle");
+    els.blenderGithubDesktop.title = label;
+    els.blenderGithubDesktop.setAttribute("aria-label", label);
+  }
+  if (els.blenderGithubFolder) els.blenderGithubFolder.disabled = blenderGithubBusy || !downloaded;
   if (els.blenderGithubInitialize) {
     els.blenderGithubInitialize.disabled = blenderGithubBusy || !hasProject || !tools.gitAvailable || !tools.lfsAvailable;
   }
@@ -10982,6 +11050,13 @@ function updateBlenderGithubActionState() {
   if (els.blenderGithubOpen) {
     els.blenderGithubOpen.disabled = blenderGithubBusy || !hasProject;
   }
+}
+
+function setBlenderGithubExpanded(expanded) {
+  const isExpanded = Boolean(expanded);
+  if (els.blenderGithubBody) els.blenderGithubBody.hidden = !isExpanded;
+  if (els.blenderGithubToggle) els.blenderGithubToggle.setAttribute("aria-expanded", String(isExpanded));
+  els.blenderGithubSharePanel?.classList.toggle("collapsed", !isExpanded);
 }
 
 function setBlenderGithubBusy(busy, message = "") {
@@ -10997,7 +11072,7 @@ function renderBlenderGithubShare(state, options = {}) {
   const project = state.project || {};
   const config = state.config || {};
   const git = state.git || {};
-  renderBlenderGithubProjectOptions(project.path || "");
+  renderBlenderGithubProjectOptions(project.repositoryUrl || project.path || "");
   syncBlenderGithubProjectContext(project.path || "");
 
   if (!options.preserveForm) {
@@ -11047,7 +11122,11 @@ async function loadBlenderGithubShare(options = {}) {
   const sequence = ++blenderGithubLoadSequence;
   const selectedProject = options.detect
     ? ""
-    : options.project ?? els.blenderGithubProject?.value ?? blenderGithubShareState?.project?.path ?? "";
+    : options.project
+      ?? els.blenderGithubProject?.value
+      ?? blenderGithubShareState?.project?.repositoryUrl
+      ?? blenderGithubShareState?.project?.path
+      ?? "";
   setBlenderGithubBusy(true, text("blenderGithubLoading"));
   try {
     const query = selectedProject ? `?project=${encodeURIComponent(selectedProject)}` : "";
@@ -11064,6 +11143,24 @@ async function loadBlenderGithubShare(options = {}) {
     if (sequence === blenderGithubLoadSequence) {
       setBlenderGithubBusy(false);
     }
+  }
+}
+
+async function addBlenderGithubProject() {
+  if (!hasBlenderGithubShare() || blenderGithubBusy) return;
+  setBlenderGithubBusy(true, text("blenderGithubAddingProject"));
+  try {
+    const payload = await postJson("/api/randomrealm/blender/github-share/add", {});
+    if (payload.cancelled) {
+      setBlenderGithubStatus("");
+      return;
+    }
+    renderBlenderGithubShare(payload);
+    setBlenderGithubStatus(text("blenderGithubProjectAdded"));
+  } catch (error) {
+    setBlenderGithubStatus(text("blenderGithubFailed", error.message));
+  } finally {
+    setBlenderGithubBusy(false);
   }
 }
 
@@ -11154,7 +11251,7 @@ async function runBlenderGithubAction(action) {
   }
 }
 
-async function openBlenderGithubTarget(target) {
+async function openBlenderGithubTarget(target, projectOverride = "", repositoryOverride = "") {
   if (!hasBlenderGithubShare() || blenderGithubBusy) return;
   const endpoint = {
     desktop: "desktop",
@@ -11162,10 +11259,18 @@ async function openBlenderGithubTarget(target) {
     github: "open"
   }[target];
   if (!endpoint) return;
-  const project = blenderGithubShareState?.project?.path || els.blenderGithubProject?.value || "";
+  const project = projectOverride
+    || els.blenderGithubProject?.value
+    || blenderGithubShareState?.project?.repositoryUrl
+    || blenderGithubShareState?.project?.path
+    || "";
+  const repositoryUrl = repositoryOverride
+    || blenderGithubShareState?.project?.repositoryUrl
+    || blenderGithubShareState?.git?.repositoryWebUrl
+    || "";
   setBlenderGithubBusy(true, text("blenderGithubLoading"));
   try {
-    await postJson(`/api/randomrealm/blender/github-share/${endpoint}`, { project });
+    await postJson(`/api/randomrealm/blender/github-share/${endpoint}`, { project, repositoryUrl });
     setBlenderGithubStatus("");
   } catch (error) {
     setBlenderGithubStatus(text("blenderGithubFailed", error.message));
@@ -15767,6 +15872,21 @@ for (const trigger of document.querySelectorAll("[data-blender-helper-jump]")) {
     window.setTimeout(() => els.blenderGithubProject?.focus({ preventScroll: true }), 260);
   });
 }
+if (els.blenderGithubToggle) {
+  setBlenderGithubExpanded(true);
+  els.blenderGithubToggle.addEventListener("dblclick", event => {
+    event.preventDefault();
+    setBlenderGithubExpanded(els.blenderGithubToggle.getAttribute("aria-expanded") !== "true");
+  });
+  els.blenderGithubToggle.addEventListener("keydown", event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    setBlenderGithubExpanded(els.blenderGithubToggle.getAttribute("aria-expanded") !== "true");
+  });
+}
+if (els.blenderGithubAdd) {
+  els.blenderGithubAdd.addEventListener("click", addBlenderGithubProject);
+}
 if (els.blenderGithubProject) {
   els.blenderGithubProject.addEventListener("change", () => {
     syncBlenderGithubProjectContext(els.blenderGithubProject.value);
@@ -15775,8 +15895,65 @@ if (els.blenderGithubProject) {
 }
 if (els.blenderGithubRefresh) {
   els.blenderGithubRefresh.addEventListener("click", () => loadBlenderGithubShare({
-    project: els.blenderGithubProject?.value || blenderGithubShareState?.project?.path || ""
+    project: els.blenderGithubProject?.value
+      || blenderGithubShareState?.project?.repositoryUrl
+      || blenderGithubShareState?.project?.path
+      || ""
   }));
+}
+if (els.blenderGithubBlendCards) {
+  els.blenderGithubBlendCards.addEventListener("dragstart", event => {
+    const card = event.target.closest(".blender-github-blend-card");
+    const path = card?.dataset.projectPath || "";
+    if (!card || !path || blenderGithubBusy) {
+      event.preventDefault();
+      return;
+    }
+    clearBlenderGithubCardClick();
+    blenderGithubDraggedPath = path;
+    blenderGithubDropCommitted = false;
+    card.classList.add("dragging");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-codex-blender-project", path);
+    event.dataTransfer.setData("text/plain", path);
+    if (typeof event.dataTransfer.setDragImage === "function") {
+      event.dataTransfer.setDragImage(card, 24, 24);
+    }
+  });
+  els.blenderGithubBlendCards.addEventListener("dragover", event => {
+    if (!blenderGithubDraggedPath) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const dragging = els.blenderGithubBlendCards.querySelector(".blender-github-blend-card.dragging");
+    const target = event.target.closest(".blender-github-blend-card");
+    if (!dragging) return;
+    if (!target) {
+      els.blenderGithubBlendCards.appendChild(dragging);
+      return;
+    }
+    if (target === dragging) return;
+    const bounds = target.getBoundingClientRect();
+    const horizontal = Math.abs(event.clientY - (bounds.top + bounds.height / 2)) < bounds.height * 0.42;
+    const placeAfter = horizontal
+      ? event.clientX > bounds.left + bounds.width / 2
+      : event.clientY > bounds.top + bounds.height / 2;
+    els.blenderGithubBlendCards.insertBefore(dragging, placeAfter ? target.nextSibling : target);
+  });
+  els.blenderGithubBlendCards.addEventListener("drop", event => {
+    if (!blenderGithubDraggedPath) return;
+    event.preventDefault();
+    blenderGithubDropCommitted = true;
+    saveBlenderGithubCardOrder();
+  });
+  els.blenderGithubBlendCards.addEventListener("dragend", () => {
+    const committed = blenderGithubDropCommitted;
+    els.blenderGithubBlendCards.querySelectorAll(".dragging").forEach(card => card.classList.remove("dragging"));
+    blenderGithubDraggedPath = "";
+    blenderGithubDropCommitted = false;
+    if (!committed && blenderGithubShareState) {
+      renderBlenderGithubBlendCards(blenderGithubShareState);
+    }
+  });
 }
 for (const input of document.querySelectorAll('input[name="blenderGithubVisibility"]')) {
   input.addEventListener("change", () => {
@@ -15886,9 +16063,6 @@ if (els.randomRealmBlenderProject) {
     updateRandomRealmProjectAddress();
     saveRandomRealmArtContext();
     loadRandomRealmBlenderObjects();
-    if (hasBlenderGithubShare()) {
-      loadBlenderGithubShare({ project: els.randomRealmBlenderProject.value });
-    }
   });
 }
 if (els.randomRealmSyncLiveSelection) {

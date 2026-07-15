@@ -10,7 +10,11 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from blender_github_share import BlenderGithubShareService  # noqa: E402
+from blender_github_share import (  # noqa: E402
+    BlenderGithubShareService,
+    filter_blender_discovery_directories,
+    is_blender_discovery_file,
+)
 
 
 def run(command, cwd=None):
@@ -44,15 +48,75 @@ def main():
         project.mkdir()
         blend = project / "Scene.blend"
         blend.write_bytes(b"BLENDER-test-version-one")
+        generated_backup = project / "Scene.codex-pre-test.blend"
+        generated_backup.write_bytes(b"backup blend")
+        asset_blend = project / "assets" / "models" / "Asset.blend"
+        asset_blend.parent.mkdir(parents=True)
+        asset_blend.write_bytes(b"asset blend")
+        roundtrip_blend = project / "RoundTrip" / "RoundTrip.blend"
+        roundtrip_blend.parent.mkdir()
+        roundtrip_blend.write_bytes(b"roundtrip blend")
         (project / "Scene.blend1").write_bytes(b"backup")
         (project / "textures").mkdir()
         (project / "textures" / "base.png").write_bytes(b"texture-one")
         (project / "renders").mkdir()
         (project / "renders" / "frame.png").write_bytes(b"render")
 
+        catalog_file = temp_root / "github-coop.json"
+        catalog_file.write_text(json.dumps({
+            "version": 1,
+            "repositories": [{
+                "name": "Cloud Project",
+                "repositoryUrl": "https://github.com/example/cloud-project.git",
+                "blendFile": "Cloud.blend",
+                "defaultBranch": "main",
+                "version": "v1.2.3",
+                "visibility": "private",
+            }],
+        }), encoding="utf-8")
+        cloud_service = BlenderGithubShareService(
+            temp_root / "cloud-share-config.json",
+            [temp_root],
+            catalog_file=catalog_file,
+        )
+        cloud_status = cloud_service.status()
+        require(cloud_status["project"]["name"] == "Cloud Project", "catalog repository was not selected")
+        require(not cloud_status["project"]["downloaded"], "cloud repository was marked as downloaded")
+        require(cloud_status["git"]["state"] == "cloud", "cloud repository has the wrong state")
+
+        cloud_local_app_data = temp_root / "CloudLocalAppData"
+        cloud_desktop_cli = cloud_local_app_data / "GitHubDesktop" / "bin" / "github.bat"
+        cloud_desktop_cli.parent.mkdir(parents=True)
+        cloud_desktop_cli.write_text("@echo off\n", encoding="ascii")
+        with patch.dict("os.environ", {"LOCALAPPDATA": str(cloud_local_app_data), "PATH": ""}, clear=False):
+            with patch.object(cloud_service, "_launch_desktop_command") as launch:
+                opened_cloud = cloud_service.open_desktop({
+                    "project": "https://github.com/example/cloud-project",
+                })
+                require(opened_cloud["action"] == "clone", "cloud repository did not enter the clone flow")
+                require("clone" in launch.call_args.args[0], "GitHub Desktop clone command was not used")
+                require(
+                    "https://github.com/example/cloud-project" in launch.call_args.args[0],
+                    "clone flow did not receive the repository URL",
+                )
+        try:
+            cloud_service.open_folder({"project": "https://github.com/example/cloud-project"})
+        except ValueError as error:
+            require("Clone" in str(error), "cloud folder error did not explain the clone requirement")
+        else:
+            raise AssertionError("cloud repository opened a nonexistent local folder")
+
         service = BlenderGithubShareService(temp_root / "share-config.json", [temp_root])
+        require(is_blender_discovery_file(blend, temp_root), "main blend file was hidden from discovery")
+        require(not is_blender_discovery_file(generated_backup, temp_root), "Codex backup entered project discovery")
+        require(not is_blender_discovery_file(asset_blend, temp_root), "asset blend entered project discovery")
+        require(not is_blender_discovery_file(roundtrip_blend, temp_root), "round-trip blend entered project discovery")
+        require(filter_blender_discovery_directories(["Project", "assets", "UnityExports"]) == ["Project"], "generated directories were not pruned")
+        require(Path(service._discover_latest_project()) == blend, "generated blend replaced the latest real project")
+        require(service._blend_files(project) == [blend.resolve()], "generated blends appeared as project cards")
         status = service.status(str(blend))
         require(status["git"]["state"] == "uninitialized", "new project should be uninitialized")
+        require(not status["collection"]["projects"], "an unpublished local project entered GitHub Coop")
 
         initialized = service.initialize({
             "project": str(blend),
@@ -111,6 +175,32 @@ def main():
         require(pushed["git"]["state"] == "dirty", "excluded local change should remain visible after push")
         require(run(["git", "rev-parse", "refs/tags/v0.1.1"], remote), "tag was not pushed")
 
+        try:
+            service.add_project({"project": str(blend)})
+        except ValueError as error:
+            require("Publish" in str(error), "unpublished repository returned the wrong error")
+        else:
+            raise AssertionError("an unpublished repository was added to GitHub Coop")
+        run(["git", "remote", "set-url", "origin", "https://github.com/example/project-one.git"], project)
+
+        sibling_blend = project / "Scene Alt.blend"
+        sibling_blend.write_bytes(b"BLENDER-sibling")
+        same_group = service.add_project({"project": str(sibling_blend)})
+        require(len(same_group["collection"]["projects"]) == 1, "files from one directory created duplicate project groups")
+        require(
+            same_group["collection"]["projects"][0]["repositoryUrl"] == "https://github.com/example/project-one",
+            "GitHub repository URL was not exposed to the project card",
+        )
+
+        unadded_project = temp_root / "Not Added"
+        unadded_project.mkdir()
+        unadded_blend = unadded_project / "Hidden.blend"
+        unadded_blend.write_bytes(b"BLENDER-unadded")
+        require(
+            all(item["path"] != str(unadded_blend.resolve()) for item in same_group["collection"]["projects"]),
+            "an unadded Blender project entered GitHub Coop",
+        )
+
         second_project = temp_root / "Project Two"
         second_project.mkdir()
         second_blend = second_project / "Other.blend"
@@ -132,10 +222,48 @@ def main():
             "scope": "project",
             "confirmPublic": True,
         })
+
+        with patch("blender_github_share.webbrowser.open") as open_web:
+            opened = service.open_repository({"project": str(second_blend)})
+            require(opened["url"] == "https://github.com/new", "missing remote did not open GitHub's new repository page")
+            open_web.assert_called_once_with("https://github.com/new")
+
+        initialized_second = service.initialize({
+            "project": str(second_blend),
+            "visibility": "public",
+            "scope": "project",
+            "confirmPublic": True,
+        })
+        require(initialized_second["git"]["initialized"], "second repository was not initialized")
+        run(["git", "config", "user.name", "Codex Console Test"], second_project)
+        run(["git", "config", "user.email", "codex-console@example.invalid"], second_project)
+        service.commit({
+            "project": str(second_blend),
+            "visibility": "public",
+            "scope": "project",
+            "version": "v0.2.0",
+            "message": "Second Blender project",
+            "confirmPublic": True,
+        })
+        run(["git", "remote", "add", "origin", "https://github.com/example/project-two.git"], second_project)
+        added_second = service.add_project({"project": str(second_blend)})
+        require(len(added_second["collection"]["projects"]) == 2, "published repositories were not kept in GitHub Coop")
+        reordered = service.reorder_projects({
+            "project": str(second_blend),
+            "order": [str(second_blend), str(sibling_blend)],
+        })
+        require(
+            [item["name"] for item in reordered["collection"]["projects"]] == ["project-two", "project-one"],
+            "GitHub repository card order was not persisted",
+        )
+
         first_config = service.status(str(blend))["config"]
         second_config = service.status(str(second_blend))["config"]
         require(first_config["visibility"] == "private", "second project overwrote first project visibility")
         require(second_config["visibility"] == "public", "second project configuration was not saved")
+        collection = service.status(str(second_blend))["collection"]["projects"]
+        require(len(collection) == 2, "GitHub Coop did not keep the two published repositories")
+        require(all(item["path"] != str(unadded_blend.resolve()) for item in collection), "unadded project appeared in the picker collection")
 
         config_payload = json.loads((temp_root / "share-config.json").read_text(encoding="utf-8"))
         require(len(config_payload.get("projects", {})) == 2, "configurations were not stored per project")
@@ -145,16 +273,18 @@ def main():
         desktop_cli.parent.mkdir(parents=True)
         desktop_cli.write_text("@echo off\n", encoding="ascii")
         with patch.dict("os.environ", {"LOCALAPPDATA": str(local_app_data)}, clear=False):
-            with patch("blender_github_share.subprocess.Popen") as launch:
+            with patch.object(service, "_launch_desktop_command") as launch:
                 opened = service.open_desktop({"project": str(blend)})
                 require(opened["fallback"] is False, "GitHub Desktop launcher used the web fallback")
                 require(launch.called, "GitHub Desktop was not launched")
+                require("open" in launch.call_args.args[0], "local repository did not use GitHub Desktop open")
                 require(str(project) in launch.call_args.args[0], "GitHub Desktop did not receive the project directory")
 
-        with patch("blender_github_share.webbrowser.open") as open_web:
-            opened = service.open_repository({"project": str(second_blend)})
-            require(opened["url"] == "https://github.com/new", "missing remote did not open GitHub's new repository page")
-            open_web.assert_called_once_with("https://github.com/new")
+        if sys.platform == "win32":
+            with patch("blender_github_share.os.startfile") as open_folder:
+                opened = service.open_folder({"project": str(sibling_blend)})
+                require(opened["path"] == str(project.resolve()), "project folder response used the wrong repository root")
+                open_folder.assert_called_once_with(str(project.resolve()))
 
     print("PASS Blender GitHub Share backend")
 

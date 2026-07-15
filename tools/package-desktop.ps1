@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.3.0",
+  [string]$Version = "0.3.1",
   [string]$OutputDir = "dist",
   [ValidateSet("all", "developer", "lite")]
   [string]$Edition = "all"
@@ -24,6 +24,7 @@ $Items = @(
   "app.js",
   "world_console.py",
   "blender_github_share.py",
+  "github-coop.json",
   "console_update.py",
   "app-manifest.json",
   "site.webmanifest",
