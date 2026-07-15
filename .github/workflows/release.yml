@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v0.3.3
+        description: Release version, for example v0.3.4
         required: true
-        default: v0.3.3
+        default: v0.3.4
   push:
     tags:
       - "v*"
@@ -39,7 +39,7 @@ jobs:
             $tag = "v$($manifest.version)"
           }
           if ([string]::IsNullOrWhiteSpace($tag)) {
-            $tag = "v0.3.3"
+            $tag = "v0.3.4"
           }
           if (-not $tag.StartsWith("v")) {
             $tag = "v$tag"
@@ -133,6 +133,6 @@ jobs:
 
             For Android, run `Start-ControlConsole-LAN.vbs` on the PC first, then open the APK and enter the PC LAN URL.
 
-            Windows portable builds now check GitHub automatically. Updates are verified with the attached SHA-256 files before installation, and each Windows user keeps separate local data.
+            Windows portable builds check Codex Console and Codex World automatically. Updates are verified with SHA-256 before installation, and each Windows user keeps separate local data.
 
             The Developer build includes Blender > Helper > GitHub Coop. Shared repositories can appear before they are downloaded, then open the correct Clone or local repository flow in GitHub Desktop.

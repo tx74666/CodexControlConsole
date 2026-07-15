@@ -51,6 +51,17 @@ def main():
         })
         require(normalized["version"] == "0.3.1", "direct release manifest was not normalized")
         require(normalized["assets"][0]["sha256"] == "a" * 64, "inline release checksum was discarded")
+        api_normalized = service._normalize_latest({
+            "tag_name": "v0.3.1",
+            "html_url": "https://github.com/example/repository/releases/tag/v0.3.1",
+            "assets": [{
+                "name": "CodexControlConsole-developer-windows.zip",
+                "browser_download_url": "https://github.com/example/repository/releases/download/v0.3.1/developer.zip",
+                "size": 100,
+                "digest": "sha256:" + "b" * 64,
+            }],
+        }, api=True)
+        require(api_normalized["assets"][0]["sha256"] == "b" * 64, "GitHub asset digest was discarded")
         state = service._default_state()
         state["latest"] = {
             "version": "0.3.1",

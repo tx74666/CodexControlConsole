@@ -18,6 +18,7 @@ const storageKeys = {
   downloadIntake: "codexControl.downloadIntake.v1",
   workspaceTodos: "codexControl.workspaceTodos.v1",
   tutorialMode: "codexControl.tutorialMode.v1",
+  updateProduct: "codexControl.updateProduct.v1",
   randomRealmArtContext: "codexControl.randomRealmArtContext.v1",
   blenderView: "codexControl.blenderView.v1",
   blenderPromptConfig: "codexControl.blenderPromptConfig.v1",
@@ -771,11 +772,17 @@ const i18n = {
     consoleUpdateRefresh: "检查更新",
     consoleUpdateInstall: "更新",
     consoleUpdateDownload: "下载",
+    consoleUpdateInstallProduct: "安装",
+    consoleUpdateOpen: "打开",
     consoleUpdateRelease: "Release",
-    consoleUpdateTop: version => `Update v${version}`,
+    consoleUpdateTop: (name, version) => `更新 ${name} v${version}`,
+    consoleUpdateTopCount: count => `${count} 项更新`,
+    consoleUpdateNotInstalled: "尚未安装",
+    consoleUpdateSource: "源码目录由 GitHub Desktop 管理",
     consoleUpdateInstalling: "正在下载并校验",
     consoleUpdateRestarting: "即将重启",
     consoleUpdateConfirm: version => `更新到 v${version} 后 Codex Console 会自动重启。现在更新？`,
+    worldUpdateConfirm: (version, installed) => `${installed ? "更新" : "安装"} Codex World v${version}？`,
     consoleUpdateFailed: message => `更新失败：${message}`,
     todoGroupPieces: "Pieces / 部件",
     todoGroupTextures: "Blend -> Unity 贴图",
@@ -1438,11 +1445,17 @@ const i18n = {
     consoleUpdateRefresh: "Check for updates",
     consoleUpdateInstall: "Update",
     consoleUpdateDownload: "Download",
+    consoleUpdateInstallProduct: "Install",
+    consoleUpdateOpen: "Open",
     consoleUpdateRelease: "Release",
-    consoleUpdateTop: version => `Update v${version}`,
+    consoleUpdateTop: (name, version) => `Update ${name} v${version}`,
+    consoleUpdateTopCount: count => `${count} updates`,
+    consoleUpdateNotInstalled: "Not installed",
+    consoleUpdateSource: "Source checkout is managed through GitHub Desktop",
     consoleUpdateInstalling: "Downloading and verifying",
     consoleUpdateRestarting: "Restarting",
     consoleUpdateConfirm: version => `Codex Console will restart after updating to v${version}. Update now?`,
+    worldUpdateConfirm: (version, installed) => `${installed ? "Update" : "Install"} Codex World v${version}?`,
     consoleUpdateFailed: message => `Update failed: ${message}`,
     todoGroupPieces: "Pieces",
     todoGroupTextures: "Blend -> Unity Textures",
@@ -1626,6 +1639,10 @@ const els = {
   openGithubDownloads: document.getElementById("openGithubDownloads"),
   githubDownloadsLink: document.getElementById("githubDownloadsLink"),
   githubDownloadsMeta: document.getElementById("githubDownloadsMeta"),
+  updateProductConsole: document.getElementById("updateProductConsole"),
+  updateProductWorld: document.getElementById("updateProductWorld"),
+  updateProductConsoleBadge: document.getElementById("updateProductConsoleBadge"),
+  updateProductWorldBadge: document.getElementById("updateProductWorldBadge"),
   consoleUpdateCurrent: document.getElementById("consoleUpdateCurrent"),
   consoleUpdateStatus: document.getElementById("consoleUpdateStatus"),
   consoleUpdateRelease: document.getElementById("consoleUpdateRelease"),
@@ -1849,8 +1866,9 @@ let blenderGithubCardClickTimer = null;
 let blenderGithubDraggedPath = "";
 let blenderGithubDropCommitted = false;
 let githubDownloadsInfo = null;
-let consoleUpdateState = null;
-let consoleUpdateBusy = false;
+let productUpdateStates = { console: null, world: null };
+let productUpdateBusy = false;
+let selectedUpdateProduct = localStorage.getItem(storageKeys.updateProduct) === "world" ? "world" : "console";
 let desktopLayoutState = null;
 let desktopLayoutBusy = false;
 let desktopLayoutNotice = "";
@@ -2123,7 +2141,9 @@ async function loadModuleData(id) {
       break;
     case "workspace":
       if (hasWorkspace) await loadGithubDownloadsInfo();
-      if (els.consoleUpdateStatus) await loadConsoleUpdateStatus({ check: true, quiet: true });
+      if (els.consoleUpdateStatus && !productUpdateStates.console && !productUpdateStates.world) {
+        await loadProductUpdateStatuses({ check: true, quiet: true });
+      }
       if (els.desktopLayoutPlan && !desktopLayoutState) await loadDesktopLayout({ quiet: true });
       if (hasMaterialWorkspace && downloadIntakeEnabled) await loadMaterialCandidates();
       break;
@@ -10604,44 +10624,122 @@ async function openGithubDownloads() {
   }
 }
 
+const updateProductIds = ["console", "world"];
+
+function updateProductName(product) {
+  return product === "world" ? "Codex World" : "Codex Console";
+}
+
+function updateProductEndpoint(product) {
+  return product === "world" ? "/api/world/update" : "/api/console/update";
+}
+
+function selectedProductUpdateState() {
+  return productUpdateStates[selectedUpdateProduct] || {};
+}
+
+function selectUpdateProduct(product, options = {}) {
+  selectedUpdateProduct = product === "world" ? "world" : "console";
+  if (options.persist !== false) {
+    localStorage.setItem(storageKeys.updateProduct, selectedUpdateProduct);
+  }
+  renderConsoleUpdate();
+}
+
+function renderUpdateProductButton(product, button, badge) {
+  if (!button || !badge) return;
+  const state = productUpdateStates[product] || {};
+  const latest = String(state.latestVersion || "").replace(/^v/i, "");
+  const current = String(state.currentVersion || "").replace(/^v/i, "");
+  const version = state.available ? latest : current || latest;
+  const selected = selectedUpdateProduct === product;
+  button.classList.toggle("primary-action", selected);
+  button.setAttribute("aria-selected", String(selected));
+  badge.textContent = version ? `v${version}` : "--";
+  badge.classList.toggle("available", Boolean(state.available));
+}
+
+function availableProductUpdates() {
+  return updateProductIds.filter(product => productUpdateStates[product]?.available);
+}
+
 function renderConsoleUpdate() {
   if (!els.consoleUpdateStatus) return;
-  const state = consoleUpdateState || {};
-  const current = String(state.currentVersion || "0.3.3").replace(/^v/i, "");
+  const state = selectedProductUpdateState();
+  const product = selectedUpdateProduct;
+  const current = String(state.currentVersion || "").replace(/^v/i, "");
   const latest = String(state.latestVersion || "").replace(/^v/i, "");
+  const installed = product !== "world" || state.installed !== false;
+
+  renderUpdateProductButton("console", els.updateProductConsole, els.updateProductConsoleBadge);
+  renderUpdateProductButton("world", els.updateProductWorld, els.updateProductWorldBadge);
+
   if (els.consoleUpdateCurrent) {
-    els.consoleUpdateCurrent.textContent = `v${current}`;
+    els.consoleUpdateCurrent.textContent = installed && current ? `v${current}` : "--";
   }
   if (els.consoleUpdateStatus) {
-    els.consoleUpdateStatus.textContent = consoleUpdateBusy
+    els.consoleUpdateStatus.textContent = productUpdateBusy
       ? text("consoleUpdateChecking")
-      : state.available
-        ? text("consoleUpdateAvailable", latest)
-        : latest
-          ? text("consoleUpdateLatest")
-          : text("consoleUpdateNoRelease");
+      : !installed
+        ? latest
+          ? `${text("consoleUpdateNotInstalled")} / v${latest}`
+          : text("consoleUpdateNotInstalled")
+        : state.available
+          ? text("consoleUpdateAvailable", latest)
+          : latest
+            ? text("consoleUpdateLatest")
+            : text("consoleUpdateNoRelease");
+    els.consoleUpdateStatus.title = state.installationMode === "source" ? text("consoleUpdateSource") : "";
   }
+
+  const loadedStates = updateProductIds.map(id => productUpdateStates[id]).filter(Boolean);
   if (els.consoleUpdateAuto) {
-    els.consoleUpdateAuto.checked = state.autoCheck !== false;
-    els.consoleUpdateAuto.disabled = consoleUpdateBusy;
+    els.consoleUpdateAuto.checked = !loadedStates.some(item => item.autoCheck === false);
+    els.consoleUpdateAuto.disabled = productUpdateBusy;
   }
   if (els.consoleUpdateRefresh) {
-    els.consoleUpdateRefresh.disabled = consoleUpdateBusy;
+    els.consoleUpdateRefresh.disabled = productUpdateBusy;
   }
   if (els.consoleUpdateInstall) {
-    els.consoleUpdateInstall.hidden = !state.available;
-    els.consoleUpdateInstall.disabled = consoleUpdateBusy;
-    els.consoleUpdateInstall.textContent = text(state.canInstall ? "consoleUpdateInstall" : "consoleUpdateDownload");
+    let action = "";
+    if (state.available) {
+      action = state.canInstall
+        ? installed ? text("consoleUpdateInstall") : text("consoleUpdateInstallProduct")
+        : text("consoleUpdateRelease");
+    } else if (product === "world" && state.canOpen) {
+      action = text("consoleUpdateOpen");
+    }
+    els.consoleUpdateInstall.hidden = !action;
+    els.consoleUpdateInstall.disabled = productUpdateBusy;
+    els.consoleUpdateInstall.textContent = action;
   }
   if (els.consoleUpdateRelease) {
-    els.consoleUpdateRelease.href = state.releaseUrl || "https://github.com/tx74666/CodexControlConsole/releases/latest";
-    els.consoleUpdateRelease.hidden = !state.available;
+    els.consoleUpdateRelease.href = state.releaseUrl
+      || (product === "world"
+        ? "https://github.com/tx74666/CodexWorldConsole/releases/latest"
+        : "https://github.com/tx74666/CodexControlConsole/releases/latest");
+    els.consoleUpdateRelease.hidden = true;
   }
+
   if (els.consoleUpdateTop) {
-    els.consoleUpdateTop.hidden = !state.available;
-    els.consoleUpdateTop.disabled = consoleUpdateBusy;
-    els.consoleUpdateTop.textContent = state.available ? text("consoleUpdateTop", latest) : "";
-    els.consoleUpdateTop.title = state.available ? text("consoleUpdateAvailable", latest) : "";
+    const updates = availableProductUpdates();
+    els.consoleUpdateTop.hidden = updates.length === 0;
+    els.consoleUpdateTop.disabled = productUpdateBusy;
+    els.consoleUpdateTop.dataset.product = updates.length === 1 ? updates[0] : "";
+    if (updates.length === 1) {
+      const update = productUpdateStates[updates[0]];
+      els.consoleUpdateTop.textContent = text(
+        "consoleUpdateTop",
+        updateProductName(updates[0]),
+        String(update.latestVersion || "").replace(/^v/i, "")
+      );
+    } else {
+      els.consoleUpdateTop.textContent = updates.length ? text("consoleUpdateTopCount", updates.length) : "";
+    }
+    els.consoleUpdateTop.title = updates.map(id => {
+      const update = productUpdateStates[id];
+      return `${updateProductName(id)} v${String(update.latestVersion || "").replace(/^v/i, "")}`;
+    }).join(" / ");
   }
   if (els.consoleUpdateError) {
     const message = String(state.updateError || state.error || "").trim();
@@ -10650,65 +10748,119 @@ function renderConsoleUpdate() {
   }
 }
 
-async function loadConsoleUpdateStatus(options = {}) {
-  if (!els.consoleUpdateStatus || consoleUpdateBusy) return;
-  consoleUpdateBusy = true;
+async function fetchProductUpdateStatus(product, options = {}) {
+  const params = new URLSearchParams();
+  if (options.force) params.set("force", "1");
+  else if (options.check) params.set("check", "auto");
+  const response = await fetch(`${updateProductEndpoint(product)}${params.size ? `?${params}` : ""}`, {
+    cache: "no-store"
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  if (options.quiet && payload.error) payload.error = "";
+  return payload;
+}
+
+async function loadProductUpdateStatuses(options = {}) {
+  if (!els.consoleUpdateStatus || productUpdateBusy) return;
+  productUpdateBusy = true;
   renderConsoleUpdate();
   try {
-    const params = new URLSearchParams();
-    if (options.force) params.set("force", "1");
-    else if (options.check) params.set("check", "auto");
-    const response = await fetch(`/api/console/update${params.size ? `?${params}` : ""}`, { cache: "no-store" });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    if (options.quiet && payload.error) payload.error = "";
-    consoleUpdateState = payload;
-  } catch (error) {
-    consoleUpdateState = {
-      ...(consoleUpdateState || {}),
-      error: options.quiet ? "" : error.message
-    };
+    const results = await Promise.all(updateProductIds.map(async product => {
+      try {
+        return [product, await fetchProductUpdateStatus(product, options)];
+      } catch (error) {
+        return [product, {
+          ...(productUpdateStates[product] || {}),
+          error: options.quiet ? "" : error.message
+        }];
+      }
+    }));
+    results.forEach(([product, state]) => {
+      productUpdateStates[product] = state;
+    });
   } finally {
-    consoleUpdateBusy = false;
+    productUpdateBusy = false;
     renderConsoleUpdate();
   }
 }
 
-async function saveConsoleUpdatePreference() {
-  if (!els.consoleUpdateAuto || consoleUpdateBusy) return;
-  consoleUpdateBusy = true;
+async function saveProductUpdatePreference() {
+  if (!els.consoleUpdateAuto || productUpdateBusy) return;
+  productUpdateBusy = true;
   renderConsoleUpdate();
+  const autoCheck = els.consoleUpdateAuto.checked;
   try {
-    consoleUpdateState = await postJson("/api/console/update/config", {
-      autoCheck: els.consoleUpdateAuto.checked
+    const results = await Promise.all(updateProductIds.map(async product => {
+      const state = await postJson(`${updateProductEndpoint(product)}/config`, { autoCheck });
+      return [product, state];
+    }));
+    results.forEach(([product, state]) => {
+      productUpdateStates[product] = state;
     });
   } catch (error) {
-    consoleUpdateState = { ...(consoleUpdateState || {}), error: error.message };
+    productUpdateStates[selectedUpdateProduct] = {
+      ...selectedProductUpdateState(),
+      error: error.message
+    };
   } finally {
-    consoleUpdateBusy = false;
+    productUpdateBusy = false;
     renderConsoleUpdate();
   }
 }
 
-async function installConsoleUpdate() {
-  if (!consoleUpdateState?.available || consoleUpdateBusy) return;
-  if (!consoleUpdateState.canInstall) {
-    window.open(consoleUpdateState.releaseUrl, "_blank", "noopener,noreferrer");
+async function installSelectedProductUpdate(product = selectedUpdateProduct) {
+  if (productUpdateBusy) return;
+  selectUpdateProduct(product);
+  const state = productUpdateStates[product] || {};
+
+  if (!state.available) {
+    if (product === "world" && state.canOpen) {
+      try {
+        await postJson("/api/world/update/open", {});
+      } catch (error) {
+        productUpdateStates.world = { ...state, error: error.message };
+        renderConsoleUpdate();
+      }
+    }
     return;
   }
-  if (!window.confirm(text("consoleUpdateConfirm", consoleUpdateState.latestVersion))) return;
-  consoleUpdateBusy = true;
+  if (!state.canInstall) {
+    window.open(state.releaseUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  const confirmed = product === "world"
+    ? window.confirm(text("worldUpdateConfirm", state.latestVersion, state.installed !== false))
+    : window.confirm(text("consoleUpdateConfirm", state.latestVersion));
+  if (!confirmed) return;
+
+  productUpdateBusy = true;
   if (els.consoleUpdateStatus) els.consoleUpdateStatus.textContent = text("consoleUpdateInstalling");
   if (els.consoleUpdateError) els.consoleUpdateError.hidden = true;
   try {
-    const payload = await postJson("/api/console/update/install", {});
-    consoleUpdateState = payload;
-    if (els.consoleUpdateStatus) els.consoleUpdateStatus.textContent = text("consoleUpdateRestarting");
+    const payload = await postJson(`${updateProductEndpoint(product)}/install`, {});
+    productUpdateStates[product] = payload;
+    if (product === "console" && payload.restarting) {
+      if (els.consoleUpdateStatus) els.consoleUpdateStatus.textContent = text("consoleUpdateRestarting");
+      return;
+    }
   } catch (error) {
-    consoleUpdateState = { ...(consoleUpdateState || {}), error: error.message };
-    consoleUpdateBusy = false;
-    renderConsoleUpdate();
+    productUpdateStates[product] = { ...state, error: error.message };
   }
+  productUpdateBusy = false;
+  renderConsoleUpdate();
+}
+
+async function handleProductUpdateTop() {
+  const updates = availableProductUpdates();
+  if (!updates.length) return;
+  if (updates.length === 1) {
+    await installSelectedProductUpdate(updates[0]);
+    return;
+  }
+  selectUpdateProduct(updates[0]);
+  activateModule("workspace", true);
 }
 
 function selectedDesktopLayoutPlan() {
@@ -16512,16 +16664,22 @@ if (hasWorkspace && els.githubDownloadsLink) {
   });
 }
 if (els.consoleUpdateAuto) {
-  els.consoleUpdateAuto.addEventListener("change", saveConsoleUpdatePreference);
+  els.consoleUpdateAuto.addEventListener("change", saveProductUpdatePreference);
 }
 if (els.consoleUpdateRefresh) {
-  els.consoleUpdateRefresh.addEventListener("click", () => loadConsoleUpdateStatus({ force: true }));
+  els.consoleUpdateRefresh.addEventListener("click", () => loadProductUpdateStatuses({ force: true }));
 }
 if (els.consoleUpdateInstall) {
-  els.consoleUpdateInstall.addEventListener("click", installConsoleUpdate);
+  els.consoleUpdateInstall.addEventListener("click", () => installSelectedProductUpdate());
 }
 if (els.consoleUpdateTop) {
-  els.consoleUpdateTop.addEventListener("click", installConsoleUpdate);
+  els.consoleUpdateTop.addEventListener("click", handleProductUpdateTop);
+}
+if (els.updateProductConsole) {
+  els.updateProductConsole.addEventListener("click", () => selectUpdateProduct("console"));
+}
+if (els.updateProductWorld) {
+  els.updateProductWorld.addEventListener("click", () => selectUpdateProduct("world"));
 }
 if (els.desktopLayoutPlan) {
   els.desktopLayoutPlan.addEventListener("change", selectDesktopLayoutPlan);
@@ -16610,6 +16768,6 @@ renderRandomRealmArtContext();
 renderBlenderPromptBuilder();
 runtimeActivityReady = true;
 syncRuntimeActivity({ resume: true });
-loadConsoleUpdateStatus({ check: true, quiet: true });
+loadProductUpdateStatuses({ check: true, quiet: true });
 loadDesktopLayout({ quiet: true });
 scheduleClockTick();

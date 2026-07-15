@@ -37,6 +37,7 @@ from blender_github_share import (
     is_blender_discovery_file,
 )
 from console_update import ConsoleUpdateService
+from world_update import WorldUpdateService
 from desktop_layout import DesktopLayoutService
 
 
@@ -340,6 +341,7 @@ CONSOLE_UPDATE = ConsoleUpdateService(
     current_console_edition,
     shutdown_callback=shutdown_active_server,
 )
+WORLD_UPDATE = WorldUpdateService(APP_DIR, USER_DATA_DIR, WORLD_CONSOLE_DIR)
 
 
 def console_edition_query(edition=None):
@@ -758,6 +760,13 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 force=query.get("force", [""])[0].lower() in {"1", "true", "yes"},
             ))
             return
+        if parsed.path == "/api/world/update":
+            query = urllib.parse.parse_qs(parsed.query)
+            self.send_json(WORLD_UPDATE.status(
+                check=query.get("check", [""])[0].lower() in {"1", "true", "yes", "auto"},
+                force=query.get("force", [""])[0].lower() in {"1", "true", "yes"},
+            ))
+            return
         if parsed.path == "/api/console/desktop-layout":
             if not self.require_local_request():
                 return
@@ -985,13 +994,39 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 self.send_json(write_console_state(payload))
                 return
             if parsed.path == "/api/console/update/config":
+                if not self.require_local_request():
+                    return
                 self.send_json(CONSOLE_UPDATE.configure(payload))
                 return
             if parsed.path == "/api/console/update/install":
+                if not self.require_local_request():
+                    return
                 self.send_json(CONSOLE_UPDATE.install())
                 return
             if parsed.path == "/api/console/update/open":
+                if not self.require_local_request():
+                    return
                 self.send_json(CONSOLE_UPDATE.open_release())
+                return
+            if parsed.path == "/api/world/update/config":
+                if not self.require_local_request():
+                    return
+                self.send_json(WORLD_UPDATE.configure(payload))
+                return
+            if parsed.path == "/api/world/update/install":
+                if not self.require_local_request():
+                    return
+                self.send_json(WORLD_UPDATE.install())
+                return
+            if parsed.path == "/api/world/update/open":
+                if not self.require_local_request():
+                    return
+                self.send_json(WORLD_UPDATE.open())
+                return
+            if parsed.path == "/api/world/update/release":
+                if not self.require_local_request():
+                    return
+                self.send_json(WORLD_UPDATE.open_release())
                 return
             if parsed.path == "/api/console/desktop-layout/select":
                 if not self.require_local_request():

@@ -174,6 +174,10 @@ class ConsoleUpdateService:
             if not url or not name:
                 continue
             checksum = str(item.get("sha256") or "").strip().lower()
+            if api and not checksum:
+                digest = str(item.get("digest") or "").strip().lower()
+                if digest.startswith("sha256:"):
+                    checksum = digest.removeprefix("sha256:")
             assets.append({
                 "name": name,
                 "url": url,

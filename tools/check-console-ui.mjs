@@ -42,11 +42,12 @@ function staticChecks() {
     "GitHub Coop catalog must contain only the unified Blender Projects repository"
   );
   assert(existsSync(join(projectRoot, "console_update.py")), "console updater backend is missing");
+  assert(existsSync(join(projectRoot, "world_update.py")), "Codex World updater backend is missing");
   assert(existsSync(join(projectRoot, "tools", "apply_update.py")), "portable update helper is missing");
   assert(existsSync(join(projectRoot, "desktop_layout.py")), "desktop layout backend is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.3.3", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.3.4", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   return Array.from(versions)[0];
@@ -238,43 +239,112 @@ async function runBrowserChecks(client) {
     current: document.querySelector('#consoleUpdateCurrent')?.textContent?.trim() || '',
     auto: document.querySelector('#consoleUpdateAuto')?.checked,
     controls: Boolean(document.querySelector('#consoleUpdateRefresh') && document.querySelector('#consoleUpdateInstall')),
+    products: document.querySelectorAll('[data-update-product]').length,
+    badges: Array.from(document.querySelectorAll('.update-product-badge')).map(item => item.textContent?.trim() || ''),
     topVisible: document.querySelector('#consoleUpdateTop')?.getBoundingClientRect().width > 0
   })`);
-  assert(updateState.current === `v${expectedAppVersion}` && typeof updateState.auto === "boolean" && updateState.controls, `update controls are incomplete: ${JSON.stringify(updateState)}`);
+  assert(
+    updateState.current === `v${expectedAppVersion}`
+      && typeof updateState.auto === "boolean"
+      && updateState.controls
+      && updateState.products === 2
+      && updateState.badges.every(Boolean),
+    `update controls are incomplete: ${JSON.stringify(updateState)}`
+  );
   assert(!updateState.topVisible, `inactive update control still occupies the top bar: ${JSON.stringify(updateState)}`);
 
   const updateBannerState = await evaluate(client, `(() => {
-    const original = consoleUpdateState;
-    consoleUpdateState = {
-      currentVersion: '0.3.2',
-      latestVersion: '0.3.3',
-      available: true,
-      autoCheck: true,
-      canInstall: false,
-      releaseUrl: 'https://github.com/tx74666/CodexControlConsole/releases/tag/v0.3.3'
+    const originalStates = productUpdateStates;
+    const originalProduct = selectedUpdateProduct;
+    productUpdateStates = {
+      console: {
+        currentVersion: '0.3.3', latestVersion: '0.3.4', available: true,
+        autoCheck: true, canInstall: true,
+        releaseUrl: 'https://github.com/tx74666/CodexControlConsole/releases/tag/v0.3.4'
+      },
+      world: {
+        currentVersion: '0.1.6', latestVersion: '0.1.7', available: true,
+        installed: true, autoCheck: true, canInstall: true,
+        releaseUrl: 'https://github.com/tx74666/CodexWorldConsole/releases/tag/v0.1.7'
+      }
     };
+    selectUpdateProduct('console', { persist: false });
     renderConsoleUpdate();
     const button = document.querySelector('#consoleUpdateTop');
-    const available = {
+    const bothAvailable = {
       visible: !button?.hidden && button?.getBoundingClientRect().width > 0,
       text: button?.textContent?.trim() || '',
       width: button?.getBoundingClientRect().width || 0,
-      releaseVisible: !document.querySelector('#consoleUpdateRelease')?.hidden
+      availableBadges: document.querySelectorAll('.update-product-badge.available').length
     };
-    consoleUpdateState = { ...consoleUpdateState, latestVersion: '0.3.2', available: false };
+    productUpdateStates.world = { ...productUpdateStates.world, latestVersion: '0.1.6', available: false };
+    renderConsoleUpdate();
+    const oneAvailable = { text: button?.textContent?.trim() || '', product: button?.dataset.product || '' };
+    productUpdateStates.console = { ...productUpdateStates.console, latestVersion: '0.3.3', available: false };
     renderConsoleUpdate();
     const hiddenWhenCurrent = Boolean(button?.hidden);
-    consoleUpdateState = original;
+    productUpdateStates = originalStates;
+    selectedUpdateProduct = originalProduct;
     renderConsoleUpdate();
-    return { available, hiddenWhenCurrent };
+    return { bothAvailable, oneAvailable, hiddenWhenCurrent };
   })()`);
   assert(
-    updateBannerState.available.visible
-      && /^Update v0\.3\.3$/i.test(updateBannerState.available.text)
-      && updateBannerState.available.width >= 120
-      && updateBannerState.available.releaseVisible
+    updateBannerState.bothAvailable.visible
+      && updateBannerState.bothAvailable.text.startsWith('2 ')
+      && updateBannerState.bothAvailable.width >= 120
+      && updateBannerState.bothAvailable.availableBadges === 2
+      && updateBannerState.oneAvailable.text.endsWith('Codex Console v0.3.4')
+      && updateBannerState.oneAvailable.product === 'console'
       && updateBannerState.hiddenWhenCurrent,
     `top update area does not reflect version availability: ${JSON.stringify(updateBannerState)}`
+  );
+
+  const oneClickUpdate = await evaluate(client, `(async () => {
+    const originalStates = productUpdateStates;
+    const originalProduct = selectedUpdateProduct;
+    const originalFetch = window.fetch;
+    const originalConfirm = window.confirm;
+    let request = null;
+    productUpdateStates = {
+      console: { currentVersion: '0.3.4', latestVersion: '0.3.4', available: false, autoCheck: true },
+      world: {
+        currentVersion: '', latestVersion: '0.1.7', available: true, installed: false,
+        autoCheck: true, canInstall: true,
+        releaseUrl: 'https://github.com/tx74666/CodexWorldConsole/releases/tag/v0.1.7'
+      }
+    };
+    window.confirm = () => true;
+    window.fetch = async (input, init = {}) => {
+      const url = String(input || '');
+      if (url.endsWith('/api/world/update/install')) {
+        request = { url, method: init.method || 'GET' };
+        return new Response(JSON.stringify({
+          currentVersion: '0.1.7', latestVersion: '0.1.7', available: false,
+          installed: true, autoCheck: true, canInstall: false, canOpen: true
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      selectUpdateProduct('console', { persist: false });
+      renderConsoleUpdate();
+      document.querySelector('#consoleUpdateTop')?.click();
+      for (let attempt = 0; attempt < 20 && !request; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      return request;
+    } finally {
+      window.fetch = originalFetch;
+      window.confirm = originalConfirm;
+      productUpdateStates = originalStates;
+      selectedUpdateProduct = originalProduct;
+      productUpdateBusy = false;
+      renderConsoleUpdate();
+    }
+  })()`, true);
+  assert(
+    oneClickUpdate?.url.endsWith('/api/world/update/install') && oneClickUpdate.method === 'POST',
+    `top update action targeted the wrong product: ${JSON.stringify(oneClickUpdate)}`
   );
 
   await clickModule(client, "workspace");
