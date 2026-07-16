@@ -3787,7 +3787,7 @@ function applyLanguage() {
     node.setAttribute("placeholder", text(node.dataset.i18nPlaceholder));
   }
   if (els.languageToggle) {
-    els.languageToggle.textContent = language === "zh" ? "EN" : "中文";
+    els.languageToggle.textContent = language === "zh" ? "CN" : "EN";
   }
   applyTheme();
   applyTutorialMode();

@@ -47,7 +47,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "desktop_layout.py")), "desktop layout backend is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.3.4", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.3.5", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   return Array.from(versions)[0];
@@ -214,6 +214,23 @@ async function checkBlenderTransition(client, target) {
 
 async function runBrowserChecks(client) {
   await waitForDocument(client);
+  const languageToggleState = await evaluate(client, `(() => {
+    const button = document.querySelector('#languageToggle');
+    const originalLanguage = language;
+    language = 'en';
+    applyLanguage();
+    const english = button?.textContent?.trim() || '';
+    language = 'zh';
+    applyLanguage();
+    const chinese = button?.textContent?.trim() || '';
+    language = originalLanguage;
+    applyLanguage();
+    return { english, chinese };
+  })()`);
+  assert(
+    languageToggleState.english === "EN" && languageToggleState.chinese === "CN",
+    `language indicator is reversed: ${JSON.stringify(languageToggleState)}`
+  );
   await waitForValue(
     () => evaluate(client, "document.querySelector('.module-link.active')?.dataset.moduleId || ''"),
     value => value === "blender",
@@ -258,9 +275,9 @@ async function runBrowserChecks(client) {
     const originalProduct = selectedUpdateProduct;
     productUpdateStates = {
       console: {
-        currentVersion: '0.3.3', latestVersion: '0.3.4', available: true,
+        currentVersion: '0.3.4', latestVersion: '0.3.5', available: true,
         autoCheck: true, canInstall: true,
-        releaseUrl: 'https://github.com/tx74666/CodexControlConsole/releases/tag/v0.3.4'
+        releaseUrl: 'https://github.com/tx74666/CodexControlConsole/releases/tag/v0.3.5'
       },
       world: {
         currentVersion: '0.1.6', latestVersion: '0.1.7', available: true,
@@ -280,7 +297,7 @@ async function runBrowserChecks(client) {
     productUpdateStates.world = { ...productUpdateStates.world, latestVersion: '0.1.6', available: false };
     renderConsoleUpdate();
     const oneAvailable = { text: button?.textContent?.trim() || '', product: button?.dataset.product || '' };
-    productUpdateStates.console = { ...productUpdateStates.console, latestVersion: '0.3.3', available: false };
+    productUpdateStates.console = { ...productUpdateStates.console, latestVersion: '0.3.4', available: false };
     renderConsoleUpdate();
     const hiddenWhenCurrent = Boolean(button?.hidden);
     productUpdateStates = originalStates;
@@ -293,7 +310,7 @@ async function runBrowserChecks(client) {
       && updateBannerState.bothAvailable.text.startsWith('2 ')
       && updateBannerState.bothAvailable.width >= 120
       && updateBannerState.bothAvailable.availableBadges === 2
-      && updateBannerState.oneAvailable.text.endsWith('Codex Console v0.3.4')
+      && updateBannerState.oneAvailable.text.endsWith('Codex Console v0.3.5')
       && updateBannerState.oneAvailable.product === 'console'
       && updateBannerState.hiddenWhenCurrent,
     `top update area does not reflect version availability: ${JSON.stringify(updateBannerState)}`
@@ -306,7 +323,7 @@ async function runBrowserChecks(client) {
     const originalConfirm = window.confirm;
     let request = null;
     productUpdateStates = {
-      console: { currentVersion: '0.3.4', latestVersion: '0.3.4', available: false, autoCheck: true },
+      console: { currentVersion: '0.3.5', latestVersion: '0.3.5', available: false, autoCheck: true },
       world: {
         currentVersion: '', latestVersion: '0.1.7', available: true, installed: false,
         autoCheck: true, canInstall: true,
