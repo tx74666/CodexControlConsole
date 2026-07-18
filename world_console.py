@@ -66,13 +66,14 @@ APP_VERSION = str(APP_MANIFEST.get("version") or "0.0.0-dev").strip()
 APP_REPOSITORY = str(APP_MANIFEST.get("repository") or "tx74666/CodexControlConsole").strip()
 APP_INSTALL_MODE = str(APP_MANIFEST.get("installMode") or "source").strip().lower()
 APP_IS_PORTABLE = APP_INSTALL_MODE == "portable"
+APP_USES_LOCAL_DATA = APP_INSTALL_MODE in {"portable", "installed"}
 
 
 def default_user_data_dir():
     configured = os.environ.get("CODEX_CONTROL_DATA_DIR", "").strip()
     if configured:
         return Path(configured).expanduser()
-    if not APP_IS_PORTABLE:
+    if not APP_USES_LOCAL_DATA:
         return APP_DIR
     local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
     base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
@@ -132,7 +133,7 @@ def media_directory(name, extensions):
     if configured:
         return Path(configured).expanduser()
     legacy = APP_DIR / name
-    if not APP_IS_PORTABLE:
+    if not APP_USES_LOCAL_DATA:
         return legacy
     try:
         if legacy.is_dir() and any(item.is_file() and item.suffix.lower() in extensions for item in legacy.iterdir()):
@@ -150,7 +151,7 @@ INSTALLATION_STATE = installation_state()
 WORLD_CACHE = CACHE_DIR / "world.geojson"
 TRANSLATION_CACHE = CACHE_DIR / "translations.json"
 WALLPAPER_DIR = media_directory("wallpapers", {".jpg", ".jpeg", ".png", ".bmp", ".webp"})
-if APP_IS_PORTABLE:
+if APP_USES_LOCAL_DATA:
     DEFAULT_MUSIC_DIR = media_directory("music", {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"})
 else:
     DEFAULT_MUSIC_DIR = Path(r"D:\MyMP3s") if Path(r"D:\MyMP3s").exists() else APP_DIR / "music"
@@ -165,7 +166,7 @@ CONSOLE_STATE_FILE = CACHE_DIR / "console_state.json"
 YOUTUBE_COOKIE_DIR = CACHE_DIR / "cookies"
 YOUTUBE_COOKIE_FILE = YOUTUBE_COOKIE_DIR / "youtube.cookies.txt"
 MATERIAL_SOURCE_DIR = Path(os.environ.get("CODEX_CONTROL_MATERIAL_SOURCE_DIR", str(Path.home() / "Downloads")))
-CODEX_TEMP_DIR = Path(os.environ.get("CODEX_CONTROL_TEMP_DIR", str(USER_DATA_DIR / "temp" if APP_IS_PORTABLE else APP_DIR.parent / "Temp")))
+CODEX_TEMP_DIR = Path(os.environ.get("CODEX_CONTROL_TEMP_DIR", str(USER_DATA_DIR / "temp" if APP_USES_LOCAL_DATA else APP_DIR.parent / "Temp")))
 BUILDER_TEXTURE_DIR = Path(os.environ.get("CODEX_CONTROL_BUILDER_TEXTURE_DIR", r"D:\Unity Projects\RandomRealm2\Assets\Art\Generated\BuildMaterials\Textures"))
 BLENDER_REPLACEMENT_TEXTURE_DIR = Path(os.environ.get("CODEX_CONTROL_BLENDER_REPLACEMENT_TEXTURE_DIR", str(BUILDER_TEXTURE_DIR / "_codex_replacements")))
 BLENDER_TEXTURE_PACKAGE_DIR = Path(os.environ.get("CODEX_CONTROL_BLENDER_TEXTURE_PACKAGE_DIR", r"D:\Blender\~Import-Export\TexturePackages"))

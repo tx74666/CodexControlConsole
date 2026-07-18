@@ -74,14 +74,6 @@
       text-decoration: none;
       font-weight: 700;
     }
-    a.button.android {
-      border-color: rgba(55, 201, 149, 0.52);
-      background: rgba(55, 201, 149, 0.14);
-    }
-    a.button.lite {
-      border-color: rgba(168, 186, 208, 0.48);
-      background: rgba(168, 186, 208, 0.12);
-    }
     .quick-start {
       margin: 18px 0 0;
       padding: 0;
@@ -179,18 +171,16 @@
       <div>
         <img class="logo" src="assets/codex-resource-icon-256.png" alt="">
         <h1>Codex Console</h1>
-        <p>Pick Lite for Wallpaper + Music. Pick Developer if you need Blender, Unity, Steamwork, RandomRealm, and workspace tools.</p>
+        <p>One Windows x64 Setup with Music, Wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.</p>
         <div class="buttons">
-          <a class="button lite" id="liteDownload" href="https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-lite-windows.zip">Download lite ZIP</a>
-          <a class="button" id="developerDownload" href="https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-developer-windows.zip">Download developer ZIP</a>
-          <a class="button android" id="androidDownload" href="https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-android.apk">Download Android APK</a>
+          <a class="button" id="setupDownload" href="https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe">Download Windows x64 Setup</a>
         </div>
         <ol class="quick-start">
-          <li><strong>Download</strong> a Windows ZIP.</li>
-          <li><strong>Unzip</strong> it anywhere.</li>
-          <li><strong>Open</strong> <code>Start-ControlConsole.vbs</code>.</li>
+          <li><strong>Open</strong> the downloaded Setup file.</li>
+          <li><strong>Choose</strong> 简体中文 or English.</li>
+          <li><strong>Select</strong> the install drive and folder.</li>
         </ol>
-        <div class="hint">For Android, run <code>Start-ControlConsole-LAN.vbs</code> on the PC first.</div>
+        <div class="hint">Windows 10 or Windows 11, 64-bit only.</div>
       </div>
       <div class="device" aria-hidden="true">
         <div class="screen">
@@ -206,8 +196,8 @@
       </div>
     </div>
     <section>
-      <h2>Android connection</h2>
-      <p>On the PC, start <code>Start-ControlConsole-LAN.vbs</code>, then enter <code>http://YOUR-PC-LAN-IP:8898/index.html</code> in the Android app.</p>
+      <h2>Installation guide</h2>
+      <p>Setup first asks for 简体中文 or English, then shows the destination path so you can choose C:, D:, or another drive before installing.</p>
     </section>
   </main>
   <script>
@@ -217,9 +207,7 @@
     const owner = hostParts.length > 2 && hostParts[1] === "github" ? hostParts[0] : fallbackOwner;
     const repo = location.pathname.split("/").filter(Boolean)[0] || fallbackRepo;
     const base = `https://github.com/${owner}/${repo}/releases/latest/download`;
-    document.getElementById("developerDownload").href = `${base}/CodexControlConsole-developer-windows.zip`;
-    document.getElementById("liteDownload").href = `${base}/CodexControlConsole-lite-windows.zip`;
-    document.getElementById("androidDownload").href = `${base}/CodexControlConsole-android.apk`;
+    document.getElementById("setupDownload").href = `${base}/CodexControlConsole-Setup-x64.exe`;
   </script>
 </body>
 </html>

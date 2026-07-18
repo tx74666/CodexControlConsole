@@ -1,99 +1,70 @@
 # Codex Console
 
-A small Windows control console for wallpaper, music, and optional developer tools.
+A Windows control console for music, wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.
 
-## Download
+## Download / 下载
 
-Most people should use the Lite desktop build:
+There is one public package: [CodexControlConsole-Setup-x64.exe](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe).
 
-| Need | Download |
-| --- | --- |
-| Wallpaper + Music only | [CodexControlConsole-lite-windows.zip](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-lite-windows.zip) |
-| Full developer tools | [CodexControlConsole-developer-windows.zip](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-developer-windows.zip) |
-| Android companion | [CodexControlConsole-android.apk](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-android.apk) |
+公开下载只有一个：[CodexControlConsole-Setup-x64.exe](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe)。
 
 Latest release: [github.com/tx74666/CodexControlConsole/releases/latest](https://github.com/tx74666/CodexControlConsole/releases/latest)
 
-## Start On Windows
+## Install / 安装
 
-1. Download one of the ZIP files above.
-2. Unzip it anywhere you like.
-3. Double-click `Start-ControlConsole.vbs`.
+1. Double-click `CodexControlConsole-Setup-x64.exe`.
+2. Choose **简体中文** or **English**.
+3. Choose the install drive and folder on the destination page.
+4. Finish Setup and launch Codex Console from the desktop or Start menu.
 
-Lite opens with only Wallpaper and Music. Developer opens with Manager, Console, Blender, Unity, Steamwork, RandomRealm, Music, and Wallpaper.
+1. 双击 `CodexControlConsole-Setup-x64.exe`。
+2. 选择 **简体中文** 或 **English**。
+3. 在安装位置页面选择磁盘和目录。
+4. 完成安装，从桌面或开始菜单启动 Codex Console。
+
+The installer contains the x64 application runtime. Users do not need to install Python.
 
 ## Updates
 
-Portable Windows builds check the latest GitHub release in the background. When a newer version is available, a prominent **Update vX.X.X** control appears in the top bar. Codex Console downloads the matching Lite or Developer ZIP, verifies its SHA-256 checksum and app manifest, installs it, and restarts.
+Codex Console checks the latest GitHub Releases for both Codex Console and Codex World. When an update is available, the update control downloads the verified Windows x64 Setup and opens the same bilingual installation guide. Updates are never installed silently.
 
-Updates are never installed silently. A source checkout opens the release page instead of overwriting the repository.
+## Per-device Data
 
-## Multiple Windows Users
-
-Each Windows account keeps its own settings, indexes, cookies, and update files in:
+Each Windows account keeps its own settings, indexes, cookies, desktop layouts, downloaded music, and update files under:
 
 ```text
 %LOCALAPPDATA%\CodexControlConsole
 ```
 
-The extracted program folder can therefore be shared without mixing users' runtime data. Set `CODEX_CONTROL_DATA_DIR` to use a different per-user location. No installation identifier or usage data is sent anywhere.
+No personal desktop layout or local media is included in the source repository or release installer.
 
 ## Desktop Layouts
 
-Console can save, import, and restore Windows desktop icon layouts. Every plan is local to the current device under `%LOCALAPPDATA%\CodexControlConsole\desktop-layout`; layout JSON and backups are excluded from source control and release packages. Saving a plan always creates a timestamped backup first, and restoring checks for missing, shifted, or overlapping icons.
-
-## Android
-
-1. On the PC, start `Start-ControlConsole-LAN.vbs`.
-2. Install `CodexControlConsole-android.apk`.
-3. In Android, enter:
-
-```text
-http://YOUR-PC-LAN-IP:8898/index.html
-```
-
-Use LAN mode only on a trusted network.
+Console can save, import, and manually restore Windows desktop icon layouts. Every plan is local to the current device. Saving a plan creates a timestamped backup first.
 
 ## Requirements
 
-- Windows 10 or Windows 11
-- Python 3.11 or newer
+- Windows 10 or Windows 11, 64-bit
 - Microsoft Edge or Google Chrome
 
 ## Build Locally
 
+Install Python 3.12 x64, PyInstaller, Pillow, yt-dlp, and Inno Setup 7, then run:
+
 ```powershell
-.\tools\package-desktop.ps1 -Version 0.3.5 -OutputDir dist
+python -m pip install pyinstaller pillow yt-dlp
+.\tools\build-windows.ps1 -Version 0.4.0 -OutputDir dist
 ```
 
-The package script builds the developer ZIP, the lite ZIP, and the compatibility Windows ZIP. Runtime cache, cookies, downloaded music, and local browser profiles are not included.
+The result is `dist\CodexControlConsole-Setup-x64.exe`.
 
-## Check The UI
-
-With Control Console running locally, use Node.js 22 or newer:
+## Checks
 
 ```powershell
 node .\tools\check-console-ui.mjs
-```
-
-The check covers cache consistency, lazy module loading, Blender view transitions, stable backgrounds, and horizontal overflow.
-
-To verify the Blender GitHub Coop workflow without touching a real project, remote, or desktop app:
-
-```powershell
 python .\tools\check-blender-github-share.py
-```
-
-To verify archive validation, rollback, and per-user update storage:
-
-```powershell
 python .\tools\check-console-update.py
-```
-
-To verify desktop layout isolation, backup behavior, imports, and restore checks without moving real desktop icons:
-
-```powershell
 python .\tools\check-desktop-layout.py
 ```
 
-Blender > Helper > GitHub Coop lists the repositories in `github-coop.json`, even before they exist locally. Double-clicking a cloud card opens GitHub Desktop's Clone flow; double-clicking a downloaded card opens its local repository. After cloning to a custom location, use `+` once to select the `.blend` file so Console can bind the cloud card to that local checkout. GitHub Desktop handles authentication, Fetch/Pull, commits, and Push; tutorial mode shows the short collaboration sequence. The Files link is enabled only after a local checkout exists, while the GitHub link always opens the repository page.
+Blender > Helper > GitHub Coop lists repositories from `github-coop.json`. GitHub Desktop handles authentication, clone, commits, pull, and push.

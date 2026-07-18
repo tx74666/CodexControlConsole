@@ -47,7 +47,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "desktop_layout.py")), "desktop layout backend is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.3.5", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.4.0", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   return Array.from(versions)[0];

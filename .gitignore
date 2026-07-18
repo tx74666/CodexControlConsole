@@ -21,6 +21,7 @@ wallpapers/*
 *.opus
 
 # Release/build output
+build/
 dist/
 release/
 *.zip

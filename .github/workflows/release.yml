@@ -1,27 +1,22 @@
-name: Release
+name: Release Windows x64 Setup
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v0.3.5
+        description: Release version, for example v0.4.0
         required: true
-        default: v0.3.5
+        default: v0.4.0
   push:
     tags:
       - "v*"
-    branches:
-      - main
-    paths:
-      - app-manifest.json
-      - .github/workflows/release.yml
 
 permissions:
   contents: write
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -31,75 +26,46 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.event.inputs.version }}"
-          if ([string]::IsNullOrWhiteSpace($tag) -and "${{ github.ref_type }}" -eq "tag") {
-            $tag = "${{ github.ref_name }}"
-          }
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-            $manifest = Get-Content -Raw app-manifest.json | ConvertFrom-Json
-            $tag = "v$($manifest.version)"
-          }
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-            $tag = "v0.3.5"
-          }
-          if (-not $tag.StartsWith("v")) {
-            $tag = "v$tag"
-          }
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "${{ github.ref_name }}" }
+          if (-not $tag.StartsWith("v")) { $tag = "v$tag" }
           $version = $tag.Substring(1)
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid release version: $version" }
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - name: Set up Python x64
+        uses: actions/setup-python@v5
         with:
-          distribution: temurin
-          java-version: "17"
+          python-version: "3.12"
+          architecture: x64
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10.2"
-
-      - name: Install Android platform
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Build Windows desktop ZIP
+      - name: Install build dependencies
         shell: pwsh
-        run: ./tools/package-desktop.ps1 -Version $env:RELEASE_VERSION -OutputDir dist
+        run: python -m pip install --disable-pip-version-check pyinstaller pillow yt-dlp
 
-      - name: Build Android APK
-        run: gradle -p android --no-daemon :app:assembleDebug -PVERSION_NAME="$RELEASE_VERSION"
-
-      - name: Collect Android APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk dist/CodexControlConsole-android.apk
-
-      - name: Create SHA-256 checksums
+      - name: Install Inno Setup 7 x64
         shell: pwsh
         run: |
-          $files = Get-ChildItem dist -File | Where-Object { $_.Extension -in ".zip", ".apk" }
-          foreach ($file in $files) {
-            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
-            "$hash  $($file.Name)" | Set-Content -LiteralPath "$($file.FullName).sha256" -Encoding utf8
-          }
+          $download = Join-Path $env:RUNNER_TEMP "innosetup-7.0.2-x64.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP "Inno Setup 7"
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-7_0_2/innosetup-7.0.2-x64.exe" -OutFile $download
+          $process = Start-Process -FilePath $download -ArgumentList "/CURRENTUSER", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/DIR=`"$installDir`"" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed: $($process.ExitCode)" }
+          $compiler = Join-Path $installDir "ISCC.exe"
+          if (-not (Test-Path -LiteralPath $compiler)) { throw "ISCC.exe was not installed" }
+          "INNO_SETUP_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          $assets = foreach ($file in $files) {
-            [ordered]@{
-              name = $file.Name
-              url = "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/$($file.Name)"
-              size = $file.Length
-              sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
-            }
+      - name: Build Windows x64 Setup
+        shell: pwsh
+        run: ./tools/build-windows.ps1 -Version $env:RELEASE_VERSION -OutputDir dist
+
+      - name: Verify single download
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem dist -File)
+          if ($files.Count -ne 1 -or $files[0].Name -ne "CodexControlConsole-Setup-x64.exe") {
+            throw "Release must contain exactly one Windows x64 Setup file."
           }
-          $manifest = [ordered]@{
-            version = $env:RELEASE_VERSION
-            tag = $env:RELEASE_TAG
-            releaseUrl = "https://github.com/${{ github.repository }}/releases/tag/$env:RELEASE_TAG"
-            publishedAt = (Get-Date).ToUniversalTime().ToString("o")
-            assets = @($assets)
-          }
-          $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath dist/update-manifest.json -Encoding utf8
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -107,32 +73,23 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
           name: Codex Console ${{ env.RELEASE_TAG }}
-          files: |
-            dist/CodexControlConsole-windows.zip
-            dist/CodexControlConsole-developer-windows.zip
-            dist/CodexControlConsole-lite-windows.zip
-            dist/CodexControlConsole-android.apk
-            dist/*.sha256
-            dist/update-manifest.json
+          make_latest: true
+          files: dist/CodexControlConsole-Setup-x64.exe
           body: |
-            ## Start Here
+            ## Windows x64
 
-            Most people should download **CodexControlConsole-lite-windows.zip** for Codex Console.
+            Download only **CodexControlConsole-Setup-x64.exe**.
 
-            | Need | Download |
-            | --- | --- |
-            | Wallpaper + Music only | CodexControlConsole-lite-windows.zip |
-            | Full developer tools | CodexControlConsole-developer-windows.zip |
-            | Android companion | CodexControlConsole-android.apk |
+            1. Double-click the downloaded Setup file.
+            2. Choose **简体中文** or **English**.
+            3. On the destination page, choose the drive and install folder.
+            4. Finish Setup, then launch **Codex Console** from the desktop or Start menu.
 
-            ## Windows
+            ## Windows 64 位
 
-            1. Download a ZIP.
-            2. Unzip it anywhere.
-            3. Double-click `Start-ControlConsole.vbs`.
+            只需下载 **CodexControlConsole-Setup-x64.exe**。
 
-            For Android, run `Start-ControlConsole-LAN.vbs` on the PC first, then open the APK and enter the PC LAN URL.
-
-            Windows portable builds check Codex Console and Codex World automatically. Updates are verified with SHA-256 before installation, and each Windows user keeps separate local data.
-
-            The Developer build includes Blender > Helper > GitHub Coop. Shared repositories can appear before they are downloaded, then open the correct Clone or local repository flow in GitHub Desktop.
+            1. 双击下载好的安装程序。
+            2. 选择 **简体中文** 或 **English**。
+            3. 在安装位置页面选择磁盘和目录。
+            4. 完成安装后，从桌面或开始菜单启动 **Codex Console**。

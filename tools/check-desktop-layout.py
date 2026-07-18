@@ -125,9 +125,10 @@ def main():
         require(not fresh["plans"][0]["exists"], "new-device plan should start unsaved")
         require(Path(fresh["plans"][0]["path"]).parent == fresh_service.plan_dir, "new-device plan is not device-local")
 
-    package_script = (ROOT / "tools" / "package-desktop.ps1").read_text(encoding="utf-8")
-    require('"desktop_layout.py"' in package_script, "desktop layout backend is missing from desktop packages")
-    require('"tools/DesktopLayout.ps1"' in package_script, "generic desktop helper is missing from desktop packages")
+    package_script = (ROOT / "tools" / "build-windows.ps1").read_text(encoding="utf-8")
+    runtime_script = (ROOT / "world_console.py").read_text(encoding="utf-8")
+    require("from desktop_layout import DesktopLayoutService" in runtime_script, "desktop layout backend is missing from the executable")
+    require('"tools\\DesktopLayout.ps1"' in package_script, "generic desktop helper is missing from Setup")
     generic_helper = (ROOT / "tools" / "DesktopLayout.ps1").read_text(encoding="utf-8")
     require("D:\\Q\\DesktopLayout" not in generic_helper, "bundled helper contains a personal layout path")
     require("preferred" not in generic_helper.casefold(), "bundled helper contains legacy preferred-layout behavior")

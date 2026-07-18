@@ -74,7 +74,7 @@ class ConsoleUpdateService:
 
     @property
     def portable(self):
-        return str(self.manifest.get("installMode") or "source").lower() == "portable"
+        return str(self.manifest.get("installMode") or "source").lower() in {"portable", "installed"}
 
     def _default_state(self):
         return {
@@ -122,7 +122,7 @@ class ConsoleUpdateService:
         return "lite" if str(value or "").lower() == "lite" else "developer"
 
     def _asset_name(self):
-        return "CodexControlConsole-lite-windows.zip" if self._edition() == "lite" else "CodexControlConsole-developer-windows.zip"
+        return "CodexControlConsole-Setup-x64.exe"
 
     def _check_is_stale(self, state):
         try:
@@ -233,6 +233,7 @@ class ConsoleUpdateService:
             "error": str(state.get("error") or ""),
             "updateError": self._last_install_error(),
             "edition": self._edition(),
+            "installationMode": str(self.manifest.get("installMode") or "source").lower(),
         }
 
     def configure(self, payload):
@@ -337,8 +338,8 @@ class ConsoleUpdateService:
         expected = self._expected_checksum(state, asset_name)
 
         self.update_dir.mkdir(parents=True, exist_ok=True)
-        archive = self.update_dir / f"{asset_name.removesuffix('.zip')}-{version}.zip"
-        temporary = archive.with_suffix(".part")
+        installer = self.update_dir / f"{Path(asset_name).stem}-{version}.exe"
+        temporary = installer.with_suffix(".part")
         digest = hashlib.sha256()
         total = 0
         try:
@@ -355,14 +356,16 @@ class ConsoleUpdateService:
                         digest.update(chunk)
             if digest.hexdigest().lower() != expected:
                 raise ValueError("The downloaded update failed SHA-256 verification")
-            os.replace(temporary, archive)
-            self._validate_archive(archive, expected_version=version)
+            with temporary.open("rb") as executable:
+                if executable.read(2) != b"MZ":
+                    raise ValueError("The downloaded update is not a Windows installer")
+            os.replace(temporary, installer)
         finally:
             temporary.unlink(missing_ok=True)
 
         state["pending"] = {
             "version": version,
-            "archive": str(archive),
+            "archive": str(installer),
             "sha256": expected,
             "verifiedAt": datetime.now(timezone.utc).isoformat(),
         }
@@ -372,7 +375,7 @@ class ConsoleUpdateService:
 
     def install(self):
         if not self.portable or sys.platform != "win32":
-            raise ValueError("Automatic installation is available in the Windows portable release")
+            raise ValueError("The Windows installer is available from an installed Codex Console")
         state = self._read_state()
         pending = state.get("pending") or {}
         archive = Path(str(pending.get("archive") or ""))
@@ -382,32 +385,15 @@ class ConsoleUpdateService:
             state = self._read_state()
             pending = state.get("pending") or {}
             archive = Path(str(pending.get("archive") or ""))
-        helper = self.app_dir / "tools" / "apply_update.py"
-        launcher = self.app_dir / "Start-ControlConsole.vbs"
-        if not helper.is_file() or not launcher.is_file():
-            raise ValueError("The portable update helper is missing")
-        command = [
-            sys.executable,
-            str(helper),
-            "--archive", str(archive),
-            "--sha256", str(pending.get("sha256") or ""),
-            "--version", str(pending.get("version") or ""),
-            "--app-dir", str(self.app_dir),
-            "--data-dir", str(self.data_dir),
-            "--launcher", str(launcher),
-            "--pid", str(os.getpid()),
-        ]
         subprocess.Popen(
-            command,
-            cwd=str(self.app_dir),
+            [str(archive)],
+            cwd=str(archive.parent),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            **_hidden_subprocess_kwargs(),
         )
-        if self.shutdown_callback:
-            threading.Timer(0.9, self.shutdown_callback).start()
         result = self.status()
-        result["restarting"] = True
+        result["setupStarted"] = True
+        result["restarting"] = False
         return result
 
     def open_release(self):

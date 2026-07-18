@@ -127,6 +127,28 @@ class WorldUpdateService(ConsoleUpdateService):
         server = self.source_dir / "world_console.py"
         return server if server.is_file() else None
 
+    @staticmethod
+    def _registered_install():
+        if sys.platform != "win32":
+            return None
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Codex\Codex World") as key:
+                directory = Path(str(winreg.QueryValueEx(key, "InstallPath")[0])).expanduser().resolve()
+                version = str(winreg.QueryValueEx(key, "Version")[0]).lstrip("v")
+        except (OSError, ValueError):
+            return None
+        executable = directory / WORLD_EXECUTABLE
+        if not executable.is_file() or not _version_tuple(version):
+            return None
+        return {
+            "mode": "installed",
+            "directory": directory,
+            "executable": executable,
+            "version": version,
+        }
+
     def _installation(self):
         active = self._active_install()
         if active:
@@ -140,6 +162,9 @@ class WorldUpdateService(ConsoleUpdateService):
                 "executable": source_target,
                 "version": source_version or "0.0.0",
             }
+        registered = self._registered_install()
+        if registered:
+            return registered
         return {
             "mode": "missing",
             "directory": self.managed_root,
@@ -159,32 +184,10 @@ class WorldUpdateService(ConsoleUpdateService):
         return "windows"
 
     def _asset_name(self):
-        state = self._read_state()
-        version = str((state.get("latest") or {}).get("version") or "").lstrip("v")
-        return f"Codex-World-Console-Windows-v{version}.zip" if version else ""
+        return "Codex-World-Setup-x64.exe"
 
     def _fetch_latest_manifest(self):
-        failures = []
-        remote_sources = [super()._fetch_latest_manifest, super()._fetch_latest_api]
-        for fetch in remote_sources:
-            try:
-                return fetch()
-            except (OSError, ValueError, json.JSONDecodeError, urllib.error.URLError) as error:
-                failures.append(error)
-
-        try:
-            url = f"https://raw.githubusercontent.com/{self.repository}/main/update-manifest.json"
-            with self._request(url, accept="application/json", timeout=20) as response:
-                payload = json.loads(response.read(4 * 1024 * 1024).decode("utf-8-sig"))
-            return self._normalize_latest(payload)
-        except (OSError, ValueError, json.JSONDecodeError, urllib.error.URLError) as error:
-            failures.append(error)
-
-        local_manifest = self.source_dir / "update-manifest.json"
-        if local_manifest.is_file():
-            payload = json.loads(local_manifest.read_text(encoding="utf-8-sig"))
-            return self._normalize_latest(payload)
-        raise ValueError("Codex World release information is unavailable") from failures[-1]
+        return super()._fetch_latest_api()
 
     def status(self, check=False, force=False):
         state = self._read_state()
@@ -318,51 +321,7 @@ class WorldUpdateService(ConsoleUpdateService):
         installation = self._installation()
         if installation["mode"] == "source":
             raise ValueError("Codex World is a source checkout on this device; update it through GitHub Desktop")
-        if sys.platform != "win32":
-            raise ValueError("Automatic Codex World installation is available on Windows")
-
-        state = self._read_state()
-        pending = state.get("pending") or {}
-        archive = Path(str(pending.get("archive") or ""))
-        latest_version = str((state.get("latest") or {}).get("version") or "")
-        if (
-            not archive.is_file()
-            or str(pending.get("version") or "") != latest_version
-            or not latest_version
-        ):
-            self.download()
-            state = self._read_state()
-            pending = state.get("pending") or {}
-            archive = Path(str(pending.get("archive") or ""))
-            latest_version = str(pending.get("version") or "")
-
-        self._validate_archive(archive, expected_version=latest_version)
-        versions_dir = self.managed_root / "versions"
-        versions_dir.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix="world-install-", dir=str(self.managed_root))).resolve()
-        try:
-            version = self._extract_archive(archive, staging, latest_version)
-            executables = list(staging.rglob(WORLD_EXECUTABLE))
-            if len(executables) != 1:
-                raise ValueError("The Codex World archive has an ambiguous application root")
-            app_root = executables[0].parent.resolve()
-            target = (versions_dir / f"v{version}").resolve()
-            target.relative_to(self.managed_root)
-            if target.exists():
-                target = (versions_dir / f"v{version}-{datetime.now().strftime('%Y%m%d%H%M%S')}").resolve()
-            shutil.move(str(app_root), str(target))
-            self._write_active_install(version, target)
-        finally:
-            if staging.is_dir():
-                shutil.rmtree(staging, ignore_errors=True)
-
-        state = self._read_state()
-        state["pending"] = {}
-        state["error"] = ""
-        self._write_state(state)
-        result = self.status()
-        result["installedNow"] = True
-        return result
+        return super().install()
 
     def open(self):
         installation = self._installation()
