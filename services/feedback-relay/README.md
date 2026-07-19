@@ -5,7 +5,7 @@ Cloudflare Worker used by Codex Console to accept public feedback without exposi
 ## Storage and limits
 
 - D1 stores report text, status, app metadata, and hashed device identifiers.
-- R2 stores private PNG/JPEG/WebP screenshots up to 5 MB.
+- R2 stores up to four private PNG/JPEG/WebP screenshots per report (5 MB each, 12 MB combined).
 - Raw IP addresses are never stored. An HMAC hash is used only for auxiliary abuse limits.
 - Each installation can submit 10 reports per UTC day by default. Each network is capped at 30.
 - Turnstile validation is required in production.

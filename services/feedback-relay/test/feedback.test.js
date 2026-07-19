@@ -41,6 +41,18 @@ class FakeStatement {
       this.database.reports.push(this.args);
       return { meta: { changes: 1 } };
     }
+    if (this.sql.startsWith("INSERT INTO report_images")) {
+      this.database.reportImages.push(this.args);
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("DELETE FROM report_images")) {
+      this.database.reportImages = this.database.reportImages.filter(row => row[0] !== this.args[0]);
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.startsWith("DELETE FROM reports")) {
+      this.database.reports = this.database.reports.filter(row => row[0] !== this.args[0]);
+      return { meta: { changes: 1 } };
+    }
     throw new Error(`Unexpected run(): ${this.sql}`);
   }
 }
@@ -50,6 +62,7 @@ class FakeDatabase {
     this.failReports = failReports;
     this.limits = new Map();
     this.reports = [];
+    this.reportImages = [];
   }
 
   prepare(sql) {
@@ -58,8 +71,18 @@ class FakeDatabase {
 }
 
 class FakeImages {
-  async put() {}
-  async delete() {}
+  constructor() {
+    this.puts = [];
+    this.deletes = [];
+  }
+
+  async put(key) {
+    this.puts.push(key);
+  }
+
+  async delete(key) {
+    this.deletes.push(key);
+  }
 }
 
 function feedbackEnvironment(database, extra = {}) {
@@ -93,6 +116,7 @@ test("normalizes a text-only report", () => {
   });
   assert.equal(report.category, "layout");
   assert.equal(report.screenshot, null);
+  assert.deepEqual(report.screenshots, []);
 });
 
 test("validates image bytes instead of trusting the filename", () => {
@@ -110,6 +134,55 @@ test("validates image bytes instead of trusting the filename", () => {
   });
   assert.equal(report.screenshot.contentType, "image/png");
   assert.equal(report.screenshot.name, "capture.exe.png");
+  assert.equal(report.screenshots.length, 1);
+});
+
+test("accepts multiple screenshots and rejects more than four", () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const screenshot = index => ({
+    data: png.toString("base64"),
+    type: "image/png",
+    name: `capture-${index}.png`
+  });
+  const report = normalizeReportInput({
+    category: "bug",
+    description: "Several screenshots show the same layout problem.",
+    installationId,
+    screenshots: [screenshot(1), screenshot(2), screenshot(3)]
+  });
+  assert.equal(report.screenshots.length, 3);
+  assert.equal(report.screenshots[2].name, "capture-3.png");
+  assert.throws(() => normalizeReportInput({
+    category: "bug",
+    description: "This report contains too many screenshots.",
+    installationId,
+    screenshots: [1, 2, 3, 4, 5].map(screenshot)
+  }), /up to 4/i);
+});
+
+test("stores every screenshot in report order", async () => {
+  const database = new FakeDatabase();
+  const images = new FakeImages();
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const request = new Request("https://feedback.example/v1/reports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": "192.0.2.10" },
+    body: JSON.stringify({
+      category: "bug",
+      description: "Two screenshots should be saved in their selected order.",
+      installationId,
+      screenshots: ["first.png", "second.png"].map(name => ({
+        data: png.toString("base64"),
+        type: "image/png",
+        name
+      }))
+    })
+  });
+  const response = await worker.fetch(request, feedbackEnvironment(database, { IMAGES: images }));
+  assert.equal(response.status, 201);
+  assert.equal(database.reportImages.length, 2);
+  assert.deepEqual(database.reportImages.map(row => row[1]), [0, 1]);
+  assert.equal(images.puts.length, 2);
 });
 
 test("rejects unknown categories and mismatched image types", () => {

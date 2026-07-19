@@ -247,12 +247,15 @@ const i18n = {
     feedbackImageTooLarge: "截图不能超过 5 MB。",
     feedbackImageType: "截图只支持 PNG、JPEG 或 WebP。",
     feedbackImageReadFailed: "无法读取这张截图。",
+    feedbackScreenshotCount: (count, maximum) => `${count} / ${maximum}`,
+    feedbackImageCount: maximum => `最多选择 ${maximum} 张截图。`,
+    feedbackImagesTotalTooLarge: megabytes => `截图合计不能超过 ${megabytes} MB。`,
     feedbackInboxTitle: "收件箱",
     feedbackInboxRefresh: "刷新收件箱",
     feedbackInboxEmpty: "没有新回报",
     feedbackInboxResolve: "完成",
     feedbackInboxResolved: "已完成",
-    feedbackOpenImage: "查看截图",
+    feedbackOpenImage: (index, total) => `查看截图 ${index}/${total}`,
     feedbackInboxMeta: (category, version, date) => `${category} · ${version || "--"} · ${date}`,
     feedbackAdminSetup: "收件箱连接",
     feedbackAdminEndpoint: "Cloudflare Worker URL",
@@ -962,12 +965,15 @@ const i18n = {
     feedbackImageTooLarge: "Screenshot must be 5 MB or smaller.",
     feedbackImageType: "Screenshot must be PNG, JPEG, or WebP.",
     feedbackImageReadFailed: "This screenshot could not be read.",
+    feedbackScreenshotCount: (count, maximum) => `${count} / ${maximum}`,
+    feedbackImageCount: maximum => `Choose up to ${maximum} screenshots.`,
+    feedbackImagesTotalTooLarge: megabytes => `Screenshots must total ${megabytes} MB or less.`,
     feedbackInboxTitle: "Inbox",
     feedbackInboxRefresh: "Refresh inbox",
     feedbackInboxEmpty: "No new reports",
     feedbackInboxResolve: "Resolve",
     feedbackInboxResolved: "Resolved",
-    feedbackOpenImage: "Screenshot",
+    feedbackOpenImage: (index, total) => `Screenshot ${index}/${total}`,
     feedbackInboxMeta: (category, version, date) => `${category} · ${version || "--"} · ${date}`,
     feedbackAdminSetup: "Inbox connection",
     feedbackAdminEndpoint: "Cloudflare Worker URL",
@@ -1660,8 +1666,6 @@ const els = {
   feedbackScreenshotName: document.getElementById("feedbackScreenshotName"),
   feedbackSubmit: document.getElementById("feedbackSubmit"),
   feedbackPreview: document.getElementById("feedbackPreview"),
-  feedbackPreviewImage: document.getElementById("feedbackPreviewImage"),
-  feedbackRemoveImage: document.getElementById("feedbackRemoveImage"),
   feedbackTurnstile: document.getElementById("feedbackTurnstile"),
   feedbackQuota: document.getElementById("feedbackQuota"),
   feedbackStatus: document.getElementById("feedbackStatus"),
@@ -2004,8 +2008,7 @@ let feedbackNotice = "";
 let feedbackNoticeTone = "";
 let feedbackLimitReached = false;
 let feedbackLimitResetTimer = 0;
-let feedbackImage = null;
-let feedbackImageUrl = "";
+let feedbackImages = [];
 let feedbackReports = [];
 let feedbackNewCount = 0;
 let feedbackInboxBusy = false;
@@ -11353,11 +11356,32 @@ function renderFeedback() {
   if (els.feedbackScreenshotButton) els.feedbackScreenshotButton.disabled = feedbackBusy;
   if (els.feedbackDescription) els.feedbackDescription.disabled = feedbackBusy;
   if (els.feedbackCategory) els.feedbackCategory.disabled = feedbackBusy;
-  if (els.feedbackScreenshotName) els.feedbackScreenshotName.textContent = feedbackImage?.name || "";
-  if (els.feedbackPreview) els.feedbackPreview.hidden = !feedbackImage;
-  if (els.feedbackPreviewImage) {
-    els.feedbackPreviewImage.src = feedbackImageUrl || "";
-    els.feedbackPreviewImage.alt = feedbackImage?.name || "";
+  const maximumImages = Number(feedbackConfig?.maxImages || 4);
+  if (els.feedbackScreenshotName) {
+    els.feedbackScreenshotName.textContent = feedbackImages.length
+      ? text("feedbackScreenshotCount", feedbackImages.length, maximumImages)
+      : "";
+  }
+  if (els.feedbackPreview) {
+    els.feedbackPreview.hidden = feedbackImages.length === 0;
+    els.feedbackPreview.replaceChildren();
+    for (const entry of feedbackImages) {
+      const item = document.createElement("figure");
+      item.className = "feedback-preview-item";
+      item.title = entry.file.name;
+      const image = document.createElement("img");
+      image.src = entry.url;
+      image.alt = entry.file.name;
+      const remove = document.createElement("button");
+      remove.className = "icon-button";
+      remove.type = "button";
+      remove.disabled = feedbackBusy;
+      remove.setAttribute("aria-label", text("feedbackRemoveImage"));
+      remove.textContent = "×";
+      remove.addEventListener("click", () => removeFeedbackImage(entry));
+      item.append(image, remove);
+      els.feedbackPreview.appendChild(item);
+    }
   }
 
   if (els.feedbackStatus) {
@@ -11383,34 +11407,59 @@ function renderFeedback() {
   renderFeedbackTop();
 }
 
-function clearFeedbackImage() {
-  if (feedbackImageUrl) URL.revokeObjectURL(feedbackImageUrl);
-  feedbackImage = null;
-  feedbackImageUrl = "";
+function clearFeedbackImages() {
+  for (const entry of feedbackImages) URL.revokeObjectURL(entry.url);
+  feedbackImages = [];
   if (els.feedbackScreenshotInput) els.feedbackScreenshotInput.value = "";
   renderFeedback();
 }
 
-function selectFeedbackImage(file) {
-  if (!file) return;
-  const maximum = Number(feedbackConfig?.maxImageBytes || 5 * 1024 * 1024);
-  if (file.size > maximum) {
-    feedbackNotice = text("feedbackImageTooLarge");
-    feedbackNoticeTone = "warning";
-    renderFeedback();
-    return;
+function removeFeedbackImage(entry) {
+  const index = feedbackImages.indexOf(entry);
+  if (index < 0) return;
+  URL.revokeObjectURL(entry.url);
+  feedbackImages.splice(index, 1);
+  if (els.feedbackScreenshotInput) els.feedbackScreenshotInput.value = "";
+  renderFeedback();
+}
+
+function selectFeedbackImages(fileList) {
+  const files = Array.from(fileList || []);
+  if (els.feedbackScreenshotInput) els.feedbackScreenshotInput.value = "";
+  if (!files.length) return;
+  const maximumBytes = Number(feedbackConfig?.maxImageBytes || 5 * 1024 * 1024);
+  const maximumImages = Number(feedbackConfig?.maxImages || 4);
+  const maximumTotalBytes = Number(feedbackConfig?.maxTotalImageBytes || 12 * 1024 * 1024);
+  let totalBytes = feedbackImages.reduce((sum, entry) => sum + entry.file.size, 0);
+  let warning = "";
+
+  for (const file of files) {
+    const duplicate = feedbackImages.some(entry => entry.file.name === file.name
+      && entry.file.size === file.size
+      && entry.file.lastModified === file.lastModified);
+    if (duplicate) continue;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      warning ||= text("feedbackImageType");
+      continue;
+    }
+    if (file.size > maximumBytes) {
+      warning ||= text("feedbackImageTooLarge");
+      continue;
+    }
+    if (feedbackImages.length >= maximumImages) {
+      warning ||= text("feedbackImageCount", maximumImages);
+      continue;
+    }
+    if (totalBytes + file.size > maximumTotalBytes) {
+      warning ||= text("feedbackImagesTotalTooLarge", Math.round(maximumTotalBytes / (1024 * 1024)));
+      continue;
+    }
+    feedbackImages.push({ file, url: URL.createObjectURL(file) });
+    totalBytes += file.size;
   }
-  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
-    feedbackNotice = text("feedbackImageType");
-    feedbackNoticeTone = "warning";
-    renderFeedback();
-    return;
-  }
-  if (feedbackImageUrl) URL.revokeObjectURL(feedbackImageUrl);
-  feedbackImage = file;
-  feedbackImageUrl = URL.createObjectURL(file);
-  feedbackNotice = "";
-  feedbackNoticeTone = "";
+
+  feedbackNotice = warning;
+  feedbackNoticeTone = warning ? "warning" : "";
   renderFeedback();
 }
 
@@ -11522,11 +11571,11 @@ async function submitFeedback(event) {
   feedbackNoticeTone = "";
   renderFeedback();
   try {
-    const screenshot = feedbackImage ? {
-      data: await readFeedbackImage(feedbackImage),
-      type: feedbackImage.type,
-      name: feedbackImage.name
-    } : null;
+    const screenshots = await Promise.all(feedbackImages.map(async entry => ({
+      data: await readFeedbackImage(entry.file),
+      type: entry.file.type,
+      name: entry.file.name
+    })));
     const turnstileToken = feedbackTurnstileWidgetId !== null && window.turnstile
       ? window.turnstile.getResponse(feedbackTurnstileWidgetId)
       : "";
@@ -11536,7 +11585,7 @@ async function submitFeedback(event) {
       body: JSON.stringify({
         category: els.feedbackCategory?.value || "bug",
         description,
-        screenshot,
+        screenshots,
         turnstileToken,
         locale: language,
         module: activeModuleId
@@ -11552,7 +11601,7 @@ async function submitFeedback(event) {
       throw error;
     }
     if (els.feedbackDescription) els.feedbackDescription.value = "";
-    clearFeedbackImage();
+    clearFeedbackImages();
     resetFeedbackTurnstile();
     const remaining = Number(payload.remaining || 0);
     setFeedbackLimit(remaining <= 0, payload.retryAfter);
@@ -11611,14 +11660,27 @@ function renderFeedbackInbox() {
     const description = document.createElement("p");
     description.textContent = report.description || "";
     body.append(meta, description);
-    if (report.hasImage) {
-      const imageLink = document.createElement("a");
-      imageLink.className = "ghost-button feedback-report-image";
-      imageLink.href = `/api/feedback/image/${encodeURIComponent(report.id)}`;
-      imageLink.target = "_blank";
-      imageLink.rel = "noreferrer";
-      imageLink.textContent = text("feedbackOpenImage");
-      row.appendChild(imageLink);
+    const imageCount = Math.max(Number(report.imageCount || 0), report.hasImage ? 1 : 0);
+    if (imageCount > 0) {
+      const images = document.createElement("div");
+      images.className = "feedback-report-images";
+      for (let index = 0; index < imageCount; index += 1) {
+        const label = text("feedbackOpenImage", index + 1, imageCount);
+        const imageLink = document.createElement("a");
+        imageLink.className = "feedback-report-image";
+        imageLink.href = `/api/feedback/image/${encodeURIComponent(report.id)}?index=${index}`;
+        imageLink.target = "_blank";
+        imageLink.rel = "noreferrer";
+        imageLink.setAttribute("aria-label", label);
+        imageLink.title = label;
+        const image = document.createElement("img");
+        image.src = imageLink.href;
+        image.alt = label;
+        image.loading = "lazy";
+        imageLink.appendChild(image);
+        images.appendChild(imageLink);
+      }
+      row.appendChild(images);
     }
     const resolve = document.createElement("button");
     resolve.className = "ghost-button feedback-resolve";
@@ -11626,7 +11688,8 @@ function renderFeedbackInbox() {
     resolve.textContent = report.status === "resolved" ? text("feedbackInboxResolved") : text("feedbackInboxResolve");
     resolve.disabled = report.status === "resolved";
     resolve.addEventListener("click", () => resolveFeedbackReport(report.id));
-    row.append(body, resolve);
+    row.prepend(body);
+    row.append(resolve);
     els.feedbackInboxList.appendChild(row);
   }
 }
@@ -17371,17 +17434,15 @@ if (els.feedbackScreenshotButton) {
   els.feedbackScreenshotButton.addEventListener("click", () => els.feedbackScreenshotInput?.click());
 }
 if (els.feedbackScreenshotInput) {
-  els.feedbackScreenshotInput.addEventListener("change", event => selectFeedbackImage(event.target.files?.[0]));
-}
-if (els.feedbackRemoveImage) {
-  els.feedbackRemoveImage.addEventListener("click", clearFeedbackImage);
+  els.feedbackScreenshotInput.addEventListener("change", event => selectFeedbackImages(event.target.files));
 }
 if (els.feedbackDescription) {
   els.feedbackDescription.addEventListener("paste", event => {
-    const image = Array.from(event.clipboardData?.items || [])
-      .find(item => item.kind === "file" && item.type.startsWith("image/"))
-      ?.getAsFile();
-    if (image) selectFeedbackImage(image);
+    const images = Array.from(event.clipboardData?.items || [])
+      .filter(item => item.kind === "file" && item.type.startsWith("image/"))
+      .map(item => item.getAsFile())
+      .filter(Boolean);
+    if (images.length) selectFeedbackImages(images);
   });
 }
 if (els.feedbackInboxRefresh) {

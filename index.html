@@ -50,7 +50,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-660">
+  <link rel="stylesheet" href="styles.css?v=control-console-661">
 </head>
 <body>
   <main class="app-shell">
@@ -163,7 +163,7 @@
         <div class="github-download-actions" aria-label="Product downloads">
           <a id="updateProductConsole" class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="true" data-update-product="console">
             <span>Codex Console</span>
-            <small id="updateProductConsoleBadge" class="update-product-badge">v0.5.4</small>
+            <small id="updateProductConsoleBadge" class="update-product-badge">v0.5.5</small>
           </a>
           <a id="updateProductWorld" class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="false" data-update-product="world">
             <span>Codex World</span>
@@ -173,7 +173,7 @@
 
         <div class="console-update-bar">
           <div class="console-update-copy">
-            <span id="consoleUpdateCurrent" class="workspace-pill">v0.5.4</span>
+            <span id="consoleUpdateCurrent" class="workspace-pill">v0.5.5</span>
             <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
             <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
           </div>
@@ -256,14 +256,11 @@
           <textarea id="feedbackDescription" rows="3" maxlength="4000" data-i18n-placeholder="feedbackDescriptionPlaceholder" placeholder="描述你遇到的问题"></textarea>
           <div class="feedback-actions">
             <button id="feedbackScreenshotButton" class="ghost-button" type="button" data-i18n="feedbackScreenshot">截图</button>
-            <input id="feedbackScreenshotInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden>
+            <input id="feedbackScreenshotInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple hidden>
             <span id="feedbackScreenshotName" class="feedback-file-name"></span>
             <button id="feedbackSubmit" class="ghost-button primary-action" type="submit" data-i18n="feedbackSend">发送</button>
           </div>
-          <div id="feedbackPreview" class="feedback-preview" hidden>
-            <img id="feedbackPreviewImage" alt="">
-            <button id="feedbackRemoveImage" class="icon-button" type="button" data-i18n-aria="feedbackRemoveImage" aria-label="移除截图">&times;</button>
-          </div>
+          <div id="feedbackPreview" class="feedback-previews" hidden></div>
           <div id="feedbackTurnstile" class="feedback-turnstile" hidden></div>
           <p id="feedbackStatus" class="feedback-status" role="status" aria-live="polite"></p>
         </form>
@@ -999,6 +996,6 @@
   <input id="steamworkAssetFileInput" class="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
   <audio id="audioPlayer" preload="metadata"></audio>
 
-<script src="app.js?v=control-console-660"></script>
+<script src="app.js?v=control-console-661"></script>
 </body>
 </html>

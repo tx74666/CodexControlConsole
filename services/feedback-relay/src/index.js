@@ -1,7 +1,9 @@
 const MAX_DESCRIPTION_LENGTH = 4000;
 const MIN_DESCRIPTION_LENGTH = 10;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGES = 4;
+const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
+const MAX_REQUEST_BYTES = 18 * 1024 * 1024;
 const CATEGORIES = new Set(["bug", "layout", "music", "update", "other"]);
 const REPORT_STATUSES = new Set(["new", "resolved"]);
 
@@ -81,28 +83,42 @@ export function normalizeReportInput(payload) {
   const installationId = String(payload.installationId || "").trim();
   if (!/^[0-9a-fA-F-]{32,40}$/.test(installationId)) throw new Error("Installation ID is invalid.");
 
-  let screenshot = null;
-  if (payload.screenshot) {
-    if (typeof payload.screenshot !== "object" || Array.isArray(payload.screenshot)) {
+  let imageInputs;
+  if (payload.screenshots !== undefined) {
+    if (!Array.isArray(payload.screenshots)) {
       throw new Error("Screenshot data is invalid.");
     }
-    const bytes = base64Bytes(payload.screenshot.data);
+    imageInputs = payload.screenshots;
+  } else {
+    imageInputs = payload.screenshot ? [payload.screenshot] : [];
+  }
+  if (imageInputs.length > MAX_IMAGES) throw new Error(`Choose up to ${MAX_IMAGES} screenshots.`);
+
+  let totalImageBytes = 0;
+  const screenshots = imageInputs.map(screenshot => {
+    if (!screenshot || typeof screenshot !== "object" || Array.isArray(screenshot)) {
+      throw new Error("Screenshot data is invalid.");
+    }
+    const bytes = base64Bytes(screenshot.data);
     const contentType = detectImageType(bytes);
     if (!contentType) throw new Error("Screenshot must be PNG, JPEG, or WebP.");
-    const claimedType = String(payload.screenshot.type || "").trim().toLowerCase();
+    const claimedType = String(screenshot.type || "").trim().toLowerCase();
     if (claimedType && claimedType !== contentType) throw new Error("Screenshot file type does not match its contents.");
-    screenshot = {
+    totalImageBytes += bytes.byteLength;
+    if (totalImageBytes > MAX_TOTAL_IMAGE_BYTES) throw new Error("Screenshots must total 12 MB or less.");
+    return {
       bytes,
       contentType,
-      name: cleanImageName(payload.screenshot.name, contentType)
+      name: cleanImageName(screenshot.name, contentType)
     };
-  }
+  });
 
   return {
     category,
     description,
     installationId,
-    screenshot,
+    screenshots,
+    screenshot: screenshots[0] || null,
     appVersion: String(payload.appVersion || "").slice(0, 40),
     osVersion: String(payload.osVersion || "").slice(0, 180),
     locale: String(payload.locale || "").slice(0, 24),
@@ -264,15 +280,19 @@ async function submitReport(request, env) {
 
   const id = crypto.randomUUID();
   const createdAt = now.toISOString();
-  let imageKey = "";
+  const storedImages = [];
+  let reportInserted = false;
   try {
-    if (input.screenshot) {
-      imageKey = `reports/${id}/screenshot.${imageExtension(input.screenshot.contentType)}`;
-      await env.IMAGES.put(imageKey, input.screenshot.bytes, {
-        httpMetadata: { contentType: input.screenshot.contentType },
+    for (let index = 0; index < input.screenshots.length; index += 1) {
+      const screenshot = input.screenshots[index];
+      const imageKey = `reports/${id}/screenshot-${index + 1}.${imageExtension(screenshot.contentType)}`;
+      await env.IMAGES.put(imageKey, screenshot.bytes, {
+        httpMetadata: { contentType: screenshot.contentType },
         customMetadata: { reportId: id }
       });
+      storedImages.push({ ...screenshot, imageKey, index });
     }
+    const firstImage = storedImages[0] || null;
     await env.DB.prepare(`
       INSERT INTO reports (
         id, category, description, image_key, image_type, image_name, status,
@@ -282,9 +302,9 @@ async function submitReport(request, env) {
       id,
       input.category,
       input.description,
-      imageKey || null,
-      input.screenshot?.contentType || null,
-      input.screenshot?.name || null,
+      firstImage?.imageKey || null,
+      firstImage?.contentType || null,
+      firstImage?.name || null,
       input.appVersion,
       input.osVersion,
       input.locale,
@@ -293,12 +313,27 @@ async function submitReport(request, env) {
       createdAt,
       createdAt
     ).run();
+    reportInserted = true;
+    for (const image of storedImages) {
+      await env.DB.prepare(`
+        INSERT INTO report_images (report_id, image_index, image_key, image_type, image_name)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(id, image.index, image.imageKey, image.contentType, image.name).run();
+    }
   } catch (problem) {
     await Promise.allSettled([
-      imageKey ? env.IMAGES.delete(imageKey) : Promise.resolve(),
+      ...storedImages.map(image => env.IMAGES.delete(image.imageKey)),
       releaseDailyQuota(env.DB, deviceQuotaKey, day),
       releaseDailyQuota(env.DB, ipQuotaKey, day)
     ]);
+    if (reportInserted) {
+      await Promise.allSettled([
+        env.DB.prepare("DELETE FROM report_images WHERE report_id = ?").bind(id).run()
+      ]);
+      await Promise.allSettled([
+        env.DB.prepare("DELETE FROM reports WHERE id = ?").bind(id).run()
+      ]);
+    }
     throw problem;
   }
   const remaining = Math.max(0, deviceLimit - deviceCount);
@@ -320,7 +355,16 @@ async function listReports(request, env) {
   const statement = env.DB.prepare(`
     SELECT id, category, description, status, app_version AS appVersion,
       os_version AS osVersion, locale, module, created_at AS createdAt,
-      updated_at AS updatedAt, image_key IS NOT NULL AS hasImage,
+      updated_at AS updatedAt,
+      (image_key IS NOT NULL OR EXISTS (
+        SELECT 1 FROM report_images WHERE report_id = reports.id
+      )) AS hasImage,
+      CASE
+        WHEN EXISTS (SELECT 1 FROM report_images WHERE report_id = reports.id)
+          THEN (SELECT COUNT(*) FROM report_images WHERE report_id = reports.id)
+        WHEN image_key IS NOT NULL THEN 1
+        ELSE 0
+      END AS imageCount,
       image_type AS imageType, image_name AS imageName
     FROM reports
     ${filter}
@@ -334,9 +378,20 @@ async function listReports(request, env) {
   return json({ reports: result.results || [], newCount: Number(count?.count || 0) });
 }
 
-async function reportImage(request, env, id) {
+async function reportImage(request, env, id, imageIndex = 0) {
   if (!await requireAdmin(request, env)) return error("Unauthorized.", 401);
-  const row = await env.DB.prepare("SELECT image_key, image_type FROM reports WHERE id = ?").bind(id).first();
+  const index = Number.parseInt(String(imageIndex), 10);
+  if (!Number.isInteger(index) || index < 0 || index >= MAX_IMAGES) {
+    return error("Screenshot index is invalid.", 400);
+  }
+  let row = await env.DB.prepare(`
+    SELECT image_key, image_type
+    FROM report_images
+    WHERE report_id = ? AND image_index = ?
+  `).bind(id, index).first();
+  if (!row && index === 0) {
+    row = await env.DB.prepare("SELECT image_key, image_type FROM reports WHERE id = ?").bind(id).first();
+  }
   if (!row?.image_key) return error("Screenshot was not found.", 404);
   const object = await env.IMAGES.get(row.image_key);
   if (!object) return error("Screenshot was not found.", 404);
@@ -373,7 +428,9 @@ export default {
       return json({
         siteKey: String(env.TURNSTILE_SITE_KEY || ""),
         dailyLimit: boundedInteger(env.DEVICE_DAILY_LIMIT, 10, 1, 100),
-        maxImageBytes: MAX_IMAGE_BYTES
+        maxImageBytes: MAX_IMAGE_BYTES,
+        maxImages: MAX_IMAGES,
+        maxTotalImageBytes: MAX_TOTAL_IMAGE_BYTES
       });
     }
     if (request.method === "POST" && url.pathname === "/v1/reports") {
@@ -386,8 +443,10 @@ export default {
     if (request.method === "GET" && url.pathname === "/v1/admin/reports") {
       return listReports(request, env);
     }
+    const imagesMatch = url.pathname.match(/^\/v1\/admin\/reports\/([0-9a-fA-F-]{16,64})\/images\/(\d+)$/);
+    if (request.method === "GET" && imagesMatch) return reportImage(request, env, imagesMatch[1], imagesMatch[2]);
     const imageMatch = url.pathname.match(/^\/v1\/admin\/reports\/([0-9a-fA-F-]{16,64})\/image$/);
-    if (request.method === "GET" && imageMatch) return reportImage(request, env, imageMatch[1]);
+    if (request.method === "GET" && imageMatch) return reportImage(request, env, imageMatch[1], 0);
     const reportMatch = url.pathname.match(/^\/v1\/admin\/reports\/([0-9a-fA-F-]{16,64})$/);
     if (request.method === "PATCH" && reportMatch) return updateReport(request, env, reportMatch[1]);
     return error("Not found.", 404);

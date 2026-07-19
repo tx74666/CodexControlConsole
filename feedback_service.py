@@ -16,6 +16,8 @@ import urllib.request
 MAX_DESCRIPTION_LENGTH = 4000
 MIN_DESCRIPTION_LENGTH = 10
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGES = 4
+MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024
 DEFAULT_DAILY_LIMIT = 10
 ALLOWED_CATEGORIES = ("bug", "layout", "music", "update", "other")
 ALLOWED_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp")
@@ -126,6 +128,14 @@ def _read_json(path):
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _bounded_integer(value, fallback, minimum, maximum):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(minimum, min(maximum, parsed))
 
 
 def _clean_endpoint(value, allow_local=False):
@@ -276,8 +286,21 @@ class FeedbackService:
             "available": bool(endpoint and self._remote_config),
             "siteKey": self._site_key(),
             "categories": list(ALLOWED_CATEGORIES),
-            "dailyLimit": int(self._remote_config.get("dailyLimit") or DEFAULT_DAILY_LIMIT),
-            "maxImageBytes": int(self._remote_config.get("maxImageBytes") or MAX_IMAGE_BYTES),
+            "dailyLimit": _bounded_integer(
+                self._remote_config.get("dailyLimit"), DEFAULT_DAILY_LIMIT, 1, 100
+            ),
+            "maxImageBytes": _bounded_integer(
+                self._remote_config.get("maxImageBytes"), MAX_IMAGE_BYTES, 1, MAX_IMAGE_BYTES
+            ),
+            "maxImages": _bounded_integer(
+                self._remote_config.get("maxImages"), MAX_IMAGES, 1, MAX_IMAGES
+            ),
+            "maxTotalImageBytes": _bounded_integer(
+                self._remote_config.get("maxTotalImageBytes"),
+                MAX_TOTAL_IMAGE_BYTES,
+                1,
+                MAX_TOTAL_IMAGE_BYTES,
+            ),
             "maxDescriptionLength": MAX_DESCRIPTION_LENGTH,
             "adminEnabled": bool(endpoint and self._admin_token()),
             "adminSetupAvailable": self._is_developer(),
@@ -301,10 +324,7 @@ class FeedbackService:
         self._remote_config_at = None
         return self.config(force=True)
 
-    def _normalize_screenshot(self, payload):
-        screenshot = payload.get("screenshot")
-        if not screenshot:
-            return None
+    def _normalize_screenshot_item(self, screenshot):
         if not isinstance(screenshot, dict):
             raise FeedbackServiceError("Screenshot data is invalid.")
         encoded = str(screenshot.get("data") or "").strip()
@@ -317,7 +337,7 @@ class FeedbackService:
         except (ValueError, TypeError) as error:
             raise FeedbackServiceError("Screenshot data is invalid.") from error
         if not data:
-            return None
+            return None, 0
         if len(data) > MAX_IMAGE_BYTES:
             raise FeedbackServiceError("Screenshot must be 5 MB or smaller.", status=413)
         detected_type = _image_type(data)
@@ -330,7 +350,28 @@ class FeedbackService:
             "data": base64.b64encode(data).decode("ascii"),
             "type": detected_type,
             "name": _clean_image_name(screenshot.get("name"), detected_type),
-        }
+        }, len(data)
+
+    def _normalize_screenshots(self, payload):
+        screenshots = payload.get("screenshots")
+        if screenshots is None:
+            screenshots = [payload.get("screenshot")] if payload.get("screenshot") else []
+        if not isinstance(screenshots, list):
+            raise FeedbackServiceError("Screenshot data is invalid.")
+        if len(screenshots) > MAX_IMAGES:
+            raise FeedbackServiceError(f"Choose up to {MAX_IMAGES} screenshots.", status=413)
+
+        normalized = []
+        total_bytes = 0
+        for screenshot in screenshots:
+            image, image_bytes = self._normalize_screenshot_item(screenshot)
+            if not image:
+                continue
+            total_bytes += image_bytes
+            if total_bytes > MAX_TOTAL_IMAGE_BYTES:
+                raise FeedbackServiceError("Screenshots must total 12 MB or less.", status=413)
+            normalized.append(image)
+        return normalized
 
     def submit(self, payload):
         payload = payload if isinstance(payload, dict) else {}
@@ -342,7 +383,7 @@ class FeedbackService:
             raise FeedbackServiceError("Please describe the problem in at least 10 characters.")
         if len(description) > MAX_DESCRIPTION_LENGTH:
             raise FeedbackServiceError("Feedback description is too long.")
-        screenshot = self._normalize_screenshot(payload)
+        screenshots = self._normalize_screenshots(payload)
         forwarded = {
             "category": category,
             "description": description,
@@ -353,8 +394,9 @@ class FeedbackService:
             "module": str(payload.get("module") or "")[:48],
             "turnstileToken": str(payload.get("turnstileToken") or "")[:4096],
         }
-        if screenshot:
-            forwarded["screenshot"] = screenshot
+        if screenshots:
+            forwarded["screenshots"] = screenshots
+            forwarded["screenshot"] = screenshots[0]
         return self._request("POST", "/v1/reports", forwarded, timeout=35)
 
     def inbox(self, status="new", limit=50):
@@ -368,11 +410,23 @@ class FeedbackService:
         query = urllib.parse.urlencode({"status": status, "limit": limit})
         return self._request("GET", f"/v1/admin/reports?{query}", admin=True)
 
-    def report_image(self, report_id):
+    def report_image(self, report_id, image_index=0):
         report_id = str(report_id or "").strip()
         if not re.fullmatch(r"[0-9a-fA-F-]{16,64}", report_id):
             raise FeedbackServiceError("Report ID is invalid.")
-        result = self._request("GET", f"/v1/admin/reports/{urllib.parse.quote(report_id)}/image", admin=True)
+        try:
+            image_index = int(image_index)
+        except (TypeError, ValueError) as error:
+            raise FeedbackServiceError("Screenshot index is invalid.") from error
+        if image_index < 0 or image_index >= MAX_IMAGES:
+            raise FeedbackServiceError("Screenshot index is invalid.")
+        report_path = f"/v1/admin/reports/{urllib.parse.quote(report_id)}"
+        try:
+            result = self._request("GET", f"{report_path}/images/{image_index}", admin=True)
+        except FeedbackServiceError as error:
+            if image_index != 0 or error.status != 404:
+                raise
+            result = self._request("GET", f"{report_path}/image", admin=True)
         body = result.get("body") if isinstance(result, dict) else None
         if not isinstance(body, bytes):
             raise FeedbackServiceError("Screenshot was not found.", status=404)

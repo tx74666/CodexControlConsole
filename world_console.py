@@ -455,7 +455,7 @@ MAX_WORKZONE_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_STEAMWORK_UPLOAD_BYTES = 1024 * 1024 * 1024
 MAX_COOKIE_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_DESKTOP_LAYOUT_UPLOAD_BYTES = 8 * 1024 * 1024
-MAX_FEEDBACK_REQUEST_BYTES = 8 * 1024 * 1024
+MAX_FEEDBACK_REQUEST_BYTES = 18 * 1024 * 1024
 GOOGLE_TRANSLATE_ENDPOINT = "https://translation.googleapis.com/language/translate/v2"
 TRANSLATION_TARGET = "zh-TW"
 MUSIC_LIBRARY_LOCK = threading.Lock()
@@ -867,8 +867,12 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if not self.require_local_request():
                 return
             try:
+                query = urllib.parse.parse_qs(parsed.query)
                 report_id = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1])
-                body, content_type = FEEDBACK.report_image(report_id)
+                body, content_type = FEEDBACK.report_image(
+                    report_id,
+                    query.get("index", ["0"])[0],
+                )
                 self.send_bytes_response(body, content_type)
             except FeedbackServiceError as error:
                 self.send_json(error.payload(), status=error.status)

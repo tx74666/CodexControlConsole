@@ -35,7 +35,13 @@ class RelayHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.requests.append(("GET", self.path, self.headers.get("Authorization", ""), None))
         if self.path == "/v1/config":
-            self.send_payload({"siteKey": "test-site-key", "dailyLimit": 10, "maxImageBytes": 5242880})
+            self.send_payload({
+                "siteKey": "test-site-key",
+                "dailyLimit": 10,
+                "maxImageBytes": 5242880,
+                "maxImages": 4,
+                "maxTotalImageBytes": 12582912,
+            })
             return
         if self.path.startswith("/v1/admin/reports?"):
             self.send_payload({
@@ -45,11 +51,12 @@ class RelayHandler(BaseHTTPRequestHandler):
                     "description": "Example report for the inbox.",
                     "status": "new",
                     "hasImage": True,
+                    "imageCount": 2,
                 }],
                 "newCount": 1,
             })
             return
-        if self.path.endswith("/image"):
+        if "/images/" in self.path or self.path.endswith("/image"):
             self.send_payload(b"\x89PNG\r\n\x1a\n", content_type="image/png")
             return
         self.send_payload({"error": "not found"}, status=404)
@@ -106,6 +113,7 @@ def main():
             config = service.config(force=True)
             require(config["configured"] and config["available"], "relay configuration was not detected")
             require(config["dailyLimit"] == 10 and config["siteKey"] == "test-site-key", "public limits were not loaded")
+            require(config["maxImages"] == 4 and config["maxTotalImageBytes"] == 12582912, "multi-image limits were not loaded")
             require("token" not in config, "admin token leaked through the public configuration")
 
             png = b"\x89PNG\r\n\x1a\n" + b"sample"
@@ -115,16 +123,24 @@ def main():
                 "locale": "en",
                 "module": "workspace",
                 "turnstileToken": "verified-test-token",
-                "screenshot": {
-                    "data": base64.b64encode(png).decode("ascii"),
-                    "type": "image/png",
-                    "name": "layout.png",
-                },
+                "screenshots": [
+                    {
+                        "data": base64.b64encode(png).decode("ascii"),
+                        "type": "image/png",
+                        "name": "layout.png",
+                    },
+                    {
+                        "data": base64.b64encode(png).decode("ascii"),
+                        "type": "image/png",
+                        "name": "layout-detail.png",
+                    },
+                ],
             })
             require(submitted["remaining"] == 9, "submission response was not returned")
             forwarded = next(item[3] for item in RelayHandler.requests if item[1] == "/v1/reports")
             require(forwarded["installationId"].startswith("123e4567"), "installation ID was not forwarded")
             require(forwarded["screenshot"]["type"] == "image/png", "validated screenshot was not forwarded")
+            require(len(forwarded["screenshots"]) == 2, "multiple screenshots were not forwarded")
 
             for description, expected_code, expected_limit in (
                 ("Burst limit test should remain temporary.", "burst_limit", False),
@@ -164,7 +180,7 @@ def main():
             require(inbox["newCount"] == 1, "inbox was not loaded")
             admin_request = next(item for item in RelayHandler.requests if item[1].startswith("/v1/admin/reports?"))
             require(admin_request[2] == f"Bearer {token}", "admin request did not use the local token")
-            image, content_type = service.report_image("123e4567-e89b-12d3-a456-426614174000")
+            image, content_type = service.report_image("123e4567-e89b-12d3-a456-426614174000", 1)
             require(content_type == "image/png" and image.startswith(b"\x89PNG"), "private image proxy failed")
             require(service.update_status("123e4567-e89b-12d3-a456-426614174000", "resolved")["status"] == "resolved", "status update failed")
     finally:

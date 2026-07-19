@@ -18,6 +18,19 @@ CREATE TABLE IF NOT EXISTS reports (
 CREATE INDEX IF NOT EXISTS reports_status_created_at
   ON reports (status, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS report_images (
+  report_id TEXT NOT NULL,
+  image_index INTEGER NOT NULL,
+  image_key TEXT NOT NULL,
+  image_type TEXT NOT NULL,
+  image_name TEXT NOT NULL,
+  PRIMARY KEY (report_id, image_index),
+  FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS report_images_report_id
+  ON report_images (report_id, image_index);
+
 CREATE TABLE IF NOT EXISTS daily_limits (
   quota_key TEXT NOT NULL,
   day TEXT NOT NULL,

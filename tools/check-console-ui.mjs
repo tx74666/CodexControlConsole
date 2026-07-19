@@ -53,7 +53,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.5.4", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.5.5", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -402,7 +402,7 @@ async function runBrowserChecks(client) {
     const originalConfirm = window.confirm;
     let request = null;
     productUpdateStates = {
-      console: { currentVersion: '0.5.4', latestVersion: '0.5.4', available: false, canUninstall: true },
+      console: { currentVersion: '0.5.5', latestVersion: '0.5.5', available: false, canUninstall: true },
       world: { currentVersion: '0.3.0', latestVersion: '0.3.0', available: false, installed: true, canUninstall: true }
     };
     window.confirm = () => true;
@@ -482,6 +482,46 @@ async function runBrowserChecks(client) {
       && consoleCollaborationState.quotaHidden
       && consoleCollaborationState.reviewAvailable === consoleCollaborationState.adminSetupAvailable,
     `Console collaboration view is incomplete: ${JSON.stringify(consoleCollaborationState)}`
+  );
+  const feedbackImagesState = await evaluate(client, `(() => {
+    const originalConfig = feedbackConfig;
+    try {
+      feedbackConfig = {
+        ...(originalConfig || {}),
+        maxImages: 4,
+        maxImageBytes: 5 * 1024 * 1024,
+        maxTotalImageBytes: 12 * 1024 * 1024
+      };
+      const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      selectFeedbackImages([
+        new File([bytes], 'one.png', { type: 'image/png', lastModified: 1 }),
+        new File([bytes], 'two.png', { type: 'image/png', lastModified: 2 }),
+        new File([bytes], 'three.png', { type: 'image/png', lastModified: 3 })
+      ]);
+      const before = {
+        selected: feedbackImages.length,
+        previews: document.querySelectorAll('.feedback-preview-item').length,
+        multiple: Boolean(document.querySelector('#feedbackScreenshotInput')?.multiple)
+      };
+      document.querySelectorAll('.feedback-preview-item .icon-button')[1]?.click();
+      return {
+        before,
+        after: feedbackImages.length,
+        remaining: feedbackImages.map(entry => entry.file.name)
+      };
+    } finally {
+      clearFeedbackImages();
+      feedbackConfig = originalConfig;
+      renderFeedback();
+    }
+  })()`);
+  assert(
+    feedbackImagesState.before.selected === 3
+      && feedbackImagesState.before.previews === 3
+      && feedbackImagesState.before.multiple
+      && feedbackImagesState.after === 2
+      && feedbackImagesState.remaining.join(',') === 'one.png,three.png',
+    `feedback multi-image selection is incomplete: ${JSON.stringify(feedbackImagesState)}`
   );
   const feedbackLimitState = await evaluate(client, `(async () => {
     const originalFetch = window.fetch;

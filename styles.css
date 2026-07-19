@@ -1140,32 +1140,39 @@ h2 {
   white-space: nowrap;
 }
 
-.feedback-preview {
+.feedback-previews {
   grid-column: 1 / -1;
-  position: relative;
-  width: min(240px, 100%);
-  min-height: 92px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  overflow: hidden;
-  background: var(--button-bg);
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(96px, 150px));
+  gap: 8px;
 }
 
-.feedback-preview[hidden],
+.feedback-previews[hidden],
 .feedback-turnstile[hidden],
 .feedback-inbox[hidden],
 .feedback-admin-setup[hidden] {
   display: none;
 }
 
-.feedback-preview img {
-  width: 100%;
-  height: 132px;
-  display: block;
-  object-fit: contain;
+.feedback-preview-item {
+  position: relative;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--button-bg);
 }
 
-.feedback-preview .icon-button {
+.feedback-preview-item img {
+  width: 100%;
+  height: 92px;
+  display: block;
+  object-fit: cover;
+}
+
+.feedback-preview-item .icon-button {
   position: absolute;
   top: 6px;
   right: 6px;
@@ -1268,13 +1275,28 @@ h2 {
 }
 
 .feedback-report-image {
-  min-width: 88px;
-  min-height: 34px;
-  display: inline-grid;
-  place-content: center;
+  width: 52px;
+  height: 40px;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--button-bg);
   text-decoration: none;
-  font-size: 12px;
-  font-weight: 700;
+}
+
+.feedback-report-image img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.feedback-report-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
 }
 
 .feedback-resolve {
@@ -1320,18 +1342,23 @@ h2 {
   }
 
   .feedback-actions,
-  .feedback-preview,
+  .feedback-previews,
   .feedback-turnstile,
   .feedback-status {
     grid-column: 1;
+  }
+
+  .feedback-previews {
+    grid-template-columns: repeat(2, minmax(96px, 1fr));
   }
 
   .feedback-report {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .feedback-report-image {
+  .feedback-report-images {
     grid-column: 1;
+    justify-content: flex-start;
   }
 }
 
