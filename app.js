@@ -236,7 +236,7 @@ const i18n = {
     feedbackScreenshot: "截图",
     feedbackRemoveImage: "移除截图",
     feedbackSend: "发送",
-    feedbackQuota: limit => `${limit}/天`,
+    feedbackHitLimit: "Hit Limit",
     feedbackConnecting: "正在连接",
     feedbackReady: "可以发送",
     feedbackNotConfigured: "回报服务尚未连接",
@@ -951,7 +951,7 @@ const i18n = {
     feedbackScreenshot: "Screenshot",
     feedbackRemoveImage: "Remove screenshot",
     feedbackSend: "Send",
-    feedbackQuota: limit => `${limit}/day`,
+    feedbackHitLimit: "Hit Limit",
     feedbackConnecting: "Connecting",
     feedbackReady: "Ready to send",
     feedbackNotConfigured: "Feedback is not connected yet",
@@ -2002,6 +2002,7 @@ let feedbackConfigBusy = false;
 let feedbackBusy = false;
 let feedbackNotice = "";
 let feedbackNoticeTone = "";
+let feedbackLimitReached = false;
 let feedbackImage = null;
 let feedbackImageUrl = "";
 let feedbackReports = [];
@@ -11326,9 +11327,11 @@ function renderFeedbackTop() {
 function renderFeedback() {
   if (!els.feedbackForm) return;
   const configured = Boolean(feedbackConfig?.configured);
-  const dailyLimit = Number(feedbackConfig?.dailyLimit || 10);
-  if (els.feedbackQuota) els.feedbackQuota.textContent = text("feedbackQuota", dailyLimit);
-  if (els.feedbackSubmit) els.feedbackSubmit.disabled = feedbackBusy || !configured;
+  if (els.feedbackQuota) {
+    els.feedbackQuota.hidden = !feedbackLimitReached;
+    els.feedbackQuota.textContent = text("feedbackHitLimit");
+  }
+  if (els.feedbackSubmit) els.feedbackSubmit.disabled = feedbackBusy || !configured || feedbackLimitReached;
   if (els.feedbackScreenshotButton) els.feedbackScreenshotButton.disabled = feedbackBusy;
   if (els.feedbackDescription) els.feedbackDescription.disabled = feedbackBusy;
   if (els.feedbackCategory) els.feedbackCategory.disabled = feedbackBusy;
@@ -11460,7 +11463,11 @@ async function loadFeedbackConfig(options = {}) {
   try {
     const response = await fetch(`/api/feedback/config${options.force ? "?force=1" : ""}`, { cache: "no-store" });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(payload.error || `HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
     feedbackConfig = payload;
     feedbackNotice = "";
     feedbackNoticeTone = "";
@@ -11479,7 +11486,7 @@ async function loadFeedbackConfig(options = {}) {
 
 async function submitFeedback(event) {
   event?.preventDefault();
-  if (!feedbackConfig?.configured || feedbackBusy) return;
+  if (!feedbackConfig?.configured || feedbackBusy || feedbackLimitReached) return;
   const description = String(els.feedbackDescription?.value || "").trim();
   if (description.length < 10) {
     feedbackNotice = text("feedbackDescriptionShort");
@@ -11515,14 +11522,21 @@ async function submitFeedback(event) {
       })
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(payload.error || `HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
     if (els.feedbackDescription) els.feedbackDescription.value = "";
     clearFeedbackImage();
     resetFeedbackTurnstile();
-    feedbackNotice = text("feedbackSent", Number(payload.remaining || 0));
+    const remaining = Number(payload.remaining || 0);
+    feedbackLimitReached = remaining <= 0;
+    feedbackNotice = text("feedbackSent", remaining);
     feedbackNoticeTone = "success";
     if (feedbackConfig.adminEnabled) window.setTimeout(() => loadFeedbackInbox({ quiet: true }), 600);
   } catch (error) {
+    if (error.status === 429) feedbackLimitReached = true;
     feedbackNotice = text("feedbackFailed", error.message);
     feedbackNoticeTone = "warning";
     resetFeedbackTurnstile();

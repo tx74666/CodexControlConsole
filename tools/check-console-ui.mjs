@@ -53,7 +53,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.5.2", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.5.3", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -402,7 +402,7 @@ async function runBrowserChecks(client) {
     const originalConfirm = window.confirm;
     let request = null;
     productUpdateStates = {
-      console: { currentVersion: '0.5.2', latestVersion: '0.5.2', available: false, canUninstall: true },
+      console: { currentVersion: '0.5.3', latestVersion: '0.5.3', available: false, canUninstall: true },
       world: { currentVersion: '0.3.0', latestVersion: '0.3.0', available: false, installed: true, canUninstall: true }
     };
     window.confirm = () => true;
@@ -470,6 +470,7 @@ async function runBrowserChecks(client) {
     commonHidden: Boolean(document.querySelector('#consoleCommonView')?.hidden),
     collaborationVisible: !document.querySelector('#consoleCollaborationView')?.hidden,
     feedbackVisible: document.querySelector('#feedbackPanel')?.getBoundingClientRect().height > 0,
+    quotaHidden: Boolean(document.querySelector('#feedbackQuota')?.hidden),
     reviewAvailable: !document.querySelector('#feedbackReviewPanel')?.hidden,
     adminSetupAvailable: Boolean(feedbackConfig?.adminSetupAvailable || feedbackConfig?.adminEnabled)
   })`);
@@ -478,8 +479,31 @@ async function runBrowserChecks(client) {
       && consoleCollaborationState.commonHidden
       && consoleCollaborationState.collaborationVisible
       && consoleCollaborationState.feedbackVisible
+      && consoleCollaborationState.quotaHidden
       && consoleCollaborationState.reviewAvailable === consoleCollaborationState.adminSetupAvailable,
     `Console collaboration view is incomplete: ${JSON.stringify(consoleCollaborationState)}`
+  );
+  const feedbackLimitState = await evaluate(client, `(() => {
+    const original = feedbackLimitReached;
+    feedbackLimitReached = true;
+    renderFeedback();
+    const quota = document.querySelector('#feedbackQuota');
+    const result = {
+      visible: !quota?.hidden,
+      text: quota?.textContent?.trim() || '',
+      sendDisabled: Boolean(document.querySelector('#feedbackSubmit')?.disabled)
+    };
+    feedbackLimitReached = original;
+    renderFeedback();
+    result.hiddenAfterReset = Boolean(quota?.hidden);
+    return result;
+  })()`);
+  assert(
+    feedbackLimitState.visible
+      && feedbackLimitState.text === "Hit Limit"
+      && feedbackLimitState.sendDisabled
+      && feedbackLimitState.hiddenAfterReset,
+    `feedback limit indicator is not event-driven: ${JSON.stringify(feedbackLimitState)}`
   );
   await evaluate(client, `document.querySelector('[data-console-view-target="common"]')?.click()`);
   await waitForValue(
