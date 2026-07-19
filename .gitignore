@@ -13,6 +13,12 @@ music/
 wallpapers/*
 !wallpapers/README.txt
 !wallpapers/SOURCES.md
+!wallpapers/blue-lake-boats.jpg
+!wallpapers/calm-mountain-lake.jpg
+!wallpapers/palm-sky-reflection.jpg
+!wallpapers/quiet-forest-aerial.jpg
+!wallpapers/snow-water-mountains.jpg
+!wallpapers/soft-mountain-sun.jpg
 *.mp3
 *.wav
 *.m4a

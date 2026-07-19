@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.5.0",
+  [string]$Version = "0.5.1",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
   [string]$FeedbackEndpoint = $env:CODEX_FEEDBACK_ENDPOINT,
@@ -75,6 +75,17 @@ $Manifest = [ordered]@{
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json -Depth 5) + [Environment]::NewLine, $Utf8NoBom)
 
+$PublicWallpaperFiles = @(
+  "README.txt",
+  "SOURCES.md",
+  "blue-lake-boats.jpg",
+  "calm-mountain-lake.jpg",
+  "palm-sky-reflection.jpg",
+  "quiet-forest-aerial.jpg",
+  "snow-water-mountains.jpg",
+  "soft-mountain-sun.jpg"
+)
+
 $DataItems = @(
   @{ Source = $ManifestPath; Destination = "." },
   @{ Source = "index.html"; Destination = "." },
@@ -100,9 +111,12 @@ $DataItems = @(
   @{ Source = "tools\NativeFileDrag.exe"; Destination = "tools" },
   @{ Source = "tools\NativeFileDrag.cs"; Destination = "tools" },
   @{ Source = "tools\blender_live_selection_bridge.py"; Destination = "tools" },
-  @{ Source = "tools\DesktopLayout.ps1"; Destination = "tools" },
-  @{ Source = "wallpapers"; Destination = "wallpapers" }
+  @{ Source = "tools\DesktopLayout.ps1"; Destination = "tools" }
 )
+
+foreach ($wallpaper in $PublicWallpaperFiles) {
+  $DataItems += @{ Source = "wallpapers\$wallpaper"; Destination = "wallpapers" }
+}
 
 $PyInstallerArgs = @(
   "-m", "PyInstaller",

@@ -1,6 +1,6 @@
 {
   "name": "Codex Control Console",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "repository": "tx74666/CodexControlConsole",
   "channel": "stable",
   "installMode": "source",

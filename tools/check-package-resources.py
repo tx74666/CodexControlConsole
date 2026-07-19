@@ -5,6 +5,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_WALLPAPERS = {
+    "blue-lake-boats.jpg",
+    "calm-mountain-lake.jpg",
+    "palm-sky-reflection.jpg",
+    "quiet-forest-aerial.jpg",
+    "snow-water-mountains.jpg",
+    "soft-mountain-sun.jpg",
+}
 
 
 def require(condition, message):
@@ -62,7 +70,11 @@ def main():
         for path in app_dir.rglob("*")
         if path.is_file() and "wallpapers" in path.parts and path.suffix.lower() in image_extensions
     ]
-    require(len(wallpapers) >= 7, f"built-in wallpapers are missing ({len(wallpapers)} found)")
+    wallpaper_names = {path.name for path in wallpapers}
+    require(
+        wallpaper_names == PUBLIC_WALLPAPERS,
+        f"public wallpapers do not match the release allowlist: {sorted(wallpaper_names)}",
+    )
 
     personal_extensions = {".mp3", ".wav", ".flac", ".m4a", ".blend"}
     personal_files = [path for path in app_dir.rglob("*") if path.is_file() and path.suffix.lower() in personal_extensions]
