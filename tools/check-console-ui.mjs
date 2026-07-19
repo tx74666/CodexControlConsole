@@ -53,7 +53,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.5.3", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.5.4", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -402,7 +402,7 @@ async function runBrowserChecks(client) {
     const originalConfirm = window.confirm;
     let request = null;
     productUpdateStates = {
-      console: { currentVersion: '0.5.3', latestVersion: '0.5.3', available: false, canUninstall: true },
+      console: { currentVersion: '0.5.4', latestVersion: '0.5.4', available: false, canUninstall: true },
       world: { currentVersion: '0.3.0', latestVersion: '0.3.0', available: false, installed: true, canUninstall: true }
     };
     window.confirm = () => true;
@@ -483,27 +483,71 @@ async function runBrowserChecks(client) {
       && consoleCollaborationState.reviewAvailable === consoleCollaborationState.adminSetupAvailable,
     `Console collaboration view is incomplete: ${JSON.stringify(consoleCollaborationState)}`
   );
-  const feedbackLimitState = await evaluate(client, `(() => {
-    const original = feedbackLimitReached;
-    feedbackLimitReached = true;
-    renderFeedback();
-    const quota = document.querySelector('#feedbackQuota');
-    const result = {
-      visible: !quota?.hidden,
-      text: quota?.textContent?.trim() || '',
-      sendDisabled: Boolean(document.querySelector('#feedbackSubmit')?.disabled)
+  const feedbackLimitState = await evaluate(client, `(async () => {
+    const originalFetch = window.fetch;
+    const originalConfig = feedbackConfig;
+    const originalDescription = document.querySelector('#feedbackDescription')?.value || '';
+    const originalNotice = feedbackNotice;
+    const originalNoticeTone = feedbackNoticeTone;
+    const runLimitedSubmit = async payload => {
+      setFeedbackLimit(false);
+      feedbackConfig = { ...(originalConfig || {}), configured: true, siteKey: '' };
+      document.querySelector('#feedbackDescription').value = 'A complete feedback limit behavior test.';
+      window.fetch = async input => {
+        if (String(input) === '/api/feedback/submit') {
+          return new Response(JSON.stringify(payload), {
+            status: 429,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        return originalFetch(input);
+      };
+      await submitFeedback({ preventDefault() {} });
+      const quota = document.querySelector('#feedbackQuota');
+      return {
+        visible: !quota?.hidden,
+        text: quota?.textContent?.trim() || '',
+        sendDisabled: Boolean(document.querySelector('#feedbackSubmit')?.disabled)
+      };
     };
-    feedbackLimitReached = original;
-    renderFeedback();
-    result.hiddenAfterReset = Boolean(quota?.hidden);
-    return result;
-  })()`);
+    try {
+      const burst = await runLimitedSubmit({
+        error: 'Too many reports. Please wait a minute.',
+        code: 'burst_limit',
+        retryAfter: 60,
+        limitReached: false
+      });
+      const daily = await runLimitedSubmit({
+        error: 'This device has reached its daily report limit.',
+        code: 'daily_limit',
+        retryAfter: 3600,
+        limitReached: true
+      });
+      setFeedbackLimit(false);
+      renderFeedback();
+      return {
+        burst,
+        daily,
+        hiddenAfterReset: Boolean(document.querySelector('#feedbackQuota')?.hidden)
+      };
+    } finally {
+      window.fetch = originalFetch;
+      feedbackConfig = originalConfig;
+      document.querySelector('#feedbackDescription').value = originalDescription;
+      feedbackNotice = originalNotice;
+      feedbackNoticeTone = originalNoticeTone;
+      setFeedbackLimit(false);
+      renderFeedback();
+    }
+  })()`, true);
   assert(
-    feedbackLimitState.visible
-      && feedbackLimitState.text === "Hit Limit"
-      && feedbackLimitState.sendDisabled
+    !feedbackLimitState.burst.visible
+      && !feedbackLimitState.burst.sendDisabled
+      && feedbackLimitState.daily.visible
+      && feedbackLimitState.daily.text === "Hit Limit"
+      && feedbackLimitState.daily.sendDisabled
       && feedbackLimitState.hiddenAfterReset,
-    `feedback limit indicator is not event-driven: ${JSON.stringify(feedbackLimitState)}`
+    `feedback daily and burst limits are confused: ${JSON.stringify(feedbackLimitState)}`
   );
   await evaluate(client, `document.querySelector('[data-console-view-target="common"]')?.click()`);
   await waitForValue(

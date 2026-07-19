@@ -92,9 +92,25 @@ def _unprotect_secret(value):
 
 
 class FeedbackServiceError(RuntimeError):
-    def __init__(self, message, status=400):
+    def __init__(self, message, status=400, code="", retry_after=0, limit_reached=False):
         super().__init__(message)
         self.status = int(status or 400)
+        self.code = re.sub(r"[^a-z0-9_-]+", "", str(code or "").strip().lower())[:48]
+        try:
+            self.retry_after = max(0, int(retry_after or 0))
+        except (TypeError, ValueError):
+            self.retry_after = 0
+        self.limit_reached = bool(limit_reached or self.code == "daily_limit")
+
+    def payload(self):
+        result = {"error": str(self)}
+        if self.code:
+            result["code"] = self.code
+        if self.retry_after:
+            result["retryAfter"] = self.retry_after
+        if self.limit_reached:
+            result["limitReached"] = True
+        return result
 
 
 def _atomic_write_json(path, payload):
@@ -217,12 +233,22 @@ class FeedbackService:
                     "contentType": response.headers.get("Content-Type", "application/octet-stream"),
                 }
         except urllib.error.HTTPError as error:
+            detail = {}
             try:
                 detail = json.loads(error.read().decode("utf-8"))
                 message = str(detail.get("error") or detail.get("message") or "Feedback request failed.")
             except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
                 message = "Feedback request failed."
-            raise FeedbackServiceError(message, status=error.code) from error
+            retry_after = detail.get("retryAfter") if isinstance(detail, dict) else 0
+            if not retry_after:
+                retry_after = error.headers.get("Retry-After", "0")
+            raise FeedbackServiceError(
+                message,
+                status=error.code,
+                code=detail.get("code") if isinstance(detail, dict) else "",
+                retry_after=retry_after,
+                limit_reached=bool(detail.get("limitReached")) if isinstance(detail, dict) else False,
+            ) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise FeedbackServiceError("Feedback service is temporarily unavailable.", status=503) from error
 

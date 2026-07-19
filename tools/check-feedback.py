@@ -59,6 +59,22 @@ class RelayHandler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
         self.requests.append(("POST", self.path, self.headers.get("Authorization", ""), payload))
         if self.path == "/v1/reports":
+            if "burst limit" in str(payload.get("description") or "").lower():
+                self.send_payload({
+                    "error": "Too many reports. Please wait a minute.",
+                    "code": "burst_limit",
+                    "retryAfter": 60,
+                    "limitReached": False,
+                }, status=429)
+                return
+            if "daily limit" in str(payload.get("description") or "").lower():
+                self.send_payload({
+                    "error": "This device has reached its daily report limit.",
+                    "code": "daily_limit",
+                    "retryAfter": 3600,
+                    "limitReached": True,
+                }, status=429)
+                return
             self.send_payload({"ok": True, "id": "report-id", "remaining": 9, "dailyLimit": 10}, status=201)
             return
         self.send_payload({"error": "not found"}, status=404)
@@ -109,6 +125,21 @@ def main():
             forwarded = next(item[3] for item in RelayHandler.requests if item[1] == "/v1/reports")
             require(forwarded["installationId"].startswith("123e4567"), "installation ID was not forwarded")
             require(forwarded["screenshot"]["type"] == "image/png", "validated screenshot was not forwarded")
+
+            for description, expected_code, expected_limit in (
+                ("Burst limit test should remain temporary.", "burst_limit", False),
+                ("Daily limit test should lock until reset.", "daily_limit", True),
+            ):
+                try:
+                    service.submit({"category": "bug", "description": description})
+                except FeedbackServiceError as error:
+                    require(error.status == 429, "rate-limit status was not preserved")
+                    require(error.code == expected_code, "rate-limit type was not preserved")
+                    require(error.limit_reached is expected_limit, "daily and burst limits were confused")
+                    require(error.retry_after > 0, "rate-limit reset time was not preserved")
+                    require(error.payload().get("limitReached", False) is expected_limit, "public limit payload is wrong")
+                else:
+                    raise AssertionError("rate-limited feedback was accepted")
 
             try:
                 service.submit({

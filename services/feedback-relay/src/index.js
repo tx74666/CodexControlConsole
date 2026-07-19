@@ -16,8 +16,8 @@ function json(payload, status = 200, headers = {}) {
   });
 }
 
-function error(message, status = 400, headers = {}) {
-  return json({ error: message }, status, headers);
+function error(message, status = 400, headers = {}, details = {}) {
+  return json({ error: message, ...details }, status, headers);
 }
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -185,6 +185,14 @@ async function consumeDailyQuota(db, key, day, limit) {
   return row ? Number(row.count || 0) : 0;
 }
 
+async function releaseDailyQuota(db, key, day) {
+  await db.prepare(`
+    UPDATE daily_limits
+    SET count = MAX(0, count - 1)
+    WHERE quota_key = ? AND day = ? AND count > 0
+  `).bind(key, day).run();
+}
+
 function secondsUntilUtcMidnight(now = new Date()) {
   const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
   return Math.max(1, Math.ceil((midnight - now.getTime()) / 1000));
@@ -216,33 +224,55 @@ async function submitReport(request, env) {
 
   if (env.SUBMIT_RATE_LIMITER) {
     const burst = await env.SUBMIT_RATE_LIMITER.limit({ key: deviceHash });
-    if (!burst.success) return error("Too many reports. Please wait a minute.", 429, { "Retry-After": "60" });
+    if (!burst.success) {
+      return error(
+        "Too many reports. Please wait a minute.",
+        429,
+        { "Retry-After": "60" },
+        { code: "burst_limit", retryAfter: 60, limitReached: false }
+      );
+    }
   }
 
   const now = new Date();
   const day = now.toISOString().slice(0, 10);
   const deviceLimit = boundedInteger(env.DEVICE_DAILY_LIMIT, 10, 1, 100);
   const ipLimit = boundedInteger(env.IP_DAILY_LIMIT, 30, deviceLimit, 500);
-  const deviceCount = await consumeDailyQuota(env.DB, `device:${deviceHash}`, day, deviceLimit);
+  const deviceQuotaKey = `device:${deviceHash}`;
+  const ipQuotaKey = `ip:${ipHash}`;
+  const retryAfter = secondsUntilUtcMidnight(now);
+  const dailyLimitDetails = { code: "daily_limit", retryAfter, limitReached: true };
+  const deviceCount = await consumeDailyQuota(env.DB, deviceQuotaKey, day, deviceLimit);
   if (!deviceCount) {
-    return error("This device has reached its daily report limit.", 429, { "Retry-After": String(secondsUntilUtcMidnight(now)) });
+    return error(
+      "This device has reached its daily report limit.",
+      429,
+      { "Retry-After": String(retryAfter) },
+      dailyLimitDetails
+    );
   }
-  const ipCount = await consumeDailyQuota(env.DB, `ip:${ipHash}`, day, ipLimit);
+  const ipCount = await consumeDailyQuota(env.DB, ipQuotaKey, day, ipLimit);
   if (!ipCount) {
-    return error("This network has reached its daily report limit.", 429, { "Retry-After": String(secondsUntilUtcMidnight(now)) });
+    await Promise.allSettled([releaseDailyQuota(env.DB, deviceQuotaKey, day)]);
+    return error(
+      "This network has reached its daily report limit.",
+      429,
+      { "Retry-After": String(retryAfter) },
+      dailyLimitDetails
+    );
   }
 
   const id = crypto.randomUUID();
   const createdAt = now.toISOString();
   let imageKey = "";
-  if (input.screenshot) {
-    imageKey = `reports/${id}/screenshot.${imageExtension(input.screenshot.contentType)}`;
-    await env.IMAGES.put(imageKey, input.screenshot.bytes, {
-      httpMetadata: { contentType: input.screenshot.contentType },
-      customMetadata: { reportId: id }
-    });
-  }
   try {
+    if (input.screenshot) {
+      imageKey = `reports/${id}/screenshot.${imageExtension(input.screenshot.contentType)}`;
+      await env.IMAGES.put(imageKey, input.screenshot.bytes, {
+        httpMetadata: { contentType: input.screenshot.contentType },
+        customMetadata: { reportId: id }
+      });
+    }
     await env.DB.prepare(`
       INSERT INTO reports (
         id, category, description, image_key, image_type, image_name, status,
@@ -264,14 +294,20 @@ async function submitReport(request, env) {
       createdAt
     ).run();
   } catch (problem) {
-    if (imageKey) await env.IMAGES.delete(imageKey);
+    await Promise.allSettled([
+      imageKey ? env.IMAGES.delete(imageKey) : Promise.resolve(),
+      releaseDailyQuota(env.DB, deviceQuotaKey, day),
+      releaseDailyQuota(env.DB, ipQuotaKey, day)
+    ]);
     throw problem;
   }
+  const remaining = Math.max(0, deviceLimit - deviceCount);
   return json({
     ok: true,
     id,
-    remaining: Math.max(0, deviceLimit - deviceCount),
-    dailyLimit: deviceLimit
+    remaining,
+    dailyLimit: deviceLimit,
+    retryAfter: remaining === 0 ? retryAfter : 0
   }, 201);
 }
 

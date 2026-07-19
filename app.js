@@ -2003,6 +2003,7 @@ let feedbackBusy = false;
 let feedbackNotice = "";
 let feedbackNoticeTone = "";
 let feedbackLimitReached = false;
+let feedbackLimitResetTimer = 0;
 let feedbackImage = null;
 let feedbackImageUrl = "";
 let feedbackReports = [];
@@ -11324,6 +11325,23 @@ function renderFeedbackTop() {
   els.feedbackTop.classList.toggle("has-reports", feedbackNewCount > 0);
 }
 
+function setFeedbackLimit(reached, retryAfter = 0) {
+  feedbackLimitReached = Boolean(reached);
+  if (feedbackLimitResetTimer) {
+    window.clearTimeout(feedbackLimitResetTimer);
+    feedbackLimitResetTimer = 0;
+  }
+  const seconds = Number(retryAfter || 0);
+  if (!feedbackLimitReached || !Number.isFinite(seconds) || seconds <= 0) return;
+  feedbackLimitResetTimer = window.setTimeout(() => {
+    feedbackLimitResetTimer = 0;
+    feedbackLimitReached = false;
+    feedbackNotice = "";
+    feedbackNoticeTone = "";
+    renderFeedback();
+  }, Math.min(2_147_483_647, Math.ceil(seconds * 1000) + 250));
+}
+
 function renderFeedback() {
   if (!els.feedbackForm) return;
   const configured = Boolean(feedbackConfig?.configured);
@@ -11466,6 +11484,9 @@ async function loadFeedbackConfig(options = {}) {
     if (!response.ok) {
       const error = new Error(payload.error || `HTTP ${response.status}`);
       error.status = response.status;
+      error.code = String(payload.code || "");
+      error.retryAfter = Number(payload.retryAfter || 0);
+      error.limitReached = payload.limitReached === true || error.code === "daily_limit";
       throw error;
     }
     feedbackConfig = payload;
@@ -11525,18 +11546,21 @@ async function submitFeedback(event) {
     if (!response.ok) {
       const error = new Error(payload.error || `HTTP ${response.status}`);
       error.status = response.status;
+      error.code = String(payload.code || "");
+      error.retryAfter = Number(payload.retryAfter || 0);
+      error.limitReached = payload.limitReached === true || error.code === "daily_limit";
       throw error;
     }
     if (els.feedbackDescription) els.feedbackDescription.value = "";
     clearFeedbackImage();
     resetFeedbackTurnstile();
     const remaining = Number(payload.remaining || 0);
-    feedbackLimitReached = remaining <= 0;
+    setFeedbackLimit(remaining <= 0, payload.retryAfter);
     feedbackNotice = text("feedbackSent", remaining);
     feedbackNoticeTone = "success";
     if (feedbackConfig.adminEnabled) window.setTimeout(() => loadFeedbackInbox({ quiet: true }), 600);
   } catch (error) {
-    if (error.status === 429) feedbackLimitReached = true;
+    setFeedbackLimit(Boolean(error.limitReached), error.retryAfter);
     feedbackNotice = text("feedbackFailed", error.message);
     feedbackNoticeTone = "warning";
     resetFeedbackTurnstile();

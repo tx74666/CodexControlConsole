@@ -849,7 +849,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             try:
                 self.send_json(FEEDBACK.config(force=query.get("force", [""])[0].lower() in {"1", "true", "yes"}))
             except FeedbackServiceError as error:
-                self.send_json({"error": str(error)}, status=error.status)
+                self.send_json(error.payload(), status=error.status)
             return
         if parsed.path == "/api/feedback/inbox":
             if not self.require_local_request():
@@ -861,7 +861,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     limit=query.get("limit", ["50"])[0],
                 ))
             except FeedbackServiceError as error:
-                self.send_json({"error": str(error)}, status=error.status)
+                self.send_json(error.payload(), status=error.status)
             return
         if parsed.path.startswith("/api/feedback/image/"):
             if not self.require_local_request():
@@ -871,7 +871,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 body, content_type = FEEDBACK.report_image(report_id)
                 self.send_bytes_response(body, content_type)
             except FeedbackServiceError as error:
-                self.send_json({"error": str(error)}, status=error.status)
+                self.send_json(error.payload(), status=error.status)
             return
         if parsed.path == "/api/console/update":
             query = urllib.parse.parse_qs(parsed.query)
@@ -1201,7 +1201,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 self.send_json(install_startup_listener())
                 return
         except FeedbackServiceError as error:
-            self.send_json({"error": str(error)}, status=error.status)
+            self.send_json(error.payload(), status=error.status)
             return
         except ValueError as error:
             self.send_json({"error": str(error)}, status=400)
