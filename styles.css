@@ -191,7 +191,8 @@ button {
   gap: 8px;
   align-items: center;
   flex: 0 1 auto;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  min-width: 0;
   margin-top: 2px;
   padding-bottom: 2px;
   min-height: 36px;
@@ -341,6 +342,7 @@ body[data-console-edition="lite"] .module-archive {
 }
 
 .module-link {
+  flex: 0 0 auto;
   min-height: 32px;
   display: inline-flex;
   align-items: center;
@@ -352,6 +354,10 @@ body[data-console-edition="lite"] .module-archive {
   font-size: 13px;
   font-weight: 700;
   text-decoration: none;
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  writing-mode: horizontal-tb;
   cursor: default;
   touch-action: none;
   user-select: none;
@@ -555,6 +561,26 @@ h2 {
   align-content: start;
 }
 
+.console-workspace,
+.console-view-stage,
+.console-subview {
+  min-width: 0;
+}
+
+.console-workspace {
+  display: grid;
+  gap: 12px;
+}
+
+.console-subnav {
+  --blender-subtab-index: 0;
+}
+
+.console-subview[hidden],
+.feedback-review-panel[hidden] {
+  display: none !important;
+}
+
 .randomrealm-workspace {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1.1fr);
@@ -574,7 +600,8 @@ h2 {
   gap: 12px;
 }
 
-.blender-subnav {
+.blender-subnav,
+.console-subnav {
   --blender-subtab-index: 0;
   position: relative;
   display: grid;
@@ -590,7 +617,8 @@ h2 {
     inset 0 -8px 18px rgba(0, 0, 0, 0.04);
 }
 
-.blender-subnav::before {
+.blender-subnav::before,
+.console-subnav::before {
   content: "";
   position: absolute;
   inset: 4px;
@@ -599,7 +627,8 @@ h2 {
   pointer-events: none;
 }
 
-.blender-subtab-drop {
+.blender-subtab-drop,
+.console-subtab-drop {
   width: calc((100% - 16px) / 2);
   position: absolute;
   top: 4px;
@@ -622,7 +651,8 @@ h2 {
   will-change: transform;
 }
 
-.blender-subtab {
+.blender-subtab,
+.console-subtab {
   min-width: 0;
   position: relative;
   z-index: 2;
@@ -641,20 +671,24 @@ h2 {
 }
 
 .blender-subtab:hover,
-.blender-subtab:focus-visible {
+.blender-subtab:focus-visible,
+.console-subtab:hover,
+.console-subtab:focus-visible {
   border-color: color-mix(in srgb, var(--line) 70%, transparent);
   background: color-mix(in srgb, var(--button-bg) 24%, transparent);
   color: var(--green);
 }
 
-.blender-subtab.active {
+.blender-subtab.active,
+.console-subtab.active {
   border-color: transparent;
   background: transparent;
   color: var(--text);
   text-shadow: none;
 }
 
-.blender-subtab:active {
+.blender-subtab:active,
+.console-subtab:active {
   transform: translateY(1px);
 }
 
@@ -1032,6 +1066,12 @@ h2 {
   display: grid;
   gap: 12px;
   scroll-margin-top: 14px;
+}
+
+.feedback-review-panel {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
 }
 
 .feedback-form {

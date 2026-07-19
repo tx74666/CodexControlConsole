@@ -53,7 +53,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.5.1", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.5.2", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -402,7 +402,7 @@ async function runBrowserChecks(client) {
     const originalConfirm = window.confirm;
     let request = null;
     productUpdateStates = {
-      console: { currentVersion: '0.5.1', latestVersion: '0.5.1', available: false, canUninstall: true },
+      console: { currentVersion: '0.5.2', latestVersion: '0.5.2', available: false, canUninstall: true },
       world: { currentVersion: '0.3.0', latestVersion: '0.3.0', available: false, installed: true, canUninstall: true }
     };
     window.confirm = () => true;
@@ -444,6 +444,44 @@ async function runBrowserChecks(client) {
   );
 
   await clickModule(client, "workspace");
+  const consoleCommonState = await evaluate(client, `({
+    active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
+    commonVisible: !document.querySelector('#consoleCommonView')?.hidden,
+    collaborationHidden: Boolean(document.querySelector('#consoleCollaborationView')?.hidden),
+    tabs: document.querySelectorAll('[data-console-view-target]').length
+  })`);
+  assert(
+    consoleCommonState.active === "common"
+      && consoleCommonState.commonVisible
+      && consoleCommonState.collaborationHidden
+      && consoleCommonState.tabs === 2,
+    `Console common view is not the stable default: ${JSON.stringify(consoleCommonState)}`
+  );
+  await evaluate(client, `document.querySelector('[data-console-view-target="collaboration"]')?.click()`);
+  await waitForValue(
+    () => evaluate(client, "Boolean(feedbackConfig)"),
+    Boolean,
+    "feedback collaboration view did not initialize",
+    10000,
+    100
+  );
+  const consoleCollaborationState = await evaluate(client, `({
+    active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
+    commonHidden: Boolean(document.querySelector('#consoleCommonView')?.hidden),
+    collaborationVisible: !document.querySelector('#consoleCollaborationView')?.hidden,
+    feedbackVisible: document.querySelector('#feedbackPanel')?.getBoundingClientRect().height > 0,
+    reviewAvailable: !document.querySelector('#feedbackReviewPanel')?.hidden,
+    adminSetupAvailable: Boolean(feedbackConfig?.adminSetupAvailable || feedbackConfig?.adminEnabled)
+  })`);
+  assert(
+    consoleCollaborationState.active === "collaboration"
+      && consoleCollaborationState.commonHidden
+      && consoleCollaborationState.collaborationVisible
+      && consoleCollaborationState.feedbackVisible
+      && consoleCollaborationState.reviewAvailable === consoleCollaborationState.adminSetupAvailable,
+    `Console collaboration view is incomplete: ${JSON.stringify(consoleCollaborationState)}`
+  );
+  await evaluate(client, `document.querySelector('[data-console-view-target="common"]')?.click()`);
   await waitForValue(
     () => evaluate(client, `({
       plans: document.querySelectorAll('#desktopLayoutPlan option').length,
@@ -818,6 +856,14 @@ async function runBrowserChecks(client) {
     scrollWidth: document.documentElement.scrollWidth,
     shellWidth: document.querySelector('.app-shell')?.getBoundingClientRect().width || 0,
     subnavWidth: document.querySelector('.blender-subnav')?.getBoundingClientRect().width || 0,
+    verticalNavLabels: Array.from(document.querySelectorAll('.module-link')).filter(element => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.writingMode !== 'horizontal-tb'
+        || style.whiteSpace !== 'nowrap'
+        || style.wordBreak !== 'keep-all'
+        || rect.height > 40;
+    }).map(element => element.textContent?.trim() || element.dataset.moduleId),
     overflowers: Array.from(document.querySelectorAll('body *')).map(element => {
       const rect = element.getBoundingClientRect();
       return {
@@ -833,6 +879,7 @@ async function runBrowserChecks(client) {
   })`);
   assert(narrowLayout.scrollWidth <= narrowLayout.viewportWidth, `narrow layout has horizontal overflow: ${JSON.stringify(narrowLayout)}`);
   assert(narrowLayout.shellWidth <= narrowLayout.viewportWidth, `app shell exceeds the narrow viewport: ${JSON.stringify(narrowLayout)}`);
+  assert(narrowLayout.verticalNavLabels.length === 0, `module labels turned vertical: ${JSON.stringify(narrowLayout)}`);
 
   await evaluate(client, "localStorage.clear()");
   await client.send("Page.navigate", { url: new URL("workspace.html?edition=public", baseUrl).href });

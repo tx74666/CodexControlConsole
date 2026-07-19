@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.5.1"
+  #define AppVersion "0.5.2"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\build\console-installer\dist\Codex Console"
@@ -52,9 +52,9 @@ Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Codex Console.exe"; IconIndex: 0
+Name: "{group}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\codex-resource-icon.ico"; IconIndex: 0
 Name: "{group}\Uninstall Codex Console"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Codex Console.exe"; IconIndex: 0
+Name: "{autodesktop}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\codex-resource-icon.ico"; IconIndex: 0
 
 [Registry]
 Root: HKCU; Subkey: "Software\Codex\Codex Console"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey

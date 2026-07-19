@@ -21,6 +21,7 @@ const storageKeys = {
   tutorialMode: "codexControl.tutorialMode.v1",
   updateProduct: "codexControl.updateProduct.v1",
   randomRealmArtContext: "codexControl.randomRealmArtContext.v1",
+  consoleView: "codexControl.consoleView.v1",
   blenderView: "codexControl.blenderView.v1",
   blenderPromptConfig: "codexControl.blenderPromptConfig.v1",
   lyricsHeight: "codexControl.lyricsHeight.v1"
@@ -194,6 +195,9 @@ const i18n = {
     tutorialModeToggle: "教程模式",
     tutorialModeOn: "教程模式已打开：显示说明和辅助入口",
     tutorialModeOff: "教程模式已关闭：只保留关键入口",
+    consoleCommonTab: "\u5e38\u7528",
+    consoleCollaborationTab: "\u534f\u4f5c",
+    feedbackReviewTitle: "\u6536\u5230\u7684\u56de\u62a5",
     desktopLayoutTitle: "\u684c\u9762\u5e03\u5c40",
     desktopLayoutLocalOnly: "\u4ec5\u672c\u673a",
     desktopLayoutPlanLabel: "\u684c\u9762\u5e03\u5c40\u65b9\u6848",
@@ -906,6 +910,9 @@ const i18n = {
     tutorialModeToggle: "Tutorial Mode",
     tutorialModeOn: "Tutorial mode is on: showing guidance and helper actions",
     tutorialModeOff: "Tutorial mode is off: showing only key actions",
+    consoleCommonTab: "Common",
+    consoleCollaborationTab: "Collaboration",
+    feedbackReviewTitle: "Received reports",
     desktopLayoutTitle: "Desktop Layout",
     desktopLayoutLocalOnly: "This device",
     desktopLayoutPlanLabel: "Desktop layout plan",
@@ -1644,6 +1651,7 @@ const els = {
   tutorialModeToggle: document.getElementById("tutorialModeToggle"),
   feedbackTop: document.getElementById("feedbackTop"),
   feedbackPanel: document.getElementById("feedbackPanel"),
+  feedbackReviewPanel: document.getElementById("feedbackReviewPanel"),
   feedbackForm: document.getElementById("feedbackForm"),
   feedbackCategory: document.getElementById("feedbackCategory"),
   feedbackDescription: document.getElementById("feedbackDescription"),
@@ -1958,6 +1966,7 @@ let materialNotice = "";
 let renderTextureNotice = "";
 let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) === "true";
 let tutorialMode = localStorage.getItem(storageKeys.tutorialMode) === "true";
+let activeConsoleView = normalizeConsoleWorkspaceView(localStorage.getItem(storageKeys.consoleView));
 let activeBlenderView = normalizeBlenderWorkspaceView(localStorage.getItem(storageKeys.blenderView));
 let blenderViewTransitionTimer = 0;
 let blenderViewTransitionFrame = 0;
@@ -2379,6 +2388,41 @@ function activateModule(id, push = false, options = {}) {
 
 function applyModuleHistory(id) {
   activateModule(id, false, { allowArchived: true, replaceUrl: true });
+}
+
+function normalizeConsoleWorkspaceView(value) {
+  return value === "collaboration" ? "collaboration" : "common";
+}
+
+function setConsoleWorkspaceView(value, options = {}) {
+  activeConsoleView = normalizeConsoleWorkspaceView(value);
+  if (options.persist !== false) {
+    localStorage.setItem(storageKeys.consoleView, activeConsoleView);
+  }
+
+  const buttons = Array.from(document.querySelectorAll("[data-console-view-target]"));
+  const activeButtonIndex = Math.max(0, buttons.findIndex(button => button.dataset.consoleViewTarget === activeConsoleView));
+  document.querySelector(".console-subnav")?.style.setProperty("--blender-subtab-index", String(activeButtonIndex));
+  for (const button of buttons) {
+    const active = button.dataset.consoleViewTarget === activeConsoleView;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+  }
+
+  for (const view of document.querySelectorAll("[data-console-view]")) {
+    const active = view.dataset.consoleView === activeConsoleView;
+    view.hidden = !active;
+    view.classList.toggle("active", active);
+  }
+
+  if (activeConsoleView === "collaboration") {
+    if (!feedbackConfig && !feedbackConfigBusy) {
+      loadFeedbackConfig({ quiet: true });
+    } else if (feedbackConfig?.adminEnabled && !feedbackInboxBusy) {
+      loadFeedbackInbox({ quiet: true });
+    }
+  }
 }
 
 function normalizeBlenderWorkspaceView(value) {
@@ -5035,9 +5079,11 @@ function loadMusicTierOrder() {
 
 function loadMusicTierVisibility() {
   try {
-    const raw = JSON.parse(localStorage.getItem(storageKeys.musicTierVisibility) || "{}");
+    const saved = localStorage.getItem(storageKeys.musicTierVisibility);
+    if (!saved) return { second: true, third: true };
+    const raw = JSON.parse(saved);
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      return { second: false, third: false };
+      return { second: true, third: true };
     }
     const second = Boolean(raw.second);
     return {
@@ -5045,7 +5091,7 @@ function loadMusicTierVisibility() {
       third: second && Boolean(raw.third)
     };
   } catch {
-    return { second: false, third: false };
+    return { second: true, third: true };
   }
 }
 
@@ -11302,6 +11348,9 @@ function renderFeedback() {
     els.feedbackStatus.classList.toggle("warning", feedbackNoticeTone === "warning" || (feedbackConfig && !configured));
   }
 
+  if (els.feedbackReviewPanel) {
+    els.feedbackReviewPanel.hidden = !(feedbackConfig?.adminSetupAvailable || feedbackConfig?.adminEnabled);
+  }
   if (els.feedbackAdminSetup) {
     els.feedbackAdminSetup.hidden = !feedbackConfig?.adminSetupAvailable;
   }
@@ -11625,6 +11674,7 @@ async function saveFeedbackAdminConfig(event) {
 
 function openFeedbackPanel() {
   activateModule("workspace", true, { allowArchived: true });
+  setConsoleWorkspaceView("collaboration");
   window.requestAnimationFrame(() => {
     els.feedbackPanel?.scrollIntoView({
       behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth",
@@ -16838,6 +16888,20 @@ if (els.openUnityProjectFolder) {
 if (els.openUnityPromoFolder) {
   els.openUnityPromoFolder.addEventListener("click", () => openRandomRealmResource("promoFolder", "randomRealmPromoFolder"));
 }
+for (const button of document.querySelectorAll("[data-console-view-target]")) {
+  button.addEventListener("click", () => setConsoleWorkspaceView(button.dataset.consoleViewTarget));
+  button.addEventListener("keydown", event => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const buttons = Array.from(document.querySelectorAll("[data-console-view-target]"));
+    const currentIndex = buttons.indexOf(button);
+    if (currentIndex < 0) return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const next = buttons[(currentIndex + direction + buttons.length) % buttons.length];
+    next?.focus();
+    setConsoleWorkspaceView(next?.dataset.consoleViewTarget);
+  });
+}
 for (const button of document.querySelectorAll("[data-blender-view-target]")) {
   button.addEventListener("click", () => setBlenderWorkspaceView(button.dataset.blenderViewTarget));
   button.addEventListener("keydown", event => {
@@ -17353,6 +17417,7 @@ if (hasMusic) {
 
 applyConsoleEdition(consoleEdition, { activate: false, forceRender: true });
 applyLanguage();
+setConsoleWorkspaceView(activeConsoleView, { persist: false });
 setBlenderWorkspaceView(activeBlenderView, { persist: false });
 loadConsoleConfig();
 restoreInitialModuleUrl();

@@ -85,6 +85,34 @@ def default_user_data_dir():
 USER_DATA_DIR = default_user_data_dir().resolve()
 CACHE_DIR = USER_DATA_DIR / "cache" if USER_DATA_DIR != APP_DIR else APP_DIR / "cache"
 INSTALLATION_STATE_FILE = CACHE_DIR / "installation.json"
+MEDIA_CONFIG_FILE = USER_DATA_DIR / "media.json"
+
+
+def read_media_config():
+    try:
+        payload = json.loads(MEDIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_media_config(payload):
+    if not APP_USES_LOCAL_DATA:
+        return
+    MEDIA_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = MEDIA_CONFIG_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, MEDIA_CONFIG_FILE)
+
+
+def directory_has_media(path, extensions):
+    try:
+        return any(
+            item.is_file() and item.suffix.lower() in extensions
+            for item in Path(path).rglob("*")
+        )
+    except OSError:
+        return False
 
 
 def migrate_legacy_user_cache():
@@ -130,13 +158,27 @@ def installation_state():
     return payload
 
 
-def media_directory(name, extensions):
+def media_directory(name, extensions, legacy_candidates=()):
     configured = os.environ.get(f"CODEX_CONTROL_{name.upper()}_DIR", "").strip()
     if configured:
         return Path(configured).expanduser()
     legacy = APP_DIR / name
     if not APP_USES_LOCAL_DATA:
         return legacy
+
+    media_config = read_media_config()
+    saved = str(media_config.get(name) or "").strip()
+    if saved:
+        saved_path = Path(saved).expanduser()
+        saved_has_media = saved_path.is_dir() and directory_has_media(saved_path, extensions)
+        legacy_has_media = any(
+            Path(candidate).expanduser().is_dir()
+            and directory_has_media(Path(candidate).expanduser(), extensions)
+            for candidate in legacy_candidates
+        )
+        if saved_path.is_dir() and (saved_has_media or not legacy_has_media):
+            return saved_path
+
     target = USER_DATA_DIR / name
     target.mkdir(parents=True, exist_ok=True)
     marker = target / ".codex-media-migrated"
@@ -154,6 +196,23 @@ def media_directory(name, extensions):
             marker.write_text(APP_VERSION + "\n", encoding="utf-8")
         except OSError:
             pass
+
+    if not directory_has_media(target, extensions):
+        for candidate in legacy_candidates:
+            candidate = Path(candidate).expanduser()
+            if candidate.is_dir() and directory_has_media(candidate, extensions):
+                media_config[name] = str(candidate.resolve())
+                try:
+                    write_media_config(media_config)
+                except OSError:
+                    pass
+                return candidate
+
+    media_config[name] = str(target.resolve())
+    try:
+        write_media_config(media_config)
+    except OSError:
+        pass
     return target
 
 
@@ -164,7 +223,11 @@ WORLD_CACHE = CACHE_DIR / "world.geojson"
 TRANSLATION_CACHE = CACHE_DIR / "translations.json"
 WALLPAPER_DIR = media_directory("wallpapers", {".jpg", ".jpeg", ".png", ".bmp", ".webp"})
 if APP_USES_LOCAL_DATA:
-    DEFAULT_MUSIC_DIR = media_directory("music", {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"})
+    DEFAULT_MUSIC_DIR = media_directory(
+        "music",
+        {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"},
+        legacy_candidates=(Path(r"D:\MyMP3s"),),
+    )
 else:
     DEFAULT_MUSIC_DIR = Path(r"D:\MyMP3s") if Path(r"D:\MyMP3s").exists() else APP_DIR / "music"
 MUSIC_DIR = Path(os.environ.get("CODEX_CONTROL_MUSIC_DIR", str(DEFAULT_MUSIC_DIR)))

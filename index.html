@@ -50,7 +50,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-656">
+  <link rel="stylesheet" href="styles.css?v=control-console-658">
 </head>
 <body>
   <main class="app-shell">
@@ -140,7 +140,15 @@
       </section>
     </section>
 
-    <section class="workspace-grid console-minimal-grid" data-module-panel="workspace" aria-labelledby="workspaceTitle" hidden>
+    <section class="console-workspace" data-module-panel="workspace" aria-label="Console workspace" hidden>
+      <div class="console-subnav" role="tablist" aria-label="Console workspace">
+        <span class="console-subtab-drop" aria-hidden="true"></span>
+        <button id="consoleCommonTab" class="console-subtab active" type="button" role="tab" aria-selected="true" aria-controls="consoleCommonView" data-console-view-target="common" data-i18n="consoleCommonTab">常用</button>
+        <button id="consoleCollaborationTab" class="console-subtab" type="button" role="tab" aria-selected="false" aria-controls="consoleCollaborationView" data-console-view-target="collaboration" data-i18n="consoleCollaborationTab">协作</button>
+      </div>
+
+      <div class="console-view-stage">
+        <section id="consoleCommonView" class="workspace-grid console-minimal-grid console-subview active" data-console-view="common" role="tabpanel" aria-labelledby="consoleCommonTab">
       <article class="panel github-download-panel">
         <div class="panel-head">
           <div>
@@ -155,7 +163,7 @@
         <div class="github-download-actions" aria-label="Product downloads">
           <a id="updateProductConsole" class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="true" data-update-product="console">
             <span>Codex Console</span>
-            <small id="updateProductConsoleBadge" class="update-product-badge">v0.5.1</small>
+            <small id="updateProductConsoleBadge" class="update-product-badge">v0.5.2</small>
           </a>
           <a id="updateProductWorld" class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="false" data-update-product="world">
             <span>Codex World</span>
@@ -165,7 +173,7 @@
 
         <div class="console-update-bar">
           <div class="console-update-copy">
-            <span id="consoleUpdateCurrent" class="workspace-pill">v0.5.1</span>
+            <span id="consoleUpdateCurrent" class="workspace-pill">v0.5.2</span>
             <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
             <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
           </div>
@@ -207,6 +215,27 @@
         <p class="desktop-layout-guide tutorial-only" data-i18n="desktopLayoutGuide">恢复后会自动检查重叠、缺失和位置偏差。保存当前版会先备份原 JSON；方案与备份不会上传。</p>
       </article>
 
+      <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label" data-i18n="workspaceTodoLabel">Todo</div>
+            <h2 id="workspaceTodoTitle" data-i18n="workspaceTodoTitle">待办清单</h2>
+          </div>
+          <span id="workspaceTodoCount">0/0</span>
+        </div>
+        <div class="todo-composer">
+          <select id="workspaceTodoCategory" aria-label="Todo category" data-i18n-aria="workspaceTodoCategoryLabel"></select>
+          <input id="workspaceTodoInput" type="text" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
+          <button id="addWorkspaceTodo" class="ghost-button primary-action" type="button" data-i18n="addWorkspaceTodo">加入</button>
+        </div>
+        <div class="todo-composer-actions">
+          <button id="resetWorkspaceTodo" class="ghost-button" type="button" data-i18n="resetWorkspaceTodo">重置为新任务清单</button>
+        </div>
+        <div id="workspaceTodoList" class="workspace-todo-list"></div>
+      </section>
+        </section>
+
+        <section id="consoleCollaborationView" class="workspace-grid console-minimal-grid console-subview" data-console-view="collaboration" role="tabpanel" aria-labelledby="consoleCollaborationTab" hidden>
       <article id="feedbackPanel" class="panel feedback-panel" aria-labelledby="feedbackTitle">
         <div class="panel-head">
           <div>
@@ -238,6 +267,15 @@
           <div id="feedbackTurnstile" class="feedback-turnstile" hidden></div>
           <p id="feedbackStatus" class="feedback-status" role="status" aria-live="polite"></p>
         </form>
+      </article>
+
+      <article id="feedbackReviewPanel" class="panel feedback-review-panel" aria-labelledby="feedbackReviewTitle" hidden>
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Admin</div>
+            <h2 id="feedbackReviewTitle" data-i18n="feedbackReviewTitle">收到的回报</h2>
+          </div>
+        </div>
 
         <section id="feedbackInbox" class="feedback-inbox" aria-labelledby="feedbackInboxTitle" hidden>
           <div class="feedback-inbox-head">
@@ -257,25 +295,8 @@
           </form>
         </details>
       </article>
-
-      <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
-        <div class="strip-head">
-          <div>
-            <div class="section-label" data-i18n="workspaceTodoLabel">Todo</div>
-            <h2 id="workspaceTodoTitle" data-i18n="workspaceTodoTitle">待办清单</h2>
-          </div>
-          <span id="workspaceTodoCount">0/0</span>
-        </div>
-        <div class="todo-composer">
-          <select id="workspaceTodoCategory" aria-label="Todo category" data-i18n-aria="workspaceTodoCategoryLabel"></select>
-          <input id="workspaceTodoInput" type="text" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
-          <button id="addWorkspaceTodo" class="ghost-button primary-action" type="button" data-i18n="addWorkspaceTodo">加入</button>
-        </div>
-        <div class="todo-composer-actions">
-          <button id="resetWorkspaceTodo" class="ghost-button" type="button" data-i18n="resetWorkspaceTodo">重置为新任务清单</button>
-        </div>
-        <div id="workspaceTodoList" class="workspace-todo-list"></div>
-      </section>
+        </section>
+      </div>
     </section>
 
     <section class="randomrealm-workspace" data-module-panel="randomrealm" aria-label="RandomRealm" hidden>
@@ -978,6 +999,6 @@
   <input id="steamworkAssetFileInput" class="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
   <audio id="audioPlayer" preload="metadata"></audio>
 
-<script src="app.js?v=control-console-656"></script>
+<script src="app.js?v=control-console-658"></script>
 </body>
 </html>

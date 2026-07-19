@@ -42,6 +42,10 @@ def main():
     args = parser.parse_args()
 
     check_ico(ROOT / "pc-console-icon.ico")
+    require(
+        (ROOT / "pc-console-icon.ico").read_bytes() == (ROOT / "codex-resource-icon.ico").read_bytes(),
+        "desktop executable is not using the classic Codex icon",
+    )
 
     installer = (ROOT / "installer" / "CodexControlConsole.iss").read_text(encoding="utf-8")
     desktop_line = next(
@@ -50,7 +54,10 @@ def main():
     )
     require(desktop_line, "desktop shortcut is missing from Setup")
     require("Tasks:" not in desktop_line, "desktop shortcut is optional instead of guaranteed")
-    require('IconFilename: "{app}\\Codex Console.exe"' in desktop_line, "shortcut icon is not pinned to the installed EXE")
+    require(
+        'IconFilename: "{app}\\_internal\\codex-resource-icon.ico"' in desktop_line,
+        "shortcut icon is not pinned to the classic Codex icon",
+    )
     require('Name: "{group}\\Uninstall Codex Console"; Filename: "{uninstallexe}"' in installer, "Start menu uninstaller is missing")
     require('#define UserDataDir "{localappdata}\\CodexControlConsole"' in installer, "default Console data directory is not device-local")
     require('Type: filesandordirs; Name: "{#UserDataDir}"' in installer, "local Console data is not removed on uninstall")
