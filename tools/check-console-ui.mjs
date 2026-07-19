@@ -53,7 +53,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.5.6", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.5.7", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -65,6 +65,7 @@ function staticChecks() {
     /id="updateProductWorld"[^>]+href="https:\/\/github\.com\/tx74666\/CodexWorldConsole\/releases\/latest"/.test(consoleHtml),
     "Codex World download card is not linked to GitHub Releases"
   );
+  assert(!/id="feedbackTop"/.test(consoleHtml), "feedback must stay inside the collaboration view");
   assert(/id="consoleUninstall"/.test(consoleHtml), "product uninstall control is missing");
   return Array.from(versions)[0];
 }
@@ -402,7 +403,7 @@ async function runBrowserChecks(client) {
     const originalConfirm = window.confirm;
     let request = null;
     productUpdateStates = {
-      console: { currentVersion: '0.5.6', latestVersion: '0.5.6', available: false, canUninstall: true },
+      console: { currentVersion: '0.5.7', latestVersion: '0.5.7', available: false, canUninstall: true },
       world: { currentVersion: '0.3.0', latestVersion: '0.3.0', available: false, installed: true, canUninstall: true }
     };
     window.confirm = () => true;

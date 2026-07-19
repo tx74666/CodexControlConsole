@@ -224,7 +224,6 @@ const i18n = {
     desktopLayoutConfirmRestore: name => `\u4f7f\u7528\u201c${name}\u201d\u6062\u590d\u684c\u9762\u56fe\u6807\u4f4d\u7f6e\uff1f`,
     desktopLayoutConfirmSave: name => `\u5148\u5907\u4efd\u539f JSON\uff0c\u518d\u7528\u5f53\u524d\u684c\u9762\u8986\u76d6\u201c${name}\u201d\uff1f`,
     desktopLayoutGuide: "\u6062\u590d\u540e\u4f1a\u81ea\u52a8\u68c0\u67e5\u91cd\u53e0\u3001\u7f3a\u5931\u548c\u4f4d\u7f6e\u504f\u5dee\u3002\u4fdd\u5b58\u5f53\u524d\u7248\u4f1a\u5148\u5907\u4efd\u539f JSON\uff1b\u65b9\u6848\u4e0e\u5907\u4efd\u4e0d\u4f1a\u4e0a\u4f20\u3002",
-    feedbackTop: "回报",
     feedbackTitle: "问题回报",
     feedbackCategoryLabel: "问题类型",
     feedbackCategoryBug: "错误",
@@ -942,7 +941,6 @@ const i18n = {
     desktopLayoutConfirmRestore: name => `Restore desktop icon positions from “${name}”?`,
     desktopLayoutConfirmSave: name => `Back up the JSON, then replace “${name}” with the current desktop?`,
     desktopLayoutGuide: "Restore checks overlaps, missing icons, and position drift. Save current always backs up the existing JSON first. Plans and backups are never uploaded.",
-    feedbackTop: "Feedback",
     feedbackTitle: "Report a Problem",
     feedbackCategoryLabel: "Problem type",
     feedbackCategoryBug: "Bug",
@@ -1655,7 +1653,6 @@ const els = {
   managerArchivedTabs: document.getElementById("managerArchivedTabs"),
   managerLayoutOrder: document.getElementById("managerLayoutOrder"),
   tutorialModeToggle: document.getElementById("tutorialModeToggle"),
-  feedbackTop: document.getElementById("feedbackTop"),
   feedbackPanel: document.getElementById("feedbackPanel"),
   feedbackReviewPanel: document.getElementById("feedbackReviewPanel"),
   feedbackForm: document.getElementById("feedbackForm"),
@@ -11320,14 +11317,6 @@ function feedbackCategoryLabel(category) {
   return text(key);
 }
 
-function renderFeedbackTop() {
-  if (!els.feedbackTop) return;
-  els.feedbackTop.textContent = feedbackNewCount > 0
-    ? `${text("feedbackTop")} ${feedbackNewCount}`
-    : text("feedbackTop");
-  els.feedbackTop.classList.toggle("has-reports", feedbackNewCount > 0);
-}
-
 function setFeedbackLimit(reached, retryAfter = 0) {
   feedbackLimitReached = Boolean(reached);
   if (feedbackLimitResetTimer) {
@@ -11404,7 +11393,6 @@ function renderFeedback() {
   }
   if (els.feedbackInbox) els.feedbackInbox.hidden = !feedbackConfig?.adminEnabled;
   renderFeedbackInbox();
-  renderFeedbackTop();
 }
 
 function clearFeedbackImages() {
@@ -11771,18 +11759,6 @@ async function saveFeedbackAdminConfig(event) {
     feedbackNoticeTone = "warning";
     renderFeedback();
   }
-}
-
-function openFeedbackPanel() {
-  activateModule("workspace", true, { allowArchived: true });
-  setConsoleWorkspaceView("collaboration");
-  window.requestAnimationFrame(() => {
-    els.feedbackPanel?.scrollIntoView({
-      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth",
-      block: "start"
-    });
-    window.setTimeout(() => els.feedbackDescription?.focus({ preventScroll: true }), 260);
-  });
 }
 
 function parseLegacyCustomResolution(value) {
@@ -16782,7 +16758,6 @@ if (els.themeToggle) els.themeToggle.addEventListener("click", () => {
   setTheme(nextTheme(theme));
 });
 if (els.tutorialModeToggle) els.tutorialModeToggle.addEventListener("click", toggleTutorialMode);
-if (els.feedbackTop) els.feedbackTop.addEventListener("click", openFeedbackPanel);
 if (els.moduleArchiveDrop) els.moduleArchiveDrop.addEventListener("click", event => {
   event.stopPropagation();
   const nextView = event.ctrlKey || event.metaKey ? "deep" : "main";
