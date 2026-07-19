@@ -19,13 +19,23 @@ class FakeStatement {
   }
 
   async first() {
-    if (!this.sql.startsWith("INSERT INTO daily_limits")) throw new Error(`Unexpected first(): ${this.sql}`);
-    const [quotaKey, day, limit] = this.args;
-    const key = `${quotaKey}|${day}`;
-    const count = Number(this.database.limits.get(key) || 0);
-    if (count >= Number(limit)) return null;
-    this.database.limits.set(key, count + 1);
-    return { count: count + 1 };
+    if (this.sql.startsWith("INSERT INTO daily_limits")) {
+      const [quotaKey, day, limit] = this.args;
+      const key = `${quotaKey}|${day}`;
+      const count = Number(this.database.limits.get(key) || 0);
+      if (count >= Number(limit)) return null;
+      this.database.limits.set(key, count + 1);
+      return { count: count + 1 };
+    }
+    if (this.sql.startsWith("INSERT INTO monthly_limits")) {
+      const [quotaKey, month, increment, limit] = this.args;
+      const key = `${quotaKey}|${month}`;
+      const amount = Number(this.database.monthlyLimits.get(key) || 0);
+      if (amount + Number(increment) > Number(limit)) return null;
+      this.database.monthlyLimits.set(key, amount + Number(increment));
+      return { amount: amount + Number(increment) };
+    }
+    throw new Error(`Unexpected first(): ${this.sql}`);
   }
 
   async run() {
@@ -35,6 +45,13 @@ class FakeStatement {
       const count = Number(this.database.limits.get(key) || 0);
       this.database.limits.set(key, Math.max(0, count - 1));
       return { meta: { changes: count > 0 ? 1 : 0 } };
+    }
+    if (this.sql.startsWith("UPDATE monthly_limits")) {
+      const [decrement, quotaKey, month] = this.args;
+      const key = `${quotaKey}|${month}`;
+      const amount = Number(this.database.monthlyLimits.get(key) || 0);
+      this.database.monthlyLimits.set(key, Math.max(0, amount - Number(decrement)));
+      return { meta: { changes: amount > 0 ? 1 : 0 } };
     }
     if (this.sql.startsWith("INSERT INTO reports")) {
       if (this.database.failReports) throw new Error("Report storage failed");
@@ -61,6 +78,7 @@ class FakeDatabase {
   constructor({ failReports = false } = {}) {
     this.failReports = failReports;
     this.limits = new Map();
+    this.monthlyLimits = new Map();
     this.reports = [];
     this.reportImages = [];
   }
@@ -93,6 +111,8 @@ function feedbackEnvironment(database, extra = {}) {
     ALLOW_UNVERIFIED_REPORTS: "true",
     DEVICE_DAILY_LIMIT: "10",
     IP_DAILY_LIMIT: "30",
+    MONTHLY_REPORT_LIMIT: "5000",
+    MONTHLY_IMAGE_BYTES_LIMIT: String(1024 * 1024 * 1024),
     ...extra
   };
 }
@@ -241,4 +261,65 @@ test("refunds both quotas when report storage fails", async () => {
   const response = await worker.fetch(reportRequest(installationId), feedbackEnvironment(database));
   assert.equal(response.status, 500);
   assert.ok([...database.limits.values()].every(count => count === 0), "failed storage consumed daily quota");
+  assert.ok(
+    [...database.monthlyLimits.values()].every(amount => amount === 0),
+    "failed storage consumed monthly capacity"
+  );
+});
+
+test("hard-stops at the monthly report safety cap and refunds daily quota", async () => {
+  const database = new FakeDatabase();
+  const environment = feedbackEnvironment(database, { MONTHLY_REPORT_LIMIT: "1" });
+  const first = await worker.fetch(reportRequest(installationId), environment);
+  assert.equal(first.status, 201);
+  const dailyBefore = new Map(database.limits);
+
+  const blocked = await worker.fetch(
+    reportRequest("223e4567-e89b-12d3-a456-426614174001", "192.0.2.11"),
+    environment
+  );
+  const payload = await blocked.json();
+  assert.equal(blocked.status, 503);
+  assert.equal(payload.code, "service_capacity");
+  assert.equal(payload.limitReached, false);
+  for (const [key, count] of dailyBefore) assert.equal(database.limits.get(key), count);
+  assert.ok(
+    [...database.limits.entries()]
+      .filter(([key]) => !dailyBefore.has(key))
+      .every(([, count]) => count === 0),
+    "the blocked report consumed daily quota"
+  );
+  assert.equal(database.reports.length, 1);
+});
+
+test("hard-stops screenshot storage at the monthly byte cap", async () => {
+  const database = new FakeDatabase();
+  const images = new FakeImages();
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const environment = feedbackEnvironment(database, {
+    IMAGES: images,
+    MONTHLY_IMAGE_BYTES_LIMIT: String(png.length)
+  });
+  const requestWithImage = (id, ip) => new Request("https://feedback.example/v1/reports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": ip },
+    body: JSON.stringify({
+      category: "bug",
+      description: "A screenshot should respect the monthly storage cap.",
+      installationId: id,
+      screenshot: { data: png.toString("base64"), type: "image/png", name: "capture.png" }
+    })
+  });
+
+  const first = await worker.fetch(requestWithImage(installationId, "192.0.2.10"), environment);
+  assert.equal(first.status, 201);
+  const blocked = await worker.fetch(
+    requestWithImage("223e4567-e89b-12d3-a456-426614174001", "192.0.2.11"),
+    environment
+  );
+  const payload = await blocked.json();
+  assert.equal(blocked.status, 503);
+  assert.equal(payload.code, "service_capacity");
+  assert.equal(images.puts.length, 1);
+  assert.equal(database.monthlyLimits.get("reports|" + new Date().toISOString().slice(0, 7)), 1);
 });

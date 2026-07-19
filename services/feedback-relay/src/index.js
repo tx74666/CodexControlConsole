@@ -4,6 +4,8 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_IMAGES = 4;
 const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
 const MAX_REQUEST_BYTES = 18 * 1024 * 1024;
+const DEFAULT_MONTHLY_REPORT_LIMIT = 5000;
+const DEFAULT_MONTHLY_IMAGE_BYTES_LIMIT = 1024 * 1024 * 1024;
 const CATEGORIES = new Set(["bug", "layout", "music", "update", "other"]);
 const REPORT_STATUSES = new Set(["new", "resolved"]);
 
@@ -209,9 +211,35 @@ async function releaseDailyQuota(db, key, day) {
   `).bind(key, day).run();
 }
 
+async function consumeMonthlyQuota(db, key, month, increment, limit) {
+  if (increment <= 0) return 0;
+  const row = await db.prepare(`
+    INSERT INTO monthly_limits (quota_key, month, amount)
+    VALUES (?, ?, ?)
+    ON CONFLICT (quota_key, month) DO UPDATE SET amount = monthly_limits.amount + excluded.amount
+    WHERE monthly_limits.amount + excluded.amount <= ?
+    RETURNING amount
+  `).bind(key, month, increment, limit).first();
+  return row ? Number(row.amount || 0) : 0;
+}
+
+async function releaseMonthlyQuota(db, key, month, decrement) {
+  if (decrement <= 0) return;
+  await db.prepare(`
+    UPDATE monthly_limits
+    SET amount = MAX(0, amount - ?)
+    WHERE quota_key = ? AND month = ? AND amount > 0
+  `).bind(decrement, key, month).run();
+}
+
 function secondsUntilUtcMidnight(now = new Date()) {
   const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
   return Math.max(1, Math.ceil((midnight - now.getTime()) / 1000));
+}
+
+function secondsUntilNextUtcMonth(now = new Date()) {
+  const nextMonth = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+  return Math.max(1, Math.ceil((nextMonth - now.getTime()) / 1000));
 }
 
 async function submitReport(request, env) {
@@ -278,6 +306,62 @@ async function submitReport(request, env) {
     );
   }
 
+  const month = day.slice(0, 7);
+  const monthlyReportLimit = boundedInteger(
+    env.MONTHLY_REPORT_LIMIT,
+    DEFAULT_MONTHLY_REPORT_LIMIT,
+    1,
+    10000
+  );
+  const monthlyImageBytesLimit = boundedInteger(
+    env.MONTHLY_IMAGE_BYTES_LIMIT,
+    DEFAULT_MONTHLY_IMAGE_BYTES_LIMIT,
+    1,
+    5 * 1024 * 1024 * 1024
+  );
+  const imageBytes = input.screenshots.reduce((total, screenshot) => total + screenshot.bytes.byteLength, 0);
+  const capacityRetryAfter = secondsUntilNextUtcMonth(now);
+  const capacityDetails = {
+    code: "service_capacity",
+    retryAfter: capacityRetryAfter,
+    limitReached: false
+  };
+  const monthlyReportCount = await consumeMonthlyQuota(
+    env.DB,
+    "reports",
+    month,
+    1,
+    monthlyReportLimit
+  );
+  if (!monthlyReportCount) {
+    await Promise.allSettled([
+      releaseDailyQuota(env.DB, deviceQuotaKey, day),
+      releaseDailyQuota(env.DB, ipQuotaKey, day)
+    ]);
+    return error(
+      "Feedback is full for this month. Please try again next month.",
+      503,
+      { "Retry-After": String(capacityRetryAfter) },
+      capacityDetails
+    );
+  }
+  const monthlyImageBytes = imageBytes > 0
+    ? await consumeMonthlyQuota(env.DB, "image_bytes", month, imageBytes, monthlyImageBytesLimit)
+    : 0;
+  if (imageBytes > 0 && !monthlyImageBytes) {
+    await Promise.allSettled([
+      releaseMonthlyQuota(env.DB, "reports", month, 1),
+      releaseDailyQuota(env.DB, deviceQuotaKey, day),
+      releaseDailyQuota(env.DB, ipQuotaKey, day)
+    ]);
+    return error(
+      "Screenshot storage is full for this month. You can try again without images.",
+      503,
+      { "Retry-After": String(capacityRetryAfter) },
+      capacityDetails
+    );
+  }
+
   const id = crypto.randomUUID();
   const createdAt = now.toISOString();
   const storedImages = [];
@@ -323,6 +407,8 @@ async function submitReport(request, env) {
   } catch (problem) {
     await Promise.allSettled([
       ...storedImages.map(image => env.IMAGES.delete(image.imageKey)),
+      releaseMonthlyQuota(env.DB, "reports", month, 1),
+      releaseMonthlyQuota(env.DB, "image_bytes", month, imageBytes),
       releaseDailyQuota(env.DB, deviceQuotaKey, day),
       releaseDailyQuota(env.DB, ipQuotaKey, day)
     ]);
@@ -430,7 +516,19 @@ export default {
         dailyLimit: boundedInteger(env.DEVICE_DAILY_LIMIT, 10, 1, 100),
         maxImageBytes: MAX_IMAGE_BYTES,
         maxImages: MAX_IMAGES,
-        maxTotalImageBytes: MAX_TOTAL_IMAGE_BYTES
+        maxTotalImageBytes: MAX_TOTAL_IMAGE_BYTES,
+        monthlyReportLimit: boundedInteger(
+          env.MONTHLY_REPORT_LIMIT,
+          DEFAULT_MONTHLY_REPORT_LIMIT,
+          1,
+          10000
+        ),
+        monthlyImageBytesLimit: boundedInteger(
+          env.MONTHLY_IMAGE_BYTES_LIMIT,
+          DEFAULT_MONTHLY_IMAGE_BYTES_LIMIT,
+          1,
+          5 * 1024 * 1024 * 1024
+        )
       });
     }
     if (request.method === "POST" && url.pathname === "/v1/reports") {

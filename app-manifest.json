@@ -1,10 +1,10 @@
 {
   "name": "Codex Control Console",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "repository": "tx74666/CodexControlConsole",
   "channel": "stable",
   "installMode": "source",
   "edition": "developer",
-  "feedbackEndpoint": "",
-  "feedbackTurnstileSiteKey": ""
+  "feedbackEndpoint": "https://codex-console-feedback.tx74666-codex.workers.dev",
+  "feedbackTurnstileSiteKey": "0x4AAAAAAD5NTJoseujco8gT"
 }

@@ -40,3 +40,13 @@ CREATE TABLE IF NOT EXISTS daily_limits (
 
 CREATE INDEX IF NOT EXISTS daily_limits_day
   ON daily_limits (day);
+
+CREATE TABLE IF NOT EXISTS monthly_limits (
+  quota_key TEXT NOT NULL,
+  month TEXT NOT NULL,
+  amount INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (quota_key, month)
+);
+
+CREATE INDEX IF NOT EXISTS monthly_limits_month
+  ON monthly_limits (month);

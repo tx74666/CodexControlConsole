@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.5.5",
+  [string]$Version = "0.5.6",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
   [string]$FeedbackEndpoint = $env:CODEX_FEEDBACK_ENDPOINT,
@@ -8,6 +8,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$SourceManifest = Get-Content -LiteralPath (Join-Path $ProjectRoot "app-manifest.json") -Raw | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($FeedbackEndpoint)) {
+  $FeedbackEndpoint = [string]$SourceManifest.feedbackEndpoint
+}
+if ([string]::IsNullOrWhiteSpace($FeedbackTurnstileSiteKey)) {
+  $FeedbackTurnstileSiteKey = [string]$SourceManifest.feedbackTurnstileSiteKey
+}
 $Version = $Version.Trim().TrimStart("v")
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
   throw "Version must use semantic versioning, for example 0.4.0."
