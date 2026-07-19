@@ -26,10 +26,12 @@
       };
       const editionModules = {
         developer: Object.keys(moduleHrefs),
+        public: Object.keys(moduleHrefs),
         lite: ["wallpaper", "music"]
       };
       const params = new URLSearchParams(window.location.search);
-      const edition = params.get("edition") === "lite" ? "lite" : "developer";
+      const requestedEdition = String(params.get("edition") || "").toLowerCase();
+      const edition = ["public", "lite"].includes(requestedEdition) ? requestedEdition : "developer";
       const allowedModules = new Set(editionModules[edition] || editionModules.developer);
       const page = window.location.pathname.split("/").pop() || "index.html";
       const lastModule = window.localStorage.getItem("codexControl.lastModule.v1") || "";
@@ -48,7 +50,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-651">
+  <link rel="stylesheet" href="styles.css?v=control-console-656">
 </head>
 <body>
   <main class="app-shell">
@@ -61,6 +63,7 @@
       </div>
       <div class="top-actions" aria-label="Console status">
         <button id="consoleUpdateTop" class="status-button console-update-top" type="button" hidden></button>
+        <button id="feedbackTop" class="status-button feedback-top" type="button" data-i18n="feedbackTop">回报</button>
         <button id="languageToggle" class="status-button" type="button">EN</button>
         <button id="themeToggle" class="status-button" type="button">暗色</button>
         <div class="time-stack">
@@ -149,20 +152,20 @@
           </div>
         </div>
 
-        <div class="github-download-actions" role="tablist" aria-label="Product updates">
-          <button id="updateProductConsole" class="ghost-button primary-action github-download-link" type="button" role="tab" aria-selected="true" data-update-product="console">
+        <div class="github-download-actions" aria-label="Product downloads">
+          <a id="updateProductConsole" class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="true" data-update-product="console">
             <span>Codex Console</span>
-            <small id="updateProductConsoleBadge" class="update-product-badge">v0.4.0</small>
-          </button>
-          <button id="updateProductWorld" class="ghost-button github-download-link" type="button" role="tab" aria-selected="false" data-update-product="world">
+            <small id="updateProductConsoleBadge" class="update-product-badge">v0.5.0</small>
+          </a>
+          <a id="updateProductWorld" class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="false" data-update-product="world">
             <span>Codex World</span>
             <small id="updateProductWorldBadge" class="update-product-badge">--</small>
-          </button>
+          </a>
         </div>
 
         <div class="console-update-bar">
           <div class="console-update-copy">
-            <span id="consoleUpdateCurrent" class="workspace-pill">v0.4.0</span>
+            <span id="consoleUpdateCurrent" class="workspace-pill">v0.5.0</span>
             <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
             <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
           </div>
@@ -173,6 +176,7 @@
             </label>
             <button id="consoleUpdateRefresh" class="icon-button console-update-refresh" type="button" title="检查更新" aria-label="检查更新" data-i18n-aria="consoleUpdateRefresh">&#x21bb;</button>
             <button id="consoleUpdateInstall" class="ghost-button primary-action" type="button" hidden data-i18n="consoleUpdateInstall">更新</button>
+            <button id="consoleUninstall" class="ghost-button danger-action" type="button" hidden data-i18n="consoleUninstall">卸载</button>
           </div>
         </div>
         <p id="consoleUpdateError" class="console-update-error" role="status" aria-live="polite" hidden></p>
@@ -201,6 +205,57 @@
         </div>
         <p id="desktopLayoutPath" class="desktop-layout-path tutorial-only"></p>
         <p class="desktop-layout-guide tutorial-only" data-i18n="desktopLayoutGuide">恢复后会自动检查重叠、缺失和位置偏差。保存当前版会先备份原 JSON；方案与备份不会上传。</p>
+      </article>
+
+      <article id="feedbackPanel" class="panel feedback-panel" aria-labelledby="feedbackTitle">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Feedback</div>
+            <h2 id="feedbackTitle" data-i18n="feedbackTitle">问题回报</h2>
+          </div>
+          <span id="feedbackQuota" class="workspace-pill">10/day</span>
+        </div>
+
+        <form id="feedbackForm" class="feedback-form">
+          <select id="feedbackCategory" aria-label="问题类型" data-i18n-aria="feedbackCategoryLabel">
+            <option value="bug" data-i18n="feedbackCategoryBug">错误</option>
+            <option value="layout" data-i18n="feedbackCategoryLayout">排版</option>
+            <option value="music" data-i18n="feedbackCategoryMusic">音乐</option>
+            <option value="update" data-i18n="feedbackCategoryUpdate">更新</option>
+            <option value="other" data-i18n="feedbackCategoryOther">其他</option>
+          </select>
+          <textarea id="feedbackDescription" rows="3" maxlength="4000" data-i18n-placeholder="feedbackDescriptionPlaceholder" placeholder="描述你遇到的问题"></textarea>
+          <div class="feedback-actions">
+            <button id="feedbackScreenshotButton" class="ghost-button" type="button" data-i18n="feedbackScreenshot">截图</button>
+            <input id="feedbackScreenshotInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden>
+            <span id="feedbackScreenshotName" class="feedback-file-name"></span>
+            <button id="feedbackSubmit" class="ghost-button primary-action" type="submit" data-i18n="feedbackSend">发送</button>
+          </div>
+          <div id="feedbackPreview" class="feedback-preview" hidden>
+            <img id="feedbackPreviewImage" alt="">
+            <button id="feedbackRemoveImage" class="icon-button" type="button" data-i18n-aria="feedbackRemoveImage" aria-label="移除截图">&times;</button>
+          </div>
+          <div id="feedbackTurnstile" class="feedback-turnstile" hidden></div>
+          <p id="feedbackStatus" class="feedback-status" role="status" aria-live="polite"></p>
+        </form>
+
+        <section id="feedbackInbox" class="feedback-inbox" aria-labelledby="feedbackInboxTitle" hidden>
+          <div class="feedback-inbox-head">
+            <h3 id="feedbackInboxTitle" data-i18n="feedbackInboxTitle">收件箱</h3>
+            <span id="feedbackInboxCount">0</span>
+            <button id="feedbackInboxRefresh" class="icon-button" type="button" data-i18n-aria="feedbackInboxRefresh" aria-label="刷新收件箱">&#x21bb;</button>
+          </div>
+          <div id="feedbackInboxList" class="feedback-inbox-list"></div>
+        </section>
+
+        <details id="feedbackAdminSetup" class="feedback-admin-setup" hidden>
+          <summary data-i18n="feedbackAdminSetup">收件箱连接</summary>
+          <form id="feedbackAdminForm" class="feedback-admin-form">
+            <input id="feedbackAdminEndpoint" type="url" inputmode="url" autocomplete="off" data-i18n-placeholder="feedbackAdminEndpoint" placeholder="https://worker.example.workers.dev">
+            <input id="feedbackAdminToken" type="password" autocomplete="new-password" data-i18n-placeholder="feedbackAdminToken" placeholder="Admin token">
+            <button class="ghost-button" type="submit" data-i18n="feedbackAdminSave">连接</button>
+          </form>
+        </details>
       </article>
 
       <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
@@ -923,6 +978,6 @@
   <input id="steamworkAssetFileInput" class="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
   <audio id="audioPlayer" preload="metadata"></audio>
 
-<script src="app.js?v=control-console-651"></script>
+<script src="app.js?v=control-console-656"></script>
 </body>
 </html>

@@ -1,7 +1,9 @@
 param(
-  [string]$Version = "0.4.0",
+  [string]$Version = "0.5.0",
   [string]$OutputDir = "dist",
-  [string]$Python = "python"
+  [string]$Python = "python",
+  [string]$FeedbackEndpoint = $env:CODEX_FEEDBACK_ENDPOINT,
+  [string]$FeedbackTurnstileSiteKey = $env:CODEX_FEEDBACK_TURNSTILE_SITE_KEY
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,6 +34,7 @@ function Remove-SafeBuildDirectory {
 function Resolve-InnoCompiler {
   $candidates = @(
     $env:INNO_SETUP_COMPILER,
+    (Join-Path (Split-Path $ProjectRoot -Parent) ".tools\Inno Setup 7\ISCC.exe"),
     "C:\Program Files\Inno Setup 7\ISCC.exe",
     "C:\Program Files (x86)\Inno Setup 7\ISCC.exe",
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -65,7 +68,9 @@ $Manifest = [ordered]@{
   repository = "tx74666/CodexControlConsole"
   channel = "stable"
   installMode = "installed"
-  edition = "developer"
+  edition = "public"
+  feedbackEndpoint = ([string]$FeedbackEndpoint).Trim()
+  feedbackTurnstileSiteKey = ([string]$FeedbackTurnstileSiteKey).Trim()
 }
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json -Depth 5) + [Environment]::NewLine, $Utf8NoBom)
@@ -89,7 +94,6 @@ $DataItems = @(
   @{ Source = "codex-resource-icon-128.png"; Destination = "." },
   @{ Source = "codex-resource-icon-256.png"; Destination = "." },
   @{ Source = "codex-resource-icon-preview.png"; Destination = "." },
-  @{ Source = "pc-console.ico"; Destination = "." },
   @{ Source = "pc-console-icon.ico"; Destination = "." },
   @{ Source = "pc-console-icon.png"; Destination = "." },
   @{ Source = "pc-console-preview.png"; Destination = "." },
@@ -107,7 +111,7 @@ $PyInstallerArgs = @(
   "--onedir",
   "--windowed",
   "--name", "Codex Console",
-  "--icon", (Join-Path $ProjectRoot "pc-console.ico"),
+  "--icon", (Join-Path $ProjectRoot "pc-console-icon.ico"),
   "--distpath", (Join-Path $BuildRoot "dist"),
   "--workpath", (Join-Path $BuildRoot "work"),
   "--specpath", (Join-Path $BuildRoot "spec"),

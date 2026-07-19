@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "codex-console-feedback",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "vars": {
+    "TURNSTILE_SITE_KEY": "",
+    "DEVICE_DAILY_LIMIT": "10",
+    "IP_DAILY_LIMIT": "30",
+    "ALLOW_UNVERIFIED_REPORTS": "false"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "codex-console-feedback",
+      "database_id": "replace-with-d1-database-id"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "IMAGES",
+      "bucket_name": "codex-console-feedback-images"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "codex-console-feedback-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute codex-console-feedback --local --file schema.sql",
+    "db:remote": "wrangler d1 execute codex-console-feedback --remote --file schema.sql",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "wrangler": "^4.112.0"
+  }
+}

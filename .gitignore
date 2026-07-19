@@ -1,5 +1,6 @@
 # Local runtime state
 cache/
+feedback-admin.json
 __pycache__/
 *.pyc
 

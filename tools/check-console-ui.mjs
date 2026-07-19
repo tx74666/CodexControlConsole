@@ -11,6 +11,9 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, "..");
 const baseUrl = new URL(process.argv[2] || "http://127.0.0.1:8898/");
 const delay = milliseconds => new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
+const allowEmptyMedia = process.env.CONSOLE_UI_ALLOW_EMPTY_MEDIA === "true";
+const allowAvailableUpdates = process.env.CONSOLE_UI_ALLOW_AVAILABLE_UPDATES === "true";
+const allowCloudProjects = process.env.CONSOLE_UI_ALLOW_CLOUD_PROJECTS === "true";
 let expectedAppVersion = "";
 
 function assert(condition, message) {
@@ -43,13 +46,26 @@ function staticChecks() {
   );
   assert(existsSync(join(projectRoot, "console_update.py")), "console updater backend is missing");
   assert(existsSync(join(projectRoot, "world_update.py")), "Codex World updater backend is missing");
+  assert(existsSync(join(projectRoot, "app_uninstall.py")), "clean uninstall backend is missing");
   assert(existsSync(join(projectRoot, "tools", "apply_update.py")), "portable update helper is missing");
   assert(existsSync(join(projectRoot, "desktop_layout.py")), "desktop layout backend is missing");
+  assert(existsSync(join(projectRoot, "feedback_service.py")), "feedback backend is missing");
+  assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.4.0", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.5.0", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
+  const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
+  assert(
+    /id="updateProductConsole"[^>]+href="https:\/\/github\.com\/tx74666\/CodexControlConsole\/releases\/latest"/.test(consoleHtml),
+    "Codex Console download card is not linked to GitHub Releases"
+  );
+  assert(
+    /id="updateProductWorld"[^>]+href="https:\/\/github\.com\/tx74666\/CodexWorldConsole\/releases\/latest"/.test(consoleHtml),
+    "Codex World download card is not linked to GitHub Releases"
+  );
+  assert(/id="consoleUninstall"/.test(consoleHtml), "product uninstall control is missing");
   return Array.from(versions)[0];
 }
 
@@ -142,13 +158,19 @@ async function waitForDocument(client) {
 async function clickModule(client, id) {
   const clicked = await evaluate(client, `(() => {
     const link = document.querySelector('.module-link[data-module-id="${id}"]');
-    if (!link) return false;
-    link.click();
-    return true;
+    if (link) {
+      link.click();
+      return true;
+    }
+    if (typeof activateModule === 'function' && document.querySelector('[data-module-panel="${id}"]')) {
+      activateModule('${id}', true, { allowArchived: true });
+      return true;
+    }
+    return false;
   })()`);
   assert(clicked, `module link not found: ${id}`);
   await waitForValue(
-    () => evaluate(client, "document.querySelector('.module-link.active')?.dataset.moduleId || ''"),
+    () => evaluate(client, "document.querySelector('.module-link.active')?.dataset.moduleId || (typeof activeModuleId === 'string' ? activeModuleId : '')"),
     value => value === id,
     `module did not activate: ${id}`,
     3000,
@@ -231,11 +253,7 @@ async function runBrowserChecks(client) {
     languageToggleState.english === "EN" && languageToggleState.chinese === "CN",
     `language indicator is reversed: ${JSON.stringify(languageToggleState)}`
   );
-  await waitForValue(
-    () => evaluate(client, "document.querySelector('.module-link.active')?.dataset.moduleId || ''"),
-    value => value === "blender",
-    "Blender module did not initialize"
-  );
+  await clickModule(client, "blender");
 
   await waitForValue(
     () => evaluate(client, "document.querySelectorAll('#randomRealmBlenderProject option').length"),
@@ -252,23 +270,36 @@ async function runBrowserChecks(client) {
     25000,
     120
   );
+  await waitForValue(
+    () => evaluate(client, "!productUpdateBusy && Boolean(productUpdateStates.console) && Boolean(productUpdateStates.world)"),
+    Boolean,
+    "product update checks did not settle",
+    60000,
+    150
+  );
   const updateState = await evaluate(client, `({
     current: document.querySelector('#consoleUpdateCurrent')?.textContent?.trim() || '',
     auto: document.querySelector('#consoleUpdateAuto')?.checked,
-    controls: Boolean(document.querySelector('#consoleUpdateRefresh') && document.querySelector('#consoleUpdateInstall')),
+    controls: Boolean(document.querySelector('#consoleUpdateRefresh') && document.querySelector('#consoleUpdateInstall') && document.querySelector('#consoleUninstall')),
     products: document.querySelectorAll('[data-update-product]').length,
     badges: Array.from(document.querySelectorAll('.update-product-badge')).map(item => item.textContent?.trim() || ''),
-    topVisible: document.querySelector('#consoleUpdateTop')?.getBoundingClientRect().width > 0
+    topVisible: document.querySelector('#consoleUpdateTop')?.getBoundingClientRect().width > 0,
+    consoleDownload: document.querySelector('#updateProductConsole')?.href || '',
+    worldDownload: document.querySelector('#updateProductWorld')?.href || ''
   })`);
   assert(
     updateState.current === `v${expectedAppVersion}`
       && typeof updateState.auto === "boolean"
       && updateState.controls
       && updateState.products === 2
-      && updateState.badges.every(Boolean),
+      && updateState.badges.every(Boolean)
+      && updateState.consoleDownload.includes('/tx74666/CodexControlConsole/releases/')
+      && updateState.worldDownload.includes('/tx74666/CodexWorldConsole/releases/'),
     `update controls are incomplete: ${JSON.stringify(updateState)}`
   );
-  assert(!updateState.topVisible, `inactive update control still occupies the top bar: ${JSON.stringify(updateState)}`);
+  if (!allowAvailableUpdates) {
+    assert(!updateState.topVisible, `inactive update control still occupies the top bar: ${JSON.stringify(updateState)}`);
+  }
 
   const updateBannerState = await evaluate(client, `(() => {
     const originalStates = productUpdateStates;
@@ -362,6 +393,54 @@ async function runBrowserChecks(client) {
   assert(
     oneClickUpdate?.url.endsWith('/api/world/update/install') && oneClickUpdate.method === 'POST',
     `top update action targeted the wrong product: ${JSON.stringify(oneClickUpdate)}`
+  );
+
+  const cleanUninstallAction = await evaluate(client, `(async () => {
+    const originalStates = productUpdateStates;
+    const originalProduct = selectedUpdateProduct;
+    const originalFetch = window.fetch;
+    const originalConfirm = window.confirm;
+    let request = null;
+    productUpdateStates = {
+      console: { currentVersion: '0.5.0', latestVersion: '0.5.0', available: false, canUninstall: true },
+      world: { currentVersion: '0.3.0', latestVersion: '0.3.0', available: false, installed: true, canUninstall: true }
+    };
+    window.confirm = () => true;
+    window.fetch = async (input, init = {}) => {
+      const url = String(input || '');
+      if (url.endsWith('/api/world/uninstall')) {
+        request = { url, method: init.method || 'GET' };
+        return new Response(JSON.stringify({ ok: true, cleanLocalData: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      selectUpdateProduct('world', { persist: false });
+      renderConsoleUpdate();
+      const button = document.querySelector('#consoleUninstall');
+      const visible = !button?.hidden;
+      button?.click();
+      for (let attempt = 0; attempt < 20 && !request; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      return { visible, request };
+    } finally {
+      window.fetch = originalFetch;
+      window.confirm = originalConfirm;
+      productUpdateStates = originalStates;
+      selectedUpdateProduct = originalProduct;
+      productUpdateBusy = false;
+      renderConsoleUpdate();
+    }
+  })()`, true);
+  assert(
+    cleanUninstallAction.visible
+      && cleanUninstallAction.request?.url.endsWith('/api/world/uninstall')
+      && cleanUninstallAction.request?.method === 'POST',
+    `clean uninstall action is not connected: ${JSON.stringify(cleanUninstallAction)}`
   );
 
   await clickModule(client, "workspace");
@@ -474,7 +553,13 @@ async function runBrowserChecks(client) {
   assert(shareState.addVisible && shareState.allDraggable && /double-click|双击/i.test(shareState.doubleClickHint), `GitHub Coop project shelf interactions are incomplete: ${JSON.stringify(shareState)}`);
   assert(/^V(?:\d|--)/.test(shareState.version), `compact version is invalid: ${JSON.stringify(shareState)}`);
   assert(shareState.refreshText && shareState.refreshFontSize >= 16, `refresh control is not visible: ${JSON.stringify(shareState)}`);
-  assert(!shareState.desktopDisabled && !shareState.folderDisabled && !shareState.openDisabled, `project links are unavailable: ${JSON.stringify(shareState)}`);
+  const cloudOnlyProject = allowCloudProjects && shareState.state === "cloud";
+  assert(
+    !shareState.desktopDisabled
+      && !shareState.openDisabled
+      && (cloudOnlyProject ? shareState.folderDisabled : !shareState.folderDisabled),
+    `project links are unavailable: ${JSON.stringify(shareState)}`
+  );
   assert(shareState.noticeHidden, `passive Ready text is still visible: ${JSON.stringify(shareState)}`);
   assert(shareState.removedControls === 0, `verbose Git controls are still mounted: ${JSON.stringify(shareState)}`);
 
@@ -507,14 +592,16 @@ async function runBrowserChecks(client) {
       window.fetch = originalFetch;
     }
   })()`, true);
-  assert(
-    doubleClickOpen.found
-      && doubleClickOpen.request?.url.endsWith('/api/randomrealm/blender/github-share/desktop')
-      && doubleClickOpen.request?.body?.project === doubleClickOpen.path
-      && doubleClickOpen.request?.body?.repositoryUrl === doubleClickOpen.repositoryUrl
-      && /^https:\/\/github\.com\//i.test(doubleClickOpen.repositoryUrl),
-    `repository card double-click is not wired to GitHub Desktop: ${JSON.stringify(doubleClickOpen)}`
-  );
+  if (!cloudOnlyProject) {
+    assert(
+      doubleClickOpen.found
+        && doubleClickOpen.request?.url.endsWith('/api/randomrealm/blender/github-share/desktop')
+        && doubleClickOpen.request?.body?.project === doubleClickOpen.path
+        && doubleClickOpen.request?.body?.repositoryUrl === doubleClickOpen.repositoryUrl
+        && /^https:\/\/github\.com\//i.test(doubleClickOpen.repositoryUrl),
+      `repository card double-click is not wired to GitHub Desktop: ${JSON.stringify(doubleClickOpen)}`
+    );
+  }
 
   const cloudCardState = await evaluate(client, `(async () => {
     const originalState = blenderGithubShareState;
@@ -599,6 +686,9 @@ async function runBrowserChecks(client) {
   assert(collapseState.collapsed && collapseState.expanded, `GitHub Coop collapse behavior is broken: ${JSON.stringify(collapseState)}`);
 
   if (process.env.CONSOLE_UI_SCREENSHOT) {
+    if (["light", "dark"].includes(process.env.CONSOLE_UI_THEME || "")) {
+      await evaluate(client, `setTheme(${JSON.stringify(process.env.CONSOLE_UI_THEME)}, { record: false })`);
+    }
     const screenshotModule = process.env.CONSOLE_UI_SCREENSHOT_MODULE || "blender";
     if (screenshotModule !== "blender") await clickModule(client, screenshotModule);
     if (process.env.CONSOLE_UI_THEME) {
@@ -675,8 +765,11 @@ async function runBrowserChecks(client) {
 
   await clickModule(client, "music");
   await waitForValue(
-    () => evaluate(client, "document.querySelectorAll('.music-dock .track-card').length"),
-    value => value > 0,
+    () => evaluate(client, `({
+      cards: document.querySelectorAll('.music-dock .track-card').length,
+      empty: document.querySelectorAll('.music-dock .music-tier-empty').length
+    })`),
+    value => value.cards > 0 || (allowEmptyMedia && value.empty > 0),
     "Music did not load on first open",
     10000
   );
@@ -740,6 +833,69 @@ async function runBrowserChecks(client) {
   })`);
   assert(narrowLayout.scrollWidth <= narrowLayout.viewportWidth, `narrow layout has horizontal overflow: ${JSON.stringify(narrowLayout)}`);
   assert(narrowLayout.shellWidth <= narrowLayout.viewportWidth, `app shell exceeds the narrow viewport: ${JSON.stringify(narrowLayout)}`);
+
+  await evaluate(client, "localStorage.clear()");
+  await client.send("Page.navigate", { url: new URL("workspace.html?edition=public", baseUrl).href });
+  await waitForDocument(client);
+  await waitForValue(
+    () => evaluate(client, "document.body?.dataset.consoleEdition || ''"),
+    value => value === "public",
+    "public edition did not initialize"
+  );
+  const publicState = await evaluate(client, `({
+    active: document.querySelector('.module-link.active')?.dataset.moduleId || '',
+    visible: Array.from(document.querySelectorAll('.module-link')).map(item => item.dataset.moduleId),
+    archived: JSON.parse(localStorage.getItem('codexControl.moduleArchive.v1') || '[]'),
+    deepArchived: JSON.parse(localStorage.getItem('codexControl.moduleDeepArchive.v1') || '[]'),
+    feedbackPanel: Boolean(document.querySelector('#feedbackPanel')),
+    feedbackStatus: document.querySelector('#feedbackStatus')?.textContent?.trim() || '',
+    viewportWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth
+  })`);
+  assert(publicState.active === "workspace", `public edition did not start in Console: ${JSON.stringify(publicState)}`);
+  assert(
+    JSON.stringify(publicState.visible) === JSON.stringify(["workspace", "music", "wallpaper"]),
+    `public edition exposed the wrong first-level tabs: ${JSON.stringify(publicState)}`
+  );
+  assert(
+    JSON.stringify(publicState.archived) === JSON.stringify(["blender"]),
+    `public edition Archive defaults are wrong: ${JSON.stringify(publicState)}`
+  );
+  assert(
+    JSON.stringify(publicState.deepArchived) === JSON.stringify(["manager", "unity", "steamwork", "randomrealm"]),
+    `public edition deep Archive defaults are wrong: ${JSON.stringify(publicState)}`
+  );
+  assert(publicState.feedbackPanel && publicState.feedbackStatus, "feedback panel did not initialize");
+  assert(publicState.scrollWidth <= publicState.viewportWidth, `public workspace overflows: ${JSON.stringify(publicState)}`);
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 1024, height: 768 },
+    { width: 1366, height: 768 },
+    { width: 1920, height: 1080 },
+    { width: 2560, height: 1440 }
+  ]) {
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      ...viewport,
+      deviceScaleFactor: 1,
+      mobile: false
+    });
+    await delay(100);
+    const responsiveState = await evaluate(client, `({
+      viewportWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      shellWidth: Math.ceil(document.querySelector('.app-shell')?.getBoundingClientRect().width || 0),
+      downloadsWidth: Math.ceil(document.querySelector('.github-download-panel')?.getBoundingClientRect().width || 0),
+      clippedControls: Array.from(document.querySelectorAll('.github-download-link, .console-update-controls button')).filter(item => item.scrollWidth > item.clientWidth + 1).map(item => item.id || item.textContent?.trim() || item.tagName)
+    })`);
+    assert(
+      responsiveState.scrollWidth <= responsiveState.viewportWidth
+        && responsiveState.shellWidth <= responsiveState.viewportWidth
+        && responsiveState.downloadsWidth <= responsiveState.viewportWidth
+        && responsiveState.clippedControls.length === 0,
+      `workspace layout is not responsive at ${viewport.width}x${viewport.height}: ${JSON.stringify(responsiveState)}`
+    );
+  }
 }
 
 async function main() {

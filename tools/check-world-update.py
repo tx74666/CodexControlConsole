@@ -49,6 +49,7 @@ def main():
             patch("console_update.sys.platform", "win32"),
             patch.object(service, "check", side_effect=lambda: service.status()),
             patch.object(service, "_request", side_effect=lambda *args, **kwargs: io.BytesIO(setup_bytes)),
+            patch.object(service, "_registered_install", return_value=None),
             patch("console_update.subprocess.Popen") as launch,
         ):
             before = service.status()

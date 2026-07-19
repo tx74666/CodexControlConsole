@@ -42,6 +42,14 @@ No personal desktop layout or local media is included in the source repository o
 
 Console can save, import, and manually restore Windows desktop icon layouts. Every plan is local to the current device. Saving a plan creates a timestamped backup first.
 
+## Feedback
+
+Users can send a category, short description, and optional PNG/JPEG/WebP screenshot from the Console tab. Reports pass through a Cloudflare Worker; the owner's PC does not expose an inbound port. The default limit is 10 reports per installation per UTC day, with Turnstile and an additional hashed network limit.
+
+Report text is stored in D1 and screenshots are private in R2. Raw IP addresses are not stored. The inbox token is encrypted for the current Windows account and never returned to the browser.
+
+Deployment files are under `services/feedback-relay`. The public installer reads the Worker URL and Turnstile site key from release repository variables.
+
 ## Requirements
 
 - Windows 10 or Windows 11, 64-bit
@@ -53,7 +61,7 @@ Install Python 3.12 x64, PyInstaller, Pillow, yt-dlp, and Inno Setup 7, then run
 
 ```powershell
 python -m pip install pyinstaller pillow yt-dlp
-.\tools\build-windows.ps1 -Version 0.4.0 -OutputDir dist
+.\tools\build-windows.ps1 -Version 0.5.0 -OutputDir dist
 ```
 
 The result is `dist\CodexControlConsole-Setup-x64.exe`.
@@ -62,9 +70,13 @@ The result is `dist\CodexControlConsole-Setup-x64.exe`.
 
 ```powershell
 node .\tools\check-console-ui.mjs
+node --test .\services\feedback-relay\test\feedback.test.js
+python .\tools\check-feedback.py
 python .\tools\check-blender-github-share.py
 python .\tools\check-console-update.py
 python .\tools\check-desktop-layout.py
 ```
 
 Blender > Helper > GitHub Coop lists repositories from `github-coop.json`. GitHub Desktop handles authentication, clone, commits, pull, and push.
+
+The release workflow can sign Setup with Microsoft Artifact Signing when its Azure secrets and repository variables are configured. Self-signing is intentionally not used because it does not establish public Windows trust.

@@ -10,10 +10,6 @@ from datetime import datetime, timezone
 import uuid
 
 
-DEFAULT_CURRENT_LAYOUT = Path(r"D:\Q\DesktopLayout\desktop-layout-remembered-current.json")
-DEFAULT_EXTERNAL_SCRIPT = Path(r"D:\Q\DesktopLayout\DesktopLayout.ps1")
-
-
 def _default_startup_file():
     app_data = os.environ.get("APPDATA", "").strip()
     root = Path(app_data) if app_data else Path.home() / "AppData" / "Roaming"
@@ -63,14 +59,14 @@ class DesktopLayoutService:
         self.plan_dir = self.data_dir / "plans"
         self.verification_dir = self.data_dir / "verification"
         self.config_file = self.data_dir / "plans.json"
-        self.default_plan_path = Path(
-            default_plan_path
-            or os.environ.get("CODEX_CONTROL_DESKTOP_LAYOUT_CURRENT", DEFAULT_CURRENT_LAYOUT)
+        configured_plan_path = default_plan_path or os.environ.get("CODEX_CONTROL_DESKTOP_LAYOUT_CURRENT")
+        self.default_plan_path = (
+            Path(configured_plan_path)
+            if configured_plan_path
+            else self.plan_dir / "desktop-layout-current.json"
         )
-        self.external_script = Path(
-            external_script
-            or os.environ.get("CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT", DEFAULT_EXTERNAL_SCRIPT)
-        )
+        configured_external_script = external_script or os.environ.get("CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT")
+        self.external_script = Path(configured_external_script) if configured_external_script else None
         self.bundled_script = Path(bundled_script or self.app_dir / "tools" / "DesktopLayout.ps1")
         self.startup_file = Path(startup_file or _default_startup_file())
         self._lock = threading.RLock()
@@ -150,7 +146,7 @@ class DesktopLayoutService:
             os.replace(temporary, self.config_file)
 
     def _script_path(self):
-        if self.external_script.is_file():
+        if self.external_script and self.external_script.is_file():
             return self.external_script
         return self.bundled_script
 

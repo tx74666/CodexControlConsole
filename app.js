@@ -14,6 +14,7 @@ const storageKeys = {
   moduleArchive: "codexControl.moduleArchive.v1",
   moduleDeepArchive: "codexControl.moduleDeepArchive.v1",
   moduleDeleted: "codexControl.moduleDeleted.v1",
+  publicLayoutInitialized: "codexControl.publicLayoutInitialized.v1",
   lastModule: "codexControl.lastModule.v1",
   downloadIntake: "codexControl.downloadIntake.v1",
   workspaceTodos: "codexControl.workspaceTodos.v1",
@@ -38,6 +39,7 @@ const modules = [
 
 const editionModules = {
   developer: modules.map(item => item.id),
+  public: modules.map(item => item.id),
   lite: ["wallpaper", "music"]
 };
 const moduleMap = new Map(modules.map(item => [item.id, item]));
@@ -46,7 +48,8 @@ const initialEditionQuery = initialEditionParams.get("edition");
 const hasEditionQuery = initialEditionParams.has("edition");
 
 function normalizeEdition(value) {
-  return String(value || "").trim().toLowerCase() === "lite" ? "lite" : "developer";
+  const clean = String(value || "").trim().toLowerCase();
+  return ["public", "lite"].includes(clean) ? clean : "developer";
 }
 
 let consoleEdition = normalizeEdition(hasEditionQuery ? initialEditionQuery : "developer");
@@ -217,6 +220,41 @@ const i18n = {
     desktopLayoutConfirmRestore: name => `\u4f7f\u7528\u201c${name}\u201d\u6062\u590d\u684c\u9762\u56fe\u6807\u4f4d\u7f6e\uff1f`,
     desktopLayoutConfirmSave: name => `\u5148\u5907\u4efd\u539f JSON\uff0c\u518d\u7528\u5f53\u524d\u684c\u9762\u8986\u76d6\u201c${name}\u201d\uff1f`,
     desktopLayoutGuide: "\u6062\u590d\u540e\u4f1a\u81ea\u52a8\u68c0\u67e5\u91cd\u53e0\u3001\u7f3a\u5931\u548c\u4f4d\u7f6e\u504f\u5dee\u3002\u4fdd\u5b58\u5f53\u524d\u7248\u4f1a\u5148\u5907\u4efd\u539f JSON\uff1b\u65b9\u6848\u4e0e\u5907\u4efd\u4e0d\u4f1a\u4e0a\u4f20\u3002",
+    feedbackTop: "回报",
+    feedbackTitle: "问题回报",
+    feedbackCategoryLabel: "问题类型",
+    feedbackCategoryBug: "错误",
+    feedbackCategoryLayout: "排版",
+    feedbackCategoryMusic: "音乐",
+    feedbackCategoryUpdate: "更新",
+    feedbackCategoryOther: "其他",
+    feedbackDescriptionPlaceholder: "描述你遇到的问题",
+    feedbackScreenshot: "截图",
+    feedbackRemoveImage: "移除截图",
+    feedbackSend: "发送",
+    feedbackQuota: limit => `${limit}/天`,
+    feedbackConnecting: "正在连接",
+    feedbackReady: "可以发送",
+    feedbackNotConfigured: "回报服务尚未连接",
+    feedbackSending: "正在发送",
+    feedbackSent: remaining => `已发送 · 今天还可发送 ${remaining} 条`,
+    feedbackFailed: message => `发送失败：${message}`,
+    feedbackDescriptionShort: "请至少写 10 个字。",
+    feedbackImageTooLarge: "截图不能超过 5 MB。",
+    feedbackImageType: "截图只支持 PNG、JPEG 或 WebP。",
+    feedbackImageReadFailed: "无法读取这张截图。",
+    feedbackInboxTitle: "收件箱",
+    feedbackInboxRefresh: "刷新收件箱",
+    feedbackInboxEmpty: "没有新回报",
+    feedbackInboxResolve: "完成",
+    feedbackInboxResolved: "已完成",
+    feedbackOpenImage: "查看截图",
+    feedbackInboxMeta: (category, version, date) => `${category} · ${version || "--"} · ${date}`,
+    feedbackAdminSetup: "收件箱连接",
+    feedbackAdminEndpoint: "Cloudflare Worker URL",
+    feedbackAdminToken: "Admin token",
+    feedbackAdminSave: "连接",
+    feedbackAdminSaved: "收件箱已连接",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
     blenderHelperTab: "Helper",
@@ -783,6 +821,10 @@ const i18n = {
     consoleUpdateRestarting: "安装向导已打开",
     consoleUpdateConfirm: version => `将打开安装向导，把 Codex Console 更新到 v${version}。现在继续？`,
     worldUpdateConfirm: (version, installed) => `将打开安装向导，${installed ? "更新" : "安装"} Codex World v${version}。现在继续？`,
+    consoleUninstall: "卸载",
+    consoleUninstallConfirm: name => `将卸载 ${name}，并永久删除它在这台电脑上的设置、缓存和本地资源。Blender 项目、GitHub 仓库和外部桌面布局不会被删除。继续？`,
+    consoleUninstalling: "卸载程序已打开",
+    consoleUninstallFailed: message => `无法打开卸载程序：${message}`,
     consoleUpdateFailed: message => `更新失败：${message}`,
     todoGroupPieces: "Pieces / 部件",
     todoGroupTextures: "Blend -> Unity 贴图",
@@ -890,6 +932,41 @@ const i18n = {
     desktopLayoutConfirmRestore: name => `Restore desktop icon positions from “${name}”?`,
     desktopLayoutConfirmSave: name => `Back up the JSON, then replace “${name}” with the current desktop?`,
     desktopLayoutGuide: "Restore checks overlaps, missing icons, and position drift. Save current always backs up the existing JSON first. Plans and backups are never uploaded.",
+    feedbackTop: "Feedback",
+    feedbackTitle: "Report a Problem",
+    feedbackCategoryLabel: "Problem type",
+    feedbackCategoryBug: "Bug",
+    feedbackCategoryLayout: "Layout",
+    feedbackCategoryMusic: "Music",
+    feedbackCategoryUpdate: "Update",
+    feedbackCategoryOther: "Other",
+    feedbackDescriptionPlaceholder: "Describe the problem",
+    feedbackScreenshot: "Screenshot",
+    feedbackRemoveImage: "Remove screenshot",
+    feedbackSend: "Send",
+    feedbackQuota: limit => `${limit}/day`,
+    feedbackConnecting: "Connecting",
+    feedbackReady: "Ready to send",
+    feedbackNotConfigured: "Feedback is not connected yet",
+    feedbackSending: "Sending",
+    feedbackSent: remaining => `Sent · ${remaining} left today`,
+    feedbackFailed: message => `Could not send: ${message}`,
+    feedbackDescriptionShort: "Please enter at least 10 characters.",
+    feedbackImageTooLarge: "Screenshot must be 5 MB or smaller.",
+    feedbackImageType: "Screenshot must be PNG, JPEG, or WebP.",
+    feedbackImageReadFailed: "This screenshot could not be read.",
+    feedbackInboxTitle: "Inbox",
+    feedbackInboxRefresh: "Refresh inbox",
+    feedbackInboxEmpty: "No new reports",
+    feedbackInboxResolve: "Resolve",
+    feedbackInboxResolved: "Resolved",
+    feedbackOpenImage: "Screenshot",
+    feedbackInboxMeta: (category, version, date) => `${category} · ${version || "--"} · ${date}`,
+    feedbackAdminSetup: "Inbox connection",
+    feedbackAdminEndpoint: "Cloudflare Worker URL",
+    feedbackAdminToken: "Admin token",
+    feedbackAdminSave: "Connect",
+    feedbackAdminSaved: "Inbox connected",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
     blenderHelperTab: "Helper",
@@ -1456,6 +1533,10 @@ const i18n = {
     consoleUpdateRestarting: "Setup is open",
     consoleUpdateConfirm: version => `Setup will open to update Codex Console to v${version}. Continue?`,
     worldUpdateConfirm: (version, installed) => `Setup will open to ${installed ? "update" : "install"} Codex World v${version}. Continue?`,
+    consoleUninstall: "Uninstall",
+    consoleUninstallConfirm: name => `Uninstall ${name} and permanently remove its settings, cache, and local resources from this PC? Blender projects, GitHub repositories, and external desktop layouts will not be removed.`,
+    consoleUninstalling: "Uninstaller opened",
+    consoleUninstallFailed: message => `Could not open uninstaller: ${message}`,
     consoleUpdateFailed: message => `Update failed: ${message}`,
     todoGroupPieces: "Pieces",
     todoGroupTextures: "Blend -> Unity Textures",
@@ -1561,6 +1642,29 @@ const els = {
   managerArchivedTabs: document.getElementById("managerArchivedTabs"),
   managerLayoutOrder: document.getElementById("managerLayoutOrder"),
   tutorialModeToggle: document.getElementById("tutorialModeToggle"),
+  feedbackTop: document.getElementById("feedbackTop"),
+  feedbackPanel: document.getElementById("feedbackPanel"),
+  feedbackForm: document.getElementById("feedbackForm"),
+  feedbackCategory: document.getElementById("feedbackCategory"),
+  feedbackDescription: document.getElementById("feedbackDescription"),
+  feedbackScreenshotButton: document.getElementById("feedbackScreenshotButton"),
+  feedbackScreenshotInput: document.getElementById("feedbackScreenshotInput"),
+  feedbackScreenshotName: document.getElementById("feedbackScreenshotName"),
+  feedbackSubmit: document.getElementById("feedbackSubmit"),
+  feedbackPreview: document.getElementById("feedbackPreview"),
+  feedbackPreviewImage: document.getElementById("feedbackPreviewImage"),
+  feedbackRemoveImage: document.getElementById("feedbackRemoveImage"),
+  feedbackTurnstile: document.getElementById("feedbackTurnstile"),
+  feedbackQuota: document.getElementById("feedbackQuota"),
+  feedbackStatus: document.getElementById("feedbackStatus"),
+  feedbackInbox: document.getElementById("feedbackInbox"),
+  feedbackInboxCount: document.getElementById("feedbackInboxCount"),
+  feedbackInboxRefresh: document.getElementById("feedbackInboxRefresh"),
+  feedbackInboxList: document.getElementById("feedbackInboxList"),
+  feedbackAdminSetup: document.getElementById("feedbackAdminSetup"),
+  feedbackAdminForm: document.getElementById("feedbackAdminForm"),
+  feedbackAdminEndpoint: document.getElementById("feedbackAdminEndpoint"),
+  feedbackAdminToken: document.getElementById("feedbackAdminToken"),
   desktopLayoutPlan: document.getElementById("desktopLayoutPlan"),
   desktopLayoutRestore: document.getElementById("desktopLayoutRestore"),
   desktopLayoutSave: document.getElementById("desktopLayoutSave"),
@@ -1649,6 +1753,7 @@ const els = {
   consoleUpdateAuto: document.getElementById("consoleUpdateAuto"),
   consoleUpdateRefresh: document.getElementById("consoleUpdateRefresh"),
   consoleUpdateInstall: document.getElementById("consoleUpdateInstall"),
+  consoleUninstall: document.getElementById("consoleUninstall"),
   consoleUpdateError: document.getElementById("consoleUpdateError"),
   consoleUpdateTop: document.getElementById("consoleUpdateTop"),
   workspaceTodoCategory: document.getElementById("workspaceTodoCategory"),
@@ -1866,7 +1971,16 @@ let blenderGithubCardClickTimer = null;
 let blenderGithubDraggedPath = "";
 let blenderGithubDropCommitted = false;
 let githubDownloadsInfo = null;
-let productUpdateStates = { console: null, world: null };
+const initialConsoleVersion = String(els.consoleUpdateCurrent?.textContent || "").replace(/^v/i, "").trim();
+let productUpdateStates = {
+  console: initialConsoleVersion ? {
+    currentVersion: initialConsoleVersion,
+    latestVersion: "",
+    installed: true,
+    autoCheck: true
+  } : null,
+  world: null
+};
 let productUpdateBusy = false;
 let selectedUpdateProduct = localStorage.getItem(storageKeys.updateProduct) === "world" ? "world" : "console";
 let desktopLayoutState = null;
@@ -1874,6 +1988,19 @@ let desktopLayoutBusy = false;
 let desktopLayoutNotice = "";
 let desktopLayoutNoticeTone = "";
 let desktopLayoutDetail = "";
+let feedbackConfig = null;
+let feedbackConfigBusy = false;
+let feedbackBusy = false;
+let feedbackNotice = "";
+let feedbackNoticeTone = "";
+let feedbackImage = null;
+let feedbackImageUrl = "";
+let feedbackReports = [];
+let feedbackNewCount = 0;
+let feedbackInboxBusy = false;
+let feedbackInboxTimer = 0;
+let feedbackTurnstileWidgetId = null;
+let feedbackTurnstileLoading = null;
 let pendingSteamworkAssetSlot = "";
 let steamworkThumbsEnabled = false;
 let workspaceTodoGroups = loadWorkspaceTodos();
@@ -2035,9 +2162,8 @@ function isModuleForeground(id) {
 
 function moduleUrl(href) {
   const params = new URLSearchParams(window.location.search);
-  if (consoleEdition === "lite") {
-    params.set("edition", "lite");
-  }
+  if (consoleEdition === "developer") params.delete("edition");
+  else params.set("edition", consoleEdition);
   const search = params.toString();
   return `${href}${search ? `?${search}` : ""}${window.location.hash}`;
 }
@@ -2091,6 +2217,7 @@ function lastModuleId() {
 }
 
 function initialModuleId() {
+  ensureEditionModuleLayout();
   const pageName = currentPageName();
   const unavailable = new Set([...allArchivedModuleIds(), ...deletedModuleIds()]);
   if (pageName === "index.html") {
@@ -2145,6 +2272,7 @@ async function loadModuleData(id) {
         await loadProductUpdateStatuses({ check: true, quiet: true });
       }
       if (els.desktopLayoutPlan && !desktopLayoutState) await loadDesktopLayout({ quiet: true });
+      if (els.feedbackForm && !feedbackConfig) await loadFeedbackConfig({ quiet: true });
       if (hasMaterialWorkspace && downloadIntakeEnabled) await loadMaterialCandidates();
       break;
     case "blender":
@@ -2206,6 +2334,12 @@ function syncRuntimeActivity(options = {}) {
   } else {
     stopRandomRealmLiveSelectionPolling();
     stopRandomRealmTextureApplyPolling();
+  }
+
+  if (isModuleForeground("workspace") && feedbackConfig?.adminEnabled) {
+    scheduleFeedbackInboxPolling(options.resume || options.moduleChanged ? 250 : 30000);
+  } else {
+    stopFeedbackInboxPolling();
   }
 }
 
@@ -2452,6 +2586,22 @@ function moduleOrder() {
   }
   const fallback = currentModules.find(item => !deleted.has(item.id)) || firstAvailableModule();
   return ordered.length ? ordered : [fallback.id];
+}
+
+function ensureEditionModuleLayout() {
+  if (consoleEdition !== "public") return;
+  if (localStorage.getItem(storageKeys.publicLayoutInitialized) === "true") return;
+
+  const visible = ["workspace", "music", "wallpaper"];
+  const archived = ["blender"];
+  const deepArchived = ["manager", "unity", "steamwork", "randomrealm"];
+  localStorage.setItem(storageKeys.moduleOrder, JSON.stringify([...visible, ...archived, ...deepArchived]));
+  localStorage.setItem(storageKeys.moduleArchive, JSON.stringify(archived));
+  localStorage.setItem(storageKeys.moduleDeepArchive, JSON.stringify(deepArchived));
+  localStorage.setItem(storageKeys.moduleDeleted, "[]");
+  const saved = localStorage.getItem(storageKeys.lastModule) || "";
+  if (!visible.includes(saved)) localStorage.setItem(storageKeys.lastModule, "workspace");
+  localStorage.setItem(storageKeys.publicLayoutInitialized, "true");
 }
 
 function saveModuleOrder(order) {
@@ -3736,9 +3886,10 @@ function applyConsoleEdition(nextEdition, options = {}) {
   if (document.body) {
     document.body.dataset.consoleEdition = consoleEdition;
   }
+  ensureEditionModuleLayout();
 
-  if (!isModuleAvailable(activeModuleId)) {
-    activeModuleId = firstAvailableModule().id;
+  if (!isModuleAvailable(activeModuleId) || allArchivedModuleIds().includes(activeModuleId) || deletedModuleIds().includes(activeModuleId)) {
+    activeModuleId = visibleModuleOrder()[0] || firstAvailableModule().id;
   }
 
   const active = moduleById(activeModuleId);
@@ -3806,6 +3957,7 @@ function applyLanguage() {
     renderGithubDownloads();
     renderConsoleUpdate();
     renderDesktopLayout();
+    renderFeedback();
     renderWorkspaceTodos();
   }
   if (hasRandomRealmArtTools()) {
@@ -10654,7 +10806,10 @@ function renderUpdateProductButton(product, button, badge) {
   const version = state.available ? latest : current || latest;
   const selected = selectedUpdateProduct === product;
   button.classList.toggle("primary-action", selected);
-  button.setAttribute("aria-selected", String(selected));
+  button.setAttribute("aria-current", String(selected));
+  button.href = state.releaseUrl || (product === "world"
+    ? "https://github.com/tx74666/CodexWorldConsole/releases/latest"
+    : "https://github.com/tx74666/CodexControlConsole/releases/latest");
   badge.textContent = version ? `v${version}` : "--";
   badge.classList.toggle("available", Boolean(state.available));
 }
@@ -10678,7 +10833,9 @@ function renderConsoleUpdate() {
     els.consoleUpdateCurrent.textContent = installed && current ? `v${current}` : "--";
   }
   if (els.consoleUpdateStatus) {
-    els.consoleUpdateStatus.textContent = productUpdateBusy
+    els.consoleUpdateStatus.textContent = state.operationMessage
+      ? state.operationMessage
+      : productUpdateBusy
       ? text("consoleUpdateChecking")
       : !installed
         ? latest
@@ -10713,6 +10870,11 @@ function renderConsoleUpdate() {
     els.consoleUpdateInstall.disabled = productUpdateBusy;
     els.consoleUpdateInstall.textContent = action;
   }
+  if (els.consoleUninstall) {
+    els.consoleUninstall.hidden = !state.canUninstall;
+    els.consoleUninstall.disabled = productUpdateBusy;
+    els.consoleUninstall.textContent = text("consoleUninstall");
+  }
   if (els.consoleUpdateRelease) {
     els.consoleUpdateRelease.href = state.releaseUrl
       || (product === "world"
@@ -10743,7 +10905,11 @@ function renderConsoleUpdate() {
   }
   if (els.consoleUpdateError) {
     const message = String(state.updateError || state.error || "").trim();
-    els.consoleUpdateError.textContent = message ? text("consoleUpdateFailed", message) : "";
+    els.consoleUpdateError.textContent = message
+      ? state.operation === "uninstall"
+        ? text("consoleUninstallFailed", message)
+        : text("consoleUpdateFailed", message)
+      : "";
     els.consoleUpdateError.hidden = !message;
   }
 }
@@ -10850,6 +11016,26 @@ async function installSelectedProductUpdate(product = selectedUpdateProduct) {
   }
   productUpdateBusy = false;
   renderConsoleUpdate();
+}
+
+async function uninstallSelectedProduct(product = selectedUpdateProduct) {
+  if (productUpdateBusy) return;
+  selectUpdateProduct(product);
+  const state = productUpdateStates[product] || {};
+  if (!state.canUninstall || !window.confirm(text("consoleUninstallConfirm", updateProductName(product)))) return;
+
+  productUpdateBusy = true;
+  renderConsoleUpdate();
+  try {
+    await postJson(`/api/${product}/uninstall`, {});
+    productUpdateStates[product] = { ...state, operationMessage: text("consoleUninstalling"), error: "" };
+    productUpdateBusy = false;
+    renderConsoleUpdate();
+  } catch (error) {
+    productUpdateStates[product] = { ...state, operation: "uninstall", error: error.message };
+    productUpdateBusy = false;
+    renderConsoleUpdate();
+  }
 }
 
 async function handleProductUpdateTop() {
@@ -11070,6 +11256,382 @@ async function importDesktopLayouts(files) {
     if (els.desktopLayoutFileInput) els.desktopLayoutFileInput.value = "";
     renderDesktopLayout();
   }
+}
+
+function feedbackCategoryLabel(category) {
+  const key = {
+    bug: "feedbackCategoryBug",
+    layout: "feedbackCategoryLayout",
+    music: "feedbackCategoryMusic",
+    update: "feedbackCategoryUpdate",
+    other: "feedbackCategoryOther"
+  }[category] || "feedbackCategoryOther";
+  return text(key);
+}
+
+function renderFeedbackTop() {
+  if (!els.feedbackTop) return;
+  els.feedbackTop.textContent = feedbackNewCount > 0
+    ? `${text("feedbackTop")} ${feedbackNewCount}`
+    : text("feedbackTop");
+  els.feedbackTop.classList.toggle("has-reports", feedbackNewCount > 0);
+}
+
+function renderFeedback() {
+  if (!els.feedbackForm) return;
+  const configured = Boolean(feedbackConfig?.configured);
+  const dailyLimit = Number(feedbackConfig?.dailyLimit || 10);
+  if (els.feedbackQuota) els.feedbackQuota.textContent = text("feedbackQuota", dailyLimit);
+  if (els.feedbackSubmit) els.feedbackSubmit.disabled = feedbackBusy || !configured;
+  if (els.feedbackScreenshotButton) els.feedbackScreenshotButton.disabled = feedbackBusy;
+  if (els.feedbackDescription) els.feedbackDescription.disabled = feedbackBusy;
+  if (els.feedbackCategory) els.feedbackCategory.disabled = feedbackBusy;
+  if (els.feedbackScreenshotName) els.feedbackScreenshotName.textContent = feedbackImage?.name || "";
+  if (els.feedbackPreview) els.feedbackPreview.hidden = !feedbackImage;
+  if (els.feedbackPreviewImage) {
+    els.feedbackPreviewImage.src = feedbackImageUrl || "";
+    els.feedbackPreviewImage.alt = feedbackImage?.name || "";
+  }
+
+  if (els.feedbackStatus) {
+    const status = feedbackNotice || (feedbackConfig
+      ? configured ? text("feedbackReady") : text("feedbackNotConfigured")
+      : text("feedbackConnecting"));
+    els.feedbackStatus.textContent = status;
+    els.feedbackStatus.classList.toggle("success", feedbackNoticeTone === "success");
+    els.feedbackStatus.classList.toggle("warning", feedbackNoticeTone === "warning" || (feedbackConfig && !configured));
+  }
+
+  if (els.feedbackAdminSetup) {
+    els.feedbackAdminSetup.hidden = !feedbackConfig?.adminSetupAvailable;
+  }
+  if (els.feedbackAdminEndpoint && document.activeElement !== els.feedbackAdminEndpoint) {
+    els.feedbackAdminEndpoint.value = feedbackConfig?.endpoint || els.feedbackAdminEndpoint.value || "";
+  }
+  if (els.feedbackInbox) els.feedbackInbox.hidden = !feedbackConfig?.adminEnabled;
+  renderFeedbackInbox();
+  renderFeedbackTop();
+}
+
+function clearFeedbackImage() {
+  if (feedbackImageUrl) URL.revokeObjectURL(feedbackImageUrl);
+  feedbackImage = null;
+  feedbackImageUrl = "";
+  if (els.feedbackScreenshotInput) els.feedbackScreenshotInput.value = "";
+  renderFeedback();
+}
+
+function selectFeedbackImage(file) {
+  if (!file) return;
+  const maximum = Number(feedbackConfig?.maxImageBytes || 5 * 1024 * 1024);
+  if (file.size > maximum) {
+    feedbackNotice = text("feedbackImageTooLarge");
+    feedbackNoticeTone = "warning";
+    renderFeedback();
+    return;
+  }
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+    feedbackNotice = text("feedbackImageType");
+    feedbackNoticeTone = "warning";
+    renderFeedback();
+    return;
+  }
+  if (feedbackImageUrl) URL.revokeObjectURL(feedbackImageUrl);
+  feedbackImage = file;
+  feedbackImageUrl = URL.createObjectURL(file);
+  feedbackNotice = "";
+  feedbackNoticeTone = "";
+  renderFeedback();
+}
+
+function readFeedbackImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(String(reader.result || "")), { once: true });
+    reader.addEventListener("error", () => reject(new Error(text("feedbackImageReadFailed"))), { once: true });
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadTurnstileLibrary() {
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  if (feedbackTurnstileLoading) return feedbackTurnstileLoading;
+  feedbackTurnstileLoading = new Promise((resolve, reject) => {
+    const existing = document.getElementById("codexFeedbackTurnstileScript");
+    const script = existing || document.createElement("script");
+    const finish = () => window.turnstile ? resolve(window.turnstile) : reject(new Error("Turnstile unavailable"));
+    script.addEventListener("load", finish, { once: true });
+    script.addEventListener("error", () => reject(new Error("Turnstile unavailable")), { once: true });
+    if (!existing) {
+      script.id = "codexFeedbackTurnstileScript";
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+  }).catch(error => {
+    feedbackTurnstileLoading = null;
+    throw error;
+  });
+  return feedbackTurnstileLoading;
+}
+
+async function renderFeedbackTurnstile() {
+  if (!els.feedbackTurnstile) return;
+  const siteKey = feedbackConfig?.siteKey || "";
+  els.feedbackTurnstile.hidden = !siteKey;
+  if (!siteKey || feedbackTurnstileWidgetId !== null) return;
+  try {
+    const turnstile = await loadTurnstileLibrary();
+    feedbackTurnstileWidgetId = turnstile.render(els.feedbackTurnstile, {
+      sitekey: siteKey,
+      theme: theme === "dark" ? "dark" : "light",
+      size: "flexible"
+    });
+  } catch {
+    feedbackNotice = text("feedbackFailed", "verification unavailable");
+    feedbackNoticeTone = "warning";
+    renderFeedback();
+  }
+}
+
+function resetFeedbackTurnstile() {
+  if (feedbackTurnstileWidgetId === null || !window.turnstile) return;
+  window.turnstile.reset(feedbackTurnstileWidgetId);
+}
+
+async function loadFeedbackConfig(options = {}) {
+  if (!els.feedbackForm || feedbackConfigBusy) return;
+  feedbackConfigBusy = true;
+  if (!options.quiet) {
+    feedbackNotice = text("feedbackConnecting");
+    feedbackNoticeTone = "";
+  }
+  renderFeedback();
+  try {
+    const response = await fetch(`/api/feedback/config${options.force ? "?force=1" : ""}`, { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    feedbackConfig = payload;
+    feedbackNotice = "";
+    feedbackNoticeTone = "";
+    renderFeedback();
+    await renderFeedbackTurnstile();
+    if (feedbackConfig.adminEnabled) await loadFeedbackInbox({ quiet: true });
+  } catch (error) {
+    feedbackConfig = { configured: false, adminEnabled: false, dailyLimit: 10, maxImageBytes: 5 * 1024 * 1024 };
+    feedbackNotice = text("feedbackFailed", error.message);
+    feedbackNoticeTone = "warning";
+    renderFeedback();
+  } finally {
+    feedbackConfigBusy = false;
+  }
+}
+
+async function submitFeedback(event) {
+  event?.preventDefault();
+  if (!feedbackConfig?.configured || feedbackBusy) return;
+  const description = String(els.feedbackDescription?.value || "").trim();
+  if (description.length < 10) {
+    feedbackNotice = text("feedbackDescriptionShort");
+    feedbackNoticeTone = "warning";
+    renderFeedback();
+    els.feedbackDescription?.focus();
+    return;
+  }
+
+  feedbackBusy = true;
+  feedbackNotice = text("feedbackSending");
+  feedbackNoticeTone = "";
+  renderFeedback();
+  try {
+    const screenshot = feedbackImage ? {
+      data: await readFeedbackImage(feedbackImage),
+      type: feedbackImage.type,
+      name: feedbackImage.name
+    } : null;
+    const turnstileToken = feedbackTurnstileWidgetId !== null && window.turnstile
+      ? window.turnstile.getResponse(feedbackTurnstileWidgetId)
+      : "";
+    const response = await fetch("/api/feedback/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: els.feedbackCategory?.value || "bug",
+        description,
+        screenshot,
+        turnstileToken,
+        locale: language,
+        module: activeModuleId
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (els.feedbackDescription) els.feedbackDescription.value = "";
+    clearFeedbackImage();
+    resetFeedbackTurnstile();
+    feedbackNotice = text("feedbackSent", Number(payload.remaining || 0));
+    feedbackNoticeTone = "success";
+    if (feedbackConfig.adminEnabled) window.setTimeout(() => loadFeedbackInbox({ quiet: true }), 600);
+  } catch (error) {
+    feedbackNotice = text("feedbackFailed", error.message);
+    feedbackNoticeTone = "warning";
+    resetFeedbackTurnstile();
+  } finally {
+    feedbackBusy = false;
+    renderFeedback();
+  }
+}
+
+function feedbackDate(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "--";
+  return new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function renderFeedbackInbox() {
+  if (!els.feedbackInboxList) return;
+  els.feedbackInboxList.replaceChildren();
+  if (els.feedbackInboxCount) els.feedbackInboxCount.textContent = String(feedbackNewCount || 0);
+  if (els.feedbackInboxRefresh) els.feedbackInboxRefresh.disabled = feedbackInboxBusy;
+  if (!feedbackConfig?.adminEnabled) return;
+  if (!feedbackReports.length) {
+    const empty = document.createElement("p");
+    empty.className = "feedback-inbox-empty";
+    empty.textContent = text("feedbackInboxEmpty");
+    els.feedbackInboxList.appendChild(empty);
+    return;
+  }
+
+  for (const report of feedbackReports) {
+    const row = document.createElement("article");
+    row.className = "feedback-report";
+    const body = document.createElement("div");
+    body.className = "feedback-report-body";
+    const meta = document.createElement("span");
+    meta.className = "feedback-report-meta";
+    meta.textContent = text(
+      "feedbackInboxMeta",
+      feedbackCategoryLabel(report.category),
+      report.appVersion ? `v${String(report.appVersion).replace(/^v/i, "")}` : "",
+      feedbackDate(report.createdAt)
+    );
+    const description = document.createElement("p");
+    description.textContent = report.description || "";
+    body.append(meta, description);
+    if (report.hasImage) {
+      const imageLink = document.createElement("a");
+      imageLink.className = "ghost-button feedback-report-image";
+      imageLink.href = `/api/feedback/image/${encodeURIComponent(report.id)}`;
+      imageLink.target = "_blank";
+      imageLink.rel = "noreferrer";
+      imageLink.textContent = text("feedbackOpenImage");
+      row.appendChild(imageLink);
+    }
+    const resolve = document.createElement("button");
+    resolve.className = "ghost-button feedback-resolve";
+    resolve.type = "button";
+    resolve.textContent = report.status === "resolved" ? text("feedbackInboxResolved") : text("feedbackInboxResolve");
+    resolve.disabled = report.status === "resolved";
+    resolve.addEventListener("click", () => resolveFeedbackReport(report.id));
+    row.append(body, resolve);
+    els.feedbackInboxList.appendChild(row);
+  }
+}
+
+function stopFeedbackInboxPolling() {
+  if (feedbackInboxTimer) window.clearTimeout(feedbackInboxTimer);
+  feedbackInboxTimer = 0;
+}
+
+function scheduleFeedbackInboxPolling(delay = 30000) {
+  stopFeedbackInboxPolling();
+  if (!feedbackConfig?.adminEnabled || !isModuleForeground("workspace")) return;
+  feedbackInboxTimer = window.setTimeout(() => loadFeedbackInbox({ quiet: true }), delay);
+}
+
+async function loadFeedbackInbox(options = {}) {
+  if (!feedbackConfig?.adminEnabled || feedbackInboxBusy) return;
+  feedbackInboxBusy = true;
+  renderFeedbackInbox();
+  try {
+    const response = await fetch("/api/feedback/inbox?status=new&limit=50", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    feedbackReports = Array.isArray(payload.reports) ? payload.reports : [];
+    feedbackNewCount = Number(payload.newCount || feedbackReports.length || 0);
+  } catch (error) {
+    if (!options.quiet) {
+      feedbackNotice = text("feedbackFailed", error.message);
+      feedbackNoticeTone = "warning";
+    }
+  } finally {
+    feedbackInboxBusy = false;
+    renderFeedback();
+    scheduleFeedbackInboxPolling();
+  }
+}
+
+async function resolveFeedbackReport(id) {
+  try {
+    const response = await fetch("/api/feedback/admin/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: "resolved" })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    feedbackReports = feedbackReports.filter(report => report.id !== id);
+    feedbackNewCount = Math.max(0, feedbackNewCount - 1);
+    renderFeedback();
+  } catch (error) {
+    feedbackNotice = text("feedbackFailed", error.message);
+    feedbackNoticeTone = "warning";
+    renderFeedback();
+  }
+}
+
+async function saveFeedbackAdminConfig(event) {
+  event?.preventDefault();
+  try {
+    const response = await fetch("/api/feedback/admin/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        endpoint: els.feedbackAdminEndpoint?.value || "",
+        token: els.feedbackAdminToken?.value || ""
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    feedbackConfig = payload;
+    if (els.feedbackAdminToken) els.feedbackAdminToken.value = "";
+    feedbackNotice = text("feedbackAdminSaved");
+    feedbackNoticeTone = "success";
+    renderFeedback();
+    await renderFeedbackTurnstile();
+    if (feedbackConfig.adminEnabled) await loadFeedbackInbox();
+  } catch (error) {
+    feedbackNotice = text("feedbackFailed", error.message);
+    feedbackNoticeTone = "warning";
+    renderFeedback();
+  }
+}
+
+function openFeedbackPanel() {
+  activateModule("workspace", true, { allowArchived: true });
+  window.requestAnimationFrame(() => {
+    els.feedbackPanel?.scrollIntoView({
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth",
+      block: "start"
+    });
+    window.setTimeout(() => els.feedbackDescription?.focus({ preventScroll: true }), 260);
+  });
 }
 
 function parseLegacyCustomResolution(value) {
@@ -16069,6 +16631,7 @@ if (els.themeToggle) els.themeToggle.addEventListener("click", () => {
   setTheme(nextTheme(theme));
 });
 if (els.tutorialModeToggle) els.tutorialModeToggle.addEventListener("click", toggleTutorialMode);
+if (els.feedbackTop) els.feedbackTop.addEventListener("click", openFeedbackPanel);
 if (els.moduleArchiveDrop) els.moduleArchiveDrop.addEventListener("click", event => {
   event.stopPropagation();
   const nextView = event.ctrlKey || event.metaKey ? "deep" : "main";
@@ -16672,6 +17235,9 @@ if (els.consoleUpdateRefresh) {
 if (els.consoleUpdateInstall) {
   els.consoleUpdateInstall.addEventListener("click", () => installSelectedProductUpdate());
 }
+if (els.consoleUninstall) {
+  els.consoleUninstall.addEventListener("click", () => uninstallSelectedProduct());
+}
 if (els.consoleUpdateTop) {
   els.consoleUpdateTop.addEventListener("click", handleProductUpdateTop);
 }
@@ -16695,6 +17261,32 @@ if (els.desktopLayoutImport) {
 }
 if (els.desktopLayoutFileInput) {
   els.desktopLayoutFileInput.addEventListener("change", event => importDesktopLayouts(event.target.files));
+}
+if (els.feedbackForm) {
+  els.feedbackForm.addEventListener("submit", submitFeedback);
+}
+if (els.feedbackScreenshotButton) {
+  els.feedbackScreenshotButton.addEventListener("click", () => els.feedbackScreenshotInput?.click());
+}
+if (els.feedbackScreenshotInput) {
+  els.feedbackScreenshotInput.addEventListener("change", event => selectFeedbackImage(event.target.files?.[0]));
+}
+if (els.feedbackRemoveImage) {
+  els.feedbackRemoveImage.addEventListener("click", clearFeedbackImage);
+}
+if (els.feedbackDescription) {
+  els.feedbackDescription.addEventListener("paste", event => {
+    const image = Array.from(event.clipboardData?.items || [])
+      .find(item => item.kind === "file" && item.type.startsWith("image/"))
+      ?.getAsFile();
+    if (image) selectFeedbackImage(image);
+  });
+}
+if (els.feedbackInboxRefresh) {
+  els.feedbackInboxRefresh.addEventListener("click", () => loadFeedbackInbox());
+}
+if (els.feedbackAdminForm) {
+  els.feedbackAdminForm.addEventListener("submit", saveFeedbackAdminConfig);
 }
 if (hasWorkspace && els.addWorkspaceTodo) {
   els.addWorkspaceTodo.addEventListener("click", addWorkspaceTodo);
@@ -16770,4 +17362,5 @@ runtimeActivityReady = true;
 syncRuntimeActivity({ resume: true });
 loadProductUpdateStatuses({ check: true, quiet: true });
 loadDesktopLayout({ quiet: true });
+loadFeedbackConfig({ quiet: true });
 scheduleClockTick();

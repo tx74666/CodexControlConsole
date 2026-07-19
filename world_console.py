@@ -39,6 +39,8 @@ from blender_github_share import (
 from console_update import ConsoleUpdateService
 from world_update import WorldUpdateService
 from desktop_layout import DesktopLayoutService
+from feedback_service import FeedbackService, FeedbackServiceError
+from app_uninstall import AppUninstallService
 
 
 def hidden_subprocess_kwargs():
@@ -135,13 +137,23 @@ def media_directory(name, extensions):
     legacy = APP_DIR / name
     if not APP_USES_LOCAL_DATA:
         return legacy
-    try:
-        if legacy.is_dir() and any(item.is_file() and item.suffix.lower() in extensions for item in legacy.iterdir()):
-            return legacy
-    except OSError:
-        pass
     target = USER_DATA_DIR / name
     target.mkdir(parents=True, exist_ok=True)
+    marker = target / ".codex-media-migrated"
+    if not marker.exists():
+        try:
+            if legacy.is_dir() and legacy.resolve() != target.resolve():
+                for source in legacy.rglob("*"):
+                    if source.is_symlink() or not source.is_file() or source.suffix.lower() not in extensions:
+                        continue
+                    relative = source.relative_to(legacy)
+                    destination = target / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    if not destination.exists():
+                        shutil.copy2(source, destination)
+            marker.write_text(APP_VERSION + "\n", encoding="utf-8")
+        except OSError:
+            pass
     return target
 
 
@@ -275,6 +287,7 @@ CONSOLE_MODULE_HREFS = {
 }
 CONSOLE_EDITION_MODULES = {
     "developer": tuple(CONSOLE_MODULE_HREFS.keys()),
+    "public": tuple(CONSOLE_MODULE_HREFS.keys()),
     "lite": ("wallpaper", "music"),
 }
 CONSOLE_PAGE_PATHS = {"", "/", *{f"/{href}" for href in CONSOLE_MODULE_HREFS.values()}}
@@ -286,7 +299,9 @@ def sanitize_console_edition(value):
 
 
 CONSOLE_CONFIG = {
-    "edition": sanitize_console_edition(os.environ.get("CODEX_CONTROL_EDITION")),
+    "edition": sanitize_console_edition(
+        os.environ.get("CODEX_CONTROL_EDITION") or APP_MANIFEST.get("edition") or "developer"
+    ),
 }
 
 
@@ -343,22 +358,33 @@ CONSOLE_UPDATE = ConsoleUpdateService(
     shutdown_callback=shutdown_active_server,
 )
 WORLD_UPDATE = WorldUpdateService(APP_DIR, USER_DATA_DIR, WORLD_CONSOLE_DIR)
+APP_UNINSTALL = AppUninstallService(APP_DIR, APP_MANIFEST, shutdown_callback=shutdown_active_server)
+FEEDBACK = FeedbackService(
+    APP_DIR,
+    USER_DATA_DIR,
+    APP_MANIFEST,
+    INSTALLATION_STATE,
+    current_console_edition,
+)
 
 
 def console_edition_query(edition=None):
-    return "?edition=lite" if sanitize_console_edition(edition or current_console_edition()) == "lite" else ""
+    selected = sanitize_console_edition(edition or current_console_edition())
+    return f"?edition={selected}" if selected != "developer" else ""
 
 
-def console_lite_redirect_path(parsed):
-    if current_console_edition() != "lite":
+def console_edition_redirect_path(parsed):
+    edition = current_console_edition()
+    if edition == "developer":
         return ""
     query = urllib.parse.parse_qs(parsed.query)
     page = parsed.path or "/index.html"
     module_id = console_module_id_from_href(page)
-    if console_module_allowed(module_id, "lite") and query.get("edition", [""])[0] == "lite":
+    if console_module_allowed(module_id, edition) and query.get("edition", [""])[0] == edition:
         return ""
-    href = CONSOLE_MODULE_HREFS[module_id] if console_module_allowed(module_id, "lite") else CONSOLE_MODULE_HREFS["wallpaper"]
-    return f"/{href}?edition=lite"
+    fallback = "workspace" if console_module_allowed("workspace", edition) else "wallpaper"
+    href = CONSOLE_MODULE_HREFS[module_id] if console_module_allowed(module_id, edition) else CONSOLE_MODULE_HREFS[fallback]
+    return f"/{href}?edition={edition}"
 
 MAX_WALLPAPER_UPLOAD_BYTES = 80 * 1024 * 1024
 MAX_MUSIC_UPLOAD_BYTES = 512 * 1024 * 1024
@@ -366,6 +392,7 @@ MAX_WORKZONE_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_STEAMWORK_UPLOAD_BYTES = 1024 * 1024 * 1024
 MAX_COOKIE_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_DESKTOP_LAYOUT_UPLOAD_BYTES = 8 * 1024 * 1024
+MAX_FEEDBACK_REQUEST_BYTES = 8 * 1024 * 1024
 GOOGLE_TRANSLATE_ENDPOINT = "https://translation.googleapis.com/language/translate/v2"
 TRANSLATION_TARGET = "zh-TW"
 MUSIC_LIBRARY_LOCK = threading.Lock()
@@ -652,7 +679,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         except ValueError:
             allowed = False
         if not allowed:
-            self.send_json({"error": "Desktop layouts are available on this PC only."}, status=403)
+            self.send_json({"error": "This action is available on this PC only."}, status=403)
         return allowed
 
     def do_GET(self):
@@ -754,19 +781,52 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/console/config":
             self.send_json(console_edition_payload())
             return
+        if parsed.path == "/api/feedback/config":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                self.send_json(FEEDBACK.config(force=query.get("force", [""])[0].lower() in {"1", "true", "yes"}))
+            except FeedbackServiceError as error:
+                self.send_json({"error": str(error)}, status=error.status)
+            return
+        if parsed.path == "/api/feedback/inbox":
+            if not self.require_local_request():
+                return
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                self.send_json(FEEDBACK.inbox(
+                    status=query.get("status", ["new"])[0],
+                    limit=query.get("limit", ["50"])[0],
+                ))
+            except FeedbackServiceError as error:
+                self.send_json({"error": str(error)}, status=error.status)
+            return
+        if parsed.path.startswith("/api/feedback/image/"):
+            if not self.require_local_request():
+                return
+            try:
+                report_id = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1])
+                body, content_type = FEEDBACK.report_image(report_id)
+                self.send_bytes_response(body, content_type)
+            except FeedbackServiceError as error:
+                self.send_json({"error": str(error)}, status=error.status)
+            return
         if parsed.path == "/api/console/update":
             query = urllib.parse.parse_qs(parsed.query)
-            self.send_json(CONSOLE_UPDATE.status(
+            status = CONSOLE_UPDATE.status(
                 check=query.get("check", [""])[0].lower() in {"1", "true", "yes", "auto"},
                 force=query.get("force", [""])[0].lower() in {"1", "true", "yes"},
-            ))
+            )
+            status.update(APP_UNINSTALL.status("console"))
+            self.send_json(status)
             return
         if parsed.path == "/api/world/update":
             query = urllib.parse.parse_qs(parsed.query)
-            self.send_json(WORLD_UPDATE.status(
+            status = WORLD_UPDATE.status(
                 check=query.get("check", [""])[0].lower() in {"1", "true", "yes", "auto"},
                 force=query.get("force", [""])[0].lower() in {"1", "true", "yes"},
-            ))
+            )
+            status.update(APP_UNINSTALL.status("world"))
+            self.send_json(status)
             return
         if parsed.path == "/api/console/desktop-layout":
             if not self.require_local_request():
@@ -813,7 +873,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             self.send_music_file_response(parsed.path[len("/music/"):])
             return
         if parsed.path in CONSOLE_PAGE_PATHS:
-            redirect_path = console_lite_redirect_path(parsed)
+            redirect_path = console_edition_redirect_path(parsed)
             if redirect_path:
                 self.send_redirect(redirect_path)
                 return
@@ -857,7 +917,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 self.send_json(stage_steamwork_asset_files(requirement_id, self.read_multipart_files(MAX_STEAMWORK_UPLOAD_BYTES)))
                 return
 
-            payload = self.read_json_body()
+            payload = self.read_json_body(
+                MAX_FEEDBACK_REQUEST_BYTES if parsed.path == "/api/feedback/submit" else None
+            )
             if parsed.path == "/api/wallpapers/apply":
                 self.send_json(apply_wallpaper(payload.get("path", "")))
                 return
@@ -994,6 +1056,21 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/console/state":
                 self.send_json(write_console_state(payload))
                 return
+            if parsed.path == "/api/feedback/submit":
+                if not self.require_local_request():
+                    return
+                self.send_json(FEEDBACK.submit(payload))
+                return
+            if parsed.path == "/api/feedback/admin/config":
+                if not self.require_local_request():
+                    return
+                self.send_json(FEEDBACK.save_admin_config(payload))
+                return
+            if parsed.path == "/api/feedback/admin/status":
+                if not self.require_local_request():
+                    return
+                self.send_json(FEEDBACK.update_status(payload.get("id"), payload.get("status")))
+                return
             if parsed.path == "/api/console/update/config":
                 if not self.require_local_request():
                     return
@@ -1008,6 +1085,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if not self.require_local_request():
                     return
                 self.send_json(CONSOLE_UPDATE.open_release())
+                return
+            if parsed.path == "/api/console/uninstall":
+                if not self.require_local_request():
+                    return
+                self.send_json(APP_UNINSTALL.launch("console"))
                 return
             if parsed.path == "/api/world/update/config":
                 if not self.require_local_request():
@@ -1028,6 +1110,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if not self.require_local_request():
                     return
                 self.send_json(WORLD_UPDATE.open_release())
+                return
+            if parsed.path == "/api/world/uninstall":
+                if not self.require_local_request():
+                    return
+                self.send_json(APP_UNINSTALL.launch("world"))
                 return
             if parsed.path == "/api/console/desktop-layout/select":
                 if not self.require_local_request():
@@ -1050,6 +1137,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/startup/install":
                 self.send_json(install_startup_listener())
                 return
+        except FeedbackServiceError as error:
+            self.send_json({"error": str(error)}, status=error.status)
+            return
         except ValueError as error:
             self.send_json({"error": str(error)}, status=400)
             return
@@ -1086,6 +1176,14 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_bytes_response(self, body, content_type="application/octet-stream", status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -1185,10 +1283,12 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             return
         self.send_ranged_file_response(path, self.guess_type(str(path)) or "application/octet-stream")
 
-    def read_json_body(self):
+    def read_json_body(self, max_bytes=None):
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length <= 0:
             return {}
+        if max_bytes is not None and length > max_bytes:
+            raise FeedbackServiceError("Feedback request is too large.", status=413)
         body = self.rfile.read(length).decode("utf-8")
         try:
             return json.loads(body)
@@ -7258,7 +7358,8 @@ def upload_music(files):
 
 def sanitize_console_module_id(value):
     clean = str(value or "").strip().lower()
-    return clean if clean in CONSOLE_MODULE_HREFS and console_module_allowed(clean) else "wallpaper"
+    fallback = "workspace" if current_console_edition() == "public" else "wallpaper"
+    return clean if clean in CONSOLE_MODULE_HREFS and console_module_allowed(clean) else fallback
 
 
 def read_console_state():
@@ -7551,7 +7652,7 @@ def node_js_runtime_arg():
     configured = os.environ.get("CODEX_CONTROL_NODE_RUNTIME", "")
     candidates = [
         configured,
-        r"C:\Users\Randy\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe",
+        str(Path.home() / ".cache" / "codex-runtimes" / "codex-primary-runtime" / "dependencies" / "node" / "bin" / "node.exe"),
         shutil.which("node"),
         shutil.which("node.exe"),
     ]

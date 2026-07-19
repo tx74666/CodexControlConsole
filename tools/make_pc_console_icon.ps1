@@ -167,7 +167,7 @@ $sizes = @(256, 128, 64, 48, 32, 16)
 $images = @()
 foreach ($size in $sizes) {
   $bitmap = Draw-Icon $size
-  $images += [pscustomobject]@{ Size = $size; Bytes = Get-PngBytes $bitmap }
+  $images += [pscustomobject]@{ Size = $size; Bytes = [byte[]](Get-PngBytes $bitmap) }
   $bitmap.Dispose()
 }
 
@@ -192,7 +192,8 @@ foreach ($image in $images) {
 }
 
 foreach ($image in $images) {
-  $writer.Write($image.Bytes)
+  $bytes = [byte[]]$image.Bytes
+  $writer.Write($bytes, 0, $bytes.Length)
 }
 
 $writer.Close()
