@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.5.7"
+  #define AppVersion "0.5.8"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\build\console-installer\dist\Codex Console"
@@ -51,16 +51,21 @@ Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+Type: files; Name: "{autodesktop}\Codex Console.lnk"
+Type: files; Name: "{group}\Codex Console.lnk"
+
 [Icons]
-Name: "{group}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\codex-resource-icon.ico"; IconIndex: 0
+Name: "{group}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Codex Console.exe"; IconIndex: 0
 Name: "{group}\Uninstall Codex Console"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\_internal\codex-resource-icon.ico"; IconIndex: 0
+Name: "{autodesktop}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Codex Console.exe"; IconIndex: 0
 
 [Registry]
 Root: HKCU; Subkey: "Software\Codex\Codex Console"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Codex\Codex Console"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"
 
 [Run]
+Filename: "{sys}\ie4uinit.exe"; Parameters: "-show"; Flags: runhidden waituntilterminated skipifdoesntexist
 Filename: "{app}\Codex Console.exe"; Description: "{cm:LaunchProgram,Codex Console}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]

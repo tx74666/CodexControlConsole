@@ -1,6 +1,7 @@
 import argparse
 import json
 import struct
+import wave
 from pathlib import Path
 
 
@@ -12,6 +13,11 @@ PUBLIC_WALLPAPERS = {
     "quiet-forest-aerial.jpg",
     "snow-water-mountains.jpg",
     "soft-mountain-sun.jpg",
+}
+PUBLIC_MUSIC = {
+    "Codex - Glass Horizon.wav",
+    "Codex - Night Workspace.wav",
+    "Codex - Quiet Circuit.wav",
 }
 
 
@@ -55,9 +61,11 @@ def main():
     require(desktop_line, "desktop shortcut is missing from Setup")
     require("Tasks:" not in desktop_line, "desktop shortcut is optional instead of guaranteed")
     require(
-        'IconFilename: "{app}\\_internal\\codex-resource-icon.ico"' in desktop_line,
-        "shortcut icon is not pinned to the classic Codex icon",
+        'IconFilename: "{app}\\Codex Console.exe"' in desktop_line,
+        "shortcut icon is not pinned to the installed executable",
     )
+    require('Type: files; Name: "{autodesktop}\\Codex Console.lnk"' in installer, "old desktop shortcut is not repaired")
+    require('Filename: "{sys}\\ie4uinit.exe"; Parameters: "-show"' in installer, "Windows icon cache is not refreshed")
     require('Name: "{group}\\Uninstall Codex Console"; Filename: "{uninstallexe}"' in installer, "Start menu uninstaller is missing")
     require('#define UserDataDir "{localappdata}\\CodexControlConsole"' in installer, "default Console data directory is not device-local")
     require('Type: filesandordirs; Name: "{#UserDataDir}"' in installer, "local Console data is not removed on uninstall")
@@ -83,13 +91,28 @@ def main():
         f"public wallpapers do not match the release allowlist: {sorted(wallpaper_names)}",
     )
 
-    personal_extensions = {".mp3", ".wav", ".flac", ".m4a", ".blend"}
+    audio_extensions = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus"}
+    music = [
+        path
+        for path in app_dir.rglob("*")
+        if path.is_file() and "music" in path.parts and path.suffix.lower() in audio_extensions
+    ]
+    music_names = {path.name for path in music}
+    require(music_names == PUBLIC_MUSIC, f"public music does not match the release allowlist: {sorted(music_names)}")
+    for path in music:
+        with wave.open(str(path), "rb") as audio:
+            duration = audio.getnframes() / max(audio.getframerate(), 1)
+            require(audio.getnchannels() == 2, f"starter track is not stereo: {path.name}")
+            require(audio.getsampwidth() == 2, f"starter track is not 16-bit PCM: {path.name}")
+            require(duration >= 20, f"starter track is too short: {path.name}")
+
+    personal_extensions = {".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".blend"}
     personal_files = [path for path in app_dir.rglob("*") if path.is_file() and path.suffix.lower() in personal_extensions]
     require(not personal_files, f"personal media entered the public package: {personal_files[:3]}")
     require(not list(app_dir.rglob("feedback-admin.json")), "feedback administrator credentials entered the package")
     require(not list(app_dir.rglob("desktop-layout-*.json")), "a device desktop layout entered the package")
 
-    print(f"PASS Console package resources ({len(wallpapers)} wallpapers)")
+    print(f"PASS Console package resources ({len(wallpapers)} wallpapers, {len(music)} starter tracks)")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ on:
       version:
         description: Release version, for example v0.4.0
         required: true
-        default: v0.5.7
+        default: v0.5.8
   push:
     tags:
       - "v*"
@@ -50,6 +50,7 @@ jobs:
           python tools/check-feedback.py
           python tools/check-console-update.py
           python tools/check-clean-uninstall.py
+          python tools/check-wallpaper-style.py
           node --test services/feedback-relay/test/feedback.test.js
 
       - name: Install Inno Setup 7 x64
@@ -75,7 +76,9 @@ jobs:
 
       - name: Verify packaged resources and shortcuts
         shell: pwsh
-        run: python tools/check-package-resources.py
+        run: |
+          python tools/check-package-resources.py
+          python tools/check-clean-install-media.py
 
       - name: Sign Setup with Microsoft Artifact Signing
         if: ${{ vars.ARTIFACT_SIGNING_ENDPOINT != '' }}

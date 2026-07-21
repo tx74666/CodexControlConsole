@@ -115,6 +115,41 @@ def directory_has_media(path, extensions):
         return False
 
 
+def same_directory(left, right):
+    try:
+        return Path(left).resolve() == Path(right).resolve()
+    except OSError:
+        return False
+
+
+def seed_packaged_media(source, target, extensions):
+    source = Path(source)
+    target = Path(target)
+    marker = target / ".codex-media-migrated"
+    try:
+        seeded_version = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        seeded_version = ""
+    if seeded_version == APP_VERSION:
+        return
+
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        if source.is_dir() and not same_directory(source, target):
+            for item in source.rglob("*"):
+                if item.is_symlink() or not item.is_file() or item.suffix.lower() not in extensions:
+                    continue
+                relative = item.relative_to(source)
+                destination = target / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if not destination.exists():
+                    shutil.copy2(item, destination)
+        marker.write_text(APP_VERSION + "\n", encoding="utf-8")
+    except OSError:
+        # Leave the old marker in place so the next launch retries the repair.
+        return
+
+
 def migrate_legacy_user_cache():
     legacy_cache = APP_DIR / "cache"
     marker = USER_DATA_DIR / ".cache-migrated-v0.3"
@@ -166,6 +201,7 @@ def media_directory(name, extensions, legacy_candidates=()):
     if not APP_USES_LOCAL_DATA:
         return legacy
 
+    target = USER_DATA_DIR / name
     media_config = read_media_config()
     saved = str(media_config.get(name) or "").strip()
     if saved:
@@ -177,25 +213,11 @@ def media_directory(name, extensions, legacy_candidates=()):
             for candidate in legacy_candidates
         )
         if saved_path.is_dir() and (saved_has_media or not legacy_has_media):
+            if same_directory(saved_path, target):
+                seed_packaged_media(legacy, target, extensions)
             return saved_path
 
-    target = USER_DATA_DIR / name
-    target.mkdir(parents=True, exist_ok=True)
-    marker = target / ".codex-media-migrated"
-    if not marker.exists():
-        try:
-            if legacy.is_dir() and legacy.resolve() != target.resolve():
-                for source in legacy.rglob("*"):
-                    if source.is_symlink() or not source.is_file() or source.suffix.lower() not in extensions:
-                        continue
-                    relative = source.relative_to(legacy)
-                    destination = target / relative
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    if not destination.exists():
-                        shutil.copy2(source, destination)
-            marker.write_text(APP_VERSION + "\n", encoding="utf-8")
-        except OSError:
-            pass
+    seed_packaged_media(legacy, target, extensions)
 
     if not directory_has_media(target, extensions):
         for candidate in legacy_candidates:
@@ -1476,6 +1498,76 @@ def unique_wallpaper_path(filename):
     return candidate
 
 
+WALLPAPER_STYLE_VALUES = {
+    "center": ("0", "0", 0),
+    "tile": ("0", "1", 1),
+    "stretch": ("2", "0", 2),
+    "fit": ("6", "0", 3),
+    "fill": ("10", "0", 4),
+    "span": ("22", "0", 5),
+}
+
+
+def get_windows_wallpaper_style():
+    if sys.platform != "win32":
+        return {}
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop") as key:
+            wallpaper_style = str(winreg.QueryValueEx(key, "WallpaperStyle")[0])
+            tile_wallpaper = str(winreg.QueryValueEx(key, "TileWallpaper")[0])
+    except OSError:
+        return {}
+    name = next(
+        (
+            style_name
+            for style_name, values in WALLPAPER_STYLE_VALUES.items()
+            if values[:2] == (wallpaper_style, tile_wallpaper)
+        ),
+        "",
+    )
+    return {
+        "name": name,
+        "wallpaperStyle": wallpaper_style,
+        "tileWallpaper": tile_wallpaper,
+    }
+
+
+def set_windows_wallpaper_style(style):
+    if sys.platform != "win32" or not style:
+        return None
+    import winreg
+
+    if isinstance(style, dict):
+        name = str(style.get("name") or "").strip().lower()
+        values = WALLPAPER_STYLE_VALUES.get(name)
+        wallpaper_style = str(style.get("wallpaperStyle") or "")
+        tile_wallpaper = str(style.get("tileWallpaper") or "")
+        if values:
+            wallpaper_style, tile_wallpaper, position = values
+        else:
+            position = None
+    else:
+        name = str(style).strip().lower()
+        values = WALLPAPER_STYLE_VALUES.get(name)
+        if not values:
+            raise ValueError("unsupported wallpaper display style")
+        wallpaper_style, tile_wallpaper, position = values
+
+    if wallpaper_style == "" or tile_wallpaper == "":
+        return None
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        r"Control Panel\Desktop",
+        0,
+        winreg.KEY_SET_VALUE,
+    ) as key:
+        winreg.SetValueEx(key, "WallpaperStyle", 0, winreg.REG_SZ, wallpaper_style)
+        winreg.SetValueEx(key, "TileWallpaper", 0, winreg.REG_SZ, tile_wallpaper)
+    return position
+
+
 def get_current_wallpaper():
     if sys.platform != "win32":
         return ""
@@ -1513,6 +1605,7 @@ def write_original_wallpaper_record(path, source="auto"):
         "path": str(path),
         "backupPath": backup_path,
         "source": source,
+        "style": get_windows_wallpaper_style(),
         "savedAt": datetime.now(timezone.utc).isoformat(),
     }
     ORIGINAL_WALLPAPER_RECORD.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1529,6 +1622,7 @@ def original_wallpaper_state():
         "available": available,
         "path": path if available else "",
         "backupPath": backup_path if available else "",
+        "style": record.get("style") if isinstance(record.get("style"), dict) else {},
         "savedAt": record.get("savedAt", "") if available else "",
     }
 
@@ -1536,6 +1630,14 @@ def original_wallpaper_state():
 def capture_original_wallpaper(force=False):
     existing = original_wallpaper_state()
     if existing["saved"] and not force:
+        if not existing.get("style"):
+            record = read_original_wallpaper_record()
+            record["style"] = get_windows_wallpaper_style()
+            ORIGINAL_WALLPAPER_RECORD.write_text(
+                json.dumps(record, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            existing = original_wallpaper_state()
         return {"ok": True, "original": existing, "changed": False}
 
     current = get_current_wallpaper()
@@ -1545,7 +1647,7 @@ def capture_original_wallpaper(force=False):
     return {"ok": True, "original": original_wallpaper_state(), "changed": True, "record": record}
 
 
-def set_windows_wallpaper(path):
+def set_windows_wallpaper(path, style=None):
     if sys.platform != "win32":
         raise ValueError("wallpaper switching is only available on Windows")
 
@@ -1580,6 +1682,8 @@ def set_windows_wallpaper(path):
 
     def format_hresult(result):
         return f"0x{ctypes.c_ulong(result).value:08X}"
+
+    position = set_windows_wallpaper_style(style)
 
     def set_desktop_wallpaper_com(target):
         CLSID_DesktopWallpaper = GUID("C2CF3110-460E-4FC1-B9D0-8A1C0C9CC4BD")
@@ -1619,6 +1723,11 @@ def set_windows_wallpaper(path):
                 raise RuntimeError(f"Desktop wallpaper COM create failed: {format_hresult(result)}")
 
             vtable = ctypes.cast(instance, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            if position is not None:
+                set_position = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_int)(vtable[10])
+                result = set_position(instance, position)
+                if hresult_failed(result):
+                    raise RuntimeError(f"Desktop wallpaper position failed: {format_hresult(result)}")
             set_wallpaper = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p)(vtable[3])
             result = set_wallpaper(instance, None, str(target))
             if hresult_failed(result):
@@ -1719,12 +1828,13 @@ def write_wallpaper_order(payload):
 def apply_wallpaper(relative_path):
     path = wallpaper_path_from_relative(relative_path)
     capture_original_wallpaper(force=False)
-    set_windows_wallpaper(path)
+    set_windows_wallpaper(path, style="fit")
     return {
         "ok": True,
         "path": str(path),
         "current": get_current_wallpaper(),
         "original": original_wallpaper_state(),
+        "displayStyle": "fit",
     }
 
 
@@ -1765,7 +1875,7 @@ def restore_original_wallpaper():
     if not original["available"]:
         raise ValueError("original wallpaper file is no longer available")
     restore_path = original["backupPath"] if original["backupPath"] and Path(original["backupPath"]).exists() else original["path"]
-    set_windows_wallpaper(restore_path)
+    set_windows_wallpaper(restore_path, style=original.get("style") or None)
     return {"ok": True, "path": restore_path, "original": original}
 
 
