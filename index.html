@@ -50,7 +50,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-661">
+  <link rel="stylesheet" href="styles.css?v=control-console-664">
 </head>
 <body>
   <main class="app-shell">
@@ -162,7 +162,7 @@
         <div class="github-download-actions" aria-label="Product downloads">
           <a id="updateProductConsole" class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="true" data-update-product="console">
             <span>Codex Console</span>
-            <small id="updateProductConsoleBadge" class="update-product-badge">v0.6.0</small>
+            <small id="updateProductConsoleBadge" class="update-product-badge">v0.6.1</small>
           </a>
           <a id="updateProductWorld" class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="false" data-update-product="world">
             <span>Codex World</span>
@@ -172,7 +172,7 @@
 
         <div class="console-update-bar">
           <div class="console-update-copy">
-            <span id="consoleUpdateCurrent" class="workspace-pill">v0.6.0</span>
+            <span id="consoleUpdateCurrent" class="workspace-pill">v0.6.1</span>
             <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
             <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
           </div>
@@ -212,6 +212,29 @@
         </div>
         <p id="desktopLayoutPath" class="desktop-layout-path tutorial-only"></p>
         <p class="desktop-layout-guide tutorial-only" data-i18n="desktopLayoutGuide">恢复后会自动检查重叠、缺失和位置偏差。保存当前版会先备份原 JSON；方案与备份不会上传。</p>
+      </article>
+
+      <article class="panel builtin-media-panel" aria-labelledby="builtinMediaTitle">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Resources</div>
+            <h2 id="builtinMediaTitle" data-i18n="builtinMediaTitle">内置资源</h2>
+          </div>
+          <span id="builtinMediaStatus" class="builtin-media-notice" role="status" aria-live="polite"></span>
+        </div>
+
+        <div class="builtin-media-list">
+          <div class="builtin-media-row">
+            <strong data-i18n="builtinMusicLabel">内置音乐</strong>
+            <span id="builtinMediaMusicCount" class="workspace-pill">--/--</span>
+            <button id="builtinMediaMusicSync" class="ghost-button" type="button" data-i18n="builtinMediaSync">同步</button>
+          </div>
+          <div class="builtin-media-row">
+            <strong data-i18n="builtinWallpapersLabel">内置桌布</strong>
+            <span id="builtinMediaWallpapersCount" class="workspace-pill">--/--</span>
+            <button id="builtinMediaWallpapersSync" class="ghost-button" type="button" data-i18n="builtinMediaSync">同步</button>
+          </div>
+        </div>
       </article>
 
       <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
@@ -995,6 +1018,6 @@
   <input id="steamworkAssetFileInput" class="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
   <audio id="audioPlayer" preload="metadata"></audio>
 
-<script src="app.js?v=control-console-661"></script>
+<script src="app.js?v=control-console-664"></script>
 </body>
 </html>

@@ -224,6 +224,16 @@ const i18n = {
     desktopLayoutConfirmRestore: name => `\u4f7f\u7528\u201c${name}\u201d\u6062\u590d\u684c\u9762\u56fe\u6807\u4f4d\u7f6e\uff1f`,
     desktopLayoutConfirmSave: name => `\u5148\u5907\u4efd\u539f JSON\uff0c\u518d\u7528\u5f53\u524d\u684c\u9762\u8986\u76d6\u201c${name}\u201d\uff1f`,
     desktopLayoutGuide: "\u6062\u590d\u540e\u4f1a\u81ea\u52a8\u68c0\u67e5\u91cd\u53e0\u3001\u7f3a\u5931\u548c\u4f4d\u7f6e\u504f\u5dee\u3002\u4fdd\u5b58\u5f53\u524d\u7248\u4f1a\u5148\u5907\u4efd\u539f JSON\uff1b\u65b9\u6848\u4e0e\u5907\u4efd\u4e0d\u4f1a\u4e0a\u4f20\u3002",
+    builtinMediaTitle: "\u5185\u7f6e\u8d44\u6e90",
+    builtinMusicLabel: "\u5185\u7f6e\u97f3\u4e50",
+    builtinWallpapersLabel: "\u5185\u7f6e\u684c\u5e03",
+    builtinMediaSync: "\u540c\u6b65",
+    builtinMediaLoading: "\u6b63\u5728\u68c0\u67e5",
+    builtinMediaSyncing: "\u6b63\u5728\u540c\u6b65",
+    builtinMediaReady: "\u5df2\u5b8c\u6574",
+    builtinMediaUnavailable: "\u672a\u627e\u5230\u5185\u7f6e\u8d44\u6e90",
+    builtinMediaAdded: count => `\u5df2\u8865\u5145 ${count} \u9879`,
+    builtinMediaFailed: message => `\u540c\u6b65\u5931\u8d25\uff1a${message}`,
     feedbackTitle: "问题回报",
     feedbackCategoryLabel: "问题类型",
     feedbackCategoryBug: "错误",
@@ -941,6 +951,16 @@ const i18n = {
     desktopLayoutConfirmRestore: name => `Restore desktop icon positions from “${name}”?`,
     desktopLayoutConfirmSave: name => `Back up the JSON, then replace “${name}” with the current desktop?`,
     desktopLayoutGuide: "Restore checks overlaps, missing icons, and position drift. Save current always backs up the existing JSON first. Plans and backups are never uploaded.",
+    builtinMediaTitle: "Built-in Resources",
+    builtinMusicLabel: "Built-in Music",
+    builtinWallpapersLabel: "Built-in Wallpapers",
+    builtinMediaSync: "Sync",
+    builtinMediaLoading: "Checking",
+    builtinMediaSyncing: "Syncing",
+    builtinMediaReady: "Complete",
+    builtinMediaUnavailable: "Built-in resources unavailable",
+    builtinMediaAdded: count => `Added ${count}`,
+    builtinMediaFailed: message => `Sync failed: ${message}`,
     feedbackTitle: "Report a Problem",
     feedbackCategoryLabel: "Problem type",
     feedbackCategoryBug: "Bug",
@@ -1682,6 +1702,11 @@ const els = {
   desktopLayoutMeta: document.getElementById("desktopLayoutMeta"),
   desktopLayoutStatus: document.getElementById("desktopLayoutStatus"),
   desktopLayoutPath: document.getElementById("desktopLayoutPath"),
+  builtinMediaStatus: document.getElementById("builtinMediaStatus"),
+  builtinMediaMusicCount: document.getElementById("builtinMediaMusicCount"),
+  builtinMediaWallpapersCount: document.getElementById("builtinMediaWallpapersCount"),
+  builtinMediaMusicSync: document.getElementById("builtinMediaMusicSync"),
+  builtinMediaWallpapersSync: document.getElementById("builtinMediaWallpapersSync"),
   localTime: document.getElementById("localTime"),
   languageToggle: document.getElementById("languageToggle"),
   themeToggle: document.getElementById("themeToggle"),
@@ -1998,6 +2023,11 @@ let desktopLayoutBusy = false;
 let desktopLayoutNotice = "";
 let desktopLayoutNoticeTone = "";
 let desktopLayoutDetail = "";
+let builtinMediaState = null;
+let builtinMediaLoading = false;
+let builtinMediaBusy = "";
+let builtinMediaNotice = "";
+let builtinMediaNoticeTone = "";
 let feedbackConfig = null;
 let feedbackConfigBusy = false;
 let feedbackBusy = false;
@@ -2283,6 +2313,7 @@ async function loadModuleData(id) {
         await loadProductUpdateStatuses({ check: true, quiet: true });
       }
       if (els.desktopLayoutPlan && !desktopLayoutState) await loadDesktopLayout({ quiet: true });
+      if (els.builtinMediaMusicSync && !builtinMediaState) await loadBuiltinMedia({ quiet: true });
       if (els.feedbackForm && !feedbackConfig) await loadFeedbackConfig({ quiet: true });
       if (hasMaterialWorkspace && downloadIntakeEnabled) await loadMaterialCandidates();
       break;
@@ -3805,7 +3836,7 @@ function displayTrackName(name) {
   const existingA8 = cleanName.match(/^a8\s*-\s*(.*)$/i);
   if (existingA8) {
     const suffix = existingA8[1].trim().replace(/^[\s-]+|[\s-]+$/g, "");
-    return suffix ? `A8 - ${suffix}` : "A8";
+    return suffix || "A8";
   }
 
   if (!/(asphalt\s*8|airborne)/i.test(cleanName)) return cleanName;
@@ -3821,7 +3852,7 @@ function displayTrackName(name) {
     .trim()
     .replace(/^[\s-]+|[\s-]+$/g, "");
 
-  return `A8 - ${song || cleanName}`;
+  return song || cleanName;
 }
 
 function trackIdentityKey(name) {
@@ -4003,6 +4034,7 @@ function applyLanguage() {
     renderGithubDownloads();
     renderConsoleUpdate();
     renderDesktopLayout();
+    renderBuiltinMedia();
     renderFeedback();
     renderWorkspaceTodos();
   }
@@ -11097,6 +11129,96 @@ async function handleProductUpdateTop() {
   activateModule("workspace", true);
 }
 
+function renderBuiltinMedia() {
+  if (!els.builtinMediaMusicSync) return;
+  const music = builtinMediaState?.music || {};
+  const wallpapers = builtinMediaState?.wallpapers || {};
+  const countText = item => Number(item.available) > 0
+    ? `${Number(item.present) || 0}/${Number(item.available) || 0}`
+    : "--/--";
+  if (els.builtinMediaMusicCount) els.builtinMediaMusicCount.textContent = countText(music);
+  if (els.builtinMediaWallpapersCount) els.builtinMediaWallpapersCount.textContent = countText(wallpapers);
+
+  for (const [kind, button] of [
+    ["music", els.builtinMediaMusicSync],
+    ["wallpapers", els.builtinMediaWallpapersSync]
+  ]) {
+    if (!button) continue;
+    button.disabled = Boolean(builtinMediaBusy || builtinMediaLoading);
+    button.textContent = builtinMediaBusy === kind ? text("builtinMediaSyncing") : text("builtinMediaSync");
+  }
+
+  if (!els.builtinMediaStatus) return;
+  let notice = builtinMediaNotice;
+  let tone = builtinMediaNoticeTone;
+  if (!notice && builtinMediaBusy) {
+    notice = text("builtinMediaSyncing");
+  } else if (!notice && (builtinMediaLoading || !builtinMediaState)) {
+    notice = text("builtinMediaLoading");
+  } else if (!notice && Number(music.available) + Number(wallpapers.available) === 0) {
+    notice = text("builtinMediaUnavailable");
+    tone = "warning";
+  } else if (!notice && Number(music.missing) + Number(wallpapers.missing) === 0) {
+    notice = text("builtinMediaReady");
+    tone = "success";
+  }
+  els.builtinMediaStatus.textContent = notice;
+  els.builtinMediaStatus.classList.toggle("success", tone === "success");
+  els.builtinMediaStatus.classList.toggle("warning", tone === "warning");
+}
+
+async function loadBuiltinMedia(options = {}) {
+  if (!els.builtinMediaMusicSync || builtinMediaBusy || builtinMediaLoading) return;
+  builtinMediaLoading = true;
+  if (!options.quiet) {
+    builtinMediaNotice = text("builtinMediaLoading");
+    builtinMediaNoticeTone = "";
+  }
+  renderBuiltinMedia();
+  try {
+    const response = await fetch("/api/media/builtins", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    builtinMediaState = payload;
+    builtinMediaNotice = "";
+    builtinMediaNoticeTone = "";
+  } catch (error) {
+    builtinMediaNotice = text("builtinMediaFailed", error.message);
+    builtinMediaNoticeTone = "warning";
+  } finally {
+    builtinMediaLoading = false;
+  }
+  renderBuiltinMedia();
+}
+
+async function syncBuiltinMedia(kind) {
+  if (builtinMediaBusy || builtinMediaLoading || !["music", "wallpapers"].includes(kind)) return;
+  builtinMediaBusy = kind;
+  builtinMediaNotice = "";
+  builtinMediaNoticeTone = "";
+  renderBuiltinMedia();
+  try {
+    const payload = await postJson("/api/media/builtins/sync", { kind }, { timeoutMs: 180000 });
+    builtinMediaState = payload;
+    const added = Number(payload.added || 0) + Number(payload.lyricsAdded || 0);
+    if (Array.isArray(payload.errors) && payload.errors.length) {
+      builtinMediaNotice = text("builtinMediaFailed", payload.errors[0]);
+      builtinMediaNoticeTone = "warning";
+    } else {
+      builtinMediaNotice = added ? text("builtinMediaAdded", added) : text("builtinMediaReady");
+      builtinMediaNoticeTone = "success";
+    }
+    if (kind === "music" && hasMusic) await loadMusic();
+    if (kind === "wallpapers" && hasWallpaper) await loadWallpapers();
+  } catch (error) {
+    builtinMediaNotice = text("builtinMediaFailed", error.message);
+    builtinMediaNoticeTone = "warning";
+  } finally {
+    builtinMediaBusy = "";
+    renderBuiltinMedia();
+  }
+}
+
 function selectedDesktopLayoutPlan() {
   const plans = Array.isArray(desktopLayoutState?.plans) ? desktopLayoutState.plans : [];
   const selectedId = els.desktopLayoutPlan?.value || desktopLayoutState?.selectedPlan || "";
@@ -17402,6 +17524,12 @@ if (els.desktopLayoutImport) {
 if (els.desktopLayoutFileInput) {
   els.desktopLayoutFileInput.addEventListener("change", event => importDesktopLayouts(event.target.files));
 }
+if (els.builtinMediaMusicSync) {
+  els.builtinMediaMusicSync.addEventListener("click", () => syncBuiltinMedia("music"));
+}
+if (els.builtinMediaWallpapersSync) {
+  els.builtinMediaWallpapersSync.addEventListener("click", () => syncBuiltinMedia("wallpapers"));
+}
 if (els.feedbackForm) {
   els.feedbackForm.addEventListener("submit", submitFeedback);
 }
@@ -17501,5 +17629,6 @@ runtimeActivityReady = true;
 syncRuntimeActivity({ resume: true });
 loadProductUpdateStatuses({ check: true, quiet: true });
 loadDesktopLayout({ quiet: true });
+loadBuiltinMedia({ quiet: true });
 loadFeedbackConfig({ quiet: true });
 scheduleClockTick();

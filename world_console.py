@@ -352,6 +352,16 @@ STARTUP_SCRIPT_NAME = "Codex-Control-Hotkey.vbs"
 HOTKEY_LAUNCHER = APP_DIR / "Start-WorldConsole-Hotkey.vbs"
 WALLPAPER_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 MUSIC_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
+BUILTIN_WALLPAPER_NAMES = (
+    "blue-lake-boats.jpg",
+    "calm-mountain-lake.jpg",
+    "dragon-maid.jpg",
+    "quiet-forest-aerial.jpg",
+    "snow-water-mountains.jpg",
+    "soft-mountain-sun.jpg",
+    "wandering-witch.jpg",
+)
+BUILTIN_MEDIA_SYNC_LOCK = threading.Lock()
 LYRICS_EXTENSIONS = {".lrc", ".txt"}
 LYRICS_AUTO_DOWNLOAD = os.environ.get("CODEX_CONTROL_AUTO_LYRICS", "1").strip().lower() not in {"0", "false", "no", "off"}
 LYRICS_USER_AGENT = os.environ.get(
@@ -787,6 +797,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/media/builtins":
+            if not self.require_local_request():
+                return
+            self.send_json(builtin_media_status())
+            return
         if parsed.path.startswith("/api/wallpapers"):
             wallpapers = list_wallpapers()
             self.send_json({
@@ -1027,6 +1042,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             payload = self.read_json_body(
                 MAX_FEEDBACK_REQUEST_BYTES if parsed.path == "/api/feedback/submit" else None
             )
+            if parsed.path == "/api/media/builtins/sync":
+                if not self.require_local_request():
+                    return
+                self.send_json(sync_builtin_media(payload.get("kind", "all")))
+                return
             if parsed.path == "/api/wallpapers/apply":
                 self.send_json(apply_wallpaper(payload.get("path", "")))
                 return
@@ -7487,7 +7507,7 @@ def display_music_name(stem):
 
     if re.match(r"(?i)^a8\s*-\s*", name):
         suffix = re.sub(r"(?i)^a8\s*-\s*", "", name).strip(" -")
-        return f"A8 - {suffix}" if suffix else "A8"
+        return suffix or "A8"
 
     if "asphalt 8" not in lower and "airborne" not in lower:
         return name
@@ -7499,7 +7519,7 @@ def display_music_name(stem):
     song = re.split(r"\s+-\s+", song, maxsplit=1)[0].strip(" -")
     song = re.sub(r"(?i)\b(?:official|video|audio|ost|soundtrack)\b.*$", "", song).strip(" -")
     song = re.sub(r"\s+", " ", song).strip(" -")
-    return f"A8 - {song or name}"
+    return song or name
 
 
 def music_name_key(name):
@@ -7509,6 +7529,178 @@ def music_name_key(name):
 
 def music_path_name_key(path):
     return music_name_key(display_music_name(path.stem))
+
+
+def builtin_music_source_directory():
+    for candidate in (APP_DIR / "public-music", APP_DIR / "music"):
+        if candidate.is_dir() and directory_has_media(candidate, MUSIC_EXTENSIONS):
+            return candidate
+    return APP_DIR / "music"
+
+
+def builtin_music_files(source=None):
+    source = Path(source or builtin_music_source_directory())
+    if not source.is_dir():
+        return []
+    return sorted(
+        (
+            path
+            for path in source.rglob("*")
+            if path.is_file() and not path.is_symlink() and path.suffix.lower() in MUSIC_EXTENSIONS
+        ),
+        key=lambda path: path.name.casefold(),
+    )
+
+
+def builtin_wallpaper_files(source=None):
+    source = Path(source or (APP_DIR / "wallpapers"))
+    if not source.is_dir():
+        return []
+    files_by_name = {
+        path.name.casefold(): path
+        for path in source.iterdir()
+        if path.is_file() and not path.is_symlink() and path.suffix.lower() in WALLPAPER_EXTENSIONS
+    }
+    return [
+        files_by_name[name.casefold()]
+        for name in BUILTIN_WALLPAPER_NAMES
+        if name.casefold() in files_by_name
+    ]
+
+
+def existing_music_by_name_key(target=None):
+    target = Path(target or MUSIC_DIR)
+    library_dir = (target / "libraries").resolve()
+    records = {}
+    if not target.is_dir():
+        return records
+    for path in target.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in MUSIC_EXTENSIONS:
+            continue
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if is_path_inside(resolved, library_dir):
+            continue
+        key = music_path_name_key(path)
+        if key and key not in records:
+            records[key] = path
+    return records
+
+
+def builtin_media_status(music_source=None, wallpaper_source=None, music_target=None, wallpaper_target=None):
+    music_target = Path(music_target or MUSIC_DIR)
+    wallpaper_target = Path(wallpaper_target or WALLPAPER_DIR)
+    music_sources = builtin_music_files(music_source)
+    wallpaper_sources = builtin_wallpaper_files(wallpaper_source)
+    existing_music = existing_music_by_name_key(music_target)
+    music_keys = {music_path_name_key(path) for path in music_sources if music_path_name_key(path)}
+    wallpaper_names = {
+        path.name.casefold()
+        for path in wallpaper_target.iterdir()
+        if wallpaper_target.is_dir() and path.is_file() and path.suffix.lower() in WALLPAPER_EXTENSIONS
+    } if wallpaper_target.is_dir() else set()
+    present_music = sum(1 for key in music_keys if key in existing_music)
+    present_wallpapers = sum(1 for path in wallpaper_sources if path.name.casefold() in wallpaper_names)
+    return {
+        "ok": True,
+        "music": {
+            "available": len(music_keys),
+            "present": present_music,
+            "missing": max(0, len(music_keys) - present_music),
+            "directory": str(music_target),
+        },
+        "wallpapers": {
+            "available": len(wallpaper_sources),
+            "present": present_wallpapers,
+            "missing": max(0, len(wallpaper_sources) - present_wallpapers),
+            "directory": str(wallpaper_target),
+        },
+    }
+
+
+def sync_builtin_music(source=None, target=None):
+    target = Path(target or MUSIC_DIR)
+    target.mkdir(parents=True, exist_ok=True)
+    existing = existing_music_by_name_key(target)
+    added = []
+    lyrics_added = []
+    errors = []
+    for source_path in builtin_music_files(source):
+        key = music_path_name_key(source_path)
+        if not key:
+            continue
+        target_path = existing.get(key)
+        if target_path is None:
+            target_path = target / source_path.name
+            try:
+                if target_path.exists():
+                    raise OSError(f"Target already exists: {target_path.name}")
+                shutil.copy2(source_path, target_path)
+                existing[key] = target_path
+                added.append(display_music_name(source_path.stem))
+            except OSError as error:
+                errors.append(str(error))
+                continue
+
+        source_lyrics = source_path.with_suffix(".lrc")
+        target_lyrics = target_path.with_suffix(".lrc")
+        if source_lyrics.is_file() and not target_lyrics.exists():
+            try:
+                shutil.copy2(source_lyrics, target_lyrics)
+                lyrics_added.append(target_lyrics.name)
+            except OSError as error:
+                errors.append(str(error))
+    return {"added": added, "lyricsAdded": lyrics_added, "errors": errors}
+
+
+def sync_builtin_wallpapers(source=None, target=None):
+    target = Path(target or WALLPAPER_DIR)
+    target.mkdir(parents=True, exist_ok=True)
+    existing_names = {
+        path.name.casefold()
+        for path in target.iterdir()
+        if path.is_file() and path.suffix.lower() in WALLPAPER_EXTENSIONS
+    }
+    added = []
+    errors = []
+    for source_path in builtin_wallpaper_files(source):
+        if source_path.name.casefold() in existing_names:
+            continue
+        target_path = target / source_path.name
+        try:
+            shutil.copy2(source_path, target_path)
+            existing_names.add(source_path.name.casefold())
+            added.append(source_path.name)
+        except OSError as error:
+            errors.append(str(error))
+    return {"added": added, "errors": errors}
+
+
+def sync_builtin_media(kind, music_source=None, wallpaper_source=None, music_target=None, wallpaper_target=None):
+    clean_kind = str(kind or "all").strip().lower()
+    if clean_kind not in {"all", "music", "wallpapers"}:
+        raise ValueError("Unknown built-in media type.")
+    with BUILTIN_MEDIA_SYNC_LOCK:
+        changes = {"music": None, "wallpapers": None}
+        if clean_kind in {"all", "music"}:
+            changes["music"] = sync_builtin_music(music_source, music_target)
+        if clean_kind in {"all", "wallpapers"}:
+            changes["wallpapers"] = sync_builtin_wallpapers(wallpaper_source, wallpaper_target)
+        status = builtin_media_status(music_source, wallpaper_source, music_target, wallpaper_target)
+    result = dict(status)
+    result["kind"] = clean_kind
+    result["changes"] = changes
+    result["added"] = sum(len(item.get("added") or []) for item in changes.values() if item)
+    result["lyricsAdded"] = len((changes["music"] or {}).get("lyricsAdded") or [])
+    result["errors"] = [
+        message
+        for item in changes.values()
+        if item
+        for message in item.get("errors") or []
+    ]
+    return result
 
 
 def local_music_name_keys():

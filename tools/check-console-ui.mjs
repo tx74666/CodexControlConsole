@@ -53,7 +53,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.6.0", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.6.1", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -67,6 +67,10 @@ function staticChecks() {
   );
   assert(!/id="feedbackTop"/.test(consoleHtml), "feedback must stay inside the collaboration view");
   assert(/id="consoleUninstall"/.test(consoleHtml), "product uninstall control is missing");
+  assert(/id="builtinMediaMusicSync"/.test(consoleHtml), "built-in music sync control is missing");
+  assert(/id="builtinMediaWallpapersSync"/.test(consoleHtml), "built-in wallpaper sync control is missing");
+  const backendSource = readFileSync(join(projectRoot, "world_console.py"), "utf8");
+  assert(backendSource.includes('"/api/media/builtins/sync"'), "built-in media sync API is missing");
   return Array.from(versions)[0];
 }
 
@@ -897,6 +901,16 @@ async function runBrowserChecks(client) {
   assert(lazyState.wallpaperCards === 0, "wallpaper data loaded before the Wallpaper module was opened");
   assert(lazyState.steamRoot === "", "Steamwork data loaded before the Steamwork module was opened");
 
+  const cleanMusicTitles = await evaluate(client, `[
+    displayTrackName("Airborne"),
+    displayTrackName("A8 - Airborne"),
+    displayTrackName("Asphalt 8 Airborne - Airborne - Official Soundtrack")
+  ]`);
+  assert(
+    JSON.stringify(cleanMusicTitles) === JSON.stringify(["Airborne", "Airborne", "Airborne"]),
+    `legacy A8 branding remains in music titles: ${JSON.stringify(cleanMusicTitles)}`
+  );
+
   const helperBackground = await evaluate(client, `(() => {
     const style = getComputedStyle(document.body, '::before');
     return [style.position, style.width, style.height, style.backgroundImage, style.backgroundSize];
@@ -920,6 +934,11 @@ async function runBrowserChecks(client) {
     "Music did not load on first open",
     10000
   );
+  const musicCardTitles = await evaluate(client, `
+    Array.from(document.querySelectorAll('.music-dock .track-card .track-body strong'), node => node.textContent.trim())
+  `);
+  assert(musicCardTitles.includes("Airborne"), "Airborne card title is missing");
+  assert(!musicCardTitles.some(title => /^A8\s*-/i.test(title)), `legacy A8 card title remains: ${JSON.stringify(musicCardTitles)}`);
 
   await clickModule(client, "wallpaper");
   await waitForValue(

@@ -6,7 +6,7 @@ on:
       version:
         description: Release version, for example v0.4.0
         required: true
-        default: v0.6.0
+        default: v0.6.1
   push:
     tags:
       - "v*"
@@ -51,6 +51,7 @@ jobs:
           python tools/check-console-update.py
           python tools/check-clean-uninstall.py
           python tools/check-wallpaper-style.py
+          python tools/check-built-in-media-sync.py
           node --test services/feedback-relay/test/feedback.test.js
 
       - name: Install Inno Setup 7 x64
@@ -127,7 +128,7 @@ jobs:
 
             Download only **CodexControlConsole-Setup-x64.exe**.
 
-            This release includes all 15 built-in tracks, all 7 wallpapers, and repaired desktop shortcut icons.
+            This release includes all 15 built-in tracks, all 7 wallpapers, clean song titles, and non-destructive resource sync for missing built-in media.
 
             1. Double-click the downloaded Setup file.
             2. Choose **简体中文** or **English**.
