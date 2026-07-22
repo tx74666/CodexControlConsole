@@ -15,10 +15,12 @@ wallpapers/*
 !wallpapers/SOURCES.md
 !wallpapers/blue-lake-boats.jpg
 !wallpapers/calm-mountain-lake.jpg
+!wallpapers/dragon-maid.jpg
 !wallpapers/palm-sky-reflection.jpg
 !wallpapers/quiet-forest-aerial.jpg
 !wallpapers/snow-water-mountains.jpg
 !wallpapers/soft-mountain-sun.jpg
+!wallpapers/wandering-witch.jpg
 *.mp3
 *.wav
 *.m4a
@@ -26,6 +28,9 @@ wallpapers/*
 *.flac
 *.ogg
 *.opus
+!public-music/*.mp3
+!public-music/*.lrc
+!public-music/README.md
 
 # Release/build output
 build/

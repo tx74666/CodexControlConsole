@@ -122,6 +122,19 @@ def same_directory(left, right):
         return False
 
 
+RETIRED_PACKAGED_MEDIA = {
+    "music": {
+        "Codex - Glass Horizon.wav",
+        "Codex - Night Workspace.wav",
+        "Codex - Quiet Circuit.wav",
+    },
+    "wallpapers": {
+        "elaina-wandering-witch-online.jpg",
+        "kobayashi-dragon-maid-online.jpg",
+    },
+}
+
+
 def seed_packaged_media(source, target, extensions):
     source = Path(source)
     target = Path(target)
@@ -135,6 +148,10 @@ def seed_packaged_media(source, target, extensions):
 
     target.mkdir(parents=True, exist_ok=True)
     try:
+        for retired_name in RETIRED_PACKAGED_MEDIA.get(source.name.casefold(), set()):
+            retired_path = target / retired_name
+            if retired_path.is_file():
+                retired_path.unlink()
         if source.is_dir() and not same_directory(source, target):
             for item in source.rglob("*"):
                 if item.is_symlink() or not item.is_file() or item.suffix.lower() not in extensions:
@@ -1774,8 +1791,14 @@ def read_wallpaper_order():
 def wallpaper_record_from_path(path):
     stat = path.stat()
     rel = path.relative_to(WALLPAPER_DIR).as_posix()
+    display_names = {
+        "elaina-wandering-witch-online": "Wandering Witch",
+        "kobayashi-dragon-maid-online": "Dragon Maid",
+        "wandering-witch": "Wandering Witch",
+        "dragon-maid": "Dragon Maid",
+    }
     return {
-        "name": path.stem,
+        "name": display_names.get(path.stem.casefold(), path.stem),
         "path": rel,
         "url": "/wallpapers/" + urllib.parse.quote(rel),
         "size": stat.st_size,
@@ -7439,11 +7462,32 @@ def clean_music_stem(stem):
 
 def display_music_name(stem):
     name = clean_music_stem(stem)
+    lower = name.casefold()
+    title_overrides = (
+        ("around the world", "Around the World"),
+        ("fire inside", "Fire Inside"),
+        ("liquid roller", "Liquid Roller"),
+        ("outrun", "Outrun"),
+        ("redline", "Redline"),
+        ("dancin", "Dancin"),
+        ("airborne", "Airborne"),
+        ("toxic", "Toxic"),
+        ("get lucky", "Get Lucky"),
+        ("stasis", "Stasis"),
+        ("final step", "Final Step"),
+        ("never be alone", "Never Be Alone"),
+        ("never slow me down", "Never Slow Me Down"),
+        ("house of memories", "House of Memories"),
+        ("luminescence", "Luminescence"),
+    )
+    for fragment, title in title_overrides:
+        if fragment in lower:
+            return title
+
     if re.match(r"(?i)^a8\s*-\s*", name):
         suffix = re.sub(r"(?i)^a8\s*-\s*", "", name).strip(" -")
         return f"A8 - {suffix}" if suffix else "A8"
 
-    lower = name.lower()
     if "asphalt 8" not in lower and "airborne" not in lower:
         return name
 

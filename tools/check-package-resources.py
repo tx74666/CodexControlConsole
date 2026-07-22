@@ -1,7 +1,6 @@
 import argparse
 import json
 import struct
-import wave
 from pathlib import Path
 
 
@@ -9,15 +8,37 @@ ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_WALLPAPERS = {
     "blue-lake-boats.jpg",
     "calm-mountain-lake.jpg",
+    "dragon-maid.jpg",
     "palm-sky-reflection.jpg",
     "quiet-forest-aerial.jpg",
     "snow-water-mountains.jpg",
     "soft-mountain-sun.jpg",
+    "wandering-witch.jpg",
 }
 PUBLIC_MUSIC = {
-    "Codex - Glass Horizon.wav",
-    "Codex - Night Workspace.wav",
-    "Codex - Quiet Circuit.wav",
+    "Airborne.mp3",
+    "Around the World.mp3",
+    "Dancin.mp3",
+    "Final Step.mp3",
+    "Fire Inside.mp3",
+    "Get Lucky.mp3",
+    "House of Memories.mp3",
+    "Liquid Roller.mp3",
+    "Luminescence.mp3",
+    "Never Be Alone.mp3",
+    "Never Slow Me Down.mp3",
+    "Outrun.mp3",
+    "Redline.mp3",
+    "Stasis.mp3",
+    "Toxic.mp3",
+}
+PUBLIC_LYRICS = {
+    "Around the World.lrc",
+    "Dancin.lrc",
+    "Get Lucky.lrc",
+    "House of Memories.lrc",
+    "Never Be Alone.lrc",
+    "Toxic.lrc",
 }
 
 
@@ -66,6 +87,14 @@ def main():
     )
     require('Type: files; Name: "{autodesktop}\\Codex Console.lnk"' in installer, "old desktop shortcut is not repaired")
     require('Filename: "{sys}\\ie4uinit.exe"; Parameters: "-show"' in installer, "Windows icon cache is not refreshed")
+    require(
+        'Type: filesandordirs; Name: "{app}\\_internal\\music"' in installer,
+        "obsolete packaged music is not cleared during upgrade",
+    )
+    require(
+        'Type: filesandordirs; Name: "{app}\\_internal\\wallpapers"' in installer,
+        "obsolete packaged wallpapers are not cleared during upgrade",
+    )
     require('Name: "{group}\\Uninstall Codex Console"; Filename: "{uninstallexe}"' in installer, "Start menu uninstaller is missing")
     require('#define UserDataDir "{localappdata}\\CodexControlConsole"' in installer, "default Console data directory is not device-local")
     require('Type: filesandordirs; Name: "{#UserDataDir}"' in installer, "local Console data is not removed on uninstall")
@@ -100,19 +129,29 @@ def main():
     music_names = {path.name for path in music}
     require(music_names == PUBLIC_MUSIC, f"public music does not match the release allowlist: {sorted(music_names)}")
     for path in music:
-        with wave.open(str(path), "rb") as audio:
-            duration = audio.getnframes() / max(audio.getframerate(), 1)
-            require(audio.getnchannels() == 2, f"starter track is not stereo: {path.name}")
-            require(audio.getsampwidth() == 2, f"starter track is not 16-bit PCM: {path.name}")
-            require(duration >= 20, f"starter track is too short: {path.name}")
+        require(path.suffix.lower() == ".mp3", f"public track is not MP3: {path.name}")
+        require(path.stat().st_size > 1_000_000, f"public track is unexpectedly small: {path.name}")
+        require(" - " not in path.stem, f"public track still exposes an artist prefix: {path.name}")
+        metadata = path.read_bytes()[:1_048_576]
+        require(b"TPE1" not in metadata and b"TPE2" not in metadata, f"artist metadata remains in {path.name}")
+        require(b"APIC" not in metadata, f"embedded artwork remains in {path.name}")
 
-    personal_extensions = {".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".blend"}
+    lyrics = [
+        path
+        for path in app_dir.rglob("*.lrc")
+        if path.is_file() and "music" in path.parts
+    ]
+    require({path.name for path in lyrics} == PUBLIC_LYRICS, "packaged lyrics do not match the music set")
+
+    packaged_audio = [path for path in app_dir.rglob("*") if path.is_file() and path.suffix.lower() in audio_extensions]
+    require(set(packaged_audio) == set(music), "an audio file was packaged outside the public music directory")
+    personal_extensions = {".blend"}
     personal_files = [path for path in app_dir.rglob("*") if path.is_file() and path.suffix.lower() in personal_extensions]
     require(not personal_files, f"personal media entered the public package: {personal_files[:3]}")
     require(not list(app_dir.rglob("feedback-admin.json")), "feedback administrator credentials entered the package")
     require(not list(app_dir.rglob("desktop-layout-*.json")), "a device desktop layout entered the package")
 
-    print(f"PASS Console package resources ({len(wallpapers)} wallpapers, {len(music)} starter tracks)")
+    print(f"PASS Console package resources ({len(wallpapers)} wallpapers, {len(music)} tracks)")
 
 
 if __name__ == "__main__":

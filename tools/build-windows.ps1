@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.5.8",
+  [string]$Version = "0.5.9",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
   [string]$FeedbackEndpoint = $env:CODEX_FEEDBACK_ENDPOINT,
@@ -56,11 +56,6 @@ function Resolve-InnoCompiler {
 
 Remove-SafeBuildDirectory -Path $BuildRoot
 New-Item -ItemType Directory -Force -Path $BuildRoot, $OutputDir | Out-Null
-$StarterMusicDir = Join-Path $BuildRoot "starter-music"
-& $Python (Join-Path $ProjectRoot "tools\generate-starter-music.py") --output $StarterMusicDir
-if ($LASTEXITCODE -ne 0) {
-  throw "Starter music generation failed with exit code $LASTEXITCODE."
-}
 
 @(
   "CodexControlConsole-*.zip",
@@ -92,10 +87,12 @@ $PublicWallpaperFiles = @(
   "SOURCES.md",
   "blue-lake-boats.jpg",
   "calm-mountain-lake.jpg",
+  "dragon-maid.jpg",
   "palm-sky-reflection.jpg",
   "quiet-forest-aerial.jpg",
   "snow-water-mountains.jpg",
-  "soft-mountain-sun.jpg"
+  "soft-mountain-sun.jpg",
+  "wandering-witch.jpg"
 )
 
 $DataItems = @(
@@ -120,7 +117,7 @@ $DataItems = @(
   @{ Source = "pc-console-icon.ico"; Destination = "." },
   @{ Source = "pc-console-icon.png"; Destination = "." },
   @{ Source = "pc-console-preview.png"; Destination = "." },
-  @{ Source = $StarterMusicDir; Destination = "music" },
+  @{ Source = "public-music"; Destination = "music" },
   @{ Source = "tools\NativeFileDrag.exe"; Destination = "tools" },
   @{ Source = "tools\NativeFileDrag.cs"; Destination = "tools" },
   @{ Source = "tools\blender_live_selection_bridge.py"; Destination = "tools" },

@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.5.8"
+  #define AppVersion "0.5.9"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\build\console-installer\dist\Codex Console"
@@ -54,6 +54,8 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 [InstallDelete]
 Type: files; Name: "{autodesktop}\Codex Console.lnk"
 Type: files; Name: "{group}\Codex Console.lnk"
+Type: filesandordirs; Name: "{app}\_internal\music"
+Type: filesandordirs; Name: "{app}\_internal\wallpapers"
 
 [Icons]
 Name: "{group}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Codex Console.exe"; IconIndex: 0
