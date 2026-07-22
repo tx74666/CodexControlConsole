@@ -131,6 +131,7 @@ RETIRED_PACKAGED_MEDIA = {
     "wallpapers": {
         "elaina-wandering-witch-online.jpg",
         "kobayashi-dragon-maid-online.jpg",
+        "palm-sky-reflection.jpg",
     },
 }
 

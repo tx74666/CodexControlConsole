@@ -9,7 +9,6 @@ PUBLIC_WALLPAPERS = {
     "blue-lake-boats.jpg",
     "calm-mountain-lake.jpg",
     "dragon-maid.jpg",
-    "palm-sky-reflection.jpg",
     "quiet-forest-aerial.jpg",
     "snow-water-mountains.jpg",
     "soft-mountain-sun.jpg",

@@ -6,7 +6,7 @@ on:
       version:
         description: Release version, for example v0.4.0
         required: true
-        default: v0.5.9
+        default: v0.6.0
   push:
     tags:
       - "v*"
@@ -127,7 +127,7 @@ jobs:
 
             Download only **CodexControlConsole-Setup-x64.exe**.
 
-            This release includes all 15 built-in tracks, all 8 wallpapers, and repaired desktop shortcut icons.
+            This release includes all 15 built-in tracks, all 7 wallpapers, and repaired desktop shortcut icons.
 
             1. Double-click the downloaded Setup file.
             2. Choose **简体中文** or **English**.

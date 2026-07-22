@@ -61,7 +61,7 @@ Install Python 3.12 x64, PyInstaller, Pillow, yt-dlp, and Inno Setup 7, then run
 
 ```powershell
 python -m pip install pyinstaller pillow yt-dlp
-.\tools\build-windows.ps1 -Version 0.5.9 -OutputDir dist
+.\tools\build-windows.ps1 -Version 0.6.0 -OutputDir dist
 ```
 
 The result is `dist\CodexControlConsole-Setup-x64.exe`.

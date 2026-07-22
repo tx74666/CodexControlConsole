@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.5.9"
+  #define AppVersion "0.6.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\build\console-installer\dist\Codex Console"

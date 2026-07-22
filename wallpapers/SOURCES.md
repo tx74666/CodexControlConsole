@@ -18,8 +18,5 @@ Unsplash images are free to download and use under the Unsplash License.
 - `soft-mountain-sun.jpg`  
   Source: https://images.unsplash.com/photo-1469474968028-56623f02e42e
 
-- `palm-sky-reflection.jpg`  
-  Source: https://images.unsplash.com/photo-1507187632231-5beb21a654a2
-
 The release also contains the project-provided `dragon-maid.jpg` and
 `wandering-witch.jpg` wallpapers.

@@ -24,6 +24,7 @@ RETIRED_MUSIC = {
 RETIRED_WALLPAPERS = {
     "elaina-wandering-witch-online.jpg",
     "kobayashi-dragon-maid-online.jpg",
+    "palm-sky-reflection.jpg",
 }
 
 
@@ -73,9 +74,9 @@ def verify_packaged_app(executable, app_dir, data_dir):
         tracks = music.get("tracks") or []
         require(len(tracks) == 15, "installation did not seed all 15 tracks")
         require({item.get("name") for item in tracks} == EXPECTED_MUSIC, "installed track names are incorrect")
-        require(len(wallpapers.get("wallpapers") or []) == 8, "installation did not seed all eight wallpapers")
+        require(len(wallpapers.get("wallpapers") or []) == 7, "installation did not seed all seven wallpapers")
         require(len(list((data_dir / "music").glob("*.mp3"))) == 15, "tracks were not copied to device data")
-        require(len(list((data_dir / "wallpapers").glob("*.jpg"))) == 8, "wallpapers were not copied to device data")
+        require(len(list((data_dir / "wallpapers").glob("*.jpg"))) == 7, "wallpapers were not copied to device data")
         require(not any((data_dir / "music" / name).exists() for name in RETIRED_MUSIC), "retired starter music remains")
         require(
             not any((data_dir / "wallpapers" / name).exists() for name in RETIRED_WALLPAPERS),
@@ -112,15 +113,15 @@ def main():
         upgrade_music.mkdir(parents=True)
         for name in RETIRED_MUSIC:
             (upgrade_music / name).write_bytes(b"retired starter track")
-        (upgrade_music / ".codex-media-migrated").write_text("0.5.8\n", encoding="utf-8")
+        (upgrade_music / ".codex-media-migrated").write_text("0.5.9\n", encoding="utf-8")
         upgrade_wallpapers = upgrade_data / "wallpapers"
         upgrade_wallpapers.mkdir(parents=True)
         for name in RETIRED_WALLPAPERS:
             (upgrade_wallpapers / name).write_bytes(b"retired wallpaper")
-        (upgrade_wallpapers / ".codex-media-migrated").write_text("0.5.8\n", encoding="utf-8")
+        (upgrade_wallpapers / ".codex-media-migrated").write_text("0.5.9\n", encoding="utf-8")
         verify_packaged_app(executable, app_dir, upgrade_data)
 
-    print("PASS clean install and v0.5.8 upgrade (15 tracks, 8 wallpapers)")
+    print("PASS clean install and v0.5.9 upgrade (15 tracks, 7 wallpapers)")
 
 
 if __name__ == "__main__":

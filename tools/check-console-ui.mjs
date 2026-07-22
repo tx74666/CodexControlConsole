@@ -53,7 +53,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.5.9", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.6.0", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -403,7 +403,7 @@ async function runBrowserChecks(client) {
     const originalConfirm = window.confirm;
     let request = null;
     productUpdateStates = {
-      console: { currentVersion: '0.5.9', latestVersion: '0.5.9', available: false, canUninstall: true },
+      console: { currentVersion: '0.6.0', latestVersion: '0.6.0', available: false, canUninstall: true },
       world: { currentVersion: '0.3.0', latestVersion: '0.3.0', available: false, installed: true, canUninstall: true }
     };
     window.confirm = () => true;

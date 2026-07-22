@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.5.9",
+  [string]$Version = "0.6.0",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
   [string]$FeedbackEndpoint = $env:CODEX_FEEDBACK_ENDPOINT,
@@ -88,7 +88,6 @@ $PublicWallpaperFiles = @(
   "blue-lake-boats.jpg",
   "calm-mountain-lake.jpg",
   "dragon-maid.jpg",
-  "palm-sky-reflection.jpg",
   "quiet-forest-aerial.jpg",
   "snow-water-mountains.jpg",
   "soft-mountain-sun.jpg",
