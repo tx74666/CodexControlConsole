@@ -842,10 +842,11 @@ const i18n = {
     consoleUpdateTopCount: count => `${count} 项更新`,
     consoleUpdateNotInstalled: "尚未安装",
     consoleUpdateSource: "源码目录由 GitHub Desktop 管理",
-    consoleUpdateInstalling: "正在下载安装程序",
-    consoleUpdateRestarting: "安装向导已打开",
-    consoleUpdateConfirm: version => `将打开安装向导，把 Codex Console 更新到 v${version}。现在继续？`,
-    worldUpdateConfirm: (version, installed) => `将打开安装向导，${installed ? "更新" : "安装"} Codex World v${version}。现在继续？`,
+    consoleUpdateInstalling: "正在安装更新",
+    consoleUpdateRestarting: "正在重启 Codex Console",
+    consoleUpdateConfirm: version => `将自动把 Codex Console 更新到 v${version} 并重新启动。现在继续？`,
+    worldUpdateConfirm: (version, installed) => `将自动${installed ? "更新" : "安装"} Codex World v${version}。现在继续？`,
+    consoleUpdateTimedOut: "更新未能在规定时间内完成。",
     consoleUninstall: "卸载",
     consoleUninstallConfirm: name => `将卸载 ${name}，并永久删除它在这台电脑上的设置、缓存和本地资源。Blender 项目、GitHub 仓库和外部桌面布局不会被删除。继续？`,
     consoleUninstalling: "卸载程序已打开",
@@ -1569,10 +1570,11 @@ const i18n = {
     consoleUpdateTopCount: count => `${count} updates`,
     consoleUpdateNotInstalled: "Not installed",
     consoleUpdateSource: "Source checkout is managed through GitHub Desktop",
-    consoleUpdateInstalling: "Downloading installer",
-    consoleUpdateRestarting: "Setup is open",
-    consoleUpdateConfirm: version => `Setup will open to update Codex Console to v${version}. Continue?`,
-    worldUpdateConfirm: (version, installed) => `Setup will open to ${installed ? "update" : "install"} Codex World v${version}. Continue?`,
+    consoleUpdateInstalling: "Installing update",
+    consoleUpdateRestarting: "Restarting Codex Console",
+    consoleUpdateConfirm: version => `Update Codex Console to v${version} and restart automatically?`,
+    worldUpdateConfirm: (version, installed) => `Automatically ${installed ? "update" : "install"} Codex World v${version}?`,
+    consoleUpdateTimedOut: "The update did not finish in time.",
     consoleUninstall: "Uninstall",
     consoleUninstallConfirm: name => `Uninstall ${name} and permanently remove its settings, cache, and local resources from this PC? Blender projects, GitHub repositories, and external desktop layouts will not be removed.`,
     consoleUninstalling: "Uninstaller opened",
@@ -11287,6 +11289,40 @@ async function saveProductUpdatePreference() {
   }
 }
 
+function waitForUpdatePoll(delay = 1000) {
+  return new Promise(resolve => window.setTimeout(resolve, delay));
+}
+
+async function waitForProductUpdateCompletion(product, targetVersion, timeout = 180000) {
+  const expected = String(targetVersion || "").replace(/^v/i, "");
+  const deadline = Date.now() + Math.max(1000, Number(timeout) || 180000);
+  let lastError = "";
+  let installError = "";
+
+  while (Date.now() < deadline) {
+    await waitForUpdatePoll();
+    try {
+      const state = await fetchProductUpdateStatus(product);
+      productUpdateStates[product] = state;
+      const current = String(state.currentVersion || "").replace(/^v/i, "");
+      if (state.updateError) {
+        installError = state.updateError;
+        break;
+      }
+      if (!state.available && (!expected || current === expected)) {
+        productUpdateBusy = false;
+        renderConsoleUpdate();
+        if (product === "console") window.location.reload();
+        return true;
+      }
+    } catch (error) {
+      lastError = error.message || String(error);
+    }
+  }
+
+  throw new Error(installError || lastError || text("consoleUpdateTimedOut"));
+}
+
 async function installSelectedProductUpdate(product = selectedUpdateProduct) {
   if (productUpdateBusy) return;
   selectUpdateProduct(product);
@@ -11321,6 +11357,12 @@ async function installSelectedProductUpdate(product = selectedUpdateProduct) {
     productUpdateStates[product] = payload;
     if (product === "console" && payload.restarting) {
       if (els.consoleUpdateStatus) els.consoleUpdateStatus.textContent = text("consoleUpdateRestarting");
+    }
+    if (payload.setupStarted) {
+      await waitForProductUpdateCompletion(
+        product,
+        payload.targetVersion || state.latestVersion
+      );
       return;
     }
   } catch (error) {

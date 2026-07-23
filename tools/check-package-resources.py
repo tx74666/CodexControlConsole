@@ -97,6 +97,10 @@ def main():
         "not FileExists(ExpandConstant('{autodesktop}\\Codex Console.lnk'))" in installer,
         "desktop shortcut preservation check is missing",
     )
+    require(
+        "'/F /IM \"Codex Console.exe\"'" in installer,
+        "Console Setup does not close the previous installed process automatically",
+    )
     require('Filename: "{sys}\\ie4uinit.exe"; Parameters: "-show"' in installer, "Windows icon cache is not refreshed")
     require(
         'Type: filesandordirs; Name: "{app}\\_internal\\music"' in installer,

@@ -61,7 +61,7 @@ Install Python 3.12 x64, PyInstaller, Pillow, yt-dlp, and Inno Setup 7, then run
 
 ```powershell
 python -m pip install pyinstaller pillow yt-dlp
-.\tools\build-windows.ps1 -Version 0.6.2 -OutputDir dist
+.\tools\build-windows.ps1 -Version 0.6.3 -OutputDir dist
 ```
 
 The result is `dist\CodexControlConsole-Setup-x64.exe`.
@@ -71,7 +71,7 @@ The result is `dist\CodexControlConsole-Setup-x64.exe`.
 The release helper retries intermittent GitHub connections, pushes `main`, creates the version tag, and waits until the single Windows x64 Setup asset is available:
 
 ```powershell
-.\tools\publish-release.ps1 -Version 0.6.2
+.\tools\publish-release.ps1 -Version 0.6.3
 ```
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.

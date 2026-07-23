@@ -1,8 +1,11 @@
+import base64
 import hashlib
 import io
+import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 from unittest.mock import patch
 
 
@@ -15,6 +18,16 @@ from console_update import ConsoleUpdateService  # noqa: E402
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def helper_script(launch):
+    command = launch.call_args.args[0]
+    require(command[0].casefold() == "powershell.exe", "Setup helper is not PowerShell")
+    try:
+        encoded = command[command.index("-EncodedCommand") + 1]
+    except (ValueError, IndexError) as error:
+        raise AssertionError("Setup helper command is not encoded") from error
+    return base64.b64decode(encoded).decode("utf-16-le")
 
 
 def main():
@@ -73,7 +86,23 @@ def main():
         with patch("console_update.sys.platform", "win32"), patch("console_update.subprocess.Popen") as launch:
             result = service.install()
         require(result["setupStarted"] and not result["restarting"], "Setup launch state is wrong")
-        require(launch.call_args.args[0] == [str(installer)], "the wrong installer was launched")
+        script = helper_script(launch)
+        require(str(installer.resolve()) in script, "the wrong installer was handed to the helper")
+        require("/VERYSILENT" in script and "/CLOSEAPPLICATIONS" in script, "Setup is not unattended")
+
+        stopped = threading.Event()
+        service.shutdown_callback = stopped.set
+        with (
+            patch("console_update.sys.platform", "win32"),
+            patch("console_update.subprocess.Popen") as launch,
+            patch("console_update.time.sleep", return_value=None),
+        ):
+            restarting = service.install()
+            require(stopped.wait(1), "Console shutdown was not scheduled")
+        restart_script = helper_script(launch)
+        require(restarting["restarting"], "self-update did not enter restart mode")
+        require(f"$waitPid = {os.getpid()}" in restart_script, "helper does not wait for Console")
+        require("--no-browser" in restart_script, "Console is not relaunched without duplicating its window")
 
         source_service = ConsoleUpdateService(
             app_dir,

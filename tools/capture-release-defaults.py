@@ -105,7 +105,7 @@ def capture_music(payload, previous):
     }
 
 
-def capture_modules(payload, previous):
+def capture_modules(payload, previous, capture_last_module=False):
     state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
     if not isinstance(state.get("order"), list):
         return previous
@@ -113,7 +113,8 @@ def capture_modules(payload, previous):
     result = {}
     for key in MODULE_KEYS:
         if key == "lastModule":
-            result[key] = str(state.get(key) or previous.get(key) or "music").strip().lower()
+            selected = state.get(key) if capture_last_module or not previous.get(key) else previous.get(key)
+            result[key] = str(selected or "music").strip().lower()
         else:
             result[key] = unique_strings(state.get(key))
     return result
@@ -132,6 +133,11 @@ def main(argv=None):
     parser.add_argument("--api-url", default="http://127.0.0.1:8898", help="Running Codex Console base URL")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Release defaults JSON path")
     parser.add_argument("--timeout", type=float, default=8.0, help="API timeout in seconds")
+    parser.add_argument(
+        "--capture-last-module",
+        action="store_true",
+        help="Intentionally replace the new-install landing module with the currently open module",
+    )
     args = parser.parse_args(argv)
 
     previous = read_json(args.output)
@@ -146,7 +152,11 @@ def main(argv=None):
     previous_music = previous.get("music") if isinstance(previous.get("music"), dict) else {}
     previous_modules = previous.get("modules") if isinstance(previous.get("modules"), dict) else {}
     music = capture_music(music_payload, previous_music)
-    modules = capture_modules(console_payload, previous_modules)
+    modules = capture_modules(
+        console_payload,
+        previous_modules,
+        capture_last_module=args.capture_last_module,
+    )
     unchanged = (
         previous.get("schemaVersion") == 1
         and previous.get("music") == music

@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.6.2"
+  #define AppVersion "0.6.3"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\build\console-installer\dist\Codex Console"
@@ -78,6 +78,22 @@ Type: filesandordirs; Name: "{app}\wallpapers"
 Type: files; Name: "{userstartup}\Codex-Control-Hotkey.vbs"
 
 [Code]
+function InitializeSetup(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := True;
+  Exec(
+    ExpandConstant('{sys}\taskkill.exe'),
+    '/F /IM "Codex Console.exe"',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  );
+  Sleep(400);
+end;
+
 function ShouldCreateDesktopShortcut(): Boolean;
 begin
   Result := not FileExists(ExpandConstant('{autodesktop}\Codex Console.lnk'));

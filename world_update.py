@@ -230,7 +230,7 @@ class WorldUpdateService(ConsoleUpdateService):
             "staged": bool(pending_archive.is_file()),
             "stagedVersion": str(pending.get("version") or ""),
             "error": str(state.get("error") or ""),
-            "updateError": "",
+            "updateError": self._last_install_error(),
             "edition": "windows",
         }
 
@@ -321,7 +321,12 @@ class WorldUpdateService(ConsoleUpdateService):
         installation = self._installation()
         if installation["mode"] == "source":
             raise ValueError("Codex World is a source checkout on this device; update it through GitHub Desktop")
-        return super().install()
+        executable = installation.get("executable")
+        stop_executable = Path(executable) if executable and Path(executable).suffix.casefold() == ".exe" else None
+        return super().install(
+            stop_executable=stop_executable,
+            restart_stopped=bool(stop_executable),
+        )
 
     def open(self):
         installation = self._installation()

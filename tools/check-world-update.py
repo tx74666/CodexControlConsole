@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import io
 from pathlib import Path
@@ -15,6 +16,13 @@ from world_update import WorldUpdateService  # noqa: E402
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def helper_script(launch):
+    command = launch.call_args.args[0]
+    require(command[0].casefold() == "powershell.exe", "World Setup helper is not PowerShell")
+    encoded = command[command.index("-EncodedCommand") + 1]
+    return base64.b64decode(encoded).decode("utf-16-le")
 
 
 def main():
@@ -60,7 +68,30 @@ def main():
         installer = Path(service._read_state()["pending"]["archive"])
         require(installer.is_file() and installer.read_bytes() == setup_bytes, "World Setup was not downloaded")
         require(result["setupStarted"], "World Setup was not started")
-        require(launch.call_args.args[0] == [str(installer)], "the wrong World installer was launched")
+        script = helper_script(launch)
+        require(str(installer.resolve()) in script, "the wrong World installer was handed to the helper")
+        require("/VERYSILENT" in script and "/CLOSEAPPLICATIONS" in script, "World Setup is not unattended")
+
+        installed_dir = root / "installed-world"
+        installed_dir.mkdir()
+        installed_executable = installed_dir / "Codex World.exe"
+        installed_executable.write_bytes(b"MZ")
+        with (
+            patch("world_update.sys.platform", "win32"),
+            patch("console_update.sys.platform", "win32"),
+            patch.object(service, "_registered_install", return_value={
+                "mode": "installed",
+                "directory": installed_dir,
+                "executable": installed_executable,
+                "version": "0.1.0",
+            }),
+            patch("console_update.subprocess.Popen") as launch,
+        ):
+            running_result = service.install()
+        running_script = helper_script(launch)
+        require(running_result["setupStarted"], "installed World update did not start")
+        require(str(installed_executable.resolve()) in running_script, "running World is not targeted for shutdown")
+        require("$restartStopped = $true" in running_script, "running World is not restored after update")
 
         source_data = root / "source-user-data"
         source_data.mkdir()

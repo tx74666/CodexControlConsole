@@ -6,7 +6,7 @@ on:
       version:
         description: Release version, for example v0.4.0
         required: true
-        default: v0.6.2
+        default: v0.6.3
   push:
     tags:
       - "v*"
@@ -49,6 +49,7 @@ jobs:
         run: |
           python tools/check-feedback.py
           python tools/check-console-update.py
+          python tools/check-world-update.py
           python tools/check-clean-uninstall.py
           python tools/check-wallpaper-style.py
           python tools/check-built-in-media-sync.py
@@ -128,7 +129,7 @@ jobs:
 
             Download only **CodexControlConsole-Setup-x64.exe**.
 
-            This release adds instant multilingual lyric switching, single-click lyric visibility, publisher-defined music/tab ordering for new installs, non-destructive built-in media sync, and desktop shortcut position preservation during upgrades.
+            This release fixes the feedback limit indicator and makes Console/World updates close the required app processes, install in the background, restart cleanly, and clear stale update notices automatically.
 
             1. Double-click the downloaded Setup file.
             2. Choose **简体中文** or **English**.
@@ -139,7 +140,7 @@ jobs:
 
             只需下载 **CodexControlConsole-Setup-x64.exe**。
 
-            本版包含 16 首内置歌曲、7 张桌布、多语言歌词切换、新设备默认排列同步，并确保升级时不移动已有桌面快捷方式。
+            本版修复了错误显示的 Hit Limit，并让 Console / World 更新自动关闭所需进程、后台安装、重新启动和清除过期的更新提示，无需再手动结束进程。
 
             1. 双击下载好的安装程序。
             2. 选择 **简体中文** 或 **English**。

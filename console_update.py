@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -30,6 +31,10 @@ def _hidden_subprocess_kwargs():
     if sys.platform != "win32":
         return {}
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
+def _powershell_literal(value):
+    return "'" + str(value or "").replace("'", "''") + "'"
 
 
 def _version_tuple(value):
@@ -373,7 +378,145 @@ class ConsoleUpdateService:
         self._write_state(state)
         return self.status()
 
-    def install(self):
+    def _setup_helper_script(
+        self,
+        archive,
+        version,
+        *,
+        wait_pid=0,
+        stop_executable=None,
+        relaunch_executable=None,
+        restart_stopped=False,
+    ):
+        lines = [
+            "$ErrorActionPreference = 'Stop'",
+            f"$installer = {_powershell_literal(Path(archive).resolve())}",
+            f"$stateFile = {_powershell_literal(self.state_file.resolve())}",
+            f"$resultFile = {_powershell_literal(self.result_file.resolve())}",
+            f"$version = {_powershell_literal(version)}",
+            f"$waitPid = {max(0, int(wait_pid or 0))}",
+            f"$stopExecutable = {_powershell_literal(Path(stop_executable).resolve() if stop_executable else '')}",
+            f"$relaunchExecutable = {_powershell_literal(Path(relaunch_executable).resolve() if relaunch_executable else '')}",
+            f"$restartStopped = {'$true' if restart_stopped else '$false'}",
+            "$stoppedTarget = $false",
+            "$ok = $false",
+            "$message = ''",
+            "",
+            "function Write-AtomicJson {",
+            "  param([string]$Path, $Value)",
+            "  $parent = Split-Path -Parent $Path",
+            "  if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }",
+            "  $temporary = \"$Path.tmp\"",
+            "  $json = $Value | ConvertTo-Json -Depth 12",
+            "  [IO.File]::WriteAllText($temporary, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))",
+            "  Move-Item -LiteralPath $temporary -Destination $Path -Force",
+            "}",
+            "",
+            "function Find-TargetProcesses {",
+            "  if (-not $stopExecutable) { return @() }",
+            "  return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {",
+            "    $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $stopExecutable, [StringComparison]::OrdinalIgnoreCase)",
+            "  })",
+            "}",
+            "",
+            "try {",
+            "  if ($waitPid -gt 0) {",
+            "    Wait-Process -Id $waitPid -Timeout 90 -ErrorAction SilentlyContinue",
+            "    if (Get-Process -Id $waitPid -ErrorAction SilentlyContinue) {",
+            "      throw 'Codex Console did not close before the update timeout.'",
+            "    }",
+            "  }",
+            "",
+            "  $targets = @(Find-TargetProcesses)",
+            "  if ($targets.Count -gt 0) {",
+            "    $stoppedTarget = $true",
+            "    foreach ($target in $targets) {",
+            "      Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue",
+            "    }",
+            "    $deadline = [DateTime]::UtcNow.AddSeconds(20)",
+            "    while (@(Find-TargetProcesses).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) {",
+            "      Start-Sleep -Milliseconds 200",
+            "    }",
+            "    if (@(Find-TargetProcesses).Count -gt 0) {",
+            "      throw 'The running application could not be closed for the update.'",
+            "    }",
+            "  }",
+            "",
+            "  $setupArguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CLOSEAPPLICATIONS')",
+            "  $setup = Start-Process -FilePath $installer -ArgumentList $setupArguments -Wait -PassThru",
+            "  if ($setup.ExitCode -ne 0) {",
+            "    throw \"Setup exited with code $($setup.ExitCode).\"",
+            "  }",
+            "",
+            "  if (Test-Path -LiteralPath $stateFile) {",
+            "    try {",
+            "      $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json",
+            "      if ($null -eq $state.pending) {",
+            "        $state | Add-Member -NotePropertyName pending -NotePropertyValue ([pscustomobject]@{}) -Force",
+            "      } else {",
+            "        $state.pending = [pscustomobject]@{}",
+            "      }",
+            "      $state.error = ''",
+            "      Write-AtomicJson $stateFile $state",
+            "    } catch {",
+            "      # The installed version remains authoritative if stale cache cleanup fails.",
+            "    }",
+            "  }",
+            "  $ok = $true",
+            "  $message = 'The update was installed successfully.'",
+            "} catch {",
+            "  $message = $_.Exception.Message",
+            "}",
+            "",
+            "$result = [ordered]@{",
+            "  ok = $ok",
+            "  message = $message",
+            "  version = $version",
+            "  updatedAt = [DateTime]::UtcNow.ToString('o')",
+            "}",
+            "Write-AtomicJson $resultFile $result",
+            "",
+            "if ($ok) {",
+            "  if ($relaunchExecutable -and (Test-Path -LiteralPath $relaunchExecutable)) {",
+            "    Start-Process -FilePath $relaunchExecutable -ArgumentList @('--no-browser')",
+            "  } elseif ($restartStopped -and $stoppedTarget -and (Test-Path -LiteralPath $stopExecutable)) {",
+            "    Start-Process -FilePath $stopExecutable -ArgumentList @('--no-browser')",
+            "  }",
+            "  exit 0",
+            "}",
+            "exit 1",
+        ]
+        return "\r\n".join(lines) + "\r\n"
+
+    def _launch_setup_helper(self, archive, version, **options):
+        script = self._setup_helper_script(archive, version, **options)
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-EncodedCommand",
+            encoded,
+        ]
+        subprocess.Popen(
+            command,
+            cwd=str(Path(archive).resolve().parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **_hidden_subprocess_kwargs(),
+        )
+        return command
+
+    def _shutdown_later(self):
+        time.sleep(0.75)
+        if callable(self.shutdown_callback):
+            self.shutdown_callback()
+
+    def install(self, *, stop_executable=None, restart_stopped=False):
         if not self.portable or sys.platform != "win32":
             raise ValueError("The Windows installer is available from an installed Codex Console")
         state = self._read_state()
@@ -385,15 +528,25 @@ class ConsoleUpdateService:
             state = self._read_state()
             pending = state.get("pending") or {}
             archive = Path(str(pending.get("archive") or ""))
-        subprocess.Popen(
-            [str(archive)],
-            cwd=str(archive.parent),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        version = str(pending.get("version") or "")
+        self.result_file.unlink(missing_ok=True)
+        restarting = callable(self.shutdown_callback)
+        self_executable = Path(sys.executable).resolve() if restarting else None
+        self._launch_setup_helper(
+            archive,
+            version,
+            wait_pid=os.getpid() if restarting else 0,
+            stop_executable=self_executable or stop_executable,
+            relaunch_executable=self_executable,
+            restart_stopped=bool(restart_stopped),
         )
+        if restarting:
+            threading.Thread(target=self._shutdown_later, daemon=True).start()
         result = self.status()
         result["setupStarted"] = True
-        result["restarting"] = False
+        result["restarting"] = restarting
+        result["installing"] = True
+        result["targetVersion"] = version
         return result
 
     def open_release(self):

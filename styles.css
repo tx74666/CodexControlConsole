@@ -1203,6 +1203,7 @@ h2 {
   gap: 8px;
 }
 
+#feedbackQuota[hidden],
 .feedback-previews[hidden],
 .feedback-turnstile[hidden],
 .feedback-inbox[hidden],

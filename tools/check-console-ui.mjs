@@ -56,7 +56,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.6.2", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.6.3", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -406,6 +406,58 @@ async function runBrowserChecks(client) {
     `top update action targeted the wrong product: ${JSON.stringify(oneClickUpdate)}`
   );
 
+  const updateCompletionState = await evaluate(client, `(async () => {
+    const originalStates = productUpdateStates;
+    const originalProduct = selectedUpdateProduct;
+    const originalBusy = productUpdateBusy;
+    const originalPoll = waitForUpdatePoll;
+    const originalFetchStatus = fetchProductUpdateStatus;
+    try {
+      productUpdateStates = {
+        console: { currentVersion: '0.6.3', latestVersion: '0.6.3', available: false, autoCheck: true },
+        world: {
+          currentVersion: '0.3.1', latestVersion: '0.3.2', available: true,
+          installed: true, autoCheck: true, canInstall: true
+        }
+      };
+      selectedUpdateProduct = 'world';
+      productUpdateBusy = true;
+      waitForUpdatePoll = async () => {};
+      fetchProductUpdateStatus = async product => ({
+        currentVersion: product === 'world' ? '0.3.2' : '0.6.3',
+        latestVersion: product === 'world' ? '0.3.2' : '0.6.3',
+        available: false,
+        installed: true,
+        autoCheck: true,
+        canInstall: false
+      });
+      const completed = await waitForProductUpdateCompletion('world', '0.3.2', 1000);
+      const button = document.querySelector('#consoleUpdateTop');
+      return {
+        completed,
+        busy: productUpdateBusy,
+        current: productUpdateStates.world?.currentVersion,
+        available: productUpdateStates.world?.available,
+        topHidden: Boolean(button?.hidden)
+      };
+    } finally {
+      waitForUpdatePoll = originalPoll;
+      fetchProductUpdateStatus = originalFetchStatus;
+      productUpdateStates = originalStates;
+      selectedUpdateProduct = originalProduct;
+      productUpdateBusy = originalBusy;
+      renderConsoleUpdate();
+    }
+  })()`, true);
+  assert(
+    updateCompletionState.completed
+      && !updateCompletionState.busy
+      && updateCompletionState.current === '0.3.2'
+      && !updateCompletionState.available
+      && updateCompletionState.topHidden,
+    `completed update did not clear the update state: ${JSON.stringify(updateCompletionState)}`
+  );
+
   const cleanUninstallAction = await evaluate(client, `(async () => {
     const originalStates = productUpdateStates;
     const originalProduct = selectedUpdateProduct;
@@ -482,6 +534,7 @@ async function runBrowserChecks(client) {
     collaborationVisible: !document.querySelector('#consoleCollaborationView')?.hidden,
     feedbackVisible: document.querySelector('#feedbackPanel')?.getBoundingClientRect().height > 0,
     quotaHidden: Boolean(document.querySelector('#feedbackQuota')?.hidden),
+    quotaRendered: document.querySelector('#feedbackQuota')?.getClientRects().length > 0,
     reviewAvailable: !document.querySelector('#feedbackReviewPanel')?.hidden,
     adminSetupAvailable: Boolean(feedbackConfig?.adminSetupAvailable || feedbackConfig?.adminEnabled)
   })`);
@@ -491,6 +544,7 @@ async function runBrowserChecks(client) {
       && consoleCollaborationState.collaborationVisible
       && consoleCollaborationState.feedbackVisible
       && consoleCollaborationState.quotaHidden
+      && !consoleCollaborationState.quotaRendered
       && consoleCollaborationState.reviewAvailable === consoleCollaborationState.adminSetupAvailable,
     `Console collaboration view is incomplete: ${JSON.stringify(consoleCollaborationState)}`
   );
@@ -557,6 +611,7 @@ async function runBrowserChecks(client) {
       const quota = document.querySelector('#feedbackQuota');
       return {
         visible: !quota?.hidden,
+        rendered: quota?.getClientRects().length > 0,
         text: quota?.textContent?.trim() || '',
         sendDisabled: Boolean(document.querySelector('#feedbackSubmit')?.disabled)
       };
@@ -576,10 +631,12 @@ async function runBrowserChecks(client) {
       });
       setFeedbackLimit(false);
       renderFeedback();
+      const quota = document.querySelector('#feedbackQuota');
       return {
         burst,
         daily,
-        hiddenAfterReset: Boolean(document.querySelector('#feedbackQuota')?.hidden)
+        hiddenAfterReset: Boolean(quota?.hidden),
+        renderedAfterReset: quota?.getClientRects().length > 0
       };
     } finally {
       window.fetch = originalFetch;
@@ -593,11 +650,14 @@ async function runBrowserChecks(client) {
   })()`, true);
   assert(
     !feedbackLimitState.burst.visible
+      && !feedbackLimitState.burst.rendered
       && !feedbackLimitState.burst.sendDisabled
       && feedbackLimitState.daily.visible
+      && feedbackLimitState.daily.rendered
       && feedbackLimitState.daily.text === "Hit Limit"
       && feedbackLimitState.daily.sendDisabled
-      && feedbackLimitState.hiddenAfterReset,
+      && feedbackLimitState.hiddenAfterReset
+      && !feedbackLimitState.renderedAfterReset,
     `feedback daily and burst limits are confused: ${JSON.stringify(feedbackLimitState)}`
   );
   await evaluate(client, `document.querySelector('[data-console-view-target="common"]')?.click()`);
@@ -1101,7 +1161,21 @@ async function runBrowserChecks(client) {
   assert(narrowLayout.shellWidth <= narrowLayout.viewportWidth, `app shell exceeds the narrow viewport: ${JSON.stringify(narrowLayout)}`);
   assert(narrowLayout.verticalNavLabels.length === 0, `module labels turned vertical: ${JSON.stringify(narrowLayout)}`);
 
-  await evaluate(client, "localStorage.clear()");
+  await evaluate(client, `(async () => {
+    const defaults = ${JSON.stringify(releaseDefaults.modules)};
+    activeModuleId = defaults.lastModule;
+    localStorage.clear();
+    localStorage.setItem('codexControl.moduleOrder.v1', JSON.stringify(defaults.order));
+    localStorage.setItem('codexControl.moduleArchive.v1', JSON.stringify(defaults.archive));
+    localStorage.setItem('codexControl.moduleDeepArchive.v1', JSON.stringify(defaults.deepArchive));
+    localStorage.setItem('codexControl.moduleDeleted.v1', JSON.stringify(defaults.deleted));
+    localStorage.setItem('codexControl.lastModule.v1', defaults.lastModule);
+    await fetch('/api/console/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(defaults)
+    });
+  })()`, true);
   await client.send("Page.navigate", { url: new URL("index.html?edition=public", baseUrl).href });
   await waitForDocument(client);
   await waitForValue(
@@ -1216,7 +1290,7 @@ async function main() {
       10000,
       100
     );
-    client = await createPageClient(port, new URL("blender.html", baseUrl).href);
+    client = await createPageClient(port, new URL("workspace.html", baseUrl).href);
     await client.send("Page.bringToFront");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1280,
