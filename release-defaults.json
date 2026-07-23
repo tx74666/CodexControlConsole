@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-07-23T06:54:10Z",
+  "capturedAt": "2026-07-23T07:06:52Z",
   "music": {
     "tiers": {
       "Outrun.mp3": "first",
@@ -35,17 +35,24 @@
   },
   "modules": {
     "order": [
-      "manager",
+      "music",
+      "wallpaper",
       "workspace",
-      "blender",
-      "unity",
       "steamwork",
       "randomrealm",
-      "music",
-      "wallpaper"
+      "blender",
+      "manager",
+      "unity"
     ],
-    "archive": [],
-    "deepArchive": [],
+    "archive": [
+      "blender",
+      "randomrealm",
+      "steamwork"
+    ],
+    "deepArchive": [
+      "manager",
+      "unity"
+    ],
     "deleted": [],
     "lastModule": "music"
   }
