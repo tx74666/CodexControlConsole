@@ -38,6 +38,19 @@ def main():
         (music_source / "Get Lucky.mp3").write_bytes(b"bundled-get-lucky")
         (music_source / "Get Lucky.lrc").write_text("[00:00.00]Get Lucky\n", encoding="utf-8")
         (music_source / "Airborne.mp3").write_bytes(b"bundled-airborne")
+        (music_source / "Ma rose éternelle.mp3").write_bytes(b"bundled-ma-rose")
+        (music_source / "Ma rose éternelle.lrc").write_text(
+            "[lang:fr]\n[00:04.28]Sous la lune pâle de Montmartre,\n",
+            encoding="utf-8",
+        )
+        (music_source / "Ma rose éternelle.en.lrc").write_text(
+            "[lang:en]\n[00:04.28]Beneath the pale moon of Montmartre,\n",
+            encoding="utf-8",
+        )
+        (music_source / "Ma rose éternelle.zh.lrc").write_text(
+            "[lang:zh]\n[00:04.28]在蒙马特高地苍白的月光之下，\n",
+            encoding="utf-8",
+        )
         legacy_track = music_target / "Daft Punk - Get Lucky (Official Audio).mp3"
         legacy_track.write_bytes(b"existing-get-lucky")
         custom_track = music_target / "My Custom Track.mp3"
@@ -50,13 +63,27 @@ def main():
             music_target=music_target,
             wallpaper_target=root / "wallpapers",
         )
-        require(first_music["added"] == 1, "only the missing bundled song should be copied")
-        require(first_music["lyricsAdded"] == 1, "lyrics should be added beside the existing legacy song")
-        require(first_music["music"]["present"] == 2, "both bundled song identities should be present")
+        require(first_music["added"] == 2, "only the two missing bundled songs should be copied")
+        require(first_music["lyricsAdded"] == 4, "all default and translated lyrics should be copied")
+        require(first_music["music"]["present"] == 3, "all bundled song identities should be present")
         require(legacy_track.read_bytes() == b"existing-get-lucky", "existing audio was overwritten")
         require(not (music_target / "Get Lucky.mp3").exists(), "legacy song identity was duplicated")
         require(custom_track.exists(), "custom music was removed")
         require((music_target / "Daft Punk - Get Lucky (Official Audio).lrc").exists(), "legacy song did not receive lyrics")
+        require((music_target / "Ma rose éternelle.mp3").exists(), "Unicode music filename was not copied")
+        require((music_target / "Ma rose éternelle.lrc").exists(), "Unicode lyric filename was not copied")
+        require((music_target / "Ma rose éternelle.en.lrc").exists(), "English lyric filename was not copied")
+        require((music_target / "Ma rose éternelle.zh.lrc").exists(), "Chinese lyric filename was not copied")
+        original_music_dir = console.MUSIC_DIR
+        console.MUSIC_DIR = music_target
+        try:
+            rose_record = console.music_track_from_path(music_target / "Ma rose éternelle.mp3")
+        finally:
+            console.MUSIC_DIR = original_music_dir
+        require(
+            [item["code"] for item in rose_record.get("lyricsLanguages", [])] == ["fr", "en", "zh"],
+            "multilingual lyrics were not exposed in French, English, Chinese order",
+        )
 
         second_music = console.sync_builtin_media(
             "music",

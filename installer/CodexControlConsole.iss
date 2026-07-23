@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.6.1"
+  #define AppVersion "0.6.2"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\build\console-installer\dist\Codex Console"
@@ -52,7 +52,6 @@ Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
-Type: files; Name: "{autodesktop}\Codex Console.lnk"
 Type: files; Name: "{group}\Codex Console.lnk"
 Type: filesandordirs; Name: "{app}\_internal\music"
 Type: filesandordirs; Name: "{app}\_internal\wallpapers"
@@ -60,7 +59,7 @@ Type: filesandordirs; Name: "{app}\_internal\wallpapers"
 [Icons]
 Name: "{group}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Codex Console.exe"; IconIndex: 0
 Name: "{group}\Uninstall Codex Console"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Codex Console.exe"; IconIndex: 0
+Name: "{autodesktop}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Codex Console.exe"; IconIndex: 0; Check: ShouldCreateDesktopShortcut
 
 [Registry]
 Root: HKCU; Subkey: "Software\Codex\Codex Console"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey
@@ -77,3 +76,9 @@ Type: filesandordirs; Name: "{app}\music"
 Type: filesandordirs; Name: "{app}\temp"
 Type: filesandordirs; Name: "{app}\wallpapers"
 Type: files; Name: "{userstartup}\Codex-Control-Hotkey.vbs"
+
+[Code]
+function ShouldCreateDesktopShortcut(): Boolean;
+begin
+  Result := not FileExists(ExpandConstant('{autodesktop}\Codex Console.lnk'));
+end;

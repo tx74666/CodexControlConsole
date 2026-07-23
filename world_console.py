@@ -139,6 +139,9 @@ RETIRED_PACKAGED_MEDIA = {
 def seed_packaged_media(source, target, extensions):
     source = Path(source)
     target = Path(target)
+    seed_extensions = set(extensions)
+    if source.name.casefold() == "music":
+        seed_extensions.update({".lrc", ".txt"})
     marker = target / ".codex-media-migrated"
     try:
         seeded_version = marker.read_text(encoding="utf-8").strip()
@@ -155,7 +158,7 @@ def seed_packaged_media(source, target, extensions):
                 retired_path.unlink()
         if source.is_dir() and not same_directory(source, target):
             for item in source.rglob("*"):
-                if item.is_symlink() or not item.is_file() or item.suffix.lower() not in extensions:
+                if item.is_symlink() or not item.is_file() or item.suffix.lower() not in seed_extensions:
                     continue
                 relative = item.relative_to(source)
                 destination = target / relative
@@ -278,6 +281,7 @@ MUSIC_STATE_BACKUP_FILE = CACHE_DIR / "music_state.previous.json"
 MUSIC_ANALYSIS_DIR = CACHE_DIR / "music_analysis"
 MUSIC_LYRIC_MARKS_FILE = CACHE_DIR / "music_lyric_marks.json"
 CONSOLE_STATE_FILE = CACHE_DIR / "console_state.json"
+RELEASE_DEFAULTS_FILE = APP_DIR / "release-defaults.json"
 YOUTUBE_COOKIE_DIR = CACHE_DIR / "cookies"
 YOUTUBE_COOKIE_FILE = YOUTUBE_COOKIE_DIR / "youtube.cookies.txt"
 MATERIAL_SOURCE_DIR = Path(os.environ.get("CODEX_CONTROL_MATERIAL_SOURCE_DIR", str(Path.home() / "Downloads")))
@@ -363,6 +367,12 @@ BUILTIN_WALLPAPER_NAMES = (
 )
 BUILTIN_MEDIA_SYNC_LOCK = threading.Lock()
 LYRICS_EXTENSIONS = {".lrc", ".txt"}
+LYRICS_LANGUAGE_ORDER = ("fr", "en", "zh")
+LYRICS_LANGUAGE_LABELS = {
+    "fr": "French",
+    "en": "English",
+    "zh": "Chinese",
+}
 LYRICS_AUTO_DOWNLOAD = os.environ.get("CODEX_CONTROL_AUTO_LYRICS", "1").strip().lower() not in {"0", "false", "no", "off"}
 LYRICS_USER_AGENT = os.environ.get(
     "CODEX_CONTROL_LYRICS_USER_AGENT",
@@ -829,7 +839,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/music/lyrics":
             query = urllib.parse.parse_qs(parsed.query)
             try:
-                lyrics_path = lyrics_path_from_music_relative(query.get("path", [""])[0])
+                lyrics_path = lyrics_path_from_music_relative(
+                    query.get("path", [""])[0],
+                    query.get("language", [""])[0],
+                )
                 self.send_file_response(lyrics_path, "text/plain; charset=utf-8", filename=lyrics_path.name)
             except ValueError as error:
                 self.send_json({"error": str(error)}, status=404)
@@ -837,7 +850,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/music/lyrics/analysis":
             query = urllib.parse.parse_qs(parsed.query)
             try:
-                self.send_json(music_lyrics_analysis(query.get("path", [""])[0]))
+                self.send_json(music_lyrics_analysis(
+                    query.get("path", [""])[0],
+                    query.get("language", [""])[0],
+                ))
             except ValueError as error:
                 self.send_json({"error": str(error)}, status=404)
             except RuntimeError as error:
@@ -892,6 +908,26 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 self.send_file_response(texture_path, content_type, filename=texture_path.name)
             except ValueError as error:
                 self.send_json({"error": str(error)}, status=400)
+            return
+        if parsed.path == "/api/release-defaults":
+            self.send_json(read_release_defaults())
+            return
+        if parsed.path == "/api/release-defaults.js":
+            payload = json.dumps(read_release_defaults(), ensure_ascii=False, separators=(",", ":"))
+            payload = payload.replace("</", "<\\/")
+            device_layout = {
+                key: value
+                for key, value in read_console_state().items()
+                if key in {"order", "archive", "deepArchive", "deleted", "lastModule"}
+            }
+            device_layout["edition"] = current_console_edition()
+            device_payload = json.dumps(device_layout, ensure_ascii=False, separators=(",", ":"))
+            device_payload = device_payload.replace("</", "<\\/")
+            body = (
+                f"window.CODEX_RELEASE_DEFAULTS={payload};\n"
+                f"window.CODEX_DEVICE_LAYOUT={device_payload};\n"
+            ).encode("utf-8")
+            self.send_bytes_response(body, "application/javascript; charset=utf-8")
             return
         if parsed.path == "/api/console/state":
             self.send_json({"state": read_console_state()})
@@ -4419,20 +4455,99 @@ def music_path_from_relative(relative_path):
     return candidate
 
 
-def lyrics_path_from_music_path(path):
+def normalize_lyrics_language(value):
+    language = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "fra": "fr",
+        "fre": "fr",
+        "french": "fr",
+        "eng": "en",
+        "english": "en",
+        "cn": "zh",
+        "zho": "zh",
+        "chi": "zh",
+        "chinese": "zh",
+        "zh-cn": "zh",
+        "zh-hans": "zh",
+    }
+    return aliases.get(language, language if language in LYRICS_LANGUAGE_ORDER else "")
+
+
+def lyrics_file_language(path):
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            for _ in range(12):
+                line = handle.readline()
+                if not line:
+                    break
+                match = re.match(r"\s*\[(?:lang|language):([^\]]+)\]", line, flags=re.IGNORECASE)
+                if match:
+                    return normalize_lyrics_language(match.group(1))
+    except OSError:
+        return ""
+    return ""
+
+
+def lyrics_language_options_from_music_path(path):
     path = Path(path).resolve()
     if not is_path_inside(path, MUSIC_DIR):
         raise ValueError("music path is outside the music folder")
+
+    options = {}
+    for suffix in (".lrc", ".txt"):
+        candidate = path.with_suffix(suffix)
+        if candidate.exists() and candidate.is_file() and is_path_inside(candidate.resolve(), MUSIC_DIR):
+            language = lyrics_file_language(candidate)
+            if language:
+                options[language] = candidate.resolve()
+            break
+
+    for language in LYRICS_LANGUAGE_ORDER:
+        if language in options:
+            continue
+        for suffix in (".lrc", ".txt"):
+            candidate = path.with_name(f"{path.stem}.{language}{suffix}")
+            if candidate.exists() and candidate.is_file() and is_path_inside(candidate.resolve(), MUSIC_DIR):
+                options[language] = candidate.resolve()
+                break
+
+    return [
+        {
+            "code": language,
+            "label": LYRICS_LANGUAGE_LABELS[language],
+            "path": options[language],
+        }
+        for language in LYRICS_LANGUAGE_ORDER
+        if language in options
+    ]
+
+
+def lyrics_path_from_music_path(path, language=""):
+    path = Path(path).resolve()
+    if not is_path_inside(path, MUSIC_DIR):
+        raise ValueError("music path is outside the music folder")
+
+    requested_language = normalize_lyrics_language(language)
+    if requested_language:
+        for option in lyrics_language_options_from_music_path(path):
+            if option["code"] == requested_language:
+                return option["path"]
+        return None
+
     for suffix in (".lrc", ".txt"):
         candidate = path.with_suffix(suffix)
         if candidate.exists() and candidate.is_file() and is_path_inside(candidate.resolve(), MUSIC_DIR):
             return candidate.resolve()
+
+    options = lyrics_language_options_from_music_path(path)
+    if options:
+        return options[0]["path"]
     return None
 
 
-def lyrics_path_from_music_relative(relative_path):
+def lyrics_path_from_music_relative(relative_path, language=""):
     music_path = music_path_from_relative(relative_path)
-    lyrics_path = lyrics_path_from_music_path(music_path)
+    lyrics_path = lyrics_path_from_music_path(music_path, language)
     if not lyrics_path:
         raise ValueError("lyrics file was not found")
     return lyrics_path
@@ -7323,15 +7438,18 @@ def lyrics_word_spans(text, duration, boundaries, peaks, valleys=None, feature_s
     return spans
 
 
-def music_lyrics_analysis(relative_path):
+def music_lyrics_analysis(relative_path, language=""):
     path = music_path_from_relative(relative_path)
-    lyrics_path = lyrics_path_from_music_path(path)
+    lyrics_language = normalize_lyrics_language(language)
+    lyrics_path = lyrics_path_from_music_path(path, lyrics_language)
     if not lyrics_path:
         raise ValueError("lyrics file was not found")
 
     cached = read_music_analysis_cache(path, lyrics_path)
     if cached:
         cached = dict(cached)
+        if lyrics_language:
+            cached["lyricsLanguage"] = lyrics_language
         cached["manualMarks"] = music_lyric_marks_for_path(path)
         return cached
 
@@ -7460,6 +7578,7 @@ def music_lyrics_analysis(relative_path):
         "ok": True,
         "path": Path(path).relative_to(MUSIC_DIR).as_posix(),
         "lyricsPath": Path(lyrics_path).relative_to(MUSIC_DIR).as_posix(),
+        "lyricsLanguage": lyrics_language,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "method": "rms-edge-speechflow-first-word-pulse-fill-v88",
         "sampleRate": audio["sampleRate"],
@@ -7550,6 +7669,17 @@ def builtin_music_files(source=None):
         ),
         key=lambda path: path.name.casefold(),
     )
+
+
+def builtin_lyrics_files(music_path):
+    music_path = Path(music_path)
+    candidates = [music_path.with_suffix(suffix) for suffix in (".lrc", ".txt")]
+    candidates.extend(
+        music_path.with_name(f"{music_path.stem}.{language}{suffix}")
+        for language in LYRICS_LANGUAGE_ORDER
+        for suffix in (".lrc", ".txt")
+    )
+    return [path for path in candidates if path.is_file() and not path.is_symlink()]
 
 
 def builtin_wallpaper_files(source=None):
@@ -7644,9 +7774,11 @@ def sync_builtin_music(source=None, target=None):
                 errors.append(str(error))
                 continue
 
-        source_lyrics = source_path.with_suffix(".lrc")
-        target_lyrics = target_path.with_suffix(".lrc")
-        if source_lyrics.is_file() and not target_lyrics.exists():
+        for source_lyrics in builtin_lyrics_files(source_path):
+            lyrics_suffix = source_lyrics.name[len(source_path.stem):]
+            target_lyrics = target_path.with_name(f"{target_path.stem}{lyrics_suffix}")
+            if target_lyrics.exists():
+                continue
             try:
                 shutil.copy2(source_lyrics, target_lyrics)
                 lyrics_added.append(target_lyrics.name)
@@ -7770,10 +7902,79 @@ def upload_music(files):
     return {"ok": True, "files": saved, "lyrics": saved_lyrics + downloaded_lyrics, "tracks": tracks}
 
 
-def sanitize_console_module_id(value):
+def read_release_defaults():
+    try:
+        payload = json.loads(RELEASE_DEFAULTS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def sanitize_console_module_id(value, fallback=None):
     clean = str(value or "").strip().lower()
-    fallback = "workspace" if current_console_edition() == "public" else "wallpaper"
-    return clean if clean in CONSOLE_MODULE_HREFS and console_module_allowed(clean) else fallback
+    if clean in CONSOLE_MODULE_HREFS and console_module_allowed(clean):
+        return clean
+    if fallback and console_module_allowed(fallback):
+        return fallback
+    default_id = "workspace" if current_console_edition() == "public" else "wallpaper"
+    return default_id if console_module_allowed(default_id) else console_module_ids()[0]
+
+
+def sanitize_console_module_list(value):
+    if not isinstance(value, list):
+        return []
+    valid_ids = set(console_module_ids())
+    result = []
+    for item in value:
+        clean = str(item or "").strip().lower()
+        if clean in valid_ids and clean not in result:
+            result.append(clean)
+    return result
+
+
+def normalize_console_state(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    release_modules = read_release_defaults().get("modules")
+    defaults = release_modules if isinstance(release_modules, dict) else {}
+
+    deleted = sanitize_console_module_list(raw.get("deleted", defaults.get("deleted", [])))
+    deleted_set = set(deleted)
+    deep_archive = [
+        item for item in sanitize_console_module_list(raw.get("deepArchive", defaults.get("deepArchive", [])))
+        if item not in deleted_set
+    ]
+    deep_set = set(deep_archive)
+    archive = [
+        item for item in sanitize_console_module_list(raw.get("archive", defaults.get("archive", [])))
+        if item not in deleted_set and item not in deep_set
+    ]
+
+    order = [
+        item for item in sanitize_console_module_list(raw.get("order", defaults.get("order", [])))
+        if item not in deleted_set
+    ]
+    for module_id in console_module_ids():
+        if module_id not in deleted_set and module_id not in order:
+            order.append(module_id)
+
+    unavailable = deleted_set | set(archive) | deep_set
+    visible = [item for item in order if item not in unavailable]
+    fallback = visible[0] if visible else (order[0] if order else console_module_ids()[0])
+    module_id = sanitize_console_module_id(
+        raw.get("lastModule", defaults.get("lastModule", fallback)),
+        fallback=fallback,
+    )
+    if module_id in unavailable:
+        module_id = fallback
+
+    return {
+        "order": order,
+        "archive": archive,
+        "deepArchive": deep_archive,
+        "deleted": deleted,
+        "lastModule": module_id,
+        "href": CONSOLE_MODULE_HREFS[module_id],
+    }
 
 
 def read_console_state():
@@ -7781,25 +7982,22 @@ def read_console_state():
         raw = json.loads(CONSOLE_STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
-    module_id = sanitize_console_module_id(raw.get("lastModule"))
-    return {
-        "lastModule": module_id,
-        "href": CONSOLE_MODULE_HREFS[module_id],
-    }
+    return normalize_console_state(raw)
 
 
 def write_console_state(payload):
     current = read_console_state()
-    if isinstance(payload, dict) and "lastModule" in payload:
-        module_id = sanitize_console_module_id(payload.get("lastModule"))
-        current = {
-            "lastModule": module_id,
-            "href": CONSOLE_MODULE_HREFS[module_id],
-        }
+    merged = {key: value for key, value in current.items() if key != "href"}
+    if isinstance(payload, dict):
+        for key in ("order", "archive", "deepArchive", "deleted", "lastModule"):
+            if key in payload:
+                merged[key] = payload.get(key)
+    current = normalize_console_state(merged)
+    stored = {key: value for key, value in current.items() if key != "href"}
     CONSOLE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONSOLE_STATE_FILE.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = CONSOLE_STATE_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, CONSOLE_STATE_FILE)
     return {"ok": True, "state": current}
 
 
@@ -7846,9 +8044,10 @@ def read_music_state():
     try:
         raw = json.loads(MUSIC_STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        raw = {}
+        raw = None
     if not isinstance(raw, dict):
-        raw = {}
+        release_music = read_release_defaults().get("music")
+        raw = release_music if isinstance(release_music, dict) else {}
     state = {
         "tiers": sanitize_string_map(raw.get("tiers")),
         "order": sanitize_string_list(raw.get("order")),
@@ -8276,6 +8475,7 @@ def music_track_from_path(path):
     stat = path.stat()
     rel = path.relative_to(MUSIC_DIR).as_posix()
     lyrics_path = lyrics_path_from_music_path(path)
+    lyrics_languages = lyrics_language_options_from_music_path(path)
     record = {
         "name": display_music_name(path.stem),
         "path": rel,
@@ -8287,7 +8487,25 @@ def music_track_from_path(path):
     if lyrics_path:
         record["lyrics"] = True
         record["lyricsType"] = lyrics_path.suffix.lower().lstrip(".")
-        record["lyricsUrl"] = "/api/music/lyrics?path=" + urllib.parse.quote(rel)
+        default_language = lyrics_file_language(lyrics_path)
+        lyrics_query = {"path": rel}
+        if default_language:
+            lyrics_query["language"] = default_language
+            record["lyricsLanguage"] = default_language
+        record["lyricsUrl"] = "/api/music/lyrics?" + urllib.parse.urlencode(lyrics_query)
+        if len(lyrics_languages) > 1:
+            record["lyricsLanguages"] = [
+                {
+                    "code": option["code"],
+                    "label": option["label"],
+                    "lyricsType": option["path"].suffix.lower().lstrip("."),
+                    "lyricsUrl": "/api/music/lyrics?" + urllib.parse.urlencode({
+                        "path": rel,
+                        "language": option["code"],
+                    }),
+                }
+                for option in lyrics_languages
+            ]
     return record
 
 

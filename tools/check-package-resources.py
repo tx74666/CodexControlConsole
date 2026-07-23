@@ -24,6 +24,7 @@ PUBLIC_MUSIC = {
     "House of Memories.mp3",
     "Liquid Roller.mp3",
     "Luminescence.mp3",
+    "Ma rose éternelle.mp3",
     "Never Be Alone.mp3",
     "Never Slow Me Down.mp3",
     "Outrun.mp3",
@@ -36,6 +37,9 @@ PUBLIC_LYRICS = {
     "Dancin.lrc",
     "Get Lucky.lrc",
     "House of Memories.lrc",
+    "Ma rose éternelle.lrc",
+    "Ma rose éternelle.en.lrc",
+    "Ma rose éternelle.zh.lrc",
     "Never Be Alone.lrc",
     "Toxic.lrc",
 }
@@ -84,7 +88,15 @@ def main():
         'IconFilename: "{app}\\Codex Console.exe"' in desktop_line,
         "shortcut icon is not pinned to the installed executable",
     )
-    require('Type: files; Name: "{autodesktop}\\Codex Console.lnk"' in installer, "old desktop shortcut is not repaired")
+    require("Check: ShouldCreateDesktopShortcut" in desktop_line, "desktop shortcut is overwritten during upgrades")
+    require(
+        'Type: files; Name: "{autodesktop}\\Codex Console.lnk"' not in installer,
+        "desktop shortcut is deleted during upgrades",
+    )
+    require(
+        "not FileExists(ExpandConstant('{autodesktop}\\Codex Console.lnk'))" in installer,
+        "desktop shortcut preservation check is missing",
+    )
     require('Filename: "{sys}\\ie4uinit.exe"; Parameters: "-show"' in installer, "Windows icon cache is not refreshed")
     require(
         'Type: filesandordirs; Name: "{app}\\_internal\\music"' in installer,
@@ -106,6 +118,32 @@ def main():
     require(len(manifests) == 1, "packaged manifest is missing or duplicated")
     manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
     require(manifest.get("edition") == "public", "release package is not the public edition")
+    defaults_files = list(app_dir.rglob("release-defaults.json"))
+    require(len(defaults_files) == 1, "release defaults are missing or duplicated")
+    release_defaults = json.loads(defaults_files[0].read_text(encoding="utf-8"))
+    default_music = release_defaults.get("music") or {}
+    require(set(default_music.get("order") or []) == PUBLIC_MUSIC, "release music order is incomplete")
+    require(len(default_music.get("order") or []) == len(PUBLIC_MUSIC), "release music order contains duplicates")
+    require(
+        set((default_music.get("tiers") or {}).values()) <= {"first", "second", "third"},
+        "release music tiers contain an invalid group",
+    )
+    default_modules = release_defaults.get("modules") or {}
+    expected_module_ids = {"manager", "workspace", "blender", "unity", "steamwork", "randomrealm", "music", "wallpaper"}
+    module_order = default_modules.get("order") or []
+    archive = default_modules.get("archive") or []
+    deep_archive = default_modules.get("deepArchive") or []
+    deleted = default_modules.get("deleted") or []
+    require(set(module_order) == expected_module_ids, "release module order is incomplete")
+    require(len(module_order) == len(expected_module_ids), "release module order contains duplicates")
+    require(not (set(archive) & set(deep_archive)), "release Archive levels overlap")
+    require(not ((set(archive) | set(deep_archive)) & set(deleted)), "deleted modules remain archived")
+    visible_modules = [
+        module_id for module_id in module_order
+        if module_id not in set(archive) | set(deep_archive) | set(deleted)
+    ]
+    require(visible_modules, "release layout has no visible module")
+    require(default_modules.get("lastModule") in visible_modules, "release default page is hidden")
 
     image_extensions = {".jpg", ".jpeg", ".png", ".webp"}
     wallpapers = [

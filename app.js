@@ -24,8 +24,16 @@ const storageKeys = {
   consoleView: "codexControl.consoleView.v1",
   blenderView: "codexControl.blenderView.v1",
   blenderPromptConfig: "codexControl.blenderPromptConfig.v1",
-  lyricsHeight: "codexControl.lyricsHeight.v1"
+  lyricsHeight: "codexControl.lyricsHeight.v1",
+  lyricsLanguages: "codexControl.lyricsLanguages.v1"
 };
+
+const releaseDefaults = window.CODEX_RELEASE_DEFAULTS && typeof window.CODEX_RELEASE_DEFAULTS === "object"
+  ? window.CODEX_RELEASE_DEFAULTS
+  : {};
+const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_DEVICE_LAYOUT === "object"
+  ? window.CODEX_DEVICE_LAYOUT
+  : {};
 
 const modules = [
   { id: "manager", labelKey: "managerNav", titleKey: "managerPageTitle", href: "manager.html" },
@@ -56,6 +64,7 @@ function normalizeEdition(value) {
 let consoleEdition = normalizeEdition(hasEditionQuery ? initialEditionQuery : "developer");
 
 const playbackModes = ["repeatAll", "repeatOne", "playOnce"];
+const lyricsLanguageCycleOrder = ["fr", "en", "zh"];
 const steamworksAppId = "3983670";
 const steamworksAppUrl = `https://partner.steamgames.com/apps/landing/${steamworksAppId}`;
 const steamworksBuildsUrl = `https://partner.steamgames.com/apps/builds/${steamworksAppId}`;
@@ -1936,6 +1945,7 @@ let musicLyricsSynced = false;
 let musicLyricsAnalysis = null;
 let musicLyricsLoadToken = 0;
 let musicLyricsLookupPath = "";
+let musicLyricsLanguagePreferences = loadMusicLyricsLanguagePreferences();
 let musicLyricsPreloadTimer = 0;
 let musicLyricsPlaybackPreloadKey = "";
 const musicLyricsCache = new Map();
@@ -1971,13 +1981,14 @@ let musicLyricMarksFlushPromise = null;
 let promotedLibraryTracks = loadPromotedLibraryTracks();
 let musicLibraryPollTimer = null;
 let musicStatePersistTimer = null;
+let consoleStatePersistTimer = null;
 let playbackMode = normalizePlaybackMode(localStorage.getItem(storageKeys.playbackMode));
 let draggedModuleId = "";
 let draggedTrackPath = "";
 let currentMusicDropTargetKey = "";
 let suppressTrackClickUntil = 0;
 let lastTrackPointerStart = 0;
-let lastPersistedModuleId = "";
+let lastPersistedConsoleState = "";
 let suppressModuleClickUntil = 0;
 let lastModulePointerStart = 0;
 let lastArchivePointerStart = 0;
@@ -1997,6 +2008,7 @@ let activeBlenderView = normalizeBlenderWorkspaceView(localStorage.getItem(stora
 let blenderViewTransitionTimer = 0;
 let blenderViewTransitionFrame = 0;
 let blenderViewTransitionAnimations = [];
+let blenderViewTransitionSequence = 0;
 let blenderGithubShareState = null;
 let blenderGithubBusy = false;
 let blenderGithubPublicConfirmed = false;
@@ -2280,13 +2292,56 @@ function rememberActiveModule(id) {
   }
 }
 
-function persistConsoleState(id) {
-  if (!isModuleId(id) || id === lastPersistedModuleId) return;
-  lastPersistedModuleId = id;
+function consoleStatePayload(id = activeModuleId) {
+  return {
+    order: moduleOrder(),
+    archive: archivedModuleIds(),
+    deepArchive: deepArchivedModuleIds(),
+    deleted: deletedModuleIds(),
+    lastModule: isModuleId(id) ? id : visibleModuleOrder()[0]
+  };
+}
+
+function persistConsoleState(id = activeModuleId) {
+  if (!isModuleId(id)) return;
+  if (consoleStatePersistTimer) {
+    window.clearTimeout(consoleStatePersistTimer);
+    consoleStatePersistTimer = null;
+  }
+  const body = JSON.stringify(consoleStatePayload(id));
+  if (body === lastPersistedConsoleState) return;
+  lastPersistedConsoleState = body;
   fetch("/api/console/state", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ lastModule: id }),
+    body,
+    keepalive: true
+  }).catch(() => {
+    if (lastPersistedConsoleState === body) lastPersistedConsoleState = "";
+  });
+}
+
+function persistConsoleStateSoon() {
+  if (consoleStatePersistTimer) window.clearTimeout(consoleStatePersistTimer);
+  consoleStatePersistTimer = window.setTimeout(() => persistConsoleState(activeModuleId), 80);
+}
+
+function flushConsoleStateBeforeUnload() {
+  if (consoleStatePersistTimer) {
+    window.clearTimeout(consoleStatePersistTimer);
+    consoleStatePersistTimer = null;
+  }
+  const body = JSON.stringify(consoleStatePayload(activeModuleId));
+  if (navigator.sendBeacon) {
+    try {
+      navigator.sendBeacon("/api/console/state", new Blob([body], { type: "application/json" }));
+      return;
+    } catch {}
+  }
+  fetch("/api/console/state", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
     keepalive: true
   }).catch(() => {});
 }
@@ -2463,6 +2518,7 @@ function normalizeBlenderWorkspaceView(value) {
 }
 
 function setBlenderWorkspaceView(value, options = {}) {
+  const transitionSequence = ++blenderViewTransitionSequence;
   const previousView = activeBlenderView;
   activeBlenderView = normalizeBlenderWorkspaceView(value);
   if (options.persist !== false) {
@@ -2548,8 +2604,9 @@ function setBlenderWorkspaceView(value, options = {}) {
   oldView.style.transform = neutral;
   stage.getBoundingClientRect();
 
+  let finalPaintScheduled = false;
   const cleanup = () => {
-    if (activeBlenderView !== targetViewName) return;
+    if (transitionSequence !== blenderViewTransitionSequence || activeBlenderView !== targetViewName) return;
     window.clearTimeout(blenderViewTransitionTimer);
     window.cancelAnimationFrame(blenderViewTransitionFrame);
     blenderViewTransitionFrame = 0;
@@ -2566,12 +2623,18 @@ function setBlenderWorkspaceView(value, options = {}) {
   };
 
   const cleanupAfterFinalPaint = () => {
-    if (activeBlenderView !== targetViewName) return;
+    if (
+      finalPaintScheduled
+      || transitionSequence !== blenderViewTransitionSequence
+      || activeBlenderView !== targetViewName
+    ) return;
+    finalPaintScheduled = true;
+    window.clearTimeout(blenderViewTransitionTimer);
     window.cancelAnimationFrame(blenderViewTransitionFrame);
     blenderViewTransitionFrame = window.requestAnimationFrame(() => {
       blenderViewTransitionFrame = window.requestAnimationFrame(() => {
         blenderViewTransitionFrame = 0;
-        cleanup();
+        blenderViewTransitionTimer = window.setTimeout(cleanup, 40);
       });
     });
   };
@@ -2598,7 +2661,15 @@ function setBlenderWorkspaceView(value, options = {}) {
   ], timing);
   blenderViewTransitionAnimations = [oldAnimation, nextAnimation];
   Promise.allSettled(blenderViewTransitionAnimations.map(animation => animation.finished)).then(cleanupAfterFinalPaint);
-  blenderViewTransitionTimer = window.setTimeout(cleanup, 560);
+  blenderViewTransitionTimer = window.setTimeout(() => {
+    if (transitionSequence !== blenderViewTransitionSequence || activeBlenderView !== targetViewName) return;
+    for (const animation of blenderViewTransitionAnimations) {
+      try {
+        animation.finish();
+      } catch {}
+    }
+    cleanupAfterFinalPaint();
+  }, 560);
 }
 
 function recordModuleChange(beforeId, afterId) {
@@ -2669,15 +2740,43 @@ function ensureEditionModuleLayout() {
   if (consoleEdition !== "public") return;
   if (localStorage.getItem(storageKeys.publicLayoutInitialized) === "true") return;
 
-  const visible = ["workspace", "music", "wallpaper"];
-  const archived = ["blender"];
-  const deepArchived = ["manager", "unity", "steamwork", "randomrealm"];
-  localStorage.setItem(storageKeys.moduleOrder, JSON.stringify([...visible, ...archived, ...deepArchived]));
+  const releaseLayout = releaseDefaults.modules && typeof releaseDefaults.modules === "object"
+    ? releaseDefaults.modules
+    : {};
+  const configured = deviceLayoutDefaults.edition === consoleEdition && Array.isArray(deviceLayoutDefaults.order)
+    ? deviceLayoutDefaults
+    : releaseLayout;
+  const validIds = editionModuleSet();
+  const uniqueValid = value => {
+    const result = [];
+    for (const id of Array.isArray(value) ? value : []) {
+      if (validIds.has(id) && !result.includes(id)) result.push(id);
+    }
+    return result;
+  };
+  const fallbackOrder = ["workspace", "music", "wallpaper", "blender", "manager", "unity", "steamwork", "randomrealm"];
+  const deleted = uniqueValid(configured.deleted);
+  const deletedSet = new Set(deleted);
+  const deepArchived = uniqueValid(configured.deepArchive).filter(id => !deletedSet.has(id));
+  const deepSet = new Set(deepArchived);
+  const archived = uniqueValid(configured.archive).filter(id => !deletedSet.has(id) && !deepSet.has(id));
+  const order = uniqueValid(Array.isArray(configured.order) ? configured.order : fallbackOrder)
+    .filter(id => !deletedSet.has(id));
+  for (const item of availableModules()) {
+    if (!deletedSet.has(item.id) && !order.includes(item.id)) order.push(item.id);
+  }
+  const unavailable = new Set([...deleted, ...archived, ...deepArchived]);
+  const visible = order.filter(id => !unavailable.has(id));
+  const fallbackLastModule = visible[0] || order[0] || "workspace";
+  const configuredLastModule = isModuleId(configured.lastModule) && visible.includes(configured.lastModule)
+    ? configured.lastModule
+    : fallbackLastModule;
+
+  localStorage.setItem(storageKeys.moduleOrder, JSON.stringify(order));
   localStorage.setItem(storageKeys.moduleArchive, JSON.stringify(archived));
   localStorage.setItem(storageKeys.moduleDeepArchive, JSON.stringify(deepArchived));
-  localStorage.setItem(storageKeys.moduleDeleted, "[]");
-  const saved = localStorage.getItem(storageKeys.lastModule) || "";
-  if (!visible.includes(saved)) localStorage.setItem(storageKeys.lastModule, "workspace");
+  localStorage.setItem(storageKeys.moduleDeleted, JSON.stringify(deleted));
+  localStorage.setItem(storageKeys.lastModule, configuredLastModule);
   localStorage.setItem(storageKeys.publicLayoutInitialized, "true");
 }
 
@@ -2685,6 +2784,7 @@ function saveModuleOrder(order) {
   const validIds = editionModuleSet();
   const deleted = new Set(deletedModuleIds());
   localStorage.setItem(storageKeys.moduleOrder, JSON.stringify(order.filter(id => validIds.has(id) && !deleted.has(id))));
+  persistConsoleStateSoon();
 }
 
 function archivedModuleIds() {
@@ -2735,6 +2835,7 @@ function saveArchivedModuleIds(ids) {
   const deepSet = new Set(deepArchivedModuleIds());
   const deleted = new Set(deletedModuleIds());
   localStorage.setItem(storageKeys.moduleArchive, JSON.stringify(ids.filter(id => validIds.has(id) && !deepSet.has(id) && !deleted.has(id))));
+  persistConsoleStateSoon();
 }
 
 function saveDeepArchivedModuleIds(ids) {
@@ -2742,12 +2843,14 @@ function saveDeepArchivedModuleIds(ids) {
   const validIds = editionModuleSet();
   const deleted = new Set(deletedModuleIds());
   localStorage.setItem(storageKeys.moduleDeepArchive, JSON.stringify(ids.filter(id => validIds.has(id) && !deleted.has(id))));
+  persistConsoleStateSoon();
 }
 
 function saveDeletedModuleIds(ids) {
   if (consoleEdition === "lite") return;
   const validIds = editionModuleSet();
   localStorage.setItem(storageKeys.moduleDeleted, JSON.stringify(ids.filter(id => validIds.has(id))));
+  persistConsoleStateSoon();
 }
 
 function visibleModuleOrder() {
@@ -4941,9 +5044,105 @@ function renderWallpapers() {
   }
 }
 
+function normalizeLyricsLanguageCode(value) {
+  const clean = String(value || "").trim().toLowerCase().replace(/_/g, "-");
+  const aliases = {
+    fra: "fr",
+    fre: "fr",
+    french: "fr",
+    eng: "en",
+    english: "en",
+    cn: "zh",
+    zho: "zh",
+    chi: "zh",
+    chinese: "zh",
+    "zh-cn": "zh",
+    "zh-hans": "zh"
+  };
+  const languageCode = aliases[clean] || clean;
+  return lyricsLanguageCycleOrder.includes(languageCode) ? languageCode : "";
+}
+
+function loadMusicLyricsLanguagePreferences() {
+  try {
+    const payload = JSON.parse(localStorage.getItem(storageKeys.lyricsLanguages) || "{}");
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+    return Object.fromEntries(
+      Object.entries(payload)
+        .map(([path, value]) => [normalizeMusicTrackPathValue(path), normalizeLyricsLanguageCode(value)])
+        .filter(([path, value]) => path && value)
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveMusicLyricsLanguagePreferences() {
+  localStorage.setItem(storageKeys.lyricsLanguages, JSON.stringify(musicLyricsLanguagePreferences));
+}
+
+function musicLyricsLanguageOptions(item) {
+  if (!Array.isArray(item?.lyricsLanguages)) return [];
+  const unique = new Map();
+  item.lyricsLanguages.forEach(option => {
+    const code = normalizeLyricsLanguageCode(option?.code);
+    if (!code || !option?.lyricsUrl || unique.has(code)) return;
+    unique.set(code, { ...option, code });
+  });
+  return lyricsLanguageCycleOrder.map(code => unique.get(code)).filter(Boolean);
+}
+
+function preferredMusicLyricsLanguage(item) {
+  const options = musicLyricsLanguageOptions(item);
+  if (!options.length) return normalizeLyricsLanguageCode(item?.lyricsLanguage);
+  const available = new Set(options.map(option => option.code));
+  const path = normalizeMusicTrackPathValue(item?.path);
+  const saved = normalizeLyricsLanguageCode(musicLyricsLanguagePreferences[path]);
+  if (available.has(saved)) return saved;
+  const current = normalizeLyricsLanguageCode(item?.lyricsLanguage);
+  if (available.has(current)) return current;
+  return options[0].code;
+}
+
+function musicTrackWithPreferredLyrics(item) {
+  if (!item) return item;
+  const options = musicLyricsLanguageOptions(item);
+  if (!options.length) return item;
+  const languageCode = preferredMusicLyricsLanguage(item);
+  const option = options.find(candidate => candidate.code === languageCode) || options[0];
+  return {
+    ...item,
+    lyrics: true,
+    lyricsLanguage: option.code,
+    lyricsType: option.lyricsType || item.lyricsType || "lrc",
+    lyricsUrl: option.lyricsUrl
+  };
+}
+
 function selectedTrack() {
   const playable = allMusicTracks();
-  return playable.find(item => item.path === selectedTrackPath) || playable[0] || null;
+  const item = playable.find(candidate => candidate.path === selectedTrackPath) || playable[0] || null;
+  return musicTrackWithPreferredLyrics(item);
+}
+
+function cycleNowPlayingLyricsLanguage(direction = 1) {
+  const item = selectedTrack();
+  const options = musicLyricsLanguageOptions(item);
+  if (!item?.path || options.length < 2) return false;
+  const currentCode = preferredMusicLyricsLanguage(item);
+  const currentIndex = Math.max(0, options.findIndex(option => option.code === currentCode));
+  const step = direction < 0 ? -1 : 1;
+  const nextIndex = (currentIndex + step + options.length) % options.length;
+  musicLyricsLanguagePreferences[item.path] = options[nextIndex].code;
+  saveMusicLyricsLanguagePreferences();
+  loadLyricsForTrack(musicTrackWithPreferredLyrics(item));
+  return true;
+}
+
+function handleNowPlayingLyricsContextMenu(event) {
+  if (musicLyricsLanguageOptions(selectedTrack()).length < 2) return;
+  event.preventDefault();
+  cycleNowPlayingLyricsLanguage(event.shiftKey ? -1 : 1);
 }
 
 function normalizeMusicTrackPathValue(path) {
@@ -7220,7 +7419,7 @@ function parseLyricsText(rawText, type = "lrc") {
   for (const rawLine of rawLines) {
     const line = rawLine.trim();
     if (!line) continue;
-    if (type === "lrc" && /^\[(?:ar|al|ti|by|offset|length|re):/i.test(line)) continue;
+    if (type === "lrc" && /^\[(?:ar|al|ti|by|offset|length|re|lang|language):/i.test(line)) continue;
 
     const tags = [...line.matchAll(/\[([0-9]{1,2}:[0-9]{2}(?:[.:][0-9]{1,3})?)\]/g)];
     const lyric = line.replace(/\[[^\]]+\]/g, "").trim();
@@ -7434,17 +7633,22 @@ function renderLyricsPanel() {
     closeLyricsTimingEditor();
   }
   if (els.nowPlayingArt) {
-    const label = hasCachedLyrics && selected
+    const baseLabel = hasCachedLyrics && selected
       ? text("lyricsButtonLabel", displayTrackName(selected.name))
       : selected
         ? text("lyricsFindLabel", displayTrackName(selected.name))
         : text("nowPlayingLabel");
+    const languageOptions = musicLyricsLanguageOptions(selected);
+    const activeLanguage = languageOptions.length > 1 ? preferredMusicLyricsLanguage(selected).toUpperCase() : "";
+    const label = activeLanguage ? `${baseLabel} · ${activeLanguage}` : baseLabel;
     els.nowPlayingArt.classList.toggle("has-lyrics", hasCachedLyrics);
     els.nowPlayingArt.classList.toggle("can-find-lyrics", Boolean(selectedPath));
     els.nowPlayingArt.classList.toggle("lyrics-searching", Boolean(selectedPath && musicLyricsLookupPath === selectedPath));
     els.nowPlayingArt.title = selectedPath ? label : "";
     els.nowPlayingArt.setAttribute("aria-label", label);
     els.nowPlayingArt.setAttribute("aria-expanded", String(isOpen));
+    if (activeLanguage) els.nowPlayingArt.dataset.lyricsLanguage = activeLanguage.toLowerCase();
+    else delete els.nowPlayingArt.dataset.lyricsLanguage;
     els.nowPlayingArt.tabIndex = selectedPath ? 0 : -1;
   }
   detachLyricsTimingEditorFromList();
@@ -10231,6 +10435,13 @@ function musicLyricsCacheType(item) {
   return String(item?.lyricsType || "lrc");
 }
 
+function musicLyricsRequestKey(item, kind = "text") {
+  const path = musicLyricsCachePath(item);
+  const languageCode = normalizeLyricsLanguageCode(item?.lyricsLanguage);
+  const source = kind === "analysis" ? languageCode : String(item?.lyricsUrl || "");
+  return `${kind}:${path}:${source}`;
+}
+
 function getMusicLyricsCacheEntry(item) {
   const path = musicLyricsCachePath(item);
   if (!path) return null;
@@ -10246,11 +10457,16 @@ function setMusicLyricsCacheEntry(item, patch = {}) {
   const path = musicLyricsCachePath(item);
   if (!path) return null;
   const current = musicLyricsCache.get(path) || {};
+  const nextLyricsUrl = typeof item === "object" && item ? item.lyricsUrl : current.lyricsUrl;
+  const sourceChanged = Boolean(current.lyricsUrl && nextLyricsUrl && current.lyricsUrl !== nextLyricsUrl);
   const entry = {
-    ...current,
+    ...(sourceChanged ? {} : current),
     path,
-    lyricsUrl: typeof item === "object" && item ? item.lyricsUrl : current.lyricsUrl,
+    lyricsUrl: nextLyricsUrl,
     lyricsType: typeof item === "object" && item ? musicLyricsCacheType(item) : current.lyricsType,
+    lyricsLanguage: typeof item === "object" && item
+      ? normalizeLyricsLanguageCode(item.lyricsLanguage)
+      : current.lyricsLanguage,
     ...patch
   };
   musicLyricsCache.set(path, entry);
@@ -10258,11 +10474,13 @@ function setMusicLyricsCacheEntry(item, patch = {}) {
 }
 
 async function fetchParsedLyricsForTrack(item) {
+  item = musicTrackWithPreferredLyrics(item);
   const path = musicLyricsCachePath(item);
   if (!item?.lyricsUrl || !path) return null;
   const cached = getMusicLyricsCacheEntry(item);
   if (cached?.lines) return cached;
-  const existing = musicLyricsTextPromises.get(path);
+  const requestKey = musicLyricsRequestKey(item);
+  const existing = musicLyricsTextPromises.get(requestKey);
   if (existing) return existing;
 
   const promise = (async () => {
@@ -10277,31 +10495,36 @@ async function fetchParsedLyricsForTrack(item) {
       lyricsLoadedAt: Date.now()
     });
   })().finally(() => {
-    if (musicLyricsTextPromises.get(path) === promise) musicLyricsTextPromises.delete(path);
+    if (musicLyricsTextPromises.get(requestKey) === promise) musicLyricsTextPromises.delete(requestKey);
   });
-  musicLyricsTextPromises.set(path, promise);
+  musicLyricsTextPromises.set(requestKey, promise);
   return promise;
 }
 
 async function fetchLyricsAnalysisForTrack(item) {
+  item = musicTrackWithPreferredLyrics(item);
   const path = musicLyricsCachePath(item);
   if (!path) return null;
   const cached = getMusicLyricsCacheEntry(item);
   if (cached?.analysis?.ok) return cached.analysis;
-  const existing = musicLyricsAnalysisPromises.get(path);
+  const requestKey = musicLyricsRequestKey(item, "analysis");
+  const existing = musicLyricsAnalysisPromises.get(requestKey);
   if (existing) return existing;
 
   const promise = (async () => {
-    const response = await fetch(`/api/music/lyrics/analysis?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+    const query = new URLSearchParams({ path });
+    const languageCode = normalizeLyricsLanguageCode(item?.lyricsLanguage);
+    if (languageCode) query.set("language", languageCode);
+    const response = await fetch(`/api/music/lyrics/analysis?${query}`, { cache: "no-store" });
     if (!response.ok) return null;
     const result = await response.json();
     const analysis = result?.ok ? result : null;
     if (analysis) setMusicLyricsCacheEntry(item, { analysis, analysisLoadedAt: Date.now() });
     return analysis;
   })().finally(() => {
-    if (musicLyricsAnalysisPromises.get(path) === promise) musicLyricsAnalysisPromises.delete(path);
+    if (musicLyricsAnalysisPromises.get(requestKey) === promise) musicLyricsAnalysisPromises.delete(requestKey);
   });
-  musicLyricsAnalysisPromises.set(path, promise);
+  musicLyricsAnalysisPromises.set(requestKey, promise);
   return promise;
 }
 
@@ -10331,6 +10554,7 @@ function applyLyricsAnalysisToActiveTrack(item, analysis) {
 }
 
 async function ensureLyricsAnalysisWarm(item) {
+  item = musicTrackWithPreferredLyrics(item);
   if (!hasMusic || !item?.path || !item.lyricsUrl) return null;
   const path = musicLyricsCachePath(item);
   const cached = getMusicLyricsCacheEntry(item);
@@ -10349,6 +10573,7 @@ async function ensureLyricsAnalysisWarm(item) {
 }
 
 async function preloadLyricsForTrack(item) {
+  item = musicTrackWithPreferredLyrics(item);
   if (!hasMusic || !item?.path || !item.lyricsUrl) return null;
   try {
     const entry = await fetchParsedLyricsForTrack(item);
@@ -10379,6 +10604,7 @@ function preloadLyricsHotspotLine(lineIndex) {
 }
 
 async function loadLyricsAnalysisForTrack(item, token) {
+  item = musicTrackWithPreferredLyrics(item);
   if (!item?.path || !musicLyricsSynced) return;
   try {
     const result = await fetchLyricsAnalysisForTrack(item);
@@ -10393,6 +10619,7 @@ async function loadLyricsAnalysisForTrack(item, token) {
 }
 
 async function loadLyricsForTrack(item) {
+  item = musicTrackWithPreferredLyrics(item);
   flushPendingMusicLyricMarks();
   const token = ++musicLyricsLoadToken;
   musicLyricsLookupPath = "";
@@ -10541,6 +10768,11 @@ function toggleNowPlayingLyrics() {
     return;
   }
   findLyricsForTrack(item);
+}
+
+function handleNowPlayingLyricsClick(event) {
+  if (event.button !== 0 || event.detail > 1) return;
+  toggleNowPlayingLyrics();
 }
 
 function renderMusic() {
@@ -16999,7 +17231,10 @@ bindSteamworkDropzone("publishTool", els.steamworkPublishToolDropzone, els.steam
 if (hasMusic) els.musicDock.addEventListener("dragover", handleLocalMusicDragOver);
 if (hasMusic) els.musicDock.addEventListener("dragleave", handleLocalMusicDragLeave);
 if (hasMusic) els.musicDock.addEventListener("drop", handleLocalMusicDrop);
-if (hasMusic && els.nowPlayingArt) els.nowPlayingArt.addEventListener("dblclick", toggleNowPlayingLyrics);
+if (hasMusic && els.nowPlayingArt) {
+  els.nowPlayingArt.addEventListener("click", handleNowPlayingLyricsClick);
+  els.nowPlayingArt.addEventListener("contextmenu", handleNowPlayingLyricsContextMenu);
+}
 if (hasMusic && els.nowPlayingLyricsPanel) {
   els.nowPlayingLyricsPanel.addEventListener("pointerdown", beginLyricsPanelResize);
   els.nowPlayingLyricsPanel.addEventListener("pointermove", setLyricsPanelResizeHover);
@@ -17010,9 +17245,12 @@ if (hasMusic && els.nowPlayingLyricsList) {
   els.nowPlayingLyricsList.addEventListener("contextmenu", openLyricsTimingEditorFromContext);
 }
 if (hasMusic && els.lyricsTimingEditor) bindLyricsTimingEditorEvents(els.lyricsTimingEditor);
-if (hasMusic) window.addEventListener("beforeunload", () => {
-  flushPendingMusicLyricMarks({ beacon: true });
-  flushMusicStateBeforeUnload();
+window.addEventListener("beforeunload", () => {
+  flushConsoleStateBeforeUnload();
+  if (hasMusic) {
+    flushPendingMusicLyricMarks({ beacon: true });
+    flushMusicStateBeforeUnload();
+  }
 });
 document.addEventListener("visibilitychange", () => {
   if (hasMusic && document.visibilityState === "hidden") {

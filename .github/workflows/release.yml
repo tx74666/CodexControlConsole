@@ -6,7 +6,7 @@ on:
       version:
         description: Release version, for example v0.4.0
         required: true
-        default: v0.6.1
+        default: v0.6.2
   push:
     tags:
       - "v*"
@@ -128,7 +128,7 @@ jobs:
 
             Download only **CodexControlConsole-Setup-x64.exe**.
 
-            This release includes all 15 built-in tracks, all 7 wallpapers, clean song titles, and non-destructive resource sync for missing built-in media.
+            This release adds instant multilingual lyric switching, single-click lyric visibility, publisher-defined music/tab ordering for new installs, non-destructive built-in media sync, and desktop shortcut position preservation during upgrades.
 
             1. Double-click the downloaded Setup file.
             2. Choose **简体中文** or **English**.
@@ -138,6 +138,8 @@ jobs:
             ## Windows 64 位
 
             只需下载 **CodexControlConsole-Setup-x64.exe**。
+
+            本版包含 16 首内置歌曲、7 张桌布、多语言歌词切换、新设备默认排列同步，并确保升级时不移动已有桌面快捷方式。
 
             1. 双击下载好的安装程序。
             2. 选择 **简体中文** 或 **English**。

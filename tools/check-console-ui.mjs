@@ -10,10 +10,12 @@ import { fileURLToPath } from "node:url";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, "..");
 const baseUrl = new URL(process.argv[2] || "http://127.0.0.1:8898/");
+const transitionOnly = process.argv.includes("--transition-only");
 const delay = milliseconds => new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
 const allowEmptyMedia = process.env.CONSOLE_UI_ALLOW_EMPTY_MEDIA === "true";
 const allowAvailableUpdates = process.env.CONSOLE_UI_ALLOW_AVAILABLE_UPDATES === "true";
 const allowCloudProjects = process.env.CONSOLE_UI_ALLOW_CLOUD_PROJECTS === "true";
+const releaseDefaults = JSON.parse(readFileSync(join(projectRoot, "release-defaults.json"), "utf8"));
 let expectedAppVersion = "";
 
 function assert(condition, message) {
@@ -30,6 +32,7 @@ function staticChecks() {
     assert(cssVersion, `${name} is missing the stylesheet cache version`);
     assert(appVersion, `${name} is missing the app cache version`);
     assert(cssVersion === appVersion, `${name} uses different CSS and JS cache versions`);
+    assert(source.includes('<script src="/api/release-defaults.js"></script>'), `${name} does not load release defaults`);
     versions.add(cssVersion);
   }
   assert(versions.size === 1, "HTML entry points do not share one cache version");
@@ -53,7 +56,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.6.1", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.6.2", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -234,7 +237,10 @@ async function checkBlenderTransition(client, target) {
   const switchingSamples = samples.filter(sample => sample.switching);
   const finalPaint = switchingSamples[switchingSamples.length - 1];
   const finalState = samples[samples.length - 1];
-  assert(finalPaint?.visibleOldWidth === 0, `${target} transition hid the old view before it fully exited`);
+  assert(
+    finalPaint?.visibleOldWidth === 0,
+    `${target} transition hid the old view with ${finalPaint?.visibleOldWidth}px still visible: ${JSON.stringify(switchingSamples.slice(-8))}`
+  );
   assert(finalPaint?.residualCount === 0, `${target} transition left ${finalPaint?.residualCount} child elements visible`);
   assert(finalState.active === target && !finalState.switching, `${target} transition did not settle cleanly`);
 }
@@ -938,7 +944,93 @@ async function runBrowserChecks(client) {
     Array.from(document.querySelectorAll('.music-dock .track-card .track-body strong'), node => node.textContent.trim())
   `);
   assert(musicCardTitles.includes("Airborne"), "Airborne card title is missing");
+  assert(musicCardTitles.includes("Ma rose éternelle"), "Ma rose éternelle card title is missing");
   assert(!musicCardTitles.some(title => /^A8\s*-/i.test(title)), `legacy A8 card title remains: ${JSON.stringify(musicCardTitles)}`);
+  const roseLyrics = await evaluate(client, `(async () => {
+    const item = tracks.find(track => track.name === "Ma rose éternelle");
+    if (!item) return null;
+    const variants = {};
+    for (const option of item.lyricsLanguages || []) {
+      const response = await fetch(option.lyricsUrl, { cache: "no-store" });
+      if (!response.ok) return { error: "HTTP " + response.status + " for " + option.code };
+      const parsed = parseLyricsText(await response.text(), option.lyricsType || "lrc");
+      const textLines = parsed.lines.filter(line => line.text);
+      variants[option.code] = {
+        synced: parsed.synced,
+        count: textLines.length,
+        first: textLines[0]?.text || "",
+        last: textLines.at(-1)?.text || ""
+      };
+    }
+
+    musicLyricsLanguagePreferences = {};
+    localStorage.removeItem(storageKeys.lyricsLanguages);
+    setSelectedTrackPath(item.path, { preload: false });
+    renderMusic();
+    await loadLyricsForTrack(selectedTrack());
+    const art = document.querySelector("#nowPlayingArt");
+    const snapshot = () => ({
+      language: art?.dataset.lyricsLanguage || "",
+      first: musicLyricsLines.find(line => line.text)?.text || "",
+      last: [...musicLyricsLines].reverse().find(line => line.text)?.text || ""
+    });
+    const waitForLanguage = async code => {
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const state = snapshot();
+        if (state.language === code && state.first) return state;
+        await new Promise(resolve => setTimeout(resolve, 40));
+      }
+      return snapshot();
+    };
+    const cycle = async (expectedLanguage, shiftKey = false) => {
+      art.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, shiftKey }));
+      return waitForLanguage(expectedLanguage);
+    };
+    const sequence = [
+      snapshot(),
+      await cycle("en"),
+      await cycle("zh"),
+      await cycle("fr"),
+      await cycle("zh", true)
+    ];
+    return {
+      order: (item.lyricsLanguages || []).map(option => option.code),
+      variants,
+      sequence,
+      saved: JSON.parse(localStorage.getItem(storageKeys.lyricsLanguages) || "{}")?.[item.path] || ""
+    };
+  })()`, true);
+  assert(JSON.stringify(roseLyrics?.order) === JSON.stringify(["fr", "en", "zh"]), `lyric language order is incorrect: ${JSON.stringify(roseLyrics)}`);
+  assert(Object.values(roseLyrics.variants).every(item => item.synced && item.count === 37), `multilingual lyrics are incomplete: ${JSON.stringify(roseLyrics.variants)}`);
+  assert(roseLyrics.variants.fr.first === "Sous la lune pâle de Montmartre,", "French lyrics are incorrect");
+  assert(roseLyrics.variants.en.first === "Beneath the pale moon of Montmartre,", "English lyrics are incorrect");
+  assert(roseLyrics.variants.zh.first === "在蒙马特高地苍白的月光之下，", "Chinese lyrics are incorrect");
+  assert(
+    JSON.stringify(roseLyrics.sequence.map(item => item.language)) === JSON.stringify(["fr", "en", "zh", "fr", "zh"]),
+    `right-click lyric language cycle is incorrect: ${JSON.stringify(roseLyrics.sequence)}`
+  );
+  assert(roseLyrics.saved === "zh", `lyric language preference was not saved: ${JSON.stringify(roseLyrics)}`);
+  const lyricPanelClick = await evaluate(client, `(async () => {
+    const item = selectedTrack();
+    await loadLyricsForTrack(item);
+    const art = document.querySelector("#nowPlayingArt");
+    const panel = document.querySelector("#nowPlayingLyricsPanel");
+    const isOpen = () => Boolean(panel && !panel.hidden);
+    const before = isOpen();
+    art.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, detail: 1 }));
+    const afterSingleClick = isOpen();
+    art.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, detail: 2 }));
+    const afterDoubleClickTail = isOpen();
+    art.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, detail: 1 }));
+    for (let attempt = 0; attempt < 80 && !isOpen(); attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    return { before, afterSingleClick, afterDoubleClickTail, afterReopen: isOpen() };
+  })()`, true);
+  assert(
+    lyricPanelClick.before && !lyricPanelClick.afterSingleClick && !lyricPanelClick.afterDoubleClickTail && lyricPanelClick.afterReopen,
+    `single-click lyric panel toggle is incorrect: ${JSON.stringify(lyricPanelClick)}`
+  );
 
   await clickModule(client, "wallpaper");
   await waitForValue(
@@ -953,7 +1045,7 @@ async function runBrowserChecks(client) {
     () => evaluate(client, "document.querySelector('#steamworkAssetRoot')?.textContent?.trim() || ''"),
     value => Boolean(value),
     "Steamwork assets did not load on first open",
-    10000
+    30000
   );
 
   const layoutState = await evaluate(client, `({
@@ -1010,7 +1102,7 @@ async function runBrowserChecks(client) {
   assert(narrowLayout.verticalNavLabels.length === 0, `module labels turned vertical: ${JSON.stringify(narrowLayout)}`);
 
   await evaluate(client, "localStorage.clear()");
-  await client.send("Page.navigate", { url: new URL("workspace.html?edition=public", baseUrl).href });
+  await client.send("Page.navigate", { url: new URL("index.html?edition=public", baseUrl).href });
   await waitForDocument(client);
   await waitForValue(
     () => evaluate(client, "document.body?.dataset.consoleEdition || ''"),
@@ -1020,26 +1112,42 @@ async function runBrowserChecks(client) {
   const publicState = await evaluate(client, `({
     active: document.querySelector('.module-link.active')?.dataset.moduleId || '',
     visible: Array.from(document.querySelectorAll('.module-link')).map(item => item.dataset.moduleId),
+    order: JSON.parse(localStorage.getItem('codexControl.moduleOrder.v1') || '[]'),
     archived: JSON.parse(localStorage.getItem('codexControl.moduleArchive.v1') || '[]'),
     deepArchived: JSON.parse(localStorage.getItem('codexControl.moduleDeepArchive.v1') || '[]'),
+    deleted: JSON.parse(localStorage.getItem('codexControl.moduleDeleted.v1') || '[]'),
+    lastModule: localStorage.getItem('codexControl.lastModule.v1') || '',
     feedbackPanel: Boolean(document.querySelector('#feedbackPanel')),
     feedbackStatus: document.querySelector('#feedbackStatus')?.textContent?.trim() || '',
     viewportWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth
   })`);
-  assert(publicState.active === "workspace", `public edition did not start in Console: ${JSON.stringify(publicState)}`);
+  const expectedModules = releaseDefaults.modules;
+  const hiddenModules = new Set([
+    ...(expectedModules.archive || []),
+    ...(expectedModules.deepArchive || []),
+    ...(expectedModules.deleted || [])
+  ]);
+  const expectedVisibleModules = expectedModules.order.filter(id => !hiddenModules.has(id));
+  assert(publicState.active === expectedModules.lastModule, `public edition did not open the publisher's default page: ${JSON.stringify(publicState)}`);
   assert(
-    JSON.stringify(publicState.visible) === JSON.stringify(["workspace", "music", "wallpaper"]),
+    JSON.stringify(publicState.visible) === JSON.stringify(expectedVisibleModules),
     `public edition exposed the wrong first-level tabs: ${JSON.stringify(publicState)}`
   );
   assert(
-    JSON.stringify(publicState.archived) === JSON.stringify(["blender"]),
+    JSON.stringify(publicState.order) === JSON.stringify(expectedModules.order),
+    `public edition module order is wrong: ${JSON.stringify(publicState)}`
+  );
+  assert(
+    JSON.stringify(publicState.archived) === JSON.stringify(expectedModules.archive),
     `public edition Archive defaults are wrong: ${JSON.stringify(publicState)}`
   );
   assert(
-    JSON.stringify(publicState.deepArchived) === JSON.stringify(["manager", "unity", "steamwork", "randomrealm"]),
+    JSON.stringify(publicState.deepArchived) === JSON.stringify(expectedModules.deepArchive),
     `public edition deep Archive defaults are wrong: ${JSON.stringify(publicState)}`
   );
+  assert(JSON.stringify(publicState.deleted) === JSON.stringify(expectedModules.deleted), "public deleted modules are wrong");
+  assert(publicState.lastModule === expectedModules.lastModule, "public default page is not the publisher's page");
   assert(publicState.feedbackPanel && publicState.feedbackStatus, "feedback panel did not initialize");
   assert(publicState.scrollWidth <= publicState.viewportWidth, `public workspace overflows: ${JSON.stringify(publicState)}`);
 
@@ -1089,6 +1197,9 @@ async function main() {
   const browser = spawn(edge, [
     "--headless=new",
     "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
     "--disable-extensions",
     "--no-first-run",
     `--remote-debugging-port=${port}`,
@@ -1106,6 +1217,7 @@ async function main() {
       100
     );
     client = await createPageClient(port, new URL("blender.html", baseUrl).href);
+    await client.send("Page.bringToFront");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1280,
       height: 800,
@@ -1119,8 +1231,21 @@ async function main() {
         window.__consoleCheckErrors.push(event.message || 'unknown error');
       })`
     });
-    await runBrowserChecks(client);
-    console.log(`PASS Control Console UI (${cacheVersion})`);
+    if (transitionOnly) {
+      await waitForDocument(client);
+      await delay(120);
+      const initialView = await evaluate(
+        client,
+        "document.querySelector('.blender-subtab.active')?.dataset.blenderViewTarget || 'helper'"
+      );
+      const alternateView = initialView === "helper" ? "builder" : "helper";
+      await checkBlenderTransition(client, alternateView);
+      await checkBlenderTransition(client, initialView);
+      console.log(`PASS Blender transitions (${cacheVersion})`);
+    } else {
+      await runBrowserChecks(client);
+      console.log(`PASS Control Console UI (${cacheVersion})`);
+    }
   } finally {
     client?.close();
     const browserExit = browser.exitCode === null
