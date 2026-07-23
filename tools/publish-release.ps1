@@ -124,7 +124,15 @@ if ($LASTEXITCODE -ne 0 -or -not $Head) { throw "Unable to resolve HEAD." }
 
 Invoke-GitWithRetry -Arguments @("push", "origin", "main")
 
-$ExistingTagCommit = (& git rev-list -n 1 $Tag 2>$null | Out-String).Trim()
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+  $ErrorActionPreference = "Continue"
+  $ExistingTagCommit = (& git rev-list -n 1 $Tag 2>$null | Out-String).Trim()
+  $ExistingTagExitCode = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($ExistingTagExitCode -ne 0) { $ExistingTagCommit = "" }
 if ($ExistingTagCommit -and $ExistingTagCommit -ne $Head) {
   throw "$Tag already points to $ExistingTagCommit instead of $Head."
 }
