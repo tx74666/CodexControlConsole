@@ -22,8 +22,14 @@ function Invoke-GitWithRetry {
 
   $lastMessage = ""
   for ($attempt = 1; $attempt -le $RetryCount; $attempt += 1) {
-    $output = & git -c http.version=HTTP/1.1 @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = "Continue"
+      $output = & git -c http.version=HTTP/1.1 @Arguments 2>&1
+      $exitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
     $lastMessage = ($output | Out-String).Trim()
     if ($exitCode -eq 0) {
       if ($lastMessage) { Write-Host $lastMessage }

@@ -145,11 +145,21 @@ def main(argv=None):
 
     previous_music = previous.get("music") if isinstance(previous.get("music"), dict) else {}
     previous_modules = previous.get("modules") if isinstance(previous.get("modules"), dict) else {}
+    music = capture_music(music_payload, previous_music)
+    modules = capture_modules(console_payload, previous_modules)
+    unchanged = (
+        previous.get("schemaVersion") == 1
+        and previous.get("music") == music
+        and previous.get("modules") == modules
+    )
+    captured_at = str(previous.get("capturedAt") or "") if unchanged else ""
+    if not captured_at:
+        captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     result = {
         "schemaVersion": 1,
-        "capturedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "music": capture_music(music_payload, previous_music),
-        "modules": capture_modules(console_payload, previous_modules),
+        "capturedAt": captured_at,
+        "music": music,
+        "modules": modules,
     }
     write_json_atomic(args.output, result)
     print(f"Captured {len(result['music']['order'])} songs and {len(result['modules'].get('order', []))} modules")
