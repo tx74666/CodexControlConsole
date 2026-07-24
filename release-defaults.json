@@ -1,35 +1,25 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-07-23T07:06:52Z",
+  "capturedAt": "2026-07-24T12:11:15Z",
   "music": {
-    "tiers": {
-      "Outrun.mp3": "first",
-      "Redline.mp3": "first",
-      "Liquid Roller.mp3": "first",
-      "Get Lucky.mp3": "second",
-      "Ma rose éternelle.mp3": "second",
-      "Around the World.mp3": "second",
-      "Airborne.mp3": "second",
-      "Luminescence.mp3": "second",
-      "Fire Inside.mp3": "second"
-    },
+    "tiers": {},
     "order": [
-      "Outrun.mp3",
-      "Redline.mp3",
       "Liquid Roller.mp3",
-      "Get Lucky.mp3",
-      "Ma rose éternelle.mp3",
-      "Around the World.mp3",
       "Airborne.mp3",
-      "Luminescence.mp3",
-      "Fire Inside.mp3",
-      "Toxic.mp3",
       "Never Be Alone.mp3",
       "Stasis.mp3",
       "Final Step.mp3",
+      "Luminescence.mp3",
       "Dancin.mp3",
       "House of Memories.mp3",
-      "Never Slow Me Down.mp3"
+      "Toxic.mp3",
+      "Get Lucky.mp3",
+      "Outrun.mp3",
+      "Fire Inside.mp3",
+      "Never Slow Me Down.mp3",
+      "Around the World.mp3",
+      "Redline.mp3",
+      "Ma rose éternelle.mp3"
     ],
     "promotedLibraryTracks": {}
   },
