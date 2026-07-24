@@ -894,7 +894,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/randomrealm/blender/github-share/status":
             query = urllib.parse.parse_qs(parsed.query)
-            self.send_json(BLENDER_GITHUB_SHARE.status(query.get("project", [""])[0]))
+            refresh_remote = query.get("refresh", ["0"])[0].strip().lower() in {"1", "true", "yes"}
+            self.send_json(BLENDER_GITHUB_SHARE.status(
+                query.get("project", [""])[0],
+                refresh_remote=refresh_remote,
+            ))
             return
         if parsed.path == "/api/randomrealm/blender/live-selection":
             query = urllib.parse.parse_qs(parsed.query)

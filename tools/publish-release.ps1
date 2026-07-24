@@ -70,7 +70,7 @@ if ($CheckConnection) {
 
 $Version = $Version.Trim().TrimStart("v")
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-  throw "Version is required and must use semantic versioning, for example 0.6.3."
+  throw "Version is required and must use semantic versioning, for example 0.6.4."
 }
 
 $Tag = "v$Version"

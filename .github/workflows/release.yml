@@ -6,7 +6,7 @@ on:
       version:
         description: Release version, for example v0.4.0
         required: true
-        default: v0.6.3
+        default: v0.6.4
   push:
     tags:
       - "v*"
@@ -129,10 +129,10 @@ jobs:
 
             Download only **CodexControlConsole-Setup-x64.exe**.
 
-            This release fixes the feedback limit indicator and makes Console/World updates close the required app processes, install in the background, restart cleanly, and clear stale update notices automatically.
+            This release completes the Blender GitHub Coop flow. Codex Console now checks the selected repository for remote changes, guides first-time Clone, shows when Pull or Push is needed, and warns when remote updates overlap local Blender changes.
 
             1. Double-click the downloaded Setup file.
-            2. Choose **简体中文** or **English**.
+            2. Choose **Simplified Chinese** or **English**.
             3. On the destination page, choose the drive and install folder.
             4. Finish Setup, then launch **Codex Console** from the desktop or Start menu.
 
@@ -140,7 +140,7 @@ jobs:
 
             只需下载 **CodexControlConsole-Setup-x64.exe**。
 
-            本版修复了错误显示的 Hit Limit，并让 Console / World 更新自动关闭所需进程、后台安装、重新启动和清除过期的更新提示，无需再手动结束进程。
+            本版补全 Blender 的 GitHub Coop 协作流程。Codex Console 会检查所选仓库的云端更新，引导首次 Clone，提示何时需要 Pull 或 Push，并在云端更新与本地 Blender 改动重叠时给出明确警告。
 
             1. 双击下载好的安装程序。
             2. 选择 **简体中文** 或 **English**。

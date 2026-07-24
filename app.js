@@ -313,6 +313,16 @@ const i18n = {
     blenderGithubDesktopOpenTitle: "\u5728 GitHub Desktop \u6253\u5f00\u672c\u5730\u4ed3\u5e93",
     blenderGithubDesktopCloneTitle: "\u7528 GitHub Desktop \u514b\u9686\u8fd9\u4e2a\u4ed3\u5e93",
     blenderGithubGuide: "\u672a\u4e0b\u8f7d\uff1a\u53cc\u51fb\u5361\u7247\u5b8c\u6210 Clone\uff0c\u7136\u540e\u70b9 + \u9009\u62e9 .blend\u3002\u4fee\u6539\u524d\u5148 Fetch/Pull\uff0c\u5b8c\u6210\u540e Commit + Push\u3002",
+    blenderGithubDownload: "\u4e0b\u8f7d",
+    blenderGithubUpdate: "\u66f4\u65b0",
+    blenderGithubWorkflowCloud: "\u672a\u4e0b\u8f7d \u00b7 \u53cc\u51fb\u5361\u7247\u540e\u5728 GitHub Desktop \u5b8c\u6210 Clone",
+    blenderGithubWorkflowBehindDirty: count => `\u4e91\u7aef\u6709 ${count} \u4e2a\u66f4\u65b0\uff0c\u672c\u5730\u4e5f\u6709\u6539\u52a8 \u00b7 \u5148\u5728 GitHub Desktop \u63d0\u4ea4\u6216\u6682\u5b58\uff0c\u518d Pull`,
+    blenderGithubWorkflowDiverged: "\u4e91\u7aef\u548c\u672c\u5730\u90fd\u6709\u65b0\u63d0\u4ea4 \u00b7 \u5728 GitHub Desktop \u5408\u5e76\u540e\u518d\u7ee7\u7eed",
+    blenderGithubWorkflowBehind: count => `\u4e91\u7aef\u6709 ${count} \u4e2a\u66f4\u65b0 \u00b7 \u53cc\u51fb\u5361\u7247\u540e Pull origin`,
+    blenderGithubWorkflowDirty: count => `\u672c\u5730\u6709 ${count} \u9879\u6539\u52a8 \u00b7 \u5b8c\u6210\u540e\u5728 GitHub Desktop \u63d0\u4ea4\u5e76 Push`,
+    blenderGithubWorkflowAhead: count => `\u6709 ${count} \u4e2a\u63d0\u4ea4\u5f85\u63a8\u9001 \u00b7 \u5728 GitHub Desktop \u70b9 Push origin`,
+    blenderGithubWorkflowSynced: "\u5df2\u4e0e GitHub \u540c\u6b65",
+    blenderGithubWorkflowOffline: "\u6682\u65f6\u65e0\u6cd5\u68c0\u67e5\u4e91\u7aef \u00b7 \u5f53\u524d\u663e\u793a\u672c\u673a\u72b6\u6001",
     blenderGithubStateCloud: "\u4e91\u7aef\uff0c\u5c1a\u672a\u4e0b\u8f7d",
     blenderGithubFolder: "文件",
     blenderGithubOpenShort: "GitHub",
@@ -1041,6 +1051,16 @@ const i18n = {
     blenderGithubDesktopOpenTitle: "Open the local repository in GitHub Desktop",
     blenderGithubDesktopCloneTitle: "Clone this repository with GitHub Desktop",
     blenderGithubGuide: "Not downloaded: double-click the card to Clone, then use + to select the .blend file. Fetch/Pull before editing; Commit + Push when finished.",
+    blenderGithubDownload: "Download",
+    blenderGithubUpdate: "Update",
+    blenderGithubWorkflowCloud: "Not downloaded \u00b7 Double-click the card to Clone with GitHub Desktop",
+    blenderGithubWorkflowBehindDirty: count => `${count} remote update${count === 1 ? "" : "s"} and local changes \u00b7 Commit or stash in GitHub Desktop, then Pull`,
+    blenderGithubWorkflowDiverged: "GitHub and this device both have new commits \u00b7 Merge them in GitHub Desktop before continuing",
+    blenderGithubWorkflowBehind: count => `${count} remote update${count === 1 ? "" : "s"} \u00b7 Double-click the card, then Pull origin`,
+    blenderGithubWorkflowDirty: count => `${count} local change${count === 1 ? "" : "s"} \u00b7 Commit and Push with GitHub Desktop when finished`,
+    blenderGithubWorkflowAhead: count => `${count} commit${count === 1 ? "" : "s"} waiting to push \u00b7 Choose Push origin in GitHub Desktop`,
+    blenderGithubWorkflowSynced: "Synced with GitHub",
+    blenderGithubWorkflowOffline: "Could not check GitHub \u00b7 Showing local status",
     blenderGithubStateCloud: "Cloud, not downloaded",
     blenderGithubFolder: "Files",
     blenderGithubOpenShort: "GitHub",
@@ -1864,6 +1884,7 @@ const els = {
   blenderGithubOpen: document.getElementById("blenderGithubOpen"),
   blenderGithubDesktop: document.getElementById("blenderGithubDesktop"),
   blenderGithubFolder: document.getElementById("blenderGithubFolder"),
+  blenderGithubWorkflow: document.getElementById("blenderGithubWorkflow"),
   blenderGithubStatus: document.getElementById("blenderGithubStatus"),
   randomRealmBlenderProject: document.getElementById("randomRealmBlenderProject"),
   randomRealmProjectPath: document.getElementById("randomRealmProjectPath"),
@@ -12314,6 +12335,54 @@ function setBlenderGithubStatus(message) {
   }
 }
 
+function blenderGithubWorkflowDetails(state) {
+  const project = state?.project || {};
+  const git = state?.git || {};
+  const downloaded = project.downloaded !== false && Boolean(project.path && project.directory);
+  const behind = Math.max(0, Number(git.behind || 0));
+  const ahead = Math.max(0, Number(git.ahead || 0));
+  const changed = Math.max(0, Number(git.changedCount || 0));
+  const dirty = Boolean(git.dirty || changed);
+  const remoteCheck = git.remoteCheck || {};
+
+  if (!downloaded || git.state === "cloud") {
+    return { state: "cloud", message: text("blenderGithubWorkflowCloud") };
+  }
+  if (behind > 0 && dirty) {
+    return { state: "behindDirty", message: text("blenderGithubWorkflowBehindDirty", behind) };
+  }
+  if (behind > 0 && ahead > 0) {
+    return { state: "diverged", message: text("blenderGithubWorkflowDiverged") };
+  }
+  if (behind > 0) {
+    return { state: "behind", message: text("blenderGithubWorkflowBehind", behind) };
+  }
+  if (dirty) {
+    return { state: "dirty", message: text("blenderGithubWorkflowDirty", changed || 1) };
+  }
+  if (ahead > 0 || git.state === "pendingPush") {
+    return { state: "ahead", message: text("blenderGithubWorkflowAhead", ahead || 1) };
+  }
+  if (remoteCheck.attempted && remoteCheck.ok === false) {
+    return { state: "offline", message: text("blenderGithubWorkflowOffline") };
+  }
+  if (git.state === "synced") {
+    return { state: "synced", message: text("blenderGithubWorkflowSynced") };
+  }
+  return {
+    state: git.state || "loading",
+    message: blenderGithubStateLabel(git.state)
+  };
+}
+
+function renderBlenderGithubWorkflow(state) {
+  if (!els.blenderGithubWorkflow) return;
+  const workflow = blenderGithubWorkflowDetails(state);
+  els.blenderGithubWorkflow.dataset.state = workflow.state;
+  els.blenderGithubWorkflow.textContent = workflow.message;
+  els.blenderGithubWorkflow.title = workflow.message;
+}
+
 function renderBlenderGithubProjectOptions(selectedPath = "") {
   if (!els.blenderGithubProject) return;
   const grouped = Array.isArray(blenderGithubShareState?.collection?.projects)
@@ -12548,7 +12617,18 @@ function updateBlenderGithubActionState() {
   if (els.blenderGithubRefresh) els.blenderGithubRefresh.disabled = blenderGithubBusy;
   if (els.blenderGithubDesktop) els.blenderGithubDesktop.disabled = blenderGithubBusy || !hasProject;
   if (els.blenderGithubDesktop) {
-    const label = text(downloaded ? "blenderGithubDesktopOpenTitle" : "blenderGithubDesktopCloneTitle");
+    const workflow = blenderGithubWorkflowDetails(state);
+    const needsUpdate = Number(git.behind || 0) > 0;
+    const label = !downloaded
+      ? text("blenderGithubDesktopCloneTitle")
+      : needsUpdate
+        ? workflow.message
+        : text("blenderGithubDesktopOpenTitle");
+    els.blenderGithubDesktop.textContent = text(!downloaded
+      ? "blenderGithubDownload"
+      : needsUpdate
+        ? "blenderGithubUpdate"
+        : "blenderGithubDesktop");
     els.blenderGithubDesktop.title = label;
     els.blenderGithubDesktop.setAttribute("aria-label", label);
   }
@@ -12629,12 +12709,22 @@ function renderBlenderGithubShare(state, options = {}) {
     els.blenderGithubState.title = blenderGithubStateLabel(git.state);
   }
   renderBlenderGithubBlendCards(state);
+  renderBlenderGithubWorkflow(state);
   updateBlenderGithubActionState();
+}
+
+function blenderGithubSameProject(left, right) {
+  const leftSlug = blenderGithubRepositorySlug(left);
+  const rightSlug = blenderGithubRepositorySlug(right);
+  if (leftSlug || rightSlug) return Boolean(leftSlug && leftSlug === rightSlug);
+  return String(left || "").replace(/\\/g, "/").toLocaleLowerCase()
+    === String(right || "").replace(/\\/g, "/").toLocaleLowerCase();
 }
 
 async function loadBlenderGithubShare(options = {}) {
   if (!hasBlenderGithubShare()) return;
-  const sequence = ++blenderGithubLoadSequence;
+  const background = Boolean(options.background);
+  const sequence = background ? blenderGithubLoadSequence : ++blenderGithubLoadSequence;
   const selectedProject = options.detect
     ? ""
     : options.project
@@ -12642,20 +12732,54 @@ async function loadBlenderGithubShare(options = {}) {
       ?? blenderGithubShareState?.project?.repositoryUrl
       ?? blenderGithubShareState?.project?.path
       ?? "";
-  setBlenderGithubBusy(true, text("blenderGithubLoading"));
+  if (!background) setBlenderGithubBusy(true, text("blenderGithubLoading"));
   try {
-    const query = selectedProject ? `?project=${encodeURIComponent(selectedProject)}` : "";
-    const response = await fetch(`/api/randomrealm/blender/github-share/status${query}`, { cache: "no-store" });
+    const query = new URLSearchParams();
+    if (selectedProject) query.set("project", selectedProject);
+    if (options.refreshRemote) query.set("refresh", "1");
+    const response = await fetch(`/api/randomrealm/blender/github-share/status${query.size ? `?${query}` : ""}`, { cache: "no-store" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     if (sequence !== blenderGithubLoadSequence) return;
-    renderBlenderGithubShare(payload);
-    setBlenderGithubStatus(text("blenderGithubReady"));
+    if (background) {
+      const currentProject = els.blenderGithubProject?.value
+        || blenderGithubShareState?.project?.repositoryUrl
+        || blenderGithubShareState?.project?.path
+        || "";
+      if (!blenderGithubSameProject(selectedProject, currentProject)) return;
+      blenderGithubShareState = payload;
+      if (els.blenderGithubState) {
+        els.blenderGithubState.dataset.state = payload.git?.state || "uninitialized";
+        els.blenderGithubState.title = blenderGithubStateLabel(payload.git?.state);
+      }
+      renderBlenderGithubWorkflow(payload);
+      updateBlenderGithubActionState();
+    } else {
+      renderBlenderGithubShare(payload);
+      setBlenderGithubStatus(text("blenderGithubReady"));
+    }
+    if (!options.refreshRemote
+      && payload.project?.downloaded !== false
+      && payload.git?.remoteUrl) {
+      const remoteProject = payload.project.repositoryUrl || payload.project.path || selectedProject;
+      window.setTimeout(() => {
+        const currentProject = els.blenderGithubProject?.value
+          || blenderGithubShareState?.project?.repositoryUrl
+          || blenderGithubShareState?.project?.path
+          || "";
+        if (!blenderGithubSameProject(remoteProject, currentProject)) return;
+        loadBlenderGithubShare({
+          project: remoteProject,
+          refreshRemote: true,
+          background: true
+        });
+      }, 120);
+    }
   } catch (error) {
     if (sequence !== blenderGithubLoadSequence) return;
-    setBlenderGithubStatus(text("blenderGithubFailed", error.message));
+    if (!background) setBlenderGithubStatus(text("blenderGithubFailed", error.message));
   } finally {
-    if (sequence === blenderGithubLoadSequence) {
+    if (!background && sequence === blenderGithubLoadSequence) {
       setBlenderGithubBusy(false);
     }
   }
@@ -17433,7 +17557,8 @@ if (els.blenderGithubRefresh) {
     project: els.blenderGithubProject?.value
       || blenderGithubShareState?.project?.repositoryUrl
       || blenderGithubShareState?.project?.path
-      || ""
+      || "",
+    refreshRemote: true
   }));
 }
 if (els.blenderGithubBlendCards) {

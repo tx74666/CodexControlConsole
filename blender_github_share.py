@@ -703,6 +703,33 @@ class BlenderGithubShareService:
         completed = self._git_command(root, arguments, check=False)
         return completed.stdout.strip() if completed.returncode == 0 else default
 
+    def _refresh_remote(self, root: Path) -> dict:
+        result = {
+            "attempted": False,
+            "ok": None,
+            "error": "",
+        }
+        if not self._tool_state().get("gitAvailable"):
+            return result
+        probe = self._git_command(root, ["rev-parse", "--is-inside-work-tree"], check=False)
+        if probe.returncode != 0 or probe.stdout.strip() != "true":
+            return result
+        if not self._git_output(root, ["remote", "get-url", "origin"]):
+            return result
+
+        result["attempted"] = True
+        completed = self._git_command(
+            root,
+            ["fetch", "--quiet", "--prune", "origin"],
+            timeout=25,
+            check=False,
+        )
+        result["ok"] = completed.returncode == 0
+        if completed.returncode != 0:
+            details = (completed.stderr or completed.stdout or "Could not reach GitHub").strip()
+            result["error"] = "\n".join(details.splitlines()[-3:])[:600]
+        return result
+
     def _github_desktop_cli(self) -> Path | None:
         local_app_data = Path(os.environ.get("LOCALAPPDATA", ""))
         candidates = [
@@ -883,9 +910,16 @@ class BlenderGithubShareService:
         blend_file: Path,
         source: str,
         collection: list[dict] | None = None,
+        refresh_remote=False,
     ) -> dict:
         config = self._stored_config(blend_file)
+        remote_check = self._refresh_remote(root) if refresh_remote else {
+            "attempted": False,
+            "ok": None,
+            "error": "",
+        }
         git = self._git_status(root, blend_file)
+        git["remoteCheck"] = remote_check
         if not config["repositoryUrl"] and git["remoteUrl"]:
             config["repositoryUrl"] = git["remoteUrl"]
         blend_files = self._ordered_blend_files(root)
@@ -941,6 +975,11 @@ class BlenderGithubShareService:
             "lastCommit": None,
             "lastTag": repository.get("version") or "",
             "lfsTracked": True,
+            "remoteCheck": {
+                "attempted": False,
+                "ok": None,
+                "error": "",
+            },
         }
         return {
             "ok": True,
@@ -991,18 +1030,23 @@ class BlenderGithubShareService:
                 return root, blend_file
         return None
 
-    def status(self, project="") -> dict:
+    def status(self, project="", refresh_remote=False) -> dict:
         raw = _safe_text(project, 1000)
 
         if raw and not _github_match(raw):
             root, blend_file, source = self._resolve_project(raw)
-            return self._local_status(root, blend_file, source)
+            return self._local_status(root, blend_file, source, refresh_remote=refresh_remote)
 
         store = self._read_store()
         selected_repository_url = _repository_web_url(raw) if raw else store.get("lastRepository", "")
         local_project = self._stored_repository_project(selected_repository_url)
         if local_project:
-            return self._local_status(local_project[0], local_project[1], "repository")
+            return self._local_status(
+                local_project[0],
+                local_project[1],
+                "repository",
+                refresh_remote=refresh_remote,
+            )
 
         collection = self._project_collection()
         repository = self._collection_project(selected_repository_url, collection)
@@ -1018,10 +1062,11 @@ class BlenderGithubShareService:
                 Path(repository["path"]),
                 "saved",
                 collection,
+                refresh_remote=refresh_remote,
             )
 
         root, blend_file, source = self._resolve_project("")
-        return self._local_status(root, blend_file, source)
+        return self._local_status(root, blend_file, source, refresh_remote=refresh_remote)
 
     def _select_blend_file(self) -> str:
         try:

@@ -175,6 +175,29 @@ def main():
         require(pushed["git"]["state"] == "dirty", "excluded local change should remain visible after push")
         require(run(["git", "rev-parse", "refs/tags/v0.1.1"], remote), "tag was not pushed")
 
+        collaborator = temp_root / "Collaborator"
+        run([
+            "git",
+            "-c",
+            "filter.lfs.smudge=",
+            "-c",
+            "filter.lfs.required=false",
+            "clone",
+            "--branch",
+            "main",
+            str(remote),
+            str(collaborator),
+        ])
+        run(["git", "config", "user.name", "Codex Collaborator"], collaborator)
+        run(["git", "config", "user.email", "collaborator@example.invalid"], collaborator)
+        (collaborator / "README.md").write_text("Remote Blender update\n", encoding="utf-8")
+        run(["git", "add", "README.md"], collaborator)
+        run(["git", "commit", "-m", "Add collaborator note"], collaborator)
+        run(["git", "push", "origin", "main"], collaborator)
+        refreshed = service.status(str(blend), refresh_remote=True)
+        require(refreshed["git"]["remoteCheck"]["ok"], "remote refresh did not complete")
+        require(refreshed["git"]["behind"] == 1, "remote collaborator update was not detected")
+
         try:
             service.add_project({"project": str(blend)})
         except ValueError as error:

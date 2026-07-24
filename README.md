@@ -61,7 +61,7 @@ Install Python 3.12 x64, PyInstaller, Pillow, yt-dlp, and Inno Setup 7, then run
 
 ```powershell
 python -m pip install pyinstaller pillow yt-dlp
-.\tools\build-windows.ps1 -Version 0.6.3 -OutputDir dist
+.\tools\build-windows.ps1 -Version 0.6.4 -OutputDir dist
 ```
 
 The result is `dist\CodexControlConsole-Setup-x64.exe`.
@@ -71,7 +71,7 @@ The result is `dist\CodexControlConsole-Setup-x64.exe`.
 The release helper retries intermittent GitHub connections, pushes `main`, creates the version tag, and waits until the single Windows x64 Setup asset is available:
 
 ```powershell
-.\tools\publish-release.ps1 -Version 0.6.3
+.\tools\publish-release.ps1 -Version 0.6.4
 ```
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.
@@ -88,5 +88,7 @@ python .\tools\check-desktop-layout.py
 ```
 
 Blender > Helper > GitHub Coop lists repositories from `github-coop.json`. GitHub Desktop handles authentication, clone, commits, pull, and push.
+
+Codex Console checks the selected repository against GitHub when Blender Helper opens and whenever Refresh is pressed. A cloud card guides first-time users into Clone; a local card reports remote updates, uncommitted work, pending pushes, or a synchronized state. Before editing a `.blend`, pull the latest version and make sure nobody else is editing that same binary file. When finished, save and close Blender, then commit and push through GitHub Desktop. External textures and references must be packed into the `.blend` or intentionally included in the repository.
 
 The release workflow can sign Setup with Microsoft Artifact Signing when its Azure secrets and repository variables are configured. Self-signing is intentionally not used because it does not establish public Windows trust.

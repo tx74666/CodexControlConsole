@@ -56,7 +56,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.6.3", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.6.4", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -414,7 +414,7 @@ async function runBrowserChecks(client) {
     const originalFetchStatus = fetchProductUpdateStatus;
     try {
       productUpdateStates = {
-        console: { currentVersion: '0.6.3', latestVersion: '0.6.3', available: false, autoCheck: true },
+        console: { currentVersion: '0.6.4', latestVersion: '0.6.4', available: false, autoCheck: true },
         world: {
           currentVersion: '0.3.1', latestVersion: '0.3.2', available: true,
           installed: true, autoCheck: true, canInstall: true
@@ -424,8 +424,8 @@ async function runBrowserChecks(client) {
       productUpdateBusy = true;
       waitForUpdatePoll = async () => {};
       fetchProductUpdateStatus = async product => ({
-        currentVersion: product === 'world' ? '0.3.2' : '0.6.3',
-        latestVersion: product === 'world' ? '0.3.2' : '0.6.3',
+        currentVersion: product === 'world' ? '0.3.2' : '0.6.4',
+        latestVersion: product === 'world' ? '0.3.2' : '0.6.4',
         available: false,
         installed: true,
         autoCheck: true,
@@ -757,6 +757,8 @@ async function runBrowserChecks(client) {
     desktopDisabled: document.querySelector('#blenderGithubDesktop')?.disabled,
     folderDisabled: document.querySelector('#blenderGithubFolder')?.disabled,
     openDisabled: document.querySelector('#blenderGithubOpen')?.disabled,
+    workflow: document.querySelector('#blenderGithubWorkflow')?.textContent?.trim() || '',
+    workflowState: document.querySelector('#blenderGithubWorkflow')?.dataset.state || '',
     noticeHidden: document.querySelector('#blenderGithubStatus')?.hidden,
     removedControls: ['blenderGithubBranch', 'blenderGithubRemote', 'blenderGithubRepository', 'blenderGithubInitialize', 'blenderGithubCommit', 'blenderGithubPush', 'blenderGithubChanges'].filter(id => document.getElementById(id)).length
   })`);
@@ -770,6 +772,7 @@ async function runBrowserChecks(client) {
   assert(shareState.addVisible && shareState.allDraggable && /double-click|双击/i.test(shareState.doubleClickHint), `GitHub Coop project shelf interactions are incomplete: ${JSON.stringify(shareState)}`);
   assert(/^V(?:\d|--)/.test(shareState.version), `compact version is invalid: ${JSON.stringify(shareState)}`);
   assert(shareState.refreshText && shareState.refreshFontSize >= 16, `refresh control is not visible: ${JSON.stringify(shareState)}`);
+  assert(shareState.workflow && shareState.workflowState, `collaboration guidance is missing: ${JSON.stringify(shareState)}`);
   const cloudOnlyProject = allowCloudProjects && shareState.state === "cloud";
   assert(
     !shareState.desktopDisabled
@@ -872,6 +875,9 @@ async function runBrowserChecks(client) {
         cloud: card?.dataset.downloaded === 'false' && card?.classList.contains('cloud'),
         cloudLabel: card?.querySelector('small')?.textContent?.trim() || '',
         folderDisabled: document.querySelector('#blenderGithubFolder')?.disabled,
+        desktopText: document.querySelector('#blenderGithubDesktop')?.textContent?.trim() || '',
+        workflowState: document.querySelector('#blenderGithubWorkflow')?.dataset.state || '',
+        workflowText: document.querySelector('#blenderGithubWorkflow')?.textContent?.trim() || '',
         request,
         repositoryUrl: cloudRepository.repositoryUrl,
         guideMounted: Boolean(document.querySelector('.blender-github-guide.tutorial-only'))
@@ -886,10 +892,51 @@ async function runBrowserChecks(client) {
       && cloudCardState.cloud
       && cloudCardState.cloudLabel
       && cloudCardState.folderDisabled
+      && /download|下载/i.test(cloudCardState.desktopText)
+      && cloudCardState.workflowState === 'cloud'
+      && cloudCardState.workflowText
       && cloudCardState.guideMounted
       && cloudCardState.request?.url.endsWith('/api/randomrealm/blender/github-share/desktop')
       && cloudCardState.request?.body?.project === cloudCardState.repositoryUrl,
     `cloud repository card is not clone-ready: ${JSON.stringify(cloudCardState)}`
+  );
+
+  const behindState = await evaluate(client, `(() => {
+    const originalState = blenderGithubShareState;
+    const simulated = {
+      ...originalState,
+      project: {
+        ...originalState.project,
+        downloaded: true
+      },
+      git: {
+        ...originalState.git,
+        state: 'behind',
+        behind: 2,
+        ahead: 0,
+        dirty: false,
+        changedCount: 0,
+        remoteCheck: { attempted: true, ok: true, error: '' }
+      }
+    };
+    try {
+      renderBlenderGithubShare(simulated);
+      return {
+        workflowState: document.querySelector('#blenderGithubWorkflow')?.dataset.state || '',
+        workflowText: document.querySelector('#blenderGithubWorkflow')?.textContent?.trim() || '',
+        desktopText: document.querySelector('#blenderGithubDesktop')?.textContent?.trim() || '',
+        desktopTitle: document.querySelector('#blenderGithubDesktop')?.title || ''
+      };
+    } finally {
+      renderBlenderGithubShare(originalState);
+    }
+  })()`);
+  assert(
+    behindState.workflowState === 'behind'
+      && /2/.test(behindState.workflowText)
+      && /update|更新/i.test(behindState.desktopText)
+      && /pull/i.test(behindState.desktopTitle),
+    `remote update guidance is incomplete: ${JSON.stringify(behindState)}`
   );
 
   const collapseState = await evaluate(client, `(() => {

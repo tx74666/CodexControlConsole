@@ -1842,6 +1842,33 @@ button.blender-hub-card:active {
   border-top: 1px solid var(--line);
 }
 
+.blender-github-workflow {
+  min-width: 0;
+  margin: 0 auto 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.blender-github-workflow[data-state="behind"],
+.blender-github-workflow[data-state="behindDirty"],
+.blender-github-workflow[data-state="diverged"],
+.blender-github-workflow[data-state="dirty"],
+.blender-github-workflow[data-state="ahead"] {
+  color: #c9851b;
+}
+
+.blender-github-workflow[data-state="synced"] {
+  color: var(--green);
+}
+
+.blender-github-workflow[data-state="offline"] {
+  color: var(--soft);
+}
+
 .blender-github-brief {
   min-width: 0;
   display: flex;
