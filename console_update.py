@@ -57,6 +57,16 @@ def _safe_release_url(value):
     return raw
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                return digest.hexdigest().lower()
+            digest.update(chunk)
+
+
 class ConsoleUpdateService:
     def __init__(self, app_dir, data_dir, manifest, edition_provider, shutdown_callback=None):
         self.app_dir = Path(app_dir).resolve()
@@ -398,6 +408,7 @@ class ConsoleUpdateService:
             f"$stopExecutable = {_powershell_literal(Path(stop_executable).resolve() if stop_executable else '')}",
             f"$relaunchExecutable = {_powershell_literal(Path(relaunch_executable).resolve() if relaunch_executable else '')}",
             f"$restartStopped = {'$true' if restart_stopped else '$false'}",
+            "$installedExecutable = if ($relaunchExecutable) { $relaunchExecutable } else { $stopExecutable }",
             "$stoppedTarget = $false",
             "$ok = $false",
             "$message = ''",
@@ -419,7 +430,37 @@ class ConsoleUpdateService:
             "  })",
             "}",
             "",
+            "function Ensure-Shortcut {",
+            "  param([string]$ShortcutPath)",
+            "  if (-not $ShortcutPath -or -not $installedExecutable) { return }",
+            "  $parent = Split-Path -Parent $ShortcutPath",
+            "  if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }",
+            "  $shell = New-Object -ComObject WScript.Shell",
+            "  if (Test-Path -LiteralPath $ShortcutPath) {",
+            "    $existing = $shell.CreateShortcut($ShortcutPath)",
+            "    if ([string]::Equals($existing.TargetPath, $installedExecutable, [StringComparison]::OrdinalIgnoreCase)) {",
+            "      return",
+            "    }",
+            "  }",
+            "  $shortcut = $shell.CreateShortcut($ShortcutPath)",
+            "  $shortcut.TargetPath = $installedExecutable",
+            "  $shortcut.WorkingDirectory = Split-Path -Parent $installedExecutable",
+            "  $shortcut.IconLocation = \"$installedExecutable,0\"",
+            "  $shortcut.Save()",
+            "}",
+            "",
+            "function Start-InstalledConsole {",
+            "  if ($installedExecutable -and (Test-Path -LiteralPath $installedExecutable)) {",
+            "    Start-Process -FilePath $installedExecutable -ArgumentList @('--no-browser')",
+            "    return $true",
+            "  }",
+            "  return $false",
+            "}",
+            "",
             "try {",
+            "  if (-not (Test-Path -LiteralPath $installer)) {",
+            "    throw 'The verified update installer is missing.'",
+            "  }",
             "  if ($waitPid -gt 0) {",
             "    Wait-Process -Id $waitPid -Timeout 90 -ErrorAction SilentlyContinue",
             "    if (Get-Process -Id $waitPid -ErrorAction SilentlyContinue) {",
@@ -447,6 +488,23 @@ class ConsoleUpdateService:
             "  if ($setup.ExitCode -ne 0) {",
             "    throw \"Setup exited with code $($setup.ExitCode).\"",
             "  }",
+            "",
+            "  if (-not $installedExecutable -or -not (Test-Path -LiteralPath $installedExecutable)) {",
+            "    throw 'Setup finished but Codex Console.exe is missing.'",
+            "  }",
+            "  $manifestPath = Join-Path (Split-Path -Parent $installedExecutable) '_internal\\app-manifest.json'",
+            "  if (-not (Test-Path -LiteralPath $manifestPath)) {",
+            "    throw 'Setup finished but the installed app manifest is missing.'",
+            "  }",
+            "  $installedManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json",
+            "  if ([string]$installedManifest.version -ne $version) {",
+            "    throw \"Installed version $($installedManifest.version) does not match $version.\"",
+            "  }",
+            "  $desktopShortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Codex Console.lnk'",
+            "  $programsFolder = [Environment]::GetFolderPath('Programs')",
+            "  $startMenuShortcut = Join-Path $programsFolder 'Codex Console\\Codex Console.lnk'",
+            "  Ensure-Shortcut $desktopShortcut",
+            "  Ensure-Shortcut $startMenuShortcut",
             "",
             "  if (Test-Path -LiteralPath $stateFile) {",
             "    try {",
@@ -477,12 +535,11 @@ class ConsoleUpdateService:
             "Write-AtomicJson $resultFile $result",
             "",
             "if ($ok) {",
-            "  if ($relaunchExecutable -and (Test-Path -LiteralPath $relaunchExecutable)) {",
-            "    Start-Process -FilePath $relaunchExecutable -ArgumentList @('--no-browser')",
-            "  } elseif ($restartStopped -and $stoppedTarget -and (Test-Path -LiteralPath $stopExecutable)) {",
-            "    Start-Process -FilePath $stopExecutable -ArgumentList @('--no-browser')",
-            "  }",
+            "  Start-InstalledConsole | Out-Null",
             "  exit 0",
+            "}",
+            "if ($stoppedTarget -or $restartStopped -or $relaunchExecutable) {",
+            "  Start-InstalledConsole | Out-Null",
             "}",
             "exit 1",
         ]
@@ -528,6 +585,18 @@ class ConsoleUpdateService:
             state = self._read_state()
             pending = state.get("pending") or {}
             archive = Path(str(pending.get("archive") or ""))
+            pending_checksum = str(pending.get("sha256") or "").strip().lower()
+        if not archive.is_file() or _sha256_file(archive) != pending_checksum:
+            archive.unlink(missing_ok=True)
+            state["pending"] = {}
+            self._write_state(state)
+            self.download()
+            state = self._read_state()
+            pending = state.get("pending") or {}
+            archive = Path(str(pending.get("archive") or ""))
+            pending_checksum = str(pending.get("sha256") or "").strip().lower()
+        if not archive.is_file() or _sha256_file(archive) != pending_checksum:
+            raise ValueError("The verified update installer could not be prepared")
         version = str(pending.get("version") or "")
         self.result_file.unlink(missing_ok=True)
         restarting = callable(self.shutdown_callback)

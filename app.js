@@ -25,7 +25,8 @@ const storageKeys = {
   blenderView: "codexControl.blenderView.v1",
   blenderPromptConfig: "codexControl.blenderPromptConfig.v1",
   lyricsHeight: "codexControl.lyricsHeight.v1",
-  lyricsLanguages: "codexControl.lyricsLanguages.v1"
+  lyricsLanguages: "codexControl.lyricsLanguages.v1",
+  windowSession: "codexControl.windowSession.v1"
 };
 
 const releaseDefaults = window.CODEX_RELEASE_DEFAULTS && typeof window.CODEX_RELEASE_DEFAULTS === "object"
@@ -34,6 +35,62 @@ const releaseDefaults = window.CODEX_RELEASE_DEFAULTS && typeof window.CODEX_REL
 const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_DEVICE_LAYOUT === "object"
   ? window.CODEX_DEVICE_LAYOUT
   : {};
+
+const consoleWindowHeartbeatMs = 30000;
+let consoleWindowHeartbeatTimer = 0;
+let consoleWindowSessionClosed = false;
+
+function consoleWindowSessionId() {
+  let sessionId = "";
+  try {
+    sessionId = sessionStorage.getItem(storageKeys.windowSession) || "";
+  } catch {
+    sessionId = "";
+  }
+  if (!sessionId) {
+    sessionId = globalThis.crypto?.randomUUID?.()
+      || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    try {
+      sessionStorage.setItem(storageKeys.windowSession, sessionId);
+    } catch {
+      // The in-memory ID still keeps this window distinct when storage is unavailable.
+    }
+  }
+  return sessionId;
+}
+
+function sendConsoleWindowSession(action, options = {}) {
+  const body = JSON.stringify({ action, sessionId: consoleWindowSessionId() });
+  if (options.beacon && navigator.sendBeacon) {
+    const payload = new Blob([body], { type: "application/json" });
+    if (navigator.sendBeacon("/api/console/window-session", payload)) return;
+  }
+  fetch("/api/console/window-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive: Boolean(options.beacon)
+  }).catch(() => {});
+}
+
+function startConsoleWindowSession() {
+  consoleWindowSessionClosed = false;
+  sendConsoleWindowSession("open");
+  if (consoleWindowHeartbeatTimer) window.clearInterval(consoleWindowHeartbeatTimer);
+  consoleWindowHeartbeatTimer = window.setInterval(() => {
+    if (!consoleWindowSessionClosed) sendConsoleWindowSession("heartbeat");
+  }, consoleWindowHeartbeatMs);
+}
+
+function closeConsoleWindowSession() {
+  if (consoleWindowSessionClosed) return;
+  consoleWindowSessionClosed = true;
+  if (consoleWindowHeartbeatTimer) {
+    window.clearInterval(consoleWindowHeartbeatTimer);
+    consoleWindowHeartbeatTimer = 0;
+  }
+  sendConsoleWindowSession("close", { beacon: true });
+}
 
 const modules = [
   { id: "manager", labelKey: "managerNav", titleKey: "managerPageTitle", href: "manager.html" },
@@ -89,6 +146,7 @@ const defaultBlenderPromptConfig = {
   customLength: ""
 };
 const musicStateVersion = 3;
+const releaseMusicLayoutVersion = Math.max(0, Number(releaseDefaults.music?.layoutVersion) || 0);
 const musicReorderCommitRatio = 1 / 3;
 const musicReorderReturnRatio = 1 - musicReorderCommitRatio;
 const musicPlaceholderLayoutPath = "__music_placeholder__";
@@ -1951,8 +2009,17 @@ let pendingSeekRatio = null;
 let activeSeekPointerId = null;
 let seekHistoryStartRatio = null;
 let volumeHistoryStart = null;
+let musicUserVolume = 0.8;
+let musicLoudnessGainDb = 0;
+let musicAudioContext = null;
+let musicAudioSourceNode = null;
+let musicCalibrationGainNode = null;
+let musicUserGainNode = null;
+let musicLimiterNode = null;
+let musicAudioGraphFailed = false;
 let musicTierAssignments = {};
 let musicTierOrder = [];
+let musicLayoutVersion = releaseMusicLayoutVersion;
 let musicTierVisibility = loadMusicTierVisibility();
 let musicNotice = "";
 let musicLinkNotice = "";
@@ -5263,6 +5330,112 @@ function audioIsTrack(item) {
   return els.audioPlayer.src === new URL(item.url, window.location.href).href;
 }
 
+function trackLoudnessGainDb(item) {
+  const value = Number(item?.loudnessGainDb);
+  return Number.isFinite(value) ? clamp(value, -12, 12) : 0;
+}
+
+function decibelsToLinearGain(value) {
+  return 10 ** (Number(value || 0) / 20);
+}
+
+function setMusicAudioParam(param, value, options = {}) {
+  if (!param || !musicAudioContext) return;
+  const nextValue = Math.max(0, Number(value) || 0);
+  const now = musicAudioContext.currentTime;
+  param.cancelScheduledValues(now);
+  if (options.immediate) {
+    param.value = nextValue;
+    return;
+  }
+  param.setValueAtTime(param.value, now);
+  param.setTargetAtTime(nextValue, now, options.timeConstant || 0.018);
+}
+
+function applyFallbackMusicVolume() {
+  if (!hasMusic || !els.audioPlayer || musicUserGainNode) return;
+  const calibratedVolume = musicUserVolume * decibelsToLinearGain(musicLoudnessGainDb);
+  els.audioPlayer.volume = clamp(calibratedVolume, 0, 1);
+}
+
+function applyTrackLoudnessCalibration(item, options = {}) {
+  musicLoudnessGainDb = trackLoudnessGainDb(item);
+  if (els.audioPlayer) {
+    els.audioPlayer.dataset.loudnessGainDb = musicLoudnessGainDb.toFixed(2);
+  }
+  if (musicCalibrationGainNode) {
+    setMusicAudioParam(
+      musicCalibrationGainNode.gain,
+      decibelsToLinearGain(musicLoudnessGainDb),
+      options
+    );
+  } else {
+    applyFallbackMusicVolume();
+  }
+  return musicLoudnessGainDb;
+}
+
+function ensureMusicAudioGraph() {
+  if (!hasMusic || !els.audioPlayer || musicAudioGraphFailed) return false;
+  if (musicAudioContext && musicCalibrationGainNode && musicUserGainNode) return true;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    musicAudioGraphFailed = true;
+    applyFallbackMusicVolume();
+    return false;
+  }
+
+  let context = null;
+  try {
+    context = new AudioContextClass();
+    const source = context.createMediaElementSource(els.audioPlayer);
+    const calibrationGain = context.createGain();
+    const userGain = context.createGain();
+    const limiter = context.createDynamicsCompressor();
+    limiter.threshold.value = -1;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.12;
+    source.connect(calibrationGain);
+    calibrationGain.connect(userGain);
+    userGain.connect(limiter);
+    limiter.connect(context.destination);
+
+    musicAudioContext = context;
+    musicAudioSourceNode = source;
+    musicCalibrationGainNode = calibrationGain;
+    musicUserGainNode = userGain;
+    musicLimiterNode = limiter;
+    els.audioPlayer.volume = 1;
+    setMusicAudioParam(musicUserGainNode.gain, musicUserVolume, { immediate: true });
+    setMusicAudioParam(
+      musicCalibrationGainNode.gain,
+      decibelsToLinearGain(musicLoudnessGainDb),
+      { immediate: true }
+    );
+    return true;
+  } catch {
+    musicAudioGraphFailed = true;
+    context?.close?.().catch?.(() => {});
+    musicAudioContext = null;
+    musicAudioSourceNode = null;
+    musicCalibrationGainNode = null;
+    musicUserGainNode = null;
+    musicLimiterNode = null;
+    applyFallbackMusicVolume();
+    return false;
+  }
+}
+
+function prepareMusicAudioPlayback(item) {
+  const graphReady = ensureMusicAudioGraph();
+  applyTrackLoudnessCalibration(item, { immediate: true });
+  if (graphReady && musicAudioContext?.state === "suspended") {
+    musicAudioContext.resume().catch(() => {});
+  }
+}
+
 function nextTrackPathAfterDelete(path) {
   const playable = allMusicTracks();
   if (!playable.length) return "";
@@ -5412,6 +5585,7 @@ function saveMusicStateLocal() {
 function musicStatePayload() {
   return {
     stateVersion: musicStateVersion,
+    layoutVersion: musicLayoutVersion,
     tiers: { ...musicTierAssignments },
     order: [...musicTierOrder],
     promotedLibraryTracks: { ...promotedLibraryTracks },
@@ -5477,6 +5651,10 @@ function applyMusicState(state, options = {}) {
     : {};
   const serverOrder = sanitizeMusicTierOrder(state.order || []);
   const serverSelectedTrackPath = normalizeMusicTrackPathValue(state.selectedTrackPath);
+  musicLayoutVersion = Math.max(
+    releaseMusicLayoutVersion,
+    Number(state.layoutVersion) || 0
+  );
   const cleanServerTiers = Object.fromEntries(
     Object.entries(serverTiers)
       .map(([path, tierId]) => [String(path), normalizeMusicTier(String(tierId || ""))])
@@ -7270,16 +7448,11 @@ function createTrackCard(item) {
   card.addEventListener("click", event => {
     if (event.target.closest("button, input, select, textarea, a")) return;
     if (Date.now() < suppressTrackClickUntil) return;
-    playTrack(item);
-  });
-  card.addEventListener("dblclick", event => {
-    if (event.target.closest("button, input, select, textarea, a")) return;
-    if (Date.now() < suppressTrackClickUntil) return;
-    playTrack(item);
+    playTrack(item, { restartIfCurrent: true });
   });
   card.addEventListener("keydown", event => {
     if (event.key === "Enter") {
-      playTrack(item);
+      playTrack(item, { restartIfCurrent: true });
     } else if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
       requestDeleteTrack(item);
@@ -15400,18 +15573,22 @@ async function applyWallpaper(item = selectedWallpaper()) {
   }
 }
 
-async function playTrack(item = selectedTrack()) {
+async function playTrack(item = selectedTrack(), options = {}) {
   if (!item) return;
   const shouldRefreshLyrics = Boolean(musicLyricsTrackPath);
   setSelectedTrackPath(item.path, { persist: "now" });
 
   const nextUrl = new URL(item.url, window.location.href).href;
-  if (els.audioPlayer.src !== nextUrl) {
+  const isCurrentSource = els.audioPlayer.src === nextUrl;
+  if (options.restartIfCurrent && isCurrentSource) {
+    resetEndedTrackToStart();
+  } else if (!isCurrentSource) {
     els.audioPlayer.src = item.url;
     els.audioPlayer.load();
   }
 
   try {
+    prepareMusicAudioPlayback(item);
     await els.audioPlayer.play();
     musicNotice = "";
     renderMusic();
@@ -15706,7 +15883,13 @@ function recordTrackSeekChange(beforeRatio, afterRatio) {
 
 function setTrackVolume(value, options = {}) {
   const nextVolume = clamp(Number(value) || 0, 0, 1);
-  els.audioPlayer.volume = nextVolume;
+  musicUserVolume = nextVolume;
+  if (musicUserGainNode) {
+    setMusicAudioParam(musicUserGainNode.gain, nextVolume, options);
+    els.audioPlayer.volume = 1;
+  } else {
+    applyFallbackMusicVolume();
+  }
   els.trackVolume.value = String(nextVolume);
   if (options.persist !== false) {
     localStorage.setItem(storageKeys.volume, String(nextVolume));
@@ -15715,7 +15898,7 @@ function setTrackVolume(value, options = {}) {
 
 function applyVolumeHistory(value) {
   const targetVolume = clamp(Number(value) || 0, 0, 1);
-  const startVolume = clamp(Number(els.audioPlayer.volume) || 0, 0, 1);
+  const startVolume = musicUserVolume;
   animateNumberValue(
     "volume",
     startVolume,
@@ -15743,14 +15926,14 @@ function recordVolumeChange(beforeVolume, afterVolume) {
 function beginVolumeGesture() {
   cancelSmoothValueAnimation("volume");
   if (volumeHistoryStart == null) {
-    volumeHistoryStart = clamp(Number(els.audioPlayer.volume) || 0, 0, 1);
+    volumeHistoryStart = musicUserVolume;
   }
 }
 
 function commitVolumeGesture() {
   if (volumeHistoryStart == null) return;
   const before = volumeHistoryStart;
-  const after = clamp(Number(els.audioPlayer.volume) || 0, 0, 1);
+  const after = musicUserVolume;
   volumeHistoryStart = null;
   recordVolumeChange(before, after);
 }
@@ -17418,6 +17601,10 @@ window.addEventListener("beforeunload", () => {
     flushMusicStateBeforeUnload();
   }
 });
+window.addEventListener("pagehide", closeConsoleWindowSession);
+window.addEventListener("pageshow", () => {
+  if (consoleWindowSessionClosed) startConsoleWindowSession();
+});
 document.addEventListener("visibilitychange", () => {
   if (hasMusic && document.visibilityState === "hidden") {
     flushPendingMusicLyricMarks({ beacon: true });
@@ -18016,13 +18203,15 @@ document.addEventListener("keydown", event => {
 });
 
 const savedVolume = Number(localStorage.getItem(storageKeys.volume));
-const initialVolume = Number.isFinite(savedVolume) ? Math.max(0, Math.min(1, savedVolume)) : 0.8;
+const initialVolume = Number.isFinite(savedVolume) ? Math.max(0, Math.min(1, savedVolume)) : (1 / 3);
 if (hasMusic) {
-  els.audioPlayer.volume = initialVolume;
+  musicUserVolume = initialVolume;
+  applyFallbackMusicVolume();
   els.trackVolume.value = String(initialVolume);
 }
 
 applyConsoleEdition(consoleEdition, { activate: false, forceRender: true });
+startConsoleWindowSession();
 applyLanguage();
 setConsoleWorkspaceView(activeConsoleView, { persist: false });
 setBlenderWorkspaceView(activeBlenderView, { persist: false });

@@ -70,7 +70,7 @@ if ($CheckConnection) {
 
 $Version = $Version.Trim().TrimStart("v")
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-  throw "Version is required and must use semantic versioning, for example 0.6.4."
+  throw "Version is required and must use semantic versioning, for example 0.7.0."
 }
 
 $Tag = "v$Version"
@@ -109,10 +109,11 @@ if (-not $SkipChecks) {
     throw "Node.js was not found. Install Node.js or use the bundled Codex runtime."
   }
 
-  Invoke-CheckedCommand "Python syntax" { python -m py_compile world_console.py console_update.py world_update.py tools\capture-release-defaults.py tools\check-release-defaults.py tools\check-built-in-media-sync.py }
+  Invoke-CheckedCommand "Python syntax" { python -m py_compile world_console.py console_window_session.py console_update.py world_update.py tools\capture-release-defaults.py tools\check-release-defaults.py tools\check-built-in-media-sync.py tools\check-console-lifecycle.py }
   Invoke-CheckedCommand "Release defaults" { python tools\check-release-defaults.py }
   Invoke-CheckedCommand "Built-in media sync" { python tools\check-built-in-media-sync.py }
   Invoke-CheckedCommand "Feedback service" { python tools\check-feedback.py }
+  Invoke-CheckedCommand "Console lifecycle" { python tools\check-console-lifecycle.py }
   Invoke-CheckedCommand "Console updater" { python tools\check-console-update.py }
   Invoke-CheckedCommand "World updater" { python tools\check-world-update.py }
   Invoke-CheckedCommand "Clean uninstall" { python tools\check-clean-uninstall.py }

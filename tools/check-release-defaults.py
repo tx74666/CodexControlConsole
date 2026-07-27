@@ -103,6 +103,7 @@ def main():
             require(console_state.get("href") == "music.html", "clean device does not launch Music")
 
             custom_music = {
+                "layoutVersion": DEFAULTS["music"]["layoutVersion"],
                 "tiers": {"Toxic.mp3": "first"},
                 "order": ["Toxic.mp3", "Outrun.mp3"],
                 "promotedLibraryTracks": {},
@@ -133,6 +134,78 @@ def main():
             require(
                 json.dumps(custom_modules["order"], ensure_ascii=False, separators=(",", ":")) in bootstrap,
                 "device layout bootstrap did not preserve the custom order",
+            )
+        finally:
+            stop_server(process)
+
+        broken_data_dir = Path(temporary) / "broken-device"
+        broken_cache = broken_data_dir / "cache"
+        broken_cache.mkdir(parents=True)
+        broken_state = {
+            "tiers": {},
+            "order": [
+                "Liquid Roller.mp3",
+                "Airborne.mp3",
+                "Never Be Alone.mp3",
+                "Stasis.mp3",
+                "Final Step.mp3",
+                "Luminescence.mp3",
+                "Dancin.mp3",
+                "House of Memories.mp3",
+                "Toxic.mp3",
+                "Get Lucky.mp3",
+                "Outrun.mp3",
+                "Fire Inside.mp3",
+                "Never Slow Me Down.mp3",
+                "Around the World.mp3",
+                "Redline.mp3",
+                "Ma rose éternelle.mp3",
+            ],
+            "promotedLibraryTracks": {},
+            "selectedTrackPath": "Redline.mp3",
+        }
+        (broken_cache / "music_state.json").write_text(
+            json.dumps(broken_state, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        port = available_port()
+        base_url = f"http://127.0.0.1:{port}"
+        process = start_server(broken_data_dir, port)
+        try:
+            migrated = request_json(f"{base_url}/api/music").get("state") or {}
+            require(migrated.get("tiers") == DEFAULTS["music"]["tiers"], "broken public tiers were not repaired")
+            require(migrated.get("order") == DEFAULTS["music"]["order"], "broken public order was not repaired")
+            require(migrated.get("selectedTrackPath") == "Redline.mp3", "selected track was lost during repair")
+            require(
+                (broken_cache / "music_state.previous.json").is_file(),
+                "broken public state was not backed up before repair",
+            )
+        finally:
+            stop_server(process)
+
+        legacy_custom_data = Path(temporary) / "legacy-custom-device"
+        legacy_custom_cache = legacy_custom_data / "cache"
+        legacy_custom_cache.mkdir(parents=True)
+        legacy_custom = {
+            "tiers": {"Toxic.mp3": "first"},
+            "order": ["Toxic.mp3", "Outrun.mp3"],
+            "promotedLibraryTracks": {},
+            "selectedTrackPath": "Toxic.mp3",
+        }
+        (legacy_custom_cache / "music_state.json").write_text(
+            json.dumps(legacy_custom, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        port = available_port()
+        base_url = f"http://127.0.0.1:{port}"
+        process = start_server(legacy_custom_data, port)
+        try:
+            preserved = request_json(f"{base_url}/api/music").get("state") or {}
+            require(preserved.get("tiers") == legacy_custom["tiers"], "custom tiers were overwritten")
+            require(preserved.get("order") == legacy_custom["order"], "custom order was overwritten")
+            require(
+                preserved.get("layoutVersion") == DEFAULTS["music"]["layoutVersion"],
+                "custom layout was not marked as migrated",
             )
         finally:
             stop_server(process)

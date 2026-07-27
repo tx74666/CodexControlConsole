@@ -75,6 +75,14 @@ def verify_packaged_app(executable, app_dir, data_dir, expected_music_state=None
         tracks = music.get("tracks") or []
         require(len(tracks) == 16, "installation did not seed all 16 tracks")
         require({item.get("name") for item in tracks} == EXPECTED_MUSIC, "installed track names are incorrect")
+        require(
+            all(isinstance(item.get("loudnessGainDb"), (int, float)) for item in tracks),
+            "installed tracks are missing loudness calibration",
+        )
+        require(
+            next(item for item in tracks if item.get("name") == "Luminescence").get("loudnessGainDb") == 0,
+            "installed Luminescence is not the unchanged loudness reference",
+        )
         expected_state = expected_music_state or RELEASE_DEFAULTS["music"]
         actual_state = music.get("state") or {}
         for key in ("tiers", "order", "promotedLibraryTracks"):

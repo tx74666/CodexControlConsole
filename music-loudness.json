@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "referenceTrack": "Luminescence",
+  "referenceLufs": -7.42,
+  "calibrationVolume": 0.333333,
+  "tracks": {
+    "Airborne": {
+      "measuredLufs": -16.3,
+      "truePeakDbtp": -5.78,
+      "gainDb": 8.88
+    },
+    "Around the World": {
+      "measuredLufs": -15.23,
+      "truePeakDbtp": -2.81,
+      "gainDb": 7.81
+    },
+    "Dancin": {
+      "measuredLufs": -8.86,
+      "truePeakDbtp": 1.57,
+      "gainDb": 1.44
+    },
+    "Final Step": {
+      "measuredLufs": -5.8,
+      "truePeakDbtp": 2.82,
+      "gainDb": -1.62
+    },
+    "Fire Inside": {
+      "measuredLufs": -14.9,
+      "truePeakDbtp": -5.34,
+      "gainDb": 7.48
+    },
+    "Get Lucky": {
+      "measuredLufs": -10.53,
+      "truePeakDbtp": 2.22,
+      "gainDb": 3.11
+    },
+    "House of Memories": {
+      "measuredLufs": -7.56,
+      "truePeakDbtp": 1.86,
+      "gainDb": 0.14
+    },
+    "Liquid Roller": {
+      "measuredLufs": -17.83,
+      "truePeakDbtp": -5.67,
+      "gainDb": 10.41
+    },
+    "Luminescence": {
+      "measuredLufs": -7.42,
+      "truePeakDbtp": 2.0,
+      "gainDb": 0.0
+    },
+    "Ma rose éternelle": {
+      "measuredLufs": -14.04,
+      "truePeakDbtp": -0.07,
+      "gainDb": 4.62,
+      "intentionalOffsetDb": -2.0
+    },
+    "Never Be Alone": {
+      "measuredLufs": -11.34,
+      "truePeakDbtp": 1.0,
+      "gainDb": 3.92
+    },
+    "Never Slow Me Down": {
+      "measuredLufs": -11.9,
+      "truePeakDbtp": 0.77,
+      "gainDb": 4.48
+    },
+    "Outrun": {
+      "measuredLufs": -13.28,
+      "truePeakDbtp": -1.98,
+      "gainDb": 5.86
+    },
+    "Redline": {
+      "measuredLufs": -15.95,
+      "truePeakDbtp": -5.31,
+      "gainDb": 8.53
+    },
+    "Stasis": {
+      "measuredLufs": -7.94,
+      "truePeakDbtp": 2.6,
+      "gainDb": 0.52
+    },
+    "Toxic": {
+      "measuredLufs": -9.86,
+      "truePeakDbtp": 0.64,
+      "gainDb": 2.44
+    }
+  }
+}

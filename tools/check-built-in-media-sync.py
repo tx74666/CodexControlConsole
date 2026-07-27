@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -23,6 +24,30 @@ def main():
         sys.path.insert(0, str(PROJECT_ROOT))
 
         import world_console as console
+
+        loudness_profile = json.loads((PROJECT_ROOT / "music-loudness.json").read_text(encoding="utf-8"))
+        loudness_tracks = loudness_profile.get("tracks") or {}
+        public_music_names = {
+            console.display_music_name(path.stem)
+            for path in (PROJECT_ROOT / "public-music").glob("*.mp3")
+        }
+        require(set(loudness_tracks) == public_music_names, "loudness profile does not cover all built-in songs")
+        reference_lufs = float(loudness_profile["referenceLufs"])
+        for title, calibration in loudness_tracks.items():
+            expected_lufs = reference_lufs + float(calibration.get("intentionalOffsetDb") or 0)
+            calibrated_lufs = float(calibration["measuredLufs"]) + float(calibration["gainDb"])
+            require(
+                abs(calibrated_lufs - expected_lufs) <= 0.02,
+                f"{title} does not resolve to its intended calibrated loudness",
+            )
+        require(
+            console.music_loudness_calibration("Luminescence").get("gainDb") == 0,
+            "Luminescence is no longer the unchanged loudness reference",
+        )
+        require(
+            console.music_loudness_calibration("Liquid Roller").get("gainDb") == 10.41,
+            "Liquid Roller loudness calibration changed unexpectedly",
+        )
 
         require(console.display_music_name("Airborne") == "Airborne", "clean Airborne title changed")
         require(console.display_music_name("A8 - Airborne") == "Airborne", "legacy A8 prefix remains")
@@ -78,8 +103,11 @@ def main():
         console.MUSIC_DIR = music_target
         try:
             rose_record = console.music_track_from_path(music_target / "Ma rose éternelle.mp3")
+            airborne_record = console.music_track_from_path(music_target / "Airborne.mp3")
         finally:
             console.MUSIC_DIR = original_music_dir
+        require(rose_record.get("loudnessGainDb") == 4.62, "gentle-song loudness offset was not exposed")
+        require(airborne_record.get("loudnessGainDb") == 8.88, "track loudness calibration was not exposed")
         require(
             [item["code"] for item in rose_record.get("lyricsLanguages", [])] == ["fr", "en", "zh"],
             "multilingual lyrics were not exposed in French, English, Chinese order",

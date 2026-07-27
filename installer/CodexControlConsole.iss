@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.6.4"
+  #define AppVersion "0.7.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\build\console-installer\dist\Codex Console"
@@ -39,6 +39,7 @@ UsePreviousAppDir=yes
 DisableDirPage=no
 DisableProgramGroupPage=yes
 CloseApplications=yes
+CloseApplicationsFilter=Codex Console.exe
 RestartApplications=no
 VersionInfoVersion={#AppVersion}
 VersionInfoProductName=Codex Console
@@ -52,9 +53,12 @@ Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
-Type: files; Name: "{group}\Codex Console.lnk"
-Type: filesandordirs; Name: "{app}\_internal\music"
-Type: filesandordirs; Name: "{app}\_internal\wallpapers"
+Type: files; Name: "{app}\_internal\music\Codex - Glass Horizon.wav"
+Type: files; Name: "{app}\_internal\music\Codex - Night Workspace.wav"
+Type: files; Name: "{app}\_internal\music\Codex - Quiet Circuit.wav"
+Type: files; Name: "{app}\_internal\wallpapers\elaina-wandering-witch-online.jpg"
+Type: files; Name: "{app}\_internal\wallpapers\kobayashi-dragon-maid-online.jpg"
+Type: files; Name: "{app}\_internal\wallpapers\palm-sky-reflection.jpg"
 
 [Icons]
 Name: "{group}\Codex Console"; Filename: "{app}\Codex Console.exe"; WorkingDir: "{app}"; IconFilename: "{app}\Codex Console.exe"; IconIndex: 0
@@ -78,22 +82,6 @@ Type: filesandordirs; Name: "{app}\wallpapers"
 Type: files; Name: "{userstartup}\Codex-Control-Hotkey.vbs"
 
 [Code]
-function InitializeSetup(): Boolean;
-var
-  ResultCode: Integer;
-begin
-  Result := True;
-  Exec(
-    ExpandConstant('{sys}\taskkill.exe'),
-    '/F /IM "Codex Console.exe"',
-    '',
-    SW_HIDE,
-    ewWaitUntilTerminated,
-    ResultCode
-  );
-  Sleep(400);
-end;
-
 function ShouldCreateDesktopShortcut(): Boolean;
 begin
   Result := not FileExists(ExpandConstant('{autodesktop}\Codex Console.lnk'));

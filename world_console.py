@@ -41,6 +41,7 @@ from world_update import WorldUpdateService
 from desktop_layout import DesktopLayoutService
 from feedback_service import FeedbackService, FeedbackServiceError
 from app_uninstall import AppUninstallService
+from console_window_session import ConsoleWindowSessionService
 
 
 def hidden_subprocess_kwargs():
@@ -282,6 +283,7 @@ MUSIC_ANALYSIS_DIR = CACHE_DIR / "music_analysis"
 MUSIC_LYRIC_MARKS_FILE = CACHE_DIR / "music_lyric_marks.json"
 CONSOLE_STATE_FILE = CACHE_DIR / "console_state.json"
 RELEASE_DEFAULTS_FILE = APP_DIR / "release-defaults.json"
+MUSIC_LOUDNESS_FILE = APP_DIR / "music-loudness.json"
 YOUTUBE_COOKIE_DIR = CACHE_DIR / "cookies"
 YOUTUBE_COOKIE_FILE = YOUTUBE_COOKIE_DIR / "youtube.cookies.txt"
 MATERIAL_SOURCE_DIR = Path(os.environ.get("CODEX_CONTROL_MATERIAL_SOURCE_DIR", str(Path.home() / "Downloads")))
@@ -473,6 +475,7 @@ def shutdown_active_server():
         server.shutdown()
 
 
+CONSOLE_WINDOW_SESSIONS = ConsoleWindowSessionService(shutdown_active_server)
 CONSOLE_UPDATE = ConsoleUpdateService(
     APP_DIR,
     USER_DATA_DIR,
@@ -1082,6 +1085,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             payload = self.read_json_body(
                 MAX_FEEDBACK_REQUEST_BYTES if parsed.path == "/api/feedback/submit" else None
             )
+            if parsed.path == "/api/console/window-session":
+                if not self.require_local_request():
+                    return
+                self.send_json(CONSOLE_WINDOW_SESSIONS.update(payload))
+                return
             if parsed.path == "/api/media/builtins/sync":
                 if not self.require_local_request():
                     return
@@ -7654,6 +7662,45 @@ def music_path_name_key(path):
     return music_name_key(display_music_name(path.stem))
 
 
+_MUSIC_LOUDNESS_CALIBRATIONS = None
+
+
+def music_loudness_calibrations():
+    global _MUSIC_LOUDNESS_CALIBRATIONS
+    if _MUSIC_LOUDNESS_CALIBRATIONS is not None:
+        return _MUSIC_LOUDNESS_CALIBRATIONS
+
+    try:
+        payload = json.loads(MUSIC_LOUDNESS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+
+    result = {}
+    tracks_payload = payload.get("tracks") if isinstance(payload, dict) else {}
+    if isinstance(tracks_payload, dict):
+        for title, raw in tracks_payload.items():
+            if not isinstance(raw, dict):
+                continue
+            key = music_name_key(title)
+            try:
+                gain_db = float(raw.get("gainDb"))
+            except (TypeError, ValueError):
+                continue
+            if not key or not math.isfinite(gain_db):
+                continue
+            result[key] = {
+                "gainDb": round(max(-12.0, min(12.0, gain_db)), 2),
+            }
+
+    _MUSIC_LOUDNESS_CALIBRATIONS = result
+    return result
+
+
+def music_loudness_calibration(name):
+    calibration = music_loudness_calibrations().get(music_name_key(name))
+    return dict(calibration) if calibration else {}
+
+
 def builtin_music_source_directory():
     for candidate in (APP_DIR / "public-music", APP_DIR / "music"):
         if candidate.is_dir() and directory_has_media(candidate, MUSIC_EXTENSIONS):
@@ -8044,21 +8091,110 @@ def sanitize_state_path(value):
     return str(value or "").replace("\\", "/").lstrip("/").strip()
 
 
-def read_music_state():
+def sanitize_layout_version(value):
     try:
-        raw = json.loads(MUSIC_STATE_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raw = None
-    if not isinstance(raw, dict):
-        release_music = read_release_defaults().get("music")
-        raw = release_music if isinstance(release_music, dict) else {}
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_music_state(raw):
+    raw = raw if isinstance(raw, dict) else {}
     state = {
         "tiers": sanitize_string_map(raw.get("tiers")),
         "order": sanitize_string_list(raw.get("order")),
         "promotedLibraryTracks": sanitize_string_map(raw.get("promotedLibraryTracks")),
     }
+    layout_version = sanitize_layout_version(raw.get("layoutVersion"))
+    if layout_version:
+        state["layoutVersion"] = layout_version
     if "selectedTrackPath" in raw:
         state["selectedTrackPath"] = sanitize_state_path(raw.get("selectedTrackPath"))
+    return state
+
+
+def localize_release_music_state(raw):
+    state = normalize_music_state(raw)
+    tracks = list_music()
+    path_by_name = {
+        music_name_key(item.get("name")): item.get("path")
+        for item in tracks
+        if music_name_key(item.get("name")) and item.get("path")
+    }
+
+    def local_path(value):
+        clean = sanitize_state_path(value)
+        key = music_name_key(display_music_name(Path(clean).stem))
+        return path_by_name.get(key) or clean
+
+    localized_tiers = {}
+    for path, tier in state.get("tiers", {}).items():
+        localized_path = local_path(path)
+        if localized_path:
+            localized_tiers[localized_path] = tier
+    state["tiers"] = localized_tiers
+    state["order"] = sanitize_string_list([
+        local_path(path)
+        for path in state.get("order", [])
+    ])
+    return state
+
+
+def music_state_matches_broken_release_layout(state, release_state):
+    if state.get("tiers") or sanitize_layout_version(state.get("layoutVersion")):
+        return False
+    release_order = release_state.get("order") or []
+    current_order = state.get("order") or []
+    if len(release_order) < 3 or len(current_order) < max(3, math.ceil(len(release_order) * 0.75)):
+        return False
+    release_keys = {
+        music_name_key(display_music_name(Path(path).stem))
+        for path in release_order
+    }
+    current_keys = {
+        music_name_key(display_music_name(Path(path).stem))
+        for path in current_order
+    }
+    release_keys.discard("")
+    current_keys.discard("")
+    return len(release_keys & current_keys) >= math.ceil(len(release_keys) * 0.75)
+
+
+def store_music_state(state, previous=None):
+    MUSIC_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(previous, dict) and previous != state:
+        MUSIC_STATE_BACKUP_FILE.write_text(
+            json.dumps(previous, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    temporary = MUSIC_STATE_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, MUSIC_STATE_FILE)
+
+
+def read_music_state():
+    try:
+        raw = json.loads(MUSIC_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raw = None
+    release_music = read_release_defaults().get("music")
+    release_state = localize_release_music_state(release_music if isinstance(release_music, dict) else {})
+    if not isinstance(raw, dict):
+        return release_state
+
+    state = normalize_music_state(raw)
+    release_layout_version = sanitize_layout_version(release_state.get("layoutVersion"))
+    if music_state_matches_broken_release_layout(state, release_state):
+        migrated = dict(release_state)
+        migrated["promotedLibraryTracks"] = state.get("promotedLibraryTracks", {})
+        if state.get("selectedTrackPath"):
+            migrated["selectedTrackPath"] = state["selectedTrackPath"]
+        store_music_state(migrated, previous=state)
+        return migrated
+
+    if release_layout_version and not state.get("layoutVersion"):
+        state["layoutVersion"] = release_layout_version
+        store_music_state(state, previous=normalize_music_state(raw))
     return state
 
 
@@ -8090,11 +8226,13 @@ def write_music_state(payload):
             current["promotedLibraryTracks"] = sanitize_string_map(payload.get("promotedLibraryTracks"))
         if "selectedTrackPath" in payload:
             current["selectedTrackPath"] = sanitize_state_path(payload.get("selectedTrackPath"))
+        if "layoutVersion" in payload:
+            current["layoutVersion"] = max(
+                sanitize_layout_version(previous.get("layoutVersion")),
+                sanitize_layout_version(payload.get("layoutVersion")),
+            )
 
-    MUSIC_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if previous != current:
-        MUSIC_STATE_BACKUP_FILE.write_text(json.dumps(previous, ensure_ascii=False, indent=2), encoding="utf-8")
-    MUSIC_STATE_FILE.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    store_music_state(current, previous=previous)
     return {"ok": not stale_client, "staleClient": stale_client, "state": current}
 
 
@@ -8488,6 +8626,9 @@ def music_track_from_path(path):
         "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
         "type": path.suffix.lower().lstrip("."),
     }
+    loudness = music_loudness_calibration(record["name"])
+    if loudness:
+        record["loudnessGainDb"] = loudness["gainDb"]
     if lyrics_path:
         record["lyrics"] = True
         record["lyricsType"] = lyrics_path.suffix.lower().lstrip(".")
@@ -10262,6 +10403,7 @@ def main():
     port = pick_port(args.port)
     url = console_start_url(port).replace("127.0.0.1", local_host, 1)
     server = ThreadingHTTPServer((args.host, port), ConsoleHandler)
+    server.daemon_threads = True
     ACTIVE_SERVER = server
 
     if sys.stdout:
@@ -10281,6 +10423,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        CONSOLE_WINDOW_SESSIONS.stop()
         server.server_close()
         ACTIVE_SERVER = None
 

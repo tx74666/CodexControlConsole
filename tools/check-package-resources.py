@@ -97,18 +97,16 @@ def main():
         "not FileExists(ExpandConstant('{autodesktop}\\Codex Console.lnk'))" in installer,
         "desktop shortcut preservation check is missing",
     )
-    require(
-        "'/F /IM \"Codex Console.exe\"'" in installer,
-        "Console Setup does not close the previous installed process automatically",
-    )
+    require("function InitializeSetup()" not in installer, "Setup still kills Console before installation starts")
+    require("CloseApplicationsFilter=Codex Console.exe" in installer, "Setup does not close Console at install time")
     require('Filename: "{sys}\\ie4uinit.exe"; Parameters: "-show"' in installer, "Windows icon cache is not refreshed")
     require(
-        'Type: filesandordirs; Name: "{app}\\_internal\\music"' in installer,
-        "obsolete packaged music is not cleared during upgrade",
+        'Type: filesandordirs; Name: "{app}\\_internal\\music"' not in installer,
+        "upgrade destructively clears all packaged music",
     )
     require(
-        'Type: filesandordirs; Name: "{app}\\_internal\\wallpapers"' in installer,
-        "obsolete packaged wallpapers are not cleared during upgrade",
+        'Type: filesandordirs; Name: "{app}\\_internal\\wallpapers"' not in installer,
+        "upgrade destructively clears all packaged wallpapers",
     )
     require('Name: "{group}\\Uninstall Codex Console"; Filename: "{uninstallexe}"' in installer, "Start menu uninstaller is missing")
     require('#define UserDataDir "{localappdata}\\CodexControlConsole"' in installer, "default Console data directory is not device-local")
@@ -124,10 +122,42 @@ def main():
     require(manifest.get("edition") == "public", "release package is not the public edition")
     defaults_files = list(app_dir.rglob("release-defaults.json"))
     require(len(defaults_files) == 1, "release defaults are missing or duplicated")
+    loudness_files = list(app_dir.rglob("music-loudness.json"))
+    require(len(loudness_files) == 1, "music loudness profile is missing or duplicated")
+    loudness_profile = json.loads(loudness_files[0].read_text(encoding="utf-8"))
+    require(
+        set((loudness_profile.get("tracks") or {}).keys()) == {Path(name).stem for name in PUBLIC_MUSIC},
+        "packaged music loudness profile is incomplete",
+    )
     release_defaults = json.loads(defaults_files[0].read_text(encoding="utf-8"))
     default_music = release_defaults.get("music") or {}
+    expected_order = [
+        "Outrun.mp3",
+        "Redline.mp3",
+        "Liquid Roller.mp3",
+        "Get Lucky.mp3",
+        "Around the World.mp3",
+        "Airborne.mp3",
+        "Luminescence.mp3",
+        "Fire Inside.mp3",
+        "Toxic.mp3",
+        "Never Be Alone.mp3",
+        "Stasis.mp3",
+        "Final Step.mp3",
+        "Dancin.mp3",
+        "House of Memories.mp3",
+        "Ma rose éternelle.mp3",
+        "Never Slow Me Down.mp3",
+    ]
+    expected_tiers = {
+        **{name: "first" for name in expected_order[:3]},
+        **{name: "second" for name in expected_order[3:8]},
+    }
+    require(default_music.get("layoutVersion") == 1, "release music layout version is missing")
     require(set(default_music.get("order") or []) == PUBLIC_MUSIC, "release music order is incomplete")
     require(len(default_music.get("order") or []) == len(PUBLIC_MUSIC), "release music order contains duplicates")
+    require(default_music.get("order") == expected_order, "release music order does not match the publisher layout")
+    require(default_music.get("tiers") == expected_tiers, "release music tiers do not match the publisher layout")
     require(
         set((default_music.get("tiers") or {}).values()) <= {"first", "second", "third"},
         "release music tiers contain an invalid group",

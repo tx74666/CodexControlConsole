@@ -6,7 +6,7 @@ on:
       version:
         description: Release version, for example v0.4.0
         required: true
-        default: v0.6.4
+        default: v0.7.0
   push:
     tags:
       - "v*"
@@ -48,6 +48,8 @@ jobs:
         shell: pwsh
         run: |
           python tools/check-feedback.py
+          python tools/check-release-defaults.py
+          python tools/check-console-lifecycle.py
           python tools/check-console-update.py
           python tools/check-world-update.py
           python tools/check-clean-uninstall.py
@@ -129,7 +131,7 @@ jobs:
 
             Download only **CodexControlConsole-Setup-x64.exe**.
 
-            This release completes the Blender GitHub Coop flow. Codex Console now checks the selected repository for remote changes, guides first-time Clone, shows when Pull or Push is needed, and warns when remote updates overlap local Blender changes.
+            This release repairs music tiers and ordering on upgraded PCs, keeps existing personal arrangements intact, and hardens Windows updates so the app and shortcuts remain recoverable if Setup is interrupted.
 
             1. Double-click the downloaded Setup file.
             2. Choose **Simplified Chinese** or **English**.
@@ -140,7 +142,7 @@ jobs:
 
             只需下载 **CodexControlConsole-Setup-x64.exe**。
 
-            本版补全 Blender 的 GitHub Coop 协作流程。Codex Console 会检查所选仓库的云端更新，引导首次 Clone，提示何时需要 Pull 或 Push，并在云端更新与本地 Blender 改动重叠时给出明确警告。
+            本版修复升级后音乐全部落入第 3 级的问题，同时保留用户已经调整过的顺序；Windows 更新流程也增加了程序本体、版本和快捷方式校验，安装中断后会重新启动可用版本。
 
             1. 双击下载好的安装程序。
             2. 选择 **简体中文** 或 **English**。

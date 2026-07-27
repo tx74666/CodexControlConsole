@@ -39,6 +39,19 @@ function staticChecks() {
 
   const appSource = readFileSync(join(projectRoot, "app.js"), "utf8");
   new Function(appSource);
+  const loudnessProfile = JSON.parse(readFileSync(join(projectRoot, "music-loudness.json"), "utf8"));
+  assert(Object.keys(loudnessProfile.tracks || {}).length === 16, "music loudness profile must cover all 16 tracks");
+  assert(loudnessProfile.referenceTrack === "Luminescence", "Luminescence must remain the loudness reference");
+  assert(loudnessProfile.tracks?.Luminescence?.gainDb === 0, "reference track must not receive calibration gain");
+  assert(
+    appSource.includes("playTrack(item, { restartIfCurrent: true })"),
+    "track cards do not request replay for the current song"
+  );
+  const trackCardStart = appSource.indexOf("function createTrackCard");
+  const trackCardEnd = appSource.indexOf("\nfunction ", trackCardStart + 1);
+  const trackCardSource = appSource.slice(trackCardStart, trackCardEnd);
+  assert(trackCardStart >= 0 && trackCardEnd > trackCardStart, "track card function is missing");
+  assert(!trackCardSource.includes('"dblclick"'), "track cards still have a duplicate double-click handler");
   assert(existsSync(join(projectRoot, "blender_github_share.py")), "Blender GitHub Share backend is missing");
   const coopCatalog = JSON.parse(readFileSync(join(projectRoot, "github-coop.json"), "utf8"));
   assert(
@@ -53,10 +66,11 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "tools", "apply_update.py")), "portable update helper is missing");
   assert(existsSync(join(projectRoot, "desktop_layout.py")), "desktop layout backend is missing");
   assert(existsSync(join(projectRoot, "feedback_service.py")), "feedback backend is missing");
+  assert(existsSync(join(projectRoot, "console_window_session.py")), "window lifecycle backend is missing");
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.6.4", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "0.7.0", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -74,6 +88,11 @@ function staticChecks() {
   assert(/id="builtinMediaWallpapersSync"/.test(consoleHtml), "built-in wallpaper sync control is missing");
   const backendSource = readFileSync(join(projectRoot, "world_console.py"), "utf8");
   assert(backendSource.includes('"/api/media/builtins/sync"'), "built-in media sync API is missing");
+  assert(backendSource.includes('"/api/console/window-session"'), "window lifecycle API is missing");
+  assert(
+    appSource.includes('window.addEventListener("pagehide", closeConsoleWindowSession)'),
+    "window close notification is missing"
+  );
   return Array.from(versions)[0];
 }
 
@@ -414,7 +433,7 @@ async function runBrowserChecks(client) {
     const originalFetchStatus = fetchProductUpdateStatus;
     try {
       productUpdateStates = {
-        console: { currentVersion: '0.6.4', latestVersion: '0.6.4', available: false, autoCheck: true },
+        console: { currentVersion: '0.7.0', latestVersion: '0.7.0', available: false, autoCheck: true },
         world: {
           currentVersion: '0.3.1', latestVersion: '0.3.2', available: true,
           installed: true, autoCheck: true, canInstall: true
@@ -424,8 +443,8 @@ async function runBrowserChecks(client) {
       productUpdateBusy = true;
       waitForUpdatePoll = async () => {};
       fetchProductUpdateStatus = async product => ({
-        currentVersion: product === 'world' ? '0.3.2' : '0.6.4',
-        latestVersion: product === 'world' ? '0.3.2' : '0.6.4',
+        currentVersion: product === 'world' ? '0.3.2' : '0.7.0',
+        latestVersion: product === 'world' ? '0.3.2' : '0.7.0',
         available: false,
         installed: true,
         autoCheck: true,
@@ -907,6 +926,8 @@ async function runBrowserChecks(client) {
       ...originalState,
       project: {
         ...originalState.project,
+        path: originalState.project.path || "D:/Blender/Projects/Blender Projects",
+        directory: originalState.project.directory || "D:/Blender/Projects/Blender Projects",
         downloaded: true
       },
       git: {
@@ -1053,6 +1074,80 @@ async function runBrowserChecks(client) {
   assert(musicCardTitles.includes("Airborne"), "Airborne card title is missing");
   assert(musicCardTitles.includes("Ma rose éternelle"), "Ma rose éternelle card title is missing");
   assert(!musicCardTitles.some(title => /^A8\s*-/i.test(title)), `legacy A8 card title remains: ${JSON.stringify(musicCardTitles)}`);
+  const musicLoudnessState = await evaluate(client, `(() => {
+    const reference = tracks.find(track => track.name === "Luminescence");
+    const quiet = tracks.find(track => track.name === "Liquid Roller");
+    const gentle = tracks.find(track => track.name === "Ma rose éternelle");
+    setTrackVolume(1 / 3, { persist: false, immediate: true });
+    applyTrackLoudnessCalibration(quiet, { immediate: true });
+    const graphReady = ensureMusicAudioGraph();
+    return {
+      trackCount: tracks.length,
+      calibratedCount: tracks.filter(track => Number.isFinite(Number(track.loudnessGainDb))).length,
+      referenceGainDb: trackLoudnessGainDb(reference),
+      quietGainDb: trackLoudnessGainDb(quiet),
+      gentleGainDb: trackLoudnessGainDb(gentle),
+      graphReady,
+      userGain: musicUserGainNode?.gain?.value ?? null,
+      calibrationGain: musicCalibrationGainNode?.gain?.value ?? null,
+      limiterThreshold: musicLimiterNode?.threshold?.value ?? null,
+      elementVolume: els.audioPlayer.volume
+    };
+  })()`);
+  assert(
+    musicLoudnessState.trackCount === 16 && musicLoudnessState.calibratedCount === 16,
+    `not every built-in track is calibrated: ${JSON.stringify(musicLoudnessState)}`
+  );
+  assert(
+    musicLoudnessState.referenceGainDb === 0
+      && musicLoudnessState.quietGainDb === 10.41
+      && musicLoudnessState.gentleGainDb === 4.62,
+    `track calibration values are wrong: ${JSON.stringify(musicLoudnessState)}`
+  );
+  assert(
+    musicLoudnessState.graphReady
+      && Math.abs(musicLoudnessState.userGain - (1 / 3)) < 0.001
+      && Math.abs(musicLoudnessState.calibrationGain - (10 ** (10.41 / 20))) < 0.01
+      && musicLoudnessState.limiterThreshold === -1
+      && musicLoudnessState.elementVolume === 1,
+    `Web Audio loudness chain is not configured correctly: ${JSON.stringify(musicLoudnessState)}`
+  );
+  const currentTrackReplayState = await evaluate(client, `(async () => {
+    const item = tracks.find(track => track.name === "Luminescence");
+    if (!item) return { error: "missing track" };
+    const url = new URL(item.url, window.location.href).href;
+    if (els.audioPlayer.src !== url) {
+      els.audioPlayer.src = item.url;
+      els.audioPlayer.load();
+    }
+    if (els.audioPlayer.readyState < 1) {
+      await new Promise(resolve => {
+        const finish = () => resolve();
+        els.audioPlayer.addEventListener("loadedmetadata", finish, { once: true });
+        els.audioPlayer.addEventListener("error", finish, { once: true });
+        setTimeout(finish, 5000);
+      });
+    }
+    if (!(els.audioPlayer.duration > 4)) return { error: "metadata unavailable" };
+    const nativePlay = els.audioPlayer.play;
+    els.audioPlayer.play = () => Promise.resolve();
+    try {
+      els.audioPlayer.currentTime = 2;
+      await playTrack(item);
+      const resumedAt = els.audioPlayer.currentTime;
+      els.audioPlayer.currentTime = 2;
+      await playTrack(item, { restartIfCurrent: true });
+      return { resumedAt, restartedAt: els.audioPlayer.currentTime };
+    } finally {
+      els.audioPlayer.play = nativePlay;
+    }
+  })()`, true);
+  assert(
+    !currentTrackReplayState.error
+      && currentTrackReplayState.resumedAt > 1.5
+      && currentTrackReplayState.restartedAt < 0.1,
+    `current track click does not restart cleanly: ${JSON.stringify(currentTrackReplayState)}`
+  );
   const roseLyrics = await evaluate(client, `(async () => {
     const item = tracks.find(track => track.name === "Ma rose éternelle");
     if (!item) return null;

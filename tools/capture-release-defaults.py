@@ -15,6 +15,7 @@ DEFAULT_OUTPUT = PROJECT_ROOT / "release-defaults.json"
 PUBLIC_MUSIC_DIR = PROJECT_ROOT / "public-music"
 VALID_TIERS = {"first", "second", "third"}
 MODULE_KEYS = ("order", "archive", "deepArchive", "deleted", "lastModule")
+MUSIC_LAYOUT_VERSION = 1
 
 
 def read_json(path):
@@ -83,6 +84,16 @@ def capture_music(payload, previous):
         if packaged_name and clean_tier in VALID_TIERS:
             tiers[packaged_name] = clean_tier
 
+    if not tiers:
+        previous_tiers = previous.get("tiers") if isinstance(previous.get("tiers"), dict) else {}
+        for previous_path, tier in previous_tiers.items():
+            packaged_name = map_path(previous_path)
+            clean_tier = str(tier or "").strip().lower()
+            if packaged_name and clean_tier in VALID_TIERS:
+                tiers[packaged_name] = clean_tier
+    if packaged and not tiers:
+        raise RuntimeError("Refusing to publish an empty music tier layout")
+
     order = []
     for active_path in state.get("order") if isinstance(state.get("order"), list) else []:
         packaged_name = map_path(active_path)
@@ -99,6 +110,7 @@ def capture_music(payload, previous):
         raise RuntimeError(f"Captured {len(order)} of {len(packaged)} packaged music tracks")
 
     return {
+        "layoutVersion": MUSIC_LAYOUT_VERSION,
         "tiers": {name: tiers[name] for name in order if name in tiers},
         "order": order,
         "promotedLibraryTracks": {},

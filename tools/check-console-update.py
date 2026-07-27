@@ -89,6 +89,17 @@ def main():
         script = helper_script(launch)
         require(str(installer.resolve()) in script, "the wrong installer was handed to the helper")
         require("/VERYSILENT" in script and "/CLOSEAPPLICATIONS" in script, "Setup is not unattended")
+        require("_internal\\app-manifest.json" in script, "installed version is not verified")
+        require("Ensure-Shortcut" in script, "shortcuts are not repaired after update")
+        require(
+            "[string]::Equals($existing.TargetPath, $installedExecutable" in script,
+            "valid shortcuts are rewritten instead of preserved",
+        )
+        require("Setup finished but Codex Console.exe is missing." in script, "missing EXE is not detected")
+        require(
+            "if ($stoppedTarget -or $restartStopped -or $relaunchExecutable)" in script,
+            "the previous app is not restarted when Setup fails",
+        )
 
         stopped = threading.Event()
         service.shutdown_callback = stopped.set
@@ -103,6 +114,18 @@ def main():
         require(restarting["restarting"], "self-update did not enter restart mode")
         require(f"$waitPid = {os.getpid()}" in restart_script, "helper does not wait for Console")
         require("--no-browser" in restart_script, "Console is not relaunched without duplicating its window")
+
+        installer.write_bytes(b"MZtampered")
+        with (
+            patch("console_update.sys.platform", "win32"),
+            patch.object(service, "download", side_effect=ValueError("redownload required")),
+        ):
+            try:
+                service.install()
+            except ValueError as error:
+                require("redownload required" in str(error), "tampered Setup returned the wrong error")
+            else:
+                raise AssertionError("tampered Setup was launched")
 
         source_service = ConsoleUpdateService(
             app_dir,

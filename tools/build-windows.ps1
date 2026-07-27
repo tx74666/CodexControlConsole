@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.6.4",
+  [string]$Version = "0.7.0",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
   [string]$FeedbackEndpoint = $env:CODEX_FEEDBACK_ENDPOINT,
@@ -103,6 +103,7 @@ $DataItems = @(
   @{ Source = "app.js"; Destination = "." },
   @{ Source = "README.md"; Destination = "." },
   @{ Source = "release-defaults.json"; Destination = "." },
+  @{ Source = "music-loudness.json"; Destination = "." },
   @{ Source = "github-coop.json"; Destination = "." },
   @{ Source = "site.webmanifest"; Destination = "." },
   @{ Source = "favicon.ico"; Destination = "." },
