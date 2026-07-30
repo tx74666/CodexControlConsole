@@ -138,6 +138,7 @@ def main():
         "Get Lucky.mp3",
         "Around the World.mp3",
         "Airborne.mp3",
+        "Ma rose éternelle.mp3",
         "Luminescence.mp3",
         "Fire Inside.mp3",
         "Toxic.mp3",
@@ -146,12 +147,11 @@ def main():
         "Final Step.mp3",
         "Dancin.mp3",
         "House of Memories.mp3",
-        "Ma rose éternelle.mp3",
         "Never Slow Me Down.mp3",
     ]
     expected_tiers = {
         **{name: "first" for name in expected_order[:3]},
-        **{name: "second" for name in expected_order[3:8]},
+        **{name: "second" for name in expected_order[3:9]},
     }
     require(default_music.get("layoutVersion") == 1, "release music layout version is missing")
     require(set(default_music.get("order") or []) == PUBLIC_MUSIC, "release music order is incomplete")

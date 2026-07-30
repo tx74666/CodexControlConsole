@@ -70,7 +70,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "0.7.0", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "1.0.0", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -162,10 +162,11 @@ async function createPageClient(port, url) {
   return client;
 }
 
-async function evaluate(client, expression, awaitPromise = false) {
+async function evaluate(client, expression, awaitPromise = false, userGesture = false) {
   const result = await client.send("Runtime.evaluate", {
     expression,
     awaitPromise,
+    userGesture,
     returnByValue: true
   });
   if (result.exceptionDetails) {
@@ -433,7 +434,7 @@ async function runBrowserChecks(client) {
     const originalFetchStatus = fetchProductUpdateStatus;
     try {
       productUpdateStates = {
-        console: { currentVersion: '0.7.0', latestVersion: '0.7.0', available: false, autoCheck: true },
+        console: { currentVersion: '1.0.0', latestVersion: '1.0.0', available: false, autoCheck: true },
         world: {
           currentVersion: '0.3.1', latestVersion: '0.3.2', available: true,
           installed: true, autoCheck: true, canInstall: true
@@ -443,8 +444,8 @@ async function runBrowserChecks(client) {
       productUpdateBusy = true;
       waitForUpdatePoll = async () => {};
       fetchProductUpdateStatus = async product => ({
-        currentVersion: product === 'world' ? '0.3.2' : '0.7.0',
-        latestVersion: product === 'world' ? '0.3.2' : '0.7.0',
+        currentVersion: product === 'world' ? '0.3.2' : '1.0.0',
+        latestVersion: product === 'world' ? '0.3.2' : '1.0.0',
         available: false,
         installed: true,
         autoCheck: true,
@@ -1112,6 +1113,37 @@ async function runBrowserChecks(client) {
       && musicLoudnessState.elementVolume === 1,
     `Web Audio loudness chain is not configured correctly: ${JSON.stringify(musicLoudnessState)}`
   );
+  const nativePlaybackState = await evaluate(client, `(async () => {
+    const item = tracks.find(track => track.name === "Liquid Roller");
+    if (!item) return { error: "missing track" };
+    musicNotice = "";
+    await playTrack(item, { restartIfCurrent: true });
+    for (let attempt = 0; attempt < 40 && els.audioPlayer.paused && !musicNotice; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    const state = {
+      paused: els.audioPlayer.paused,
+      duration: els.audioPlayer.duration,
+      readyState: els.audioPlayer.readyState,
+      networkState: els.audioPlayer.networkState,
+      source: els.audioPlayer.currentSrc,
+      mediaError: els.audioPlayer.error?.message || "",
+      notice: musicNotice
+    };
+    musicPlaybackRequestId += 1;
+    els.audioPlayer.pause();
+    return state;
+  })()`, true, true);
+  assert(
+    !nativePlaybackState.error
+      && !nativePlaybackState.paused
+      && nativePlaybackState.duration > 120
+      && nativePlaybackState.readyState >= 2
+      && nativePlaybackState.source.includes("/music/")
+      && !nativePlaybackState.mediaError
+      && !nativePlaybackState.notice,
+    `native Liquid Roller playback failed: ${JSON.stringify(nativePlaybackState)}`
+  );
   const currentTrackReplayState = await evaluate(client, `(async () => {
     const item = tracks.find(track => track.name === "Luminescence");
     if (!item) return { error: "missing track" };
@@ -1147,6 +1179,64 @@ async function runBrowserChecks(client) {
       && currentTrackReplayState.resumedAt > 1.5
       && currentTrackReplayState.restartedAt < 0.1,
     `current track click does not restart cleanly: ${JSON.stringify(currentTrackReplayState)}`
+  );
+  const playbackInterruptionState = await evaluate(client, `(async () => {
+    const item = tracks.find(track => track.name === "Luminescence");
+    if (!item) return { error: "missing track" };
+    const nativePlay = els.audioPlayer.play;
+    try {
+      musicNotice = "";
+      els.audioPlayer.play = () => Promise.reject(new DOMException(
+        "The play() request was interrupted by a call to pause().",
+        "AbortError"
+      ));
+      await playTrack(item);
+      const interruptionNotice = musicNotice;
+
+      musicNotice = "";
+      els.audioPlayer.play = () => Promise.reject(new DOMException(
+        "The audio resource could not be decoded.",
+        "NotSupportedError"
+      ));
+      await playTrack(item);
+      return { interruptionNotice, genuineNotice: musicNotice };
+    } finally {
+      els.audioPlayer.play = nativePlay;
+    }
+  })()`, true);
+  assert(
+    !playbackInterruptionState.error
+      && playbackInterruptionState.interruptionNotice === ""
+      && playbackInterruptionState.genuineNotice.includes("could not be decoded"),
+    `playback interruption handling is wrong: ${JSON.stringify(playbackInterruptionState)}`
+  );
+  const unavailableSourceRecovery = await evaluate(client, `(async () => {
+    const item = tracks.find(track => track.name === "Liquid Roller");
+    if (!item) return { error: "missing track" };
+    const nativeLoad = els.audioPlayer.load;
+    const nativePlay = els.audioPlayer.play;
+    let loadCount = 0;
+    els.audioPlayer.src = item.url;
+    Object.defineProperty(els.audioPlayer, "networkState", {
+      configurable: true,
+      value: HTMLMediaElement.NETWORK_NO_SOURCE
+    });
+    els.audioPlayer.load = () => { loadCount += 1; };
+    els.audioPlayer.play = () => Promise.resolve();
+    try {
+      await playTrack(item);
+      return { loadCount, notice: musicNotice };
+    } finally {
+      delete els.audioPlayer.networkState;
+      els.audioPlayer.load = nativeLoad;
+      els.audioPlayer.play = nativePlay;
+    }
+  })()`, true);
+  assert(
+    !unavailableSourceRecovery.error
+      && unavailableSourceRecovery.loadCount === 1
+      && unavailableSourceRecovery.notice === "",
+    `an unavailable current source is not reloaded: ${JSON.stringify(unavailableSourceRecovery)}`
   );
   const roseLyrics = await evaluate(client, `(async () => {
     const item = tracks.find(track => track.name === "Ma rose éternelle");

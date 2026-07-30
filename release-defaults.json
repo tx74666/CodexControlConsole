@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-07-27T14:39:14Z",
+  "capturedAt": "2026-07-30T19:14:02Z",
   "music": {
     "layoutVersion": 1,
     "tiers": {
@@ -10,6 +10,7 @@
       "Get Lucky.mp3": "second",
       "Around the World.mp3": "second",
       "Airborne.mp3": "second",
+      "Ma rose éternelle.mp3": "second",
       "Luminescence.mp3": "second",
       "Fire Inside.mp3": "second"
     },
@@ -20,6 +21,7 @@
       "Get Lucky.mp3",
       "Around the World.mp3",
       "Airborne.mp3",
+      "Ma rose éternelle.mp3",
       "Luminescence.mp3",
       "Fire Inside.mp3",
       "Toxic.mp3",
@@ -28,7 +30,6 @@
       "Final Step.mp3",
       "Dancin.mp3",
       "House of Memories.mp3",
-      "Ma rose éternelle.mp3",
       "Never Slow Me Down.mp3"
     ],
     "promotedLibraryTracks": {}

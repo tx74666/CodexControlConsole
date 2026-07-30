@@ -44,8 +44,6 @@ def check_session_service():
     service = ConsoleWindowSessionService(
         shutdown.set,
         close_delay_seconds=0.12,
-        stale_after_seconds=1.0,
-        sweep_interval_seconds=0.05,
     )
     try:
         first = service.update({"action": "open", "sessionId": "window-one"})
@@ -70,18 +68,27 @@ def check_session_service():
     finally:
         service.stop()
 
-    stale_shutdown = threading.Event()
-    stale_service = ConsoleWindowSessionService(
-        stale_shutdown.set,
+    background_shutdown = threading.Event()
+    background_service = ConsoleWindowSessionService(
+        background_shutdown.set,
         close_delay_seconds=0.05,
-        stale_after_seconds=0.12,
-        sweep_interval_seconds=0.03,
     )
     try:
-        stale_service.update({"action": "open", "sessionId": "stale-window"})
-        require(stale_shutdown.wait(1.0), "an abandoned window session was not cleaned up")
+        background_service.update({"action": "open", "sessionId": "background-window"})
+        time.sleep(0.3)
+        require(
+            not background_shutdown.is_set(),
+            "a background or throttled window was mistaken for a closed window",
+        )
+        heartbeat = background_service.update({
+            "action": "heartbeat",
+            "sessionId": "background-window",
+        })
+        require(heartbeat["activeSessions"] == 1, "background heartbeat duplicated the session")
+        background_service.update({"action": "close", "sessionId": "background-window"})
+        require(background_shutdown.wait(1.0), "an explicitly closed window left the backend running")
     finally:
-        stale_service.stop()
+        background_service.stop()
 
     try:
         service.update({"action": "invalid", "sessionId": "window-one"})
@@ -96,6 +103,7 @@ def check_live_server():
     environment = os.environ.copy()
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     with tempfile.TemporaryDirectory(prefix="codex-console-lifecycle-") as temporary:
+        Path(temporary, ".cache-migrated-v0.3").write_text("test\n", encoding="utf-8")
         environment["CODEX_CONTROL_DATA_DIR"] = temporary
         process = subprocess.Popen(
             [

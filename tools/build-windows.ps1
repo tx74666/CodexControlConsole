@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.7.0",
+  [string]$Version = "1.0.0",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
   [string]$FeedbackEndpoint = $env:CODEX_FEEDBACK_ENDPOINT,

@@ -2073,6 +2073,7 @@ let musicLibraryPollTimer = null;
 let musicStatePersistTimer = null;
 let consoleStatePersistTimer = null;
 let playbackMode = normalizePlaybackMode(localStorage.getItem(storageKeys.playbackMode));
+let musicPlaybackRequestId = 0;
 let draggedModuleId = "";
 let draggedTrackPath = "";
 let currentMusicDropTargetKey = "";
@@ -15533,6 +15534,7 @@ async function deleteTrack(item) {
     if (wasCurrentTrack) {
       const nextTrack = allMusicTracks().find(track => track.path === nextPath) || null;
       if (els.audioPlayer.src) {
+        musicPlaybackRequestId += 1;
         els.audioPlayer.pause();
         els.audioPlayer.removeAttribute("src");
         els.audioPlayer.load();
@@ -15575,33 +15577,49 @@ async function applyWallpaper(item = selectedWallpaper()) {
 
 async function playTrack(item = selectedTrack(), options = {}) {
   if (!item) return;
+  const playbackRequestId = ++musicPlaybackRequestId;
   const shouldRefreshLyrics = Boolean(musicLyricsTrackPath);
   setSelectedTrackPath(item.path, { persist: "now" });
 
   const nextUrl = new URL(item.url, window.location.href).href;
   const isCurrentSource = els.audioPlayer.src === nextUrl;
-  if (options.restartIfCurrent && isCurrentSource) {
-    resetEndedTrackToStart();
-  } else if (!isCurrentSource) {
+  const currentSourceUnavailable = isCurrentSource && (
+    Boolean(els.audioPlayer.error)
+    || els.audioPlayer.networkState === HTMLMediaElement.NETWORK_NO_SOURCE
+  );
+  if (!isCurrentSource || currentSourceUnavailable) {
     els.audioPlayer.src = item.url;
     els.audioPlayer.load();
+  } else if (options.restartIfCurrent) {
+    resetEndedTrackToStart();
   }
 
   try {
     prepareMusicAudioPlayback(item);
     await els.audioPlayer.play();
+    if (playbackRequestId !== musicPlaybackRequestId) return;
     musicNotice = "";
     renderMusic();
     if (shouldRefreshLyrics) {
       loadLyricsForTrack(item);
     }
   } catch (error) {
+    if (playbackRequestId !== musicPlaybackRequestId || isExpectedPlaybackInterruption(error)) return;
     musicNotice = text("musicPlayFailed", error.message);
     renderMusic();
     if (shouldRefreshLyrics) {
       loadLyricsForTrack(item);
     }
   }
+}
+
+function isExpectedPlaybackInterruption(error) {
+  if (!error) return false;
+  if (error.name === "AbortError") return true;
+  const message = String(error.message || error);
+  return /play\(\) request was interrupted/i.test(message)
+    || /interrupted by a call to pause/i.test(message)
+    || /interrupted by a new load request/i.test(message);
 }
 
 async function togglePlayback() {
@@ -15616,6 +15634,7 @@ async function togglePlayback() {
   if (els.audioPlayer.paused) {
     await playTrack(item);
   } else {
+    musicPlaybackRequestId += 1;
     els.audioPlayer.pause();
     renderMusic();
   }
@@ -17656,6 +17675,7 @@ if (hasMusic) els.audioPlayer.addEventListener("ended", () => {
 });
 if (hasMusic) els.audioPlayer.addEventListener("error", () => {
   stopLyricsAnimationLoop();
+  if (els.audioPlayer.error?.code === 1) return;
   musicNotice = text("musicPlayFailed", "unsupported or unavailable audio");
   renderMusic();
 });
