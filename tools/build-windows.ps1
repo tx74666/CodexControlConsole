@@ -1,7 +1,9 @@
 param(
-  [string]$Version = "1.0.0",
+  [string]$Version = "1.0.1",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
+  [ValidateSet("All", "Application", "Installer")]
+  [string]$Stage = "All",
   [string]$FeedbackEndpoint = $env:CODEX_FEEDBACK_ENDPOINT,
   [string]$FeedbackTurnstileSiteKey = $env:CODEX_FEEDBACK_TURNSTILE_SITE_KEY
 )
@@ -25,6 +27,8 @@ if (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
 }
 $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $BuildRoot = Join-Path $ProjectRoot "build\console-installer"
+$BuildApplication = $Stage -in @("All", "Application")
+$BuildInstaller = $Stage -in @("All", "Installer")
 
 function Remove-SafeBuildDirectory {
   param([string]$Path)
@@ -54,7 +58,24 @@ function Resolve-InnoCompiler {
   throw "Inno Setup compiler was not found. Install Inno Setup 7 or set INNO_SETUP_COMPILER."
 }
 
-Remove-SafeBuildDirectory -Path $BuildRoot
+function Resolve-CSharpCompiler {
+  $candidates = @(
+    (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+    (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
+  )
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate) {
+      return (Resolve-Path -LiteralPath $candidate).Path
+    }
+  }
+  throw "The Windows C# compiler was not found. NativeFileDrag.exe must be built from source."
+}
+
+if ($BuildApplication) {
+  Remove-SafeBuildDirectory -Path $BuildRoot
+} elseif (-not (Test-Path -LiteralPath $BuildRoot)) {
+  throw "Application build output is missing. Run the Application stage before Installer."
+}
 New-Item -ItemType Directory -Force -Path $BuildRoot, $OutputDir | Out-Null
 
 @(
@@ -68,21 +89,41 @@ New-Item -ItemType Directory -Force -Path $BuildRoot, $OutputDir | Out-Null
     Remove-Item -Force
 }
 
-$ManifestPath = Join-Path $BuildRoot "app-manifest.json"
-$Manifest = [ordered]@{
-  name = "Codex Control Console"
-  version = $Version
-  repository = "tx74666/CodexControlConsole"
-  channel = "stable"
-  installMode = "installed"
-  edition = "public"
-  feedbackEndpoint = ([string]$FeedbackEndpoint).Trim()
-  feedbackTurnstileSiteKey = ([string]$FeedbackTurnstileSiteKey).Trim()
-}
-$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json -Depth 5) + [Environment]::NewLine, $Utf8NoBom)
+if ($BuildApplication) {
+  $ManifestPath = Join-Path $BuildRoot "app-manifest.json"
+  $Manifest = [ordered]@{
+    name = "Codex Control Console"
+    version = $Version
+    repository = "tx74666/CodexControlConsole"
+    channel = "stable"
+    installMode = "installed"
+    edition = "public"
+    feedbackEndpoint = ([string]$FeedbackEndpoint).Trim()
+    feedbackTurnstileSiteKey = ([string]$FeedbackTurnstileSiteKey).Trim()
+  }
+  $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json -Depth 5) + [Environment]::NewLine, $Utf8NoBom)
 
-$PublicWallpaperFiles = @(
+  $GeneratedToolsDir = Join-Path $BuildRoot "generated-tools"
+  New-Item -ItemType Directory -Force -Path $GeneratedToolsDir | Out-Null
+  $NativeFileDragSource = Join-Path $ProjectRoot "tools\NativeFileDrag.cs"
+  $NativeFileDragExe = Join-Path $GeneratedToolsDir "NativeFileDrag.exe"
+  $CSharpCompiler = Resolve-CSharpCompiler
+  & $CSharpCompiler `
+    /nologo `
+    /target:winexe `
+    /platform:x64 `
+    /optimize+ `
+    /reference:System.dll `
+    /reference:System.Drawing.dll `
+    /reference:System.Windows.Forms.dll `
+    "/out:$NativeFileDragExe" `
+    $NativeFileDragSource
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $NativeFileDragExe)) {
+    throw "NativeFileDrag.exe could not be compiled from source."
+  }
+
+  $PublicWallpaperFiles = @(
   "README.txt",
   "SOURCES.md",
   "blue-lake-boats.jpg",
@@ -94,7 +135,7 @@ $PublicWallpaperFiles = @(
   "wandering-witch.jpg"
 )
 
-$DataItems = @(
+  $DataItems = @(
   @{ Source = $ManifestPath; Destination = "." },
   @{ Source = "index.html"; Destination = "." },
   @{ Source = "music.html"; Destination = "." },
@@ -119,20 +160,21 @@ $DataItems = @(
   @{ Source = "pc-console-icon.png"; Destination = "." },
   @{ Source = "pc-console-preview.png"; Destination = "." },
   @{ Source = "public-music"; Destination = "music" },
-  @{ Source = "tools\NativeFileDrag.exe"; Destination = "tools" },
+  @{ Source = $NativeFileDragExe; Destination = "tools" },
   @{ Source = "tools\NativeFileDrag.cs"; Destination = "tools" },
   @{ Source = "tools\blender_live_selection_bridge.py"; Destination = "tools" },
   @{ Source = "tools\DesktopLayout.ps1"; Destination = "tools" }
 )
 
-foreach ($wallpaper in $PublicWallpaperFiles) {
-  $DataItems += @{ Source = "wallpapers\$wallpaper"; Destination = "wallpapers" }
-}
+  foreach ($wallpaper in $PublicWallpaperFiles) {
+    $DataItems += @{ Source = "wallpapers\$wallpaper"; Destination = "wallpapers" }
+  }
 
-$PyInstallerArgs = @(
+  $PyInstallerArgs = @(
   "-m", "PyInstaller",
   "--noconfirm",
   "--clean",
+  "--noupx",
   "--onedir",
   "--windowed",
   "--name", "Codex Console",
@@ -145,23 +187,29 @@ $PyInstallerArgs = @(
   "--collect-all", "yt_dlp"
 )
 
-foreach ($item in $DataItems) {
-  $source = if ([System.IO.Path]::IsPathRooted($item.Source)) { $item.Source } else { Join-Path $ProjectRoot $item.Source }
-  if (Test-Path -LiteralPath $source) {
-    $PyInstallerArgs += @("--add-data", "$source;$($item.Destination)")
+  foreach ($item in $DataItems) {
+    $source = if ([System.IO.Path]::IsPathRooted($item.Source)) { $item.Source } else { Join-Path $ProjectRoot $item.Source }
+    if (Test-Path -LiteralPath $source) {
+      $PyInstallerArgs += @("--add-data", "$source;$($item.Destination)")
+    }
   }
-}
-$PyInstallerArgs += (Join-Path $ProjectRoot "world_console.py")
+  $PyInstallerArgs += (Join-Path $ProjectRoot "world_console.py")
 
-& $Python @PyInstallerArgs
-if ($LASTEXITCODE -ne 0) {
-  throw "PyInstaller failed with exit code $LASTEXITCODE."
+  & $Python @PyInstallerArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller failed with exit code $LASTEXITCODE."
+  }
 }
 
 $AppDir = Join-Path $BuildRoot "dist\Codex Console"
 $AppExe = Join-Path $AppDir "Codex Console.exe"
 if (-not (Test-Path -LiteralPath $AppExe)) {
   throw "Codex Console executable was not created."
+}
+
+if (-not $BuildInstaller) {
+  Write-Host "Created application bundle $AppDir"
+  exit 0
 }
 
 $TargetInstaller = Join-Path $OutputDir "CodexControlConsole-Setup-x64.exe"

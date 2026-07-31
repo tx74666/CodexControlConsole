@@ -61,20 +61,24 @@ Install Python 3.12 x64, PyInstaller, Pillow, yt-dlp, and Inno Setup 7, then run
 
 ```powershell
 python -m pip install pyinstaller pillow yt-dlp
-.\tools\build-windows.ps1 -Version 1.0.0 -OutputDir dist
+.\tools\build-windows.ps1 -Version 1.0.1 -OutputDir dist
 ```
 
-The result is `dist\CodexControlConsole-Setup-x64.exe`.
+The result is `dist\CodexControlConsole-Setup-x64.exe`. A local build is unsigned and is only for development and security testing; it must not be published.
 
 ## Publish A Release
 
 The release helper retries intermittent GitHub connections, pushes `main`, creates the version tag, and waits until the single Windows x64 Setup asset is available:
 
 ```powershell
-.\tools\publish-release.ps1 -Version 1.0.0
+.\tools\publish-release.ps1 -Version 1.0.1
 ```
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.
+
+Public releases are fail-closed. GitHub Actions first builds the application, signs every packaged `exe`, `dll`, and `pyd`, verifies those signatures, builds and signs Setup, recursively verifies again, and finally scans the main executable, native drag helper, and Setup with Microsoft Defender. The workflow stops before publishing if any signature is missing, Defender reports a threat, or any Artifact Signing setting is absent.
+
+Required repository variables are `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, and `ARTIFACT_SIGNING_PROFILE`. Required secrets are `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET`. The certificate profile must use a publicly trusted signing identity; self-signed and test profiles are not release identities.
 
 ## Checks
 
@@ -85,10 +89,11 @@ python .\tools\check-feedback.py
 python .\tools\check-blender-github-share.py
 python .\tools\check-console-update.py
 python .\tools\check-desktop-layout.py
+python .\tools\check-release-security.py
 ```
 
 Blender > Helper > GitHub Coop lists repositories from `github-coop.json`. GitHub Desktop handles authentication, clone, commits, pull, and push.
 
 Codex Console checks the selected repository against GitHub when Blender Helper opens and whenever Refresh is pressed. A cloud card guides first-time users into Clone; a local card reports remote updates, uncommitted work, pending pushes, or a synchronized state. Before editing a `.blend`, pull the latest version and make sure nobody else is editing that same binary file. When finished, save and close Blender, then commit and push through GitHub Desktop. External textures and references must be packed into the `.blend` or intentionally included in the repository.
 
-The release workflow can sign Setup with Microsoft Artifact Signing when its Azure secrets and repository variables are configured. Self-signing is intentionally not used because it does not establish public Windows trust.
+The release workflow requires Microsoft Artifact Signing and cannot publish an unsigned Setup. `NativeFileDrag.exe` is compiled from `NativeFileDrag.cs` during every clean application build instead of packaging the repository's precompiled helper. Self-signing is intentionally not used because it does not establish public Windows trust.

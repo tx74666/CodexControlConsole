@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v1.0.0
+        description: Release version, for example v1.0.1
         required: true
-        default: v1.0.0
+        default: v1.0.1
   push:
     tags:
       - "v*"
@@ -34,6 +34,29 @@ jobs:
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Require Artifact Signing configuration
+        shell: pwsh
+        env:
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          $required = @(
+            "ARTIFACT_SIGNING_ENDPOINT",
+            "ARTIFACT_SIGNING_ACCOUNT",
+            "ARTIFACT_SIGNING_PROFILE",
+            "AZURE_TENANT_ID",
+            "AZURE_CLIENT_ID",
+            "AZURE_CLIENT_SECRET"
+          )
+          $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+          if ($missing.Count -gt 0) {
+            throw "Public release blocked. Missing trusted signing configuration: $($missing -join ', ')"
+          }
+
       - name: Set up Python x64
         uses: actions/setup-python@v5
         with:
@@ -42,7 +65,7 @@ jobs:
 
       - name: Install build dependencies
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check pyinstaller pillow yt-dlp
+        run: python -m pip install --disable-pip-version-check pyinstaller==6.21.0 pillow==12.3.0 yt-dlp==2026.3.17
 
       - name: Test feedback and update services
         shell: pwsh
@@ -55,6 +78,7 @@ jobs:
           python tools/check-clean-uninstall.py
           python tools/check-wallpaper-style.py
           python tools/check-built-in-media-sync.py
+          python tools/check-release-security.py
           node --test services/feedback-relay/test/feedback.test.js
 
       - name: Install Inno Setup 7 x64
@@ -69,14 +93,47 @@ jobs:
           if (-not (Test-Path -LiteralPath $compiler)) { throw "ISCC.exe was not installed" }
           "INNO_SETUP_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Build Windows x64 application
+        shell: pwsh
+        run: |
+          ./tools/build-windows.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -OutputDir dist `
+            -Stage Application `
+            -FeedbackEndpoint '${{ vars.CODEX_FEEDBACK_ENDPOINT }}' `
+            -FeedbackTurnstileSiteKey '${{ vars.CODEX_FEEDBACK_TURNSTILE_SITE_KEY }}'
+
+      - name: Sign application PE files
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\build\console-installer\dist\Codex Console
+          files-folder-filter: exe,dll,pyd
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify application PE signatures
+        shell: pwsh
+        run: |
+          ./tools/check-authenticode-signatures.ps1 `
+            -Root "build\console-installer\dist\Codex Console" `
+            -Extensions @("exe", "dll", "pyd") `
+            -RequiredRelativePaths @("Codex Console.exe", "_internal\tools\NativeFileDrag.exe")
+
       - name: Build Windows x64 Setup
         shell: pwsh
         run: |
           ./tools/build-windows.ps1 `
             -Version $env:RELEASE_VERSION `
             -OutputDir dist `
-            -FeedbackEndpoint '${{ vars.CODEX_FEEDBACK_ENDPOINT }}' `
-            -FeedbackTurnstileSiteKey '${{ vars.CODEX_FEEDBACK_TURNSTILE_SITE_KEY }}'
+            -Stage Installer
 
       - name: Verify packaged resources and shortcuts
         shell: pwsh
@@ -84,31 +141,36 @@ jobs:
           python tools/check-package-resources.py
           python tools/check-clean-install-media.py
 
-      - name: Sign Setup with Microsoft Artifact Signing
-        if: ${{ vars.ARTIFACT_SIGNING_ENDPOINT != '' }}
-        uses: azure/trusted-signing-action@v0
+      - name: Sign Windows Setup
+        uses: azure/artifact-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
-          files-folder: ${{ github.workspace }}\dist
-          files-folder-filter: exe
-          files-folder-recurse: false
+          files: ${{ github.workspace }}\dist\CodexControlConsole-Setup-x64.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Verify signed Setup
-        if: ${{ vars.ARTIFACT_SIGNING_ENDPOINT != '' }}
+      - name: Verify signed Windows Setup
         shell: pwsh
         run: |
-          $signature = Get-AuthenticodeSignature "dist\CodexControlConsole-Setup-x64.exe"
-          if ($signature.Status -ne "Valid") {
-            throw "Setup signature is not valid: $($signature.Status)"
-          }
+          ./tools/check-authenticode-signatures.ps1 `
+            -Root dist `
+            -Extensions @("exe") `
+            -RequiredRelativePaths @("CodexControlConsole-Setup-x64.exe")
+
+      - name: Defender scan release artifacts
+        shell: pwsh
+        run: |
+          ./tools/check-defender-artifacts.ps1 -Files @(
+            "build\console-installer\dist\Codex Console\Codex Console.exe",
+            "build\console-installer\dist\Codex Console\_internal\tools\NativeFileDrag.exe",
+            "dist\CodexControlConsole-Setup-x64.exe"
+          )
 
       - name: Verify single download
         shell: pwsh
@@ -131,7 +193,9 @@ jobs:
 
             Download only **CodexControlConsole-Setup-x64.exe**.
 
-            Codex Console 1.0 keeps the publisher's current 16-track tiers and ordering, prevents a background or minimized window from losing its local service, and automatically reloads an audio source after a transient service interruption.
+            Codex Console v1.0.1 keeps the publisher's current 16-track tiers and ordering, prevents a background or minimized window from losing its local service, and automatically reloads an audio source after a transient service interruption.
+
+            This download is published only after every packaged Windows executable is signed with the same trusted identity, all signatures are verified, and Microsoft Defender accepts the final Setup.
 
             1. Double-click the downloaded Setup file.
             2. Choose **Simplified Chinese** or **English**.
@@ -142,7 +206,9 @@ jobs:
 
             只需下载 **CodexControlConsole-Setup-x64.exe**。
 
-            Codex Console 1.0 会保留发布者当前的 16 首歌曲分级与顺序；后台或最小化窗口不再误关本地服务，服务短暂中断后播放器也会自动重新载入音频。
+            Codex Console v1.0.1 会保留发布者当前的 16 首歌曲分级与顺序；后台或最小化窗口不再误关本地服务，服务短暂中断后播放器也会自动重新载入音频。
+
+            这个下载包只会在所有 Windows 可执行文件均由同一可信身份签名、签名全部验证通过，并且最终安装包通过 Microsoft Defender 扫描后发布。
 
             1. 双击下载好的安装程序。
             2. 选择 **简体中文** 或 **English**。

@@ -70,7 +70,7 @@ if ($CheckConnection) {
 
 $Version = $Version.Trim().TrimStart("v")
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-  throw "Version is required and must use semantic versioning, for example 1.0.0."
+  throw "Version is required and must use semantic versioning, for example 1.0.1."
 }
 
 $Tag = "v$Version"
@@ -109,7 +109,8 @@ if (-not $SkipChecks) {
     throw "Node.js was not found. Install Node.js or use the bundled Codex runtime."
   }
 
-  Invoke-CheckedCommand "Python syntax" { python -m py_compile world_console.py console_window_session.py console_update.py world_update.py tools\capture-release-defaults.py tools\check-release-defaults.py tools\check-built-in-media-sync.py tools\check-console-lifecycle.py }
+  Invoke-CheckedCommand "Python syntax" { python -m py_compile world_console.py console_window_session.py console_update.py world_update.py tools\capture-release-defaults.py tools\check-release-defaults.py tools\check-built-in-media-sync.py tools\check-console-lifecycle.py tools\check-release-security.py }
+  Invoke-CheckedCommand "Release security" { python tools\check-release-security.py }
   Invoke-CheckedCommand "Release defaults" { python tools\check-release-defaults.py }
   Invoke-CheckedCommand "Built-in media sync" { python tools\check-built-in-media-sync.py }
   Invoke-CheckedCommand "Feedback service" { python tools\check-feedback.py }
