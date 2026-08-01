@@ -1,0 +1,91 @@
+name: Audit Windows x64 Setup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Build and scan without publishing
+    runs-on: windows-2025
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+          architecture: x64
+
+      - name: Install locked build dependencies
+        shell: pwsh
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --only-binary=:all:
+          -r tools/windows-release-requirements.txt
+
+      - name: Install Inno Setup 7 x64
+        shell: pwsh
+        run: |
+          $download = Join-Path $env:RUNNER_TEMP "innosetup-7.0.2-x64.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP "Inno Setup 7"
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-7_0_2/innosetup-7.0.2-x64.exe" -OutFile $download
+          $process = Start-Process -FilePath $download -ArgumentList "/CURRENTUSER", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/DIR=`"$installDir`"" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed: $($process.ExitCode)" }
+          $compiler = Join-Path $installDir "ISCC.exe"
+          if (-not (Test-Path -LiteralPath $compiler)) { throw "ISCC.exe was not installed" }
+          "INNO_SETUP_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Verify release security rules
+        shell: pwsh
+        run: python tools/check-release-security.py
+
+      - name: Build unsigned audit Setup
+        shell: pwsh
+        run: |
+          ./tools/build-windows.ps1 `
+            -Version 1.0.1 `
+            -OutputDir dist-audit `
+            -Stage All `
+            -FeedbackEndpoint '${{ vars.CODEX_FEEDBACK_ENDPOINT }}' `
+            -FeedbackTurnstileSiteKey '${{ vars.CODEX_FEEDBACK_TURNSTILE_SITE_KEY }}'
+
+      - name: Verify packaged resources
+        shell: pwsh
+        run: |
+          python tools/check-package-resources.py
+          python tools/check-clean-install-media.py
+
+      - name: Defender scan audit artifacts
+        shell: pwsh
+        run: |
+          ./tools/check-defender-artifacts.ps1 -Files @(
+            "build\console-installer\dist\Codex Console\Codex Console.exe",
+            "build\console-installer\dist\Codex Console\_internal\tools\NativeFileDrag.exe",
+            "dist-audit\CodexControlConsole-Setup-x64.exe"
+          )
+
+      - name: Record audit hashes
+        shell: pwsh
+        run: |
+          @(
+            "build\console-installer\dist\Codex Console\Codex Console.exe",
+            "build\console-installer\dist\Codex Console\_internal\tools\NativeFileDrag.exe",
+            "dist-audit\CodexControlConsole-Setup-x64.exe"
+          ) | ForEach-Object {
+            $item = Get-Item -LiteralPath $_
+            $hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256
+            "- ``$($item.Name)``: ``$($hash.Hash)`` ($($item.Length) bytes)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+
+      - name: Confirm audit remains private
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath "dist") {
+            throw "Audit output must not use the public release directory."
+          }
+          Write-Host "PASS audit artifacts were scanned locally on the runner and were not uploaded or released."

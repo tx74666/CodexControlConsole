@@ -17,7 +17,9 @@ def position(text, value):
 
 def main():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    audit_workflow = (ROOT / ".github" / "workflows" / "security-audit.yml").read_text(encoding="utf-8")
     build = (ROOT / "tools" / "build-windows.ps1").read_text(encoding="utf-8")
+    requirements = (ROOT / "tools" / "windows-release-requirements.txt").read_text(encoding="utf-8")
 
     require("Require Artifact Signing configuration" in workflow, "signing configuration is not mandatory")
     require("azure/artifact-signing-action@v2" in workflow, "current Artifact Signing action is not used")
@@ -40,6 +42,29 @@ def main():
     require("files-folder-recurse: true" in workflow, "application signing is not recursive")
     require("check-authenticode-signatures.ps1" in workflow, "recursive signature verification is missing")
     require("check-defender-artifacts.ps1" in workflow, "Defender release scan is missing")
+    require('runs-on: windows-2025' in workflow, "release runner is not locked to the known baseline")
+    require('python-version: "3.12.10"' in workflow, "release Python is not locked to the known baseline")
+    require("windows-release-requirements.txt" in workflow, "release dependencies are not installed from the lock file")
+
+    require("workflow_dispatch:" in audit_workflow, "security audit cannot be started manually")
+    require("push:" not in audit_workflow, "security audit must never run as a publishing trigger")
+    require("check-defender-artifacts.ps1" in audit_workflow, "security audit does not scan with Defender")
+    require("upload-artifact" not in audit_workflow, "unsigned audit artifacts must not be uploaded")
+    require("action-gh-release" not in audit_workflow, "security audit must not publish a release")
+    require("dist-audit" in audit_workflow, "security audit output is not isolated")
+
+    locked_packages = {
+        "altgraph==0.17.5",
+        "packaging==26.2",
+        "pefile==2024.8.26",
+        "pillow==12.3.0",
+        "pyinstaller==6.21.0",
+        "pyinstaller-hooks-contrib==2026.6",
+        "pywin32-ctypes==0.2.3",
+        "setuptools==83.0.0",
+        "yt-dlp==2026.7.4",
+    }
+    require(set(requirements.splitlines()) == locked_packages, "Windows release dependency lock changed unexpectedly")
 
     require("Resolve-CSharpCompiler" in build, "NativeFileDrag compiler discovery is missing")
     require("NativeFileDrag.exe could not be compiled from source" in build, "NativeFileDrag build is not enforced")

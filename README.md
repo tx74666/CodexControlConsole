@@ -76,7 +76,9 @@ The release helper retries intermittent GitHub connections, pushes `main`, creat
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.
 
-Public releases are fail-closed. GitHub Actions first builds the application, signs every packaged `exe`, `dll`, and `pyd`, verifies those signatures, builds and signs Setup, recursively verifies again, and finally scans the main executable, native drag helper, and Setup with Microsoft Defender. The workflow stops before publishing if any signature is missing, Defender reports a threat, or any Artifact Signing setting is absent.
+Public releases are fail-closed. GitHub Actions uses the same Windows 2025, Python 3.12.10, PyInstaller 6.21.0, and dependency baseline as the clean v0.7.0 build. It first builds the application, signs every packaged `exe`, `dll`, and `pyd`, verifies those signatures, builds and signs Setup, recursively verifies again, and finally scans the main executable, native drag helper, and Setup with Microsoft Defender. The workflow stops before publishing if any signature is missing, Defender reports a threat, or any Artifact Signing setting is absent.
+
+The manual `Audit Windows x64 Setup` workflow reproduces the build and Defender scan without signing, uploading, or publishing its temporary installer. Use it to compare a candidate with an earlier release while trusted signing is being configured.
 
 Required repository variables are `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, and `ARTIFACT_SIGNING_PROFILE`. Required secrets are `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET`. The certificate profile must use a publicly trusted signing identity; self-signed and test profiles are not release identities.
 
