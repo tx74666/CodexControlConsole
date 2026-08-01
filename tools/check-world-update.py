@@ -111,6 +111,30 @@ def main():
         else:
             raise AssertionError("source checkout was overwritten by Setup")
 
+        store_service = WorldUpdateService(
+            app_dir,
+            root / "store-user-data",
+            root / "store-world-missing",
+            store_managed=True,
+            store_product_id="9WORLDTEST",
+        )
+        store_service._write_state(state)
+        with patch.object(store_service, "_request", side_effect=AssertionError("Store build contacted GitHub")):
+            store_status = store_service.status(check=True, force=True)
+        require(store_status["managedByStore"], "Store did not own Codex World acquisition")
+        require(not store_status["available"] and not store_status["canInstall"], "Store build exposed World Setup")
+        require(
+            store_status["releaseUrl"] == "ms-windows-store://pdp/?ProductId=9WORLDTEST",
+            "World Store product link is wrong",
+        )
+        for operation in (store_service.download, store_service.install):
+            try:
+                operation()
+            except ValueError as error:
+                require("Microsoft Store" in str(error), "World Store guard returned the wrong error")
+            else:
+                raise AssertionError("Store build launched the external World installer")
+
     print("PASS Codex World Setup updater")
 
 

@@ -1,0 +1,74 @@
+name: Audit Microsoft Store MSIX
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Build and scan Store package without publishing
+    runs-on: windows-2025
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+          architecture: x64
+
+      - name: Install locked build dependencies
+        shell: pwsh
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --only-binary=:all:
+          -r tools/windows-release-requirements.txt
+
+      - name: Test Store update and uninstall ownership
+        shell: pwsh
+        run: |
+          python tools/check-console-update.py
+          python tools/check-world-update.py
+          python tools/check-clean-uninstall.py
+          python tools/check-release-security.py
+
+      - name: Read application version
+        shell: pwsh
+        run: |
+          $version = [string](Get-Content app-manifest.json -Raw | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "app-manifest.json contains an invalid version: $version"
+          }
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build development-identity MSIX
+        shell: pwsh
+        env:
+          FEEDBACK_ENDPOINT: ${{ vars.CODEX_FEEDBACK_ENDPOINT }}
+          FEEDBACK_SITE_KEY: ${{ vars.CODEX_FEEDBACK_TURNSTILE_SITE_KEY }}
+        run: |
+          ./tools/build-store-msix.ps1 `
+            -OutputDir dist-store `
+            -FeedbackEndpoint $env:FEEDBACK_ENDPOINT `
+            -FeedbackTurnstileSiteKey $env:FEEDBACK_SITE_KEY
+
+      - name: Defender scan Store artifacts
+        shell: pwsh
+        run: |
+          ./tools/check-defender-artifacts.ps1 -Files @(
+            "build\store-msix\staging\Codex Console.exe",
+            "build\store-msix\staging\_internal\tools\NativeFileDrag.exe",
+            "dist-store\CodexConsole-$env:APP_VERSION-x64.msix"
+          )
+
+      - name: Confirm audit remains private
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath "dist") {
+            throw "Store audit output must not use the public release directory."
+          }
+          Write-Host "PASS MSIX was tested on the runner and was not uploaded or published."

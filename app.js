@@ -35,6 +35,7 @@ const releaseDefaults = window.CODEX_RELEASE_DEFAULTS && typeof window.CODEX_REL
 const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_DEVICE_LAYOUT === "object"
   ? window.CODEX_DEVICE_LAYOUT
   : {};
+const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
 let consoleWindowHeartbeatTimer = 0;
@@ -885,6 +886,7 @@ const i18n = {
     addWorkspaceTodo: "加入",
     resetWorkspaceTodo: "重置为新任务清单",
     githubDownloadsTitle: "GitHub 下载",
+    storeUpdatesTitle: "Microsoft Store 更新",
     githubDownloadsStatus: "待连接",
     githubDownloadsReady: "已定位",
     githubDownloadsMissing: "未连接",
@@ -897,6 +899,7 @@ const i18n = {
     githubDownloadsOpenFailed: message => `打开 GitHub 下载页失败：${message}`,
     consoleUpdateChecking: "正在检查",
     consoleUpdateLatest: "已是最新版",
+    consoleUpdateManagedByStore: "由 Microsoft Store 管理",
     consoleUpdateAvailable: version => `可更新到 v${version}`,
     consoleUpdateNoRelease: "尚未找到发布版",
     consoleUpdateAuto: "自动",
@@ -1623,6 +1626,7 @@ const i18n = {
     addWorkspaceTodo: "Add",
     resetWorkspaceTodo: "Reset new task set",
     githubDownloadsTitle: "GitHub Downloads",
+    storeUpdatesTitle: "Microsoft Store Updates",
     githubDownloadsStatus: "Not linked",
     githubDownloadsReady: "Ready",
     githubDownloadsMissing: "Not linked",
@@ -1635,6 +1639,7 @@ const i18n = {
     githubDownloadsOpenFailed: message => `Could not open GitHub downloads: ${message}`,
     consoleUpdateChecking: "Checking",
     consoleUpdateLatest: "Up to date",
+    consoleUpdateManagedByStore: "Managed by Microsoft Store",
     consoleUpdateAvailable: version => `v${version} available`,
     consoleUpdateNoRelease: "No release found",
     consoleUpdateAuto: "Auto",
@@ -7167,7 +7172,9 @@ function renderMusicLibraries() {
     els.musicLibraryDock.appendChild(createTrackCard(item));
   }
 
-  els.musicLibraryDock.appendChild(createMusicLibraryAddCard());
+  if (!storeManagedInstall) {
+    els.musicLibraryDock.appendChild(createMusicLibraryAddCard());
+  }
 }
 
 function setMusicImportBusy(isBusy) {
@@ -7215,8 +7222,27 @@ function setMusicAddMenuOpen(isOpen) {
 function toggleMusicAddMenu(event) {
   event.preventDefault();
   event.stopPropagation();
+  if (storeManagedInstall) {
+    openAddMusicPicker();
+    return;
+  }
   const shouldOpen = Boolean(els.musicAddMenu?.hidden);
   setMusicAddMenuOpen(shouldOpen);
+}
+
+function applyInstallModePolicy() {
+  if (!storeManagedInstall) return;
+  if (els.musicAddMenu) els.musicAddMenu.hidden = true;
+  if (els.addMusic) {
+    els.addMusic.removeAttribute("aria-haspopup");
+    els.addMusic.removeAttribute("aria-expanded");
+  }
+  const updateHeading = document.getElementById("workspaceTitle");
+  if (updateHeading) updateHeading.dataset.i18n = "storeUpdatesTitle";
+  const updateSourceLabel = document.getElementById("workspaceSourceLabel");
+  if (updateSourceLabel) updateSourceLabel.textContent = "MICROSOFT STORE";
+  els.consoleUpdateAuto?.closest(".console-update-toggle")?.setAttribute("hidden", "");
+  if (els.consoleUpdateRefresh) els.consoleUpdateRefresh.hidden = true;
 }
 
 function showMusicAddUrlForm() {
@@ -11307,6 +11333,10 @@ function selectUpdateProduct(product, options = {}) {
   renderConsoleUpdate();
 }
 
+function storeProductUnavailable(state) {
+  return Boolean(state?.managedByStore && !state.releaseUrl && !state.canOpen);
+}
+
 function renderUpdateProductButton(product, button, badge) {
   if (!button || !badge) return;
   const state = productUpdateStates[product] || {};
@@ -11314,11 +11344,18 @@ function renderUpdateProductButton(product, button, badge) {
   const current = String(state.currentVersion || "").replace(/^v/i, "");
   const version = state.available ? latest : current || latest;
   const selected = selectedUpdateProduct === product;
+  button.hidden = storeProductUnavailable(state);
   button.classList.toggle("primary-action", selected);
   button.setAttribute("aria-current", String(selected));
-  button.href = state.releaseUrl || (product === "world"
-    ? "https://github.com/tx74666/CodexWorldConsole/releases/latest"
-    : "https://github.com/tx74666/CodexControlConsole/releases/latest");
+  if (state.releaseUrl) {
+    button.href = state.releaseUrl;
+  } else if (!state.managedByStore) {
+    button.href = product === "world"
+      ? "https://github.com/tx74666/CodexWorldConsole/releases/latest"
+      : "https://github.com/tx74666/CodexControlConsole/releases/latest";
+  } else {
+    button.removeAttribute("href");
+  }
   badge.textContent = version ? `v${version}` : "--";
   badge.classList.toggle("available", Boolean(state.available));
 }
@@ -11329,6 +11366,10 @@ function availableProductUpdates() {
 
 function renderConsoleUpdate() {
   if (!els.consoleUpdateStatus) return;
+  if (selectedUpdateProduct === "world" && storeProductUnavailable(productUpdateStates.world)) {
+    selectedUpdateProduct = "console";
+    localStorage.setItem(storageKeys.updateProduct, selectedUpdateProduct);
+  }
   const state = selectedProductUpdateState();
   const product = selectedUpdateProduct;
   const current = String(state.currentVersion || "").replace(/^v/i, "");
@@ -11346,6 +11387,8 @@ function renderConsoleUpdate() {
       ? state.operationMessage
       : productUpdateBusy
       ? text("consoleUpdateChecking")
+      : state.managedByStore
+      ? text("consoleUpdateManagedByStore")
       : !installed
         ? latest
           ? `${text("consoleUpdateNotInstalled")} / v${latest}`
@@ -11385,10 +11428,15 @@ function renderConsoleUpdate() {
     els.consoleUninstall.textContent = text("consoleUninstall");
   }
   if (els.consoleUpdateRelease) {
-    els.consoleUpdateRelease.href = state.releaseUrl
-      || (product === "world"
+    if (state.releaseUrl) {
+      els.consoleUpdateRelease.href = state.releaseUrl;
+    } else if (!state.managedByStore) {
+      els.consoleUpdateRelease.href = product === "world"
         ? "https://github.com/tx74666/CodexWorldConsole/releases/latest"
-        : "https://github.com/tx74666/CodexControlConsole/releases/latest");
+        : "https://github.com/tx74666/CodexControlConsole/releases/latest";
+    } else {
+      els.consoleUpdateRelease.removeAttribute("href");
+    }
     els.consoleUpdateRelease.hidden = true;
   }
 
@@ -11535,7 +11583,7 @@ async function installSelectedProductUpdate(product = selectedUpdateProduct) {
     return;
   }
   if (!state.canInstall) {
-    window.open(state.releaseUrl, "_blank", "noopener,noreferrer");
+    if (state.releaseUrl) window.open(state.releaseUrl, "_blank", "noopener,noreferrer");
     return;
   }
 
@@ -18231,6 +18279,7 @@ if (hasMusic) {
 }
 
 applyConsoleEdition(consoleEdition, { activate: false, forceRender: true });
+applyInstallModePolicy();
 startConsoleWindowSession();
 applyLanguage();
 setConsoleWorkspaceView(activeConsoleView, { persist: false });

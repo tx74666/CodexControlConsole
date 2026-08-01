@@ -88,8 +88,22 @@ class ConsoleUpdateService:
         return str(self.manifest.get("repository") or "tx74666/CodexControlConsole").strip()
 
     @property
+    def install_mode(self):
+        return str(self.manifest.get("installMode") or "source").strip().lower()
+
+    @property
+    def store_managed(self):
+        return self.install_mode == "store"
+
+    @property
     def portable(self):
-        return str(self.manifest.get("installMode") or "source").lower() in {"portable", "installed"}
+        return self.install_mode in {"portable", "installed"}
+
+    def _store_release_url(self):
+        product_id = str(self.manifest.get("storeProductId") or "").strip()
+        if product_id:
+            return f"ms-windows-store://pdp/?ProductId={urllib.parse.quote(product_id)}"
+        return ""
 
     def _default_state(self):
         return {
@@ -157,6 +171,17 @@ class ConsoleUpdateService:
         return str(payload.get("message") or "The previous update could not be installed")[:500]
 
     def check(self):
+        if self.store_managed:
+            state = self._read_state()
+            state.update({
+                "autoCheck": True,
+                "checkedAt": datetime.now(timezone.utc).isoformat(),
+                "latest": {},
+                "pending": {},
+                "error": "",
+            })
+            self._write_state(state)
+            return self.status()
         state = self._read_state()
         try:
             state["latest"] = self._fetch_latest_manifest()
@@ -222,6 +247,30 @@ class ConsoleUpdateService:
 
     def status(self, check=False, force=False):
         state = self._read_state()
+        if self.store_managed:
+            pending = state.get("pending") or {}
+            pending_archive = Path(str(pending.get("archive") or ""))
+            return {
+                "ok": True,
+                "currentVersion": self.current_version,
+                "latestVersion": self.current_version,
+                "available": False,
+                "autoCheck": True,
+                "checkedAt": state.get("checkedAt") or "",
+                "releaseUrl": self._store_release_url(),
+                "publishedAt": "",
+                "assetName": "",
+                "assetAvailable": False,
+                "portable": False,
+                "canInstall": False,
+                "staged": bool(pending_archive.is_file()),
+                "stagedVersion": str(pending.get("version") or ""),
+                "error": "",
+                "updateError": "",
+                "edition": self._edition(),
+                "installationMode": self.install_mode,
+                "managedByStore": True,
+            }
         if force or (check and state["autoCheck"] and self._check_is_stale(state)):
             return self.check()
         latest = state.get("latest") or {}
@@ -249,9 +298,12 @@ class ConsoleUpdateService:
             "updateError": self._last_install_error(),
             "edition": self._edition(),
             "installationMode": str(self.manifest.get("installMode") or "source").lower(),
+            "managedByStore": False,
         }
 
     def configure(self, payload):
+        if self.store_managed:
+            return self.status()
         state = self._read_state()
         if "autoCheck" in payload:
             state["autoCheck"] = bool(payload.get("autoCheck"))
@@ -338,6 +390,8 @@ class ConsoleUpdateService:
             raise ValueError("The downloaded update is not a valid ZIP") from error
 
     def download(self):
+        if self.store_managed:
+            raise ValueError("Codex Console updates are managed by Microsoft Store")
         self.check()
         state = self._read_state()
         latest = state.get("latest") or {}
@@ -574,6 +628,8 @@ class ConsoleUpdateService:
             self.shutdown_callback()
 
     def install(self, *, stop_executable=None, restart_stopped=False):
+        if self.store_managed:
+            raise ValueError("Codex Console updates are managed by Microsoft Store")
         if not self.portable or sys.platform != "win32":
             raise ValueError("The Windows installer is available from an installed Codex Console")
         state = self._read_state()

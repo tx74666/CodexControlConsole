@@ -34,6 +34,10 @@ class AppUninstallService:
         self.manifest = dict(manifest or {})
         self.shutdown_callback = shutdown_callback
 
+    @property
+    def store_managed(self):
+        return str(self.manifest.get("installMode") or "source").strip().lower() == "store"
+
     @staticmethod
     def _registered_directory(product):
         if sys.platform != "win32":
@@ -70,6 +74,8 @@ class AppUninstallService:
     def _uninstaller(self, product):
         if product not in PRODUCTS:
             raise ValueError("Unknown Codex product")
+        if product == "console" and self.store_managed:
+            return None
         directory = self._install_directory(product)
         for name in ("unins000.exe", "uninstall.exe"):
             candidate = directory / name
@@ -94,6 +100,8 @@ class AppUninstallService:
     def launch(self, product):
         if sys.platform != "win32":
             raise ValueError("Uninstall is available on Windows only")
+        if product == "console" and self.store_managed:
+            raise ValueError("Use Windows Settings or Microsoft Store to uninstall Codex Console")
         uninstaller = self._uninstaller(product)
         if not uninstaller:
             raise ValueError(f"{PRODUCTS[product]['name']} does not have an installed uninstaller")

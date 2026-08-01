@@ -140,6 +140,10 @@ button {
   font: inherit;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .visually-hidden {
   position: fixed;
   width: 1px;

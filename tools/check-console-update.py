@@ -137,6 +137,43 @@ def main():
         with patch("console_update.sys.platform", "win32"):
             require(not source_service.status()["canInstall"], "source checkout should not overwrite itself")
 
+        store_service = ConsoleUpdateService(
+            app_dir,
+            root / "store-data",
+            {**manifest, "installMode": "store", "storeProductId": "9TESTSTORE"},
+            lambda: "developer",
+        )
+        store_service._write_state(state)
+        with patch.object(store_service, "_request", side_effect=AssertionError("Store build contacted GitHub")):
+            store_status = store_service.status(check=True, force=True)
+        require(store_status["managedByStore"], "Store update ownership was not exposed")
+        require(store_status["installationMode"] == "store", "Store installation mode was not exposed")
+        require(not store_status["available"], "Store build advertised a GitHub update")
+        require(not store_status["canInstall"], "Store build can launch the GitHub Setup")
+        require(store_status["latestVersion"] == manifest["version"], "Store status did not stay on its package version")
+        require(
+            store_status["releaseUrl"] == "ms-windows-store://pdp/?ProductId=9TESTSTORE",
+            "Store product link is wrong",
+        )
+        store_without_product = ConsoleUpdateService(
+            app_dir,
+            root / "store-data-no-product",
+            {**manifest, "installMode": "store"},
+            lambda: "developer",
+        )
+        require(
+            store_without_product.status()["releaseUrl"] == "",
+            "Store build fell back to an external GitHub download",
+        )
+        require(store_service.configure({"autoCheck": False})["autoCheck"], "Store update checks were disabled locally")
+        for operation in (store_service.download, store_service.install):
+            try:
+                operation()
+            except ValueError as error:
+                require("Microsoft Store" in str(error), "Store update guard returned the wrong error")
+            else:
+                raise AssertionError("Store build launched the GitHub updater")
+
     print("PASS Codex Console Setup updater")
 
 

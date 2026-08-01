@@ -32,7 +32,8 @@ WORLD_VERSION_PATTERN = re.compile(r"(?im)^Version:\s*v?(\d+\.\d+\.\d+)\s*$")
 
 
 class WorldUpdateService(ConsoleUpdateService):
-    def __init__(self, app_dir, data_dir, source_dir):
+    def __init__(self, app_dir, data_dir, source_dir, *, store_managed=False, store_product_id=""):
+        install_mode = "store" if store_managed else "portable"
         super().__init__(
             app_dir,
             data_dir,
@@ -40,8 +41,9 @@ class WorldUpdateService(ConsoleUpdateService):
                 "name": "Codex World",
                 "version": "0.0.0",
                 "repository": WORLD_REPOSITORY,
-                "installMode": "portable",
+                "installMode": install_mode,
                 "edition": "windows",
+                "storeProductId": str(store_product_id or "").strip(),
             },
             "windows",
         )
@@ -191,13 +193,45 @@ class WorldUpdateService(ConsoleUpdateService):
 
     def status(self, check=False, force=False):
         state = self._read_state()
+        installation = self._installation()
+        current_version = str(installation.get("version") or "0.0.0")
+        installed = installation["mode"] != "missing"
+        if self.store_managed:
+            product_id = str(self.manifest.get("storeProductId") or "").strip()
+            release_url = (
+                f"ms-windows-store://pdp/?ProductId={urllib.parse.quote(product_id)}"
+                if product_id
+                else ""
+            )
+            return {
+                "ok": True,
+                "product": "world",
+                "currentVersion": current_version if installed else "",
+                "latestVersion": current_version if installed else "",
+                "available": False,
+                "installed": installed,
+                "installationMode": "store",
+                "installationPath": str(installation["directory"]),
+                "autoCheck": True,
+                "checkedAt": state.get("checkedAt") or "",
+                "releaseUrl": release_url,
+                "publishedAt": "",
+                "assetName": "",
+                "assetAvailable": False,
+                "portable": False,
+                "canInstall": False,
+                "canOpen": bool(installation.get("executable")),
+                "staged": False,
+                "stagedVersion": "",
+                "error": "",
+                "updateError": "",
+                "edition": "windows",
+                "managedByStore": True,
+            }
         if force or (check and state["autoCheck"] and self._check_is_stale(state)):
             return self.check()
         latest = state.get("latest") or {}
         latest_version = str(latest.get("version") or "")
-        installation = self._installation()
-        current_version = str(installation.get("version") or "0.0.0")
-        installed = installation["mode"] != "missing"
         asset_name = self._asset_name()
         asset = next((item for item in latest.get("assets") or [] if item.get("name") == asset_name), {})
         pending = state.get("pending") or {}
@@ -232,6 +266,7 @@ class WorldUpdateService(ConsoleUpdateService):
             "error": str(state.get("error") or ""),
             "updateError": self._last_install_error(),
             "edition": "windows",
+            "managedByStore": False,
         }
 
     @staticmethod
@@ -350,6 +385,12 @@ class WorldUpdateService(ConsoleUpdateService):
         return {"ok": True, "path": str(target), "version": installation.get("version") or ""}
 
     def open_release(self):
+        if self.store_managed:
+            url = self.status().get("releaseUrl") or ""
+            if not url:
+                raise ValueError("Codex World is not available in Microsoft Store yet")
+            webbrowser.open(url)
+            return {"ok": True, "url": url}
         url = self.status().get("releaseUrl") or f"https://github.com/{self.repository}/releases/latest"
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme != "https" or parsed.hostname != "github.com":

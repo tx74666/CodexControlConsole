@@ -69,7 +69,31 @@ APP_VERSION = str(APP_MANIFEST.get("version") or "0.0.0-dev").strip()
 APP_REPOSITORY = str(APP_MANIFEST.get("repository") or "tx74666/CodexControlConsole").strip()
 APP_INSTALL_MODE = str(APP_MANIFEST.get("installMode") or "source").strip().lower()
 APP_IS_PORTABLE = APP_INSTALL_MODE == "portable"
-APP_USES_LOCAL_DATA = APP_INSTALL_MODE in {"portable", "installed"}
+APP_USES_LOCAL_DATA = APP_INSTALL_MODE in {"portable", "installed", "store"}
+
+
+def require_network_music_import():
+    if APP_INSTALL_MODE == "store":
+        raise ValueError("Microsoft Store edition supports local music and lyric files only")
+
+
+def current_package_family_name():
+    if sys.platform != "win32":
+        return ""
+    try:
+        import ctypes
+
+        length = ctypes.c_uint32(0)
+        get_family_name = ctypes.windll.kernel32.GetCurrentPackageFamilyName
+        result = get_family_name(ctypes.byref(length), None)
+        if result != 122 or not length.value:
+            return ""
+        buffer = ctypes.create_unicode_buffer(length.value)
+        if get_family_name(ctypes.byref(length), buffer) != 0:
+            return ""
+        return buffer.value.strip()
+    except (AttributeError, OSError, ValueError):
+        return ""
 
 
 def default_user_data_dir():
@@ -80,6 +104,10 @@ def default_user_data_dir():
         return APP_DIR
     local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
     base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+    if APP_INSTALL_MODE == "store":
+        package_family = current_package_family_name()
+        if package_family:
+            return base / "Packages" / package_family / "LocalState" / "CodexControlConsole"
     return base / "CodexControlConsole"
 
 
@@ -483,7 +511,13 @@ CONSOLE_UPDATE = ConsoleUpdateService(
     current_console_edition,
     shutdown_callback=shutdown_active_server,
 )
-WORLD_UPDATE = WorldUpdateService(APP_DIR, USER_DATA_DIR, WORLD_CONSOLE_DIR)
+WORLD_UPDATE = WorldUpdateService(
+    APP_DIR,
+    USER_DATA_DIR,
+    WORLD_CONSOLE_DIR,
+    store_managed=APP_INSTALL_MODE == "store",
+    store_product_id=APP_MANIFEST.get("worldStoreProductId"),
+)
 APP_UNINSTALL = AppUninstallService(APP_DIR, APP_MANIFEST, shutdown_callback=shutdown_active_server)
 FEEDBACK = FeedbackService(
     APP_DIR,
@@ -928,6 +962,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if key in {"order", "archive", "deepArchive", "deleted", "lastModule"}
             }
             device_layout["edition"] = current_console_edition()
+            device_layout["installMode"] = APP_INSTALL_MODE
             device_payload = json.dumps(device_layout, ensure_ascii=False, separators=(",", ":"))
             device_payload = device_payload.replace("</", "<\\/")
             body = (
@@ -4851,6 +4886,7 @@ def download_lyrics_for_music_path(path, force=False, prefer_synced=False):
         return lyrics_file_record(path, existing, source="local", downloaded=False)
     if not LYRICS_AUTO_DOWNLOAD:
         return None
+    require_network_music_import()
 
     if prefer_synced:
         result = query_internet_lyrics(path, synced_only=True)
@@ -8326,6 +8362,7 @@ def youtube_cookie_file():
 
 
 def upload_youtube_cookies(files):
+    require_network_music_import()
     if not files:
         raise ValueError("no cookies file was uploaded")
     item = files[0]
@@ -8554,6 +8591,7 @@ def download_music_url_with_command(clean_url, use_browser_cookies=False):
 
 
 def import_music_url(url, use_browser_cookies=False):
+    require_network_music_import()
     clean_url = normalize_youtube_video_url(url)
 
     ensure_music_dir()
@@ -8932,6 +8970,7 @@ def run_music_library_import(library_id, clean_url, requested_name=""):
 
 
 def import_music_library(url, name=""):
+    require_network_music_import()
     clean_url = normalize_youtube_playlist_url(validate_music_url(url))
     ensure_music_library_dir()
     requested_name = str(name or "").strip() or "Library"

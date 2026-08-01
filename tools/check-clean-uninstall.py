@@ -66,6 +66,16 @@ def main():
                 "frozen Console selected the wrong parent uninstaller",
             )
 
+        store = AppUninstallService(installed_dir, {"installMode": "store"})
+        with patch.object(app_uninstall.sys, "platform", "win32"):
+            require(not store.status("console")["canUninstall"], "Store build exposed the Inno uninstaller")
+            try:
+                store.launch("console")
+            except ValueError as error:
+                require("Microsoft Store" in str(error), "Store uninstall guard returned the wrong error")
+            else:
+                raise AssertionError("Store build launched an external uninstaller")
+
     print("PASS clean uninstall launcher")
 
 

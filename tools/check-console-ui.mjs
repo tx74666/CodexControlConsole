@@ -90,6 +90,23 @@ function staticChecks() {
   assert(backendSource.includes('"/api/media/builtins/sync"'), "built-in media sync API is missing");
   assert(backendSource.includes('"/api/console/window-session"'), "window lifecycle API is missing");
   assert(
+    appSource.includes('const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store"')
+      && appSource.includes("if (storeManagedInstall) {\n    openAddMusicPicker();"),
+    "Store music add control does not open the local file picker directly"
+  );
+  assert(
+    consoleHtml.includes('id="workspaceSourceLabel"')
+      && appSource.includes('updateSourceLabel.textContent = "MICROSOFT STORE"'),
+    "Store update panel still identifies itself as GitHub"
+  );
+  assert(
+    backendSource.includes('device_layout["installMode"] = APP_INSTALL_MODE')
+      && backendSource.includes('Microsoft Store edition supports local music and lyric files only'),
+    "Store install policy is not exposed or enforced"
+  );
+  const styleSource = readFileSync(join(projectRoot, "styles.css"), "utf8");
+  assert(/\[hidden\]\s*\{\s*display:\s*none\s*!important;/.test(styleSource), "hidden Store controls can remain visible");
+  assert(
     appSource.includes('window.addEventListener("pagehide", closeConsoleWindowSession)'),
     "window close notification is missing"
   );

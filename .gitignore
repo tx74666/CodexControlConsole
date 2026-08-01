@@ -38,6 +38,9 @@ release/
 *.zip
 *.apk
 *.aab
+*.msix
+*.msixupload
+store/store-identity.local.json
 
 # Android/Gradle output
 android/.gradle/

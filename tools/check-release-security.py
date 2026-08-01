@@ -18,6 +18,7 @@ def position(text, value):
 def main():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     audit_workflow = (ROOT / ".github" / "workflows" / "security-audit.yml").read_text(encoding="utf-8")
+    store_audit_workflow = (ROOT / ".github" / "workflows" / "store-package-audit.yml").read_text(encoding="utf-8")
     build = (ROOT / "tools" / "build-windows.ps1").read_text(encoding="utf-8")
     requirements = (ROOT / "tools" / "windows-release-requirements.txt").read_text(encoding="utf-8")
 
@@ -53,6 +54,13 @@ def main():
     require("action-gh-release" not in audit_workflow, "security audit must not publish a release")
     require("dist-audit" in audit_workflow, "security audit output is not isolated")
 
+    require("workflow_dispatch:" in store_audit_workflow, "Store audit cannot be started manually")
+    require("push:" not in store_audit_workflow, "Store audit must never run as a publishing trigger")
+    require("build-store-msix.ps1" in store_audit_workflow, "Store audit does not build the MSIX")
+    require("check-defender-artifacts.ps1" in store_audit_workflow, "Store audit does not scan with Defender")
+    require("upload-artifact" not in store_audit_workflow, "development-identity MSIX must not be uploaded")
+    require("action-gh-release" not in store_audit_workflow, "Store audit must not publish a release")
+
     locked_packages = {
         "altgraph==0.17.5",
         "packaging==26.2",
@@ -70,6 +78,7 @@ def main():
     require("NativeFileDrag.exe could not be compiled from source" in build, "NativeFileDrag build is not enforced")
     require('Source = "tools\\NativeFileDrag.exe"' not in build, "precompiled NativeFileDrag.exe is still packaged")
     require('"--noupx"' in build, "PyInstaller UPX is not explicitly disabled")
+    require('@("--exclude-module", "yt_dlp")' in build, "Store package still includes the network media downloader")
 
     print("PASS release signing and Defender gates are fail-closed")
 

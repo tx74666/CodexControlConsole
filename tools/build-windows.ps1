@@ -4,6 +4,10 @@ param(
   [string]$Python = "python",
   [ValidateSet("All", "Application", "Installer")]
   [string]$Stage = "All",
+  [ValidateSet("installed", "store")]
+  [string]$InstallMode = "installed",
+  [string]$StoreProductId = "",
+  [string]$StoreWorldProductId = "",
   [string]$FeedbackEndpoint = $env:CODEX_FEEDBACK_ENDPOINT,
   [string]$FeedbackTurnstileSiteKey = $env:CODEX_FEEDBACK_TURNSTILE_SITE_KEY
 )
@@ -29,6 +33,9 @@ $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $BuildRoot = Join-Path $ProjectRoot "build\console-installer"
 $BuildApplication = $Stage -in @("All", "Application")
 $BuildInstaller = $Stage -in @("All", "Installer")
+if ($BuildInstaller -and $InstallMode -eq "store") {
+  throw "Store application bundles must be packaged with tools/build-store-msix.ps1, not Inno Setup."
+}
 
 function Remove-SafeBuildDirectory {
   param([string]$Path)
@@ -96,10 +103,16 @@ if ($BuildApplication) {
     version = $Version
     repository = "tx74666/CodexControlConsole"
     channel = "stable"
-    installMode = "installed"
+    installMode = $InstallMode
     edition = "public"
     feedbackEndpoint = ([string]$FeedbackEndpoint).Trim()
     feedbackTurnstileSiteKey = ([string]$FeedbackTurnstileSiteKey).Trim()
+  }
+  if ($InstallMode -eq "store" -and -not [string]::IsNullOrWhiteSpace($StoreProductId)) {
+    $Manifest.storeProductId = $StoreProductId.Trim()
+  }
+  if ($InstallMode -eq "store" -and -not [string]::IsNullOrWhiteSpace($StoreWorldProductId)) {
+    $Manifest.worldStoreProductId = $StoreWorldProductId.Trim()
   }
   $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   [System.IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json -Depth 5) + [Environment]::NewLine, $Utf8NoBom)
@@ -128,12 +141,13 @@ if ($BuildApplication) {
   "SOURCES.md",
   "blue-lake-boats.jpg",
   "calm-mountain-lake.jpg",
-  "dragon-maid.jpg",
   "quiet-forest-aerial.jpg",
   "snow-water-mountains.jpg",
-  "soft-mountain-sun.jpg",
-  "wandering-witch.jpg"
+  "soft-mountain-sun.jpg"
 )
+  if ($InstallMode -ne "store") {
+    $PublicWallpaperFiles += @("dragon-maid.jpg", "wandering-witch.jpg")
+  }
 
   $DataItems = @(
   @{ Source = $ManifestPath; Destination = "." },
@@ -159,12 +173,15 @@ if ($BuildApplication) {
   @{ Source = "pc-console-icon.ico"; Destination = "." },
   @{ Source = "pc-console-icon.png"; Destination = "." },
   @{ Source = "pc-console-preview.png"; Destination = "." },
-  @{ Source = "public-music"; Destination = "music" },
   @{ Source = $NativeFileDragExe; Destination = "tools" },
   @{ Source = "tools\NativeFileDrag.cs"; Destination = "tools" },
   @{ Source = "tools\blender_live_selection_bridge.py"; Destination = "tools" },
   @{ Source = "tools\DesktopLayout.ps1"; Destination = "tools" }
 )
+
+  if ($InstallMode -ne "store") {
+    $DataItems += @{ Source = "public-music"; Destination = "music" }
+  }
 
   foreach ($wallpaper in $PublicWallpaperFiles) {
     $DataItems += @{ Source = "wallpapers\$wallpaper"; Destination = "wallpapers" }
@@ -183,9 +200,14 @@ if ($BuildApplication) {
   "--workpath", (Join-Path $BuildRoot "work"),
   "--specpath", (Join-Path $BuildRoot "spec"),
   "--paths", $ProjectRoot,
-  "--hidden-import", "tkinter",
-  "--collect-all", "yt_dlp"
+  "--hidden-import", "tkinter"
 )
+
+  if ($InstallMode -eq "store") {
+    $PyInstallerArgs += @("--exclude-module", "yt_dlp")
+  } else {
+    $PyInstallerArgs += @("--collect-all", "yt_dlp")
+  }
 
   foreach ($item in $DataItems) {
     $source = if ([System.IO.Path]::IsPathRooted($item.Source)) { $item.Source } else { Join-Path $ProjectRoot $item.Source }
