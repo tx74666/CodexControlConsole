@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-07-30T19:14:02Z",
+  "capturedAt": "2026-08-03T07:31:19Z",
   "music": {
     "layoutVersion": 1,
     "tiers": {
@@ -47,7 +47,8 @@
     ],
     "archive": [
       "blender",
-      "randomrealm"
+      "randomrealm",
+      "steamwork"
     ],
     "deepArchive": [
       "manager",
