@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 import json
 import os
@@ -1069,17 +1070,72 @@ class BlenderGithubShareService:
         return self._local_status(root, blend_file, source, refresh_remote=refresh_remote)
 
     def _select_blend_file(self) -> str:
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-        except ImportError as error:
-            raise ValueError("The Blender project picker is unavailable") from error
-
         store = self._read_store()
         saved = Path(store.get("lastProject") or "").expanduser()
         initial_directory = saved.parent if saved.is_file() else None
         if not initial_directory or not initial_directory.is_dir():
             initial_directory = next((root for root in self.project_roots if root.is_dir()), Path.home())
+
+        if sys.platform == "win32":
+            script = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Add Blender project'
+$dialog.Filter = 'Blender project (*.blend)|*.blend|All files (*.*)|*.*'
+$dialog.InitialDirectory = $env:CODEX_PICKER_INITIAL_DIR
+$dialog.CheckFileExists = $true
+$dialog.Multiselect = $false
+$dialog.RestoreDirectory = $true
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.Opacity = 0
+$owner.Show()
+try {
+  if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::Out.Write($dialog.FileName)
+  }
+} finally {
+  $owner.Close()
+  $owner.Dispose()
+  $dialog.Dispose()
+}
+"""
+            encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+            environment = os.environ.copy()
+            environment["CODEX_PICKER_INITIAL_DIR"] = str(initial_directory)
+            completed = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-STA",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-EncodedCommand",
+                    encoded,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+                env=environment,
+                **_hidden_subprocess_kwargs(),
+            )
+            if completed.returncode != 0:
+                raise ValueError("The Blender project picker could not be opened")
+            return completed.stdout.strip()
+
+        try:
+            import importlib
+
+            tk = importlib.import_module("tkinter")
+            filedialog = importlib.import_module("tkinter.filedialog")
+        except ImportError as error:
+            raise ValueError("The Blender project picker is unavailable") from error
 
         window = tk.Tk()
         try:

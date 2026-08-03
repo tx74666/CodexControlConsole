@@ -23,7 +23,7 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
 }
 $Version = $Version.Trim().TrimStart("v")
 if ($Version -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
-  throw "Version must use semantic versioning, for example 1.0.1."
+  throw "Version must use semantic versioning, for example 1.0.2."
 }
 $PackageVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
 

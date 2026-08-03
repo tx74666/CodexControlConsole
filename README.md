@@ -61,20 +61,28 @@ Install Python 3.12 x64, PyInstaller, Pillow, yt-dlp, and Inno Setup 7, then run
 
 ```powershell
 python -m pip install pyinstaller pillow yt-dlp
-.\tools\build-windows.ps1 -Version 1.0.1 -OutputDir dist
+.\tools\build-windows.ps1 -Version 1.0.2 -OutputDir dist
 ```
 
-The result is `dist\CodexControlConsole-Setup-x64.exe`. A local build is unsigned and is only for development and security testing; it must not be published.
+The result is `dist\CodexControlConsole-Setup-x64.exe`. A local build is unsigned and is only for development and security testing unless it passes the explicit direct-release checks below.
 
 ## Publish A Release
 
 The release helper retries intermittent GitHub connections, pushes `main`, creates the version tag, and waits until the single Windows x64 Setup asset is available:
 
 ```powershell
-.\tools\publish-release.ps1 -Version 1.0.1
+.\tools\publish-release.ps1 -Version 1.0.2
 ```
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.
+
+While public Artifact Signing is being configured, an explicitly approved direct GitHub release can be built, resource-tested, startup-tested, scanned with the latest local Microsoft Defender definitions, uploaded with digest verification, and installed back onto the publisher device in one command:
+
+```powershell
+.\tools\publish-release.ps1 -Version 1.0.2 -DirectGitHub
+```
+
+The direct route discloses its Authenticode status in the release notes and removes incomplete draft releases after a failed upload. It does not weaken the fail-closed signed GitHub Actions workflow.
 
 Public releases are fail-closed. GitHub Actions uses the same Windows 2025, Python 3.12.10, PyInstaller 6.21.0, and dependency baseline as the clean v0.7.0 build. It first builds the application, signs every packaged `exe`, `dll`, and `pyd`, verifies those signatures, builds and signs Setup, recursively verifies again, and finally scans the main executable, native drag helper, and Setup with Microsoft Defender. The workflow stops before publishing if any signature is missing, Defender reports a threat, or any Artifact Signing setting is absent.
 

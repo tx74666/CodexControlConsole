@@ -48,7 +48,7 @@ jobs:
         shell: pwsh
         run: |
           ./tools/build-windows.ps1 `
-            -Version 1.0.1 `
+            -Version 1.0.2 `
             -OutputDir dist-audit `
             -Stage All `
             -FeedbackEndpoint '${{ vars.CODEX_FEEDBACK_ENDPOINT }}' `
@@ -59,6 +59,7 @@ jobs:
         run: |
           python tools/check-package-resources.py
           python tools/check-clean-install-media.py
+          python tools/check-package-footprint.py
 
       - name: Defender scan audit artifacts
         shell: pwsh

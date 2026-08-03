@@ -2,6 +2,8 @@ param(
   [string]$Version = "",
   [switch]$CheckConnection,
   [switch]$SkipChecks,
+  [switch]$DirectGitHub,
+  [switch]$SkipLocalInstall,
   [ValidateRange(1, 12)]
   [int]$RetryCount = 6,
   [ValidateRange(1, 60)]
@@ -60,6 +62,22 @@ function Invoke-CheckedCommand {
   }
 }
 
+function Remove-DirectOutput {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $full = [System.IO.Path]::GetFullPath($Path)
+  $root = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\') + '\'
+  if (
+    -not $full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) -or
+    -not ([System.IO.Path]::GetFileName($full)).StartsWith("dist-direct-", [System.StringComparison]::OrdinalIgnoreCase)
+  ) {
+    throw "Refusing to remove an unexpected direct-release directory: $full"
+  }
+  if (Test-Path -LiteralPath $full) {
+    Remove-Item -LiteralPath $full -Recurse -Force
+  }
+}
+
 git config http.version HTTP/1.1
 
 if ($CheckConnection) {
@@ -70,7 +88,7 @@ if ($CheckConnection) {
 
 $Version = $Version.Trim().TrimStart("v")
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-  throw "Version is required and must use semantic versioning, for example 1.0.1."
+  throw "Version is required and must use semantic versioning, for example 1.0.2."
 }
 
 $Tag = "v$Version"
@@ -109,7 +127,7 @@ if (-not $SkipChecks) {
     throw "Node.js was not found. Install Node.js or use the bundled Codex runtime."
   }
 
-  Invoke-CheckedCommand "Python syntax" { python -m py_compile world_console.py console_window_session.py console_update.py world_update.py tools\capture-release-defaults.py tools\check-release-defaults.py tools\check-built-in-media-sync.py tools\check-console-lifecycle.py tools\check-release-security.py }
+  Invoke-CheckedCommand "Python syntax" { python -m py_compile world_console.py blender_github_share.py console_window_session.py console_update.py world_update.py tools\capture-release-defaults.py tools\check-release-defaults.py tools\check-built-in-media-sync.py tools\check-blender-github-share.py tools\check-console-lifecycle.py tools\check-package-footprint.py tools\check-release-security.py }
   Invoke-CheckedCommand "Release security" { python tools\check-release-security.py }
   Invoke-CheckedCommand "Release defaults" { python tools\check-release-defaults.py }
   Invoke-CheckedCommand "Built-in media sync" { python tools\check-built-in-media-sync.py }
@@ -119,13 +137,64 @@ if (-not $SkipChecks) {
   Invoke-CheckedCommand "World updater" { python tools\check-world-update.py }
   Invoke-CheckedCommand "Clean uninstall" { python tools\check-clean-uninstall.py }
   Invoke-CheckedCommand "Wallpaper style" { python tools\check-wallpaper-style.py }
+  Invoke-CheckedCommand "Blender GitHub share" { python tools\check-blender-github-share.py }
+  Invoke-CheckedCommand "Console UI" {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\check-console-ui-local.ps1 -NodePath $NodePath
+  }
   Invoke-CheckedCommand "Feedback relay" { & $NodePath --test services\feedback-relay\test\feedback.test.js }
+}
+
+$DirectOutputDir = Join-Path $ProjectRoot "dist-direct-$Version"
+$DirectInstaller = Join-Path $DirectOutputDir "CodexControlConsole-Setup-x64.exe"
+$DefenderDefinition = ""
+if ($DirectGitHub) {
+  Remove-DirectOutput -Path $DirectOutputDir
+  Invoke-CheckedCommand "Build direct GitHub candidate" {
+    & (Join-Path $PSScriptRoot "build-windows.ps1") `
+      -Version $Version `
+      -OutputDir $DirectOutputDir `
+      -Stage All
+  }
+  Invoke-CheckedCommand "Verify packaged resources" { python tools\check-package-resources.py }
+  Invoke-CheckedCommand "Verify clean install and media" { python tools\check-clean-install-media.py }
+  Invoke-CheckedCommand "Verify lean package and startup" { python tools\check-package-footprint.py }
+  Invoke-CheckedCommand "Defender scan direct release" {
+    & (Join-Path $PSScriptRoot "check-defender-artifacts.ps1") -Files @(
+      "build\console-installer\dist\Codex Console\Codex Console.exe",
+      "build\console-installer\dist\Codex Console\_internal\tools\NativeFileDrag.exe",
+      $DirectInstaller
+    )
+  }
+  $DefenderDefinition = [string](Get-MpComputerStatus).AntivirusSignatureVersion
+  if (-not $DefenderDefinition) {
+    throw "Microsoft Defender definition version could not be read."
+  }
 }
 
 $Head = (& git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or -not $Head) { throw "Unable to resolve HEAD." }
 
 Invoke-GitWithRetry -Arguments @("push", "origin", "main")
+
+if ($DirectGitHub) {
+  $DirectPublisher = Join-Path $PSScriptRoot "publish-direct-github.ps1"
+  try {
+    & $DirectPublisher `
+      -Version $Version `
+      -InstallerPath $DirectInstaller `
+      -DefenderDefinition $DefenderDefinition `
+      -TargetCommitish $Head `
+      -SkipLocalInstall:$SkipLocalInstall
+    if ($LASTEXITCODE -ne 0) {
+      throw "Direct GitHub publishing failed with exit code $LASTEXITCODE."
+    }
+    Remove-DirectOutput -Path $DirectOutputDir
+  } catch {
+    Write-Warning "The verified candidate remains at $DirectInstaller for diagnosis."
+    throw
+  }
+  exit 0
+}
 
 $previousErrorActionPreference = $ErrorActionPreference
 try {

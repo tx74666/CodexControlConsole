@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v1.0.1
+        description: Release version, for example v1.0.2
         required: true
-        default: v1.0.1
+        default: v1.0.2
   push:
     tags:
       - "v*"
@@ -143,6 +143,7 @@ jobs:
         run: |
           python tools/check-package-resources.py
           python tools/check-clean-install-media.py
+          python tools/check-package-footprint.py
 
       - name: Sign Windows Setup
         uses: azure/artifact-signing-action@v2
@@ -196,7 +197,7 @@ jobs:
 
             Download only **CodexControlConsole-Setup-x64.exe**.
 
-            Codex Console v1.0.1 keeps the publisher's current 16-track tiers and ordering, prevents a background or minimized window from losing its local service, and automatically reloads an audio source after a transient service interruption.
+            Codex Console v1.0.2 keeps the publisher's current 16-track tiers and ordering, starts faster with a leaner Windows package, and synchronizes the publisher's local installation after a direct GitHub release.
 
             This download is published only after every packaged Windows executable is signed with the same trusted identity, all signatures are verified, and Microsoft Defender accepts the final Setup.
 
@@ -209,7 +210,7 @@ jobs:
 
             只需下载 **CodexControlConsole-Setup-x64.exe**。
 
-            Codex Console v1.0.1 会保留发布者当前的 16 首歌曲分级与顺序；后台或最小化窗口不再误关本地服务，服务短暂中断后播放器也会自动重新载入音频。
+            Codex Console v1.0.2 会保留发布者当前的 16 首歌曲分级与顺序；精简 Windows 安装包以加快启动，并在直接发布 GitHub 版本后同步发布者本机安装。
 
             这个下载包只会在所有 Windows 可执行文件均由同一可信身份签名、签名全部验证通过，并且最终安装包通过 Microsoft Defender 扫描后发布。
 

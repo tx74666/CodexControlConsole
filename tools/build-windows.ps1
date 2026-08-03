@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "1.0.1",
+  [string]$Version = "1.0.2",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
   [ValidateSet("All", "Application", "Installer")]
@@ -200,13 +200,11 @@ if ($BuildApplication) {
   "--workpath", (Join-Path $BuildRoot "work"),
   "--specpath", (Join-Path $BuildRoot "spec"),
   "--paths", $ProjectRoot,
-  "--hidden-import", "tkinter"
+  "--exclude-module", "tkinter"
 )
 
   if ($InstallMode -eq "store") {
     $PyInstallerArgs += @("--exclude-module", "yt_dlp")
-  } else {
-    $PyInstallerArgs += @("--collect-all", "yt_dlp")
   }
 
   foreach ($item in $DataItems) {

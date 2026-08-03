@@ -200,6 +200,25 @@ def seed_packaged_media(source, target, extensions):
         return
 
 
+LEGACY_CACHE_ITEMS = (
+    "installation.json",
+    "world.geojson",
+    "translations.json",
+    "music_libraries.json",
+    "music_state.json",
+    "music_state.previous.json",
+    "music_lyric_marks.json",
+    "console_state.json",
+    "blender_live_selection.json",
+    "blender_github_share.json",
+    "original_wallpaper.json",
+    "wallpaper_order.json",
+    "music_analysis",
+    "cookies",
+    "steamwork_thumbs",
+)
+
+
 def migrate_legacy_user_cache():
     legacy_cache = APP_DIR / "cache"
     marker = USER_DATA_DIR / ".cache-migrated-v0.3"
@@ -207,17 +226,20 @@ def migrate_legacy_user_cache():
         return
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if legacy_cache.is_dir():
-        for source in legacy_cache.rglob("*"):
-            if source.is_symlink() or not source.is_file():
-                continue
-            try:
-                relative = source.relative_to(legacy_cache)
-                target = CACHE_DIR / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if not target.exists():
-                    shutil.copy2(source, target)
-            except OSError:
-                continue
+        for item_name in LEGACY_CACHE_ITEMS:
+            item = legacy_cache / item_name
+            sources = item.rglob("*") if item.is_dir() else (item,)
+            for source in sources:
+                if source.is_symlink() or not source.is_file():
+                    continue
+                try:
+                    relative = source.relative_to(legacy_cache)
+                    target = CACHE_DIR / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if not target.exists():
+                        shutil.copy2(source, target)
+                except OSError:
+                    continue
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(APP_VERSION + "\n", encoding="utf-8")
 
@@ -976,6 +998,24 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/console/config":
             self.send_json(console_edition_payload())
+            return
+        if parsed.path == "/api/console/package-check":
+            if not self.require_local_request():
+                return
+            try:
+                import yt_dlp
+
+                yt_dlp_version = str(getattr(getattr(yt_dlp, "version", None), "__version__", ""))
+                yt_dlp_ready = callable(getattr(yt_dlp, "YoutubeDL", None))
+            except (ImportError, OSError):
+                yt_dlp_version = ""
+                yt_dlp_ready = False
+            self.send_json({
+                "ok": yt_dlp_ready,
+                "version": APP_VERSION,
+                "ytDlp": yt_dlp_ready,
+                "ytDlpVersion": yt_dlp_version,
+            })
             return
         if parsed.path == "/api/feedback/config":
             query = urllib.parse.parse_qs(parsed.query)
@@ -10351,7 +10391,7 @@ def load_world_geojson():
 
 def port_is_available(port):
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+        with socket.create_connection(("127.0.0.1", port), timeout=0.08):
             return False
     except OSError:
         return True
@@ -10369,11 +10409,11 @@ def pick_port(start):
 def running_console_port(start):
     for port in range(start, start + 30):
         if port_is_available(port):
-            continue
+            return None
         url = f"http://127.0.0.1:{port}/index.html"
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "CodexWorldConsole/1.0"})
-            with urllib.request.urlopen(request, timeout=1.2) as response:
+            with urllib.request.urlopen(request, timeout=0.35) as response:
                 body = response.read(4096).decode("utf-8", errors="ignore")
             if (
                 "Codex Console" in body

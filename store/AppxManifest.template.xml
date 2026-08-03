@@ -8,7 +8,7 @@
   <Identity
     Name="tx74666.CodexControlConsole.Dev"
     Publisher="CN=tx74666, OID.2.25.337204255706875845106508963978635774496=1"
-    Version="1.0.1.0"
+    Version="1.0.2.0"
     ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>Codex Console</DisplayName>

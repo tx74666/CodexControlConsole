@@ -70,7 +70,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "1.0.1", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "1.0.2", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -451,7 +451,7 @@ async function runBrowserChecks(client) {
     const originalFetchStatus = fetchProductUpdateStatus;
     try {
       productUpdateStates = {
-        console: { currentVersion: '1.0.1', latestVersion: '1.0.1', available: false, autoCheck: true },
+        console: { currentVersion: '1.0.2', latestVersion: '1.0.2', available: false, autoCheck: true },
         world: {
           currentVersion: '0.3.1', latestVersion: '0.3.2', available: true,
           installed: true, autoCheck: true, canInstall: true
@@ -461,8 +461,8 @@ async function runBrowserChecks(client) {
       productUpdateBusy = true;
       waitForUpdatePoll = async () => {};
       fetchProductUpdateStatus = async product => ({
-        currentVersion: product === 'world' ? '0.3.2' : '1.0.1',
-        latestVersion: product === 'world' ? '0.3.2' : '1.0.1',
+        currentVersion: product === 'world' ? '0.3.2' : '1.0.2',
+        latestVersion: product === 'world' ? '0.3.2' : '1.0.2',
         available: false,
         installed: true,
         autoCheck: true,
