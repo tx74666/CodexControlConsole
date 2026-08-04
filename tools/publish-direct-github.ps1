@@ -78,16 +78,26 @@ function Install-PublisherCopy {
     [string]$ExpectedVersion
   )
 
-  $wasRunning = [bool](Get-Process -Name "Codex Console" -ErrorAction SilentlyContinue)
+  $runningProcesses = @(Get-Process -Name "Codex Console" -ErrorAction SilentlyContinue)
+  $wasRunning = $runningProcesses.Count -gt 0
+  foreach ($runningProcess in $runningProcesses) {
+    Stop-Process -Id $runningProcess.Id -Force -ErrorAction Stop
+    Wait-Process -Id $runningProcess.Id -Timeout 10 -ErrorAction SilentlyContinue
+  }
+  $logPath = Join-Path $env:TEMP "CodexConsole-publisher-install.log"
+  Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
   $arguments = @(
     "/VERYSILENT",
     "/SUPPRESSMSGBOXES",
     "/NORESTART",
-    "/CLOSEAPPLICATIONS"
+    "/CLOSEAPPLICATIONS",
+    "/FORCECLOSEAPPLICATIONS",
+    "/LOG=`"$logPath`""
   )
   $install = Start-Process -FilePath $Setup -ArgumentList $arguments -Wait -PassThru
   if ($install.ExitCode -ne 0) {
-    throw "The local publisher installation failed with exit code $($install.ExitCode)."
+    $details = (Get-Content -LiteralPath $logPath -Tail 30 -ErrorAction SilentlyContinue) -join "`n"
+    throw "The local publisher installation failed with exit code $($install.ExitCode).`n$details"
   }
 
   $installPath = ""
@@ -109,6 +119,7 @@ function Install-PublisherCopy {
     $installedExe = Join-Path $installPath "Codex Console.exe"
     Start-Process -FilePath $installedExe | Out-Null
   }
+  Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
   Write-Host "Publisher installation synchronized to v$ExpectedVersion."
 }
 

@@ -95,6 +95,7 @@ def main():
     require("Removed incomplete draft release" in publisher, "direct publisher does not clean failed drafts")
     require("Install-PublisherCopy" in publisher, "publisher device is not synchronized after release")
     require("ExpectedVersion" in publisher, "local publisher upgrade is not version-verified")
+    require("/FORCECLOSEAPPLICATIONS" in publisher, "publisher upgrade cannot close a headless old backend")
     require("check-defender-artifacts.ps1" in release_helper, "direct publishing can bypass Defender")
     require("check-package-footprint.py" in release_helper, "direct publishing does not test packaged startup")
     require("check-console-ui-local.ps1" in release_helper, "release UI checks still depend on an installed version")
