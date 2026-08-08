@@ -29,10 +29,34 @@ if ($Installer.Name -ne "CodexControlConsole-Setup-x64.exe") {
 }
 if (-not $TargetCommitish) {
   $TargetCommitish = (& git rev-parse HEAD).Trim()
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to resolve the current Git commit."
+  }
 }
-if ($LASTEXITCODE -ne 0 -or $TargetCommitish -notmatch '^[0-9a-f]{40}$') {
+if ($TargetCommitish -notmatch '^[0-9a-f]{40}$') {
   throw "TargetCommitish must be a full Git commit SHA."
 }
+
+function Assert-TrustedInstallerSignature {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $signature = Get-AuthenticodeSignature -LiteralPath $Path
+  if ($signature.Status -ne "Valid" -or -not $signature.SignerCertificate) {
+    throw "Direct GitHub publishing is blocked: the installer does not have a valid trusted Authenticode signature."
+  }
+  if (-not $signature.TimeStamperCertificate) {
+    throw "Direct GitHub publishing is blocked: the installer signature is not timestamped."
+  }
+  if ($signature.SignerCertificate.PublicKey.Oid.Value -ne "1.2.840.113549.1.1.1") {
+    throw "Direct GitHub publishing is blocked: the installer must use an RSA code-signing certificate."
+  }
+  if ($signature.SignerCertificate.Subject -eq $signature.SignerCertificate.Issuer) {
+    throw "Direct GitHub publishing is blocked: self-signed certificates are not accepted for public releases."
+  }
+  return $signature
+}
+
+$Signature = Assert-TrustedInstallerSignature -Path $InstallerPath
 
 function Get-GitHubCredential {
   $manager = @(
@@ -139,12 +163,7 @@ $Client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28")
 
 $Api = "https://api.github.com/repos/$Repository"
 $Sha256 = (Get-FileHash -LiteralPath $InstallerPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$Signature = Get-AuthenticodeSignature -LiteralPath $InstallerPath
-$SignatureNote = if ($Signature.Status -eq "Valid") {
-  "The installer has a valid Authenticode signature from $($Signature.SignerCertificate.Subject)."
-} else {
-  "This direct GitHub installer currently has no publicly trusted Authenticode signature."
-}
+$SignatureNote = "The installer has a valid, timestamped Authenticode signature from $($Signature.SignerCertificate.Subject)."
 $Release = $null
 $Published = $false
 

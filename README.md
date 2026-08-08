@@ -64,7 +64,7 @@ python -m pip install pyinstaller pillow yt-dlp
 .\tools\build-windows.ps1 -Version 1.0.2 -OutputDir dist
 ```
 
-The result is `dist\CodexControlConsole-Setup-x64.exe`. A local build is unsigned and is only for development and security testing unless it passes the explicit direct-release checks below.
+The result is `dist\CodexControlConsole-Setup-x64.exe`. A local build is unsigned and is only for development and security testing.
 
 ## Publish A Release
 
@@ -76,13 +76,7 @@ The release helper retries intermittent GitHub connections, pushes `main`, creat
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.
 
-While public Artifact Signing is being configured, an explicitly approved direct GitHub release can be built, resource-tested, startup-tested, scanned with the latest local Microsoft Defender definitions, uploaded with digest verification, and installed back onto the publisher device in one command:
-
-```powershell
-.\tools\publish-release.ps1 -Version 1.0.2 -DirectGitHub
-```
-
-The direct route discloses its Authenticode status in the release notes and removes incomplete draft releases after a failed upload. It does not weaken the fail-closed signed GitHub Actions workflow.
+Unsigned local builds can never be published by the release helper. The emergency direct-publisher helper accepts only an installer that already has a valid, timestamped, RSA Authenticode signature from a trusted issuer.
 
 Public releases are fail-closed. GitHub Actions uses the same Windows 2025, Python 3.12.10, PyInstaller 6.21.0, and dependency baseline as the clean v0.7.0 build. It first builds the application, signs every packaged `exe`, `dll`, and `pyd`, verifies those signatures, builds and signs Setup, recursively verifies again, and finally scans the main executable, native drag helper, and Setup with Microsoft Defender. The workflow stops before publishing if any signature is missing, Defender reports a threat, or any Artifact Signing setting is absent.
 
@@ -97,12 +91,15 @@ node .\tools\check-console-ui.mjs
 node --test .\services\feedback-relay\test\feedback.test.js
 python .\tools\check-feedback.py
 python .\tools\check-blender-github-share.py
+python .\tools\check-reference-views.py
 python .\tools\check-console-update.py
 python .\tools\check-desktop-layout.py
 python .\tools\check-release-security.py
 ```
 
 Blender > Helper > GitHub Coop lists repositories from `github-coop.json`. GitHub Desktop handles authentication, clone, commits, pull, and push.
+
+Blender > Builder > Reference View Set accepts Front, Back, Left, Right, Top, and Bottom images for any kind of object. Temporary uploads are decoded and copied into the selected project's `References/CDesigner/<set-name>--<set-id>/images` folder. Create/Update submits configuration, replacements, and removals as one transaction; all images are validated before the versioned `reference-views.json` manifest is atomically replaced, so a failed request leaves the previous set usable. The manifest stores only POSIX paths relative to itself so the C designer Blender add-on can rebuild the set after either application restarts.
 
 Codex Console checks the selected repository against GitHub when Blender Helper opens and whenever Refresh is pressed. A cloud card guides first-time users into Clone; a local card reports remote updates, uncommitted work, pending pushes, or a synchronized state. Before editing a `.blend`, pull the latest version and make sure nobody else is editing that same binary file. When finished, save and close Blender, then commit and push through GitHub Desktop. External textures and references must be packed into the `.blend` or intentionally included in the repository.
 
