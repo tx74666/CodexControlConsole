@@ -218,59 +218,59 @@ class BlenderGithubShareService:
         project_order = payload.get("projectOrder")
         if not isinstance(project_order, list):
             project_order = []
-            if not project_order:
-                project_order = [
-                    record.get("blendFile")
-                    for record in projects.values()
-                    if isinstance(record, dict) and record.get("blendFile")
-                ]
-            cleaned_project_order = []
-            seen_projects = set()
-            for item in project_order:
-                path = _safe_text(item, 1000)
-                key = os.path.normcase(path).casefold()
-                if not path or key in seen_projects:
+        if not project_order:
+            project_order = [
+                record.get("blendFile")
+                for record in projects.values()
+                if isinstance(record, dict) and record.get("blendFile")
+            ]
+        cleaned_project_order = []
+        seen_projects = set()
+        for item in project_order:
+            path = _safe_text(item, 1000)
+            key = os.path.normcase(path).casefold()
+            if not path or key in seen_projects:
+                continue
+            seen_projects.add(key)
+            cleaned_project_order.append(path)
+
+        raw_file_order = payload.get("fileOrder")
+        file_order = {}
+        if isinstance(raw_file_order, dict):
+            for root_key, items in raw_file_order.items():
+                if not isinstance(items, list):
                     continue
-                seen_projects.add(key)
-                cleaned_project_order.append(path)
-
-            raw_file_order = payload.get("fileOrder")
-            file_order = {}
-            if isinstance(raw_file_order, dict):
-                for root_key, items in raw_file_order.items():
-                    if not isinstance(items, list):
+                cleaned = []
+                seen_files = set()
+                for item in items:
+                    path = _safe_text(item, 1000)
+                    key = os.path.normcase(path).casefold()
+                    if not path or key in seen_files:
                         continue
-                    cleaned = []
-                    seen_files = set()
-                    for item in items:
-                        path = _safe_text(item, 1000)
-                        key = os.path.normcase(path).casefold()
-                        if not path or key in seen_files:
-                            continue
-                        seen_files.add(key)
-                        cleaned.append(path)
-                    if cleaned:
-                        file_order[_safe_text(root_key, 1200)] = cleaned
-            raw_repository_order = payload.get("repositoryOrder")
-            repository_order = []
-            seen_repositories = set()
-            if isinstance(raw_repository_order, list):
-                for item in raw_repository_order:
-                    url = _repository_web_url(item)
-                    slug = _repository_slug(url)
-                    if not slug or slug in seen_repositories:
-                        continue
-                    seen_repositories.add(slug)
-                    repository_order.append(url)
+                    seen_files.add(key)
+                    cleaned.append(path)
+                if cleaned:
+                    file_order[_safe_text(root_key, 1200)] = cleaned
+        raw_repository_order = payload.get("repositoryOrder")
+        repository_order = []
+        seen_repositories = set()
+        if isinstance(raw_repository_order, list):
+            for item in raw_repository_order:
+                url = _repository_web_url(item)
+                slug = _repository_slug(url)
+                if not slug or slug in seen_repositories:
+                    continue
+                seen_repositories.add(slug)
+                repository_order.append(url)
 
-            repository_paths = {}
-            raw_repository_paths = payload.get("repositoryPaths")
-            if isinstance(raw_repository_paths, dict):
-                for repository, path_value in raw_repository_paths.items():
-                    slug = _repository_slug(repository)
-                    path = _safe_text(path_value, 1000)
-                    if slug and path:
-                        repository_paths[slug] = path
+        repository_paths = {}
+        raw_repository_paths = payload.get("repositoryPaths")
+        if isinstance(raw_repository_paths, dict):
+            for repository, path_value in raw_repository_paths.items():
+                slug = _repository_slug(repository)
+                path = _safe_text(path_value, 1000)
+                if slug and path:
+                    repository_paths[slug] = path
 
         return {
             "version": 3,
