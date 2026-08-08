@@ -109,7 +109,7 @@ if (-not $SkipChecks) {
     throw "Node.js was not found. Install Node.js or use the bundled Codex runtime."
   }
 
-  Invoke-CheckedCommand "Python syntax" { python -m py_compile world_console.py blender_github_share.py console_window_session.py console_update.py world_update.py tools\capture-release-defaults.py tools\check-release-defaults.py tools\check-built-in-media-sync.py tools\check-blender-github-share.py tools\check-console-lifecycle.py tools\check-package-footprint.py tools\check-release-security.py }
+  Invoke-CheckedCommand "Python syntax" { python -m py_compile world_console.py blender_github_share.py reference_views.py console_window_session.py console_update.py world_update.py tools\capture-release-defaults.py tools\check-release-defaults.py tools\check-built-in-media-sync.py tools\check-blender-github-share.py tools\check-reference-views.py tools\check-console-lifecycle.py tools\check-package-footprint.py tools\check-release-security.py }
   Invoke-CheckedCommand "Release security" { python tools\check-release-security.py }
   Invoke-CheckedCommand "Release defaults" { python tools\check-release-defaults.py }
   Invoke-CheckedCommand "Built-in media sync" { python tools\check-built-in-media-sync.py }
@@ -120,6 +120,7 @@ if (-not $SkipChecks) {
   Invoke-CheckedCommand "Clean uninstall" { python tools\check-clean-uninstall.py }
   Invoke-CheckedCommand "Wallpaper style" { python tools\check-wallpaper-style.py }
   Invoke-CheckedCommand "Blender GitHub share" { python tools\check-blender-github-share.py }
+  Invoke-CheckedCommand "Reference View Set" { python tools\check-reference-views.py }
   Invoke-CheckedCommand "Console UI" {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\check-console-ui-local.ps1 -NodePath $NodePath
   }

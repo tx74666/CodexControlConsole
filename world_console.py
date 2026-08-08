@@ -42,6 +42,7 @@ from desktop_layout import DesktopLayoutService
 from feedback_service import FeedbackService, FeedbackServiceError
 from app_uninstall import AppUninstallService
 from console_window_session import ConsoleWindowSessionService
+from reference_views import ReferenceViewSetService
 
 
 def hidden_subprocess_kwargs():
@@ -574,6 +575,9 @@ MAX_WORKZONE_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_STEAMWORK_UPLOAD_BYTES = 1024 * 1024 * 1024
 MAX_COOKIE_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_DESKTOP_LAYOUT_UPLOAD_BYTES = 8 * 1024 * 1024
+MAX_REFERENCE_VIEW_UPLOAD_BYTES = 64 * 1024 * 1024
+MAX_REFERENCE_VIEW_REQUEST_BYTES = 256 * 1024
+MAX_REFERENCE_VIEW_TRANSACTION_BYTES = (6 * MAX_REFERENCE_VIEW_UPLOAD_BYTES) + MAX_REFERENCE_VIEW_REQUEST_BYTES
 MAX_FEEDBACK_REQUEST_BYTES = 18 * 1024 * 1024
 GOOGLE_TRANSLATE_ENDPOINT = "https://translation.googleapis.com/language/translate/v2"
 TRANSLATION_TARGET = "zh-TW"
@@ -951,6 +955,36 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 "blender": str(find_blender_executable() or ""),
             })
             return
+        if parsed.path == "/api/reference-views/image":
+            if not self.require_local_request():
+                return
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                image_path = REFERENCE_VIEW_SETS.image_path(
+                    query.get("project", [""])[0],
+                    query.get("key", [""])[0],
+                    query.get("direction", [""])[0],
+                )
+                content_type = mimetypes.guess_type(str(image_path))[0] or "application/octet-stream"
+                self.send_file_response(image_path, content_type, filename=image_path.name)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=404)
+            return
+        if parsed.path == "/api/reference-views":
+            if not self.require_local_request():
+                return
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                project = query.get("project", [""])[0]
+                key = query.get("key", [""])[0]
+                self.send_json(
+                    REFERENCE_VIEW_SETS.get(project, key)
+                    if key
+                    else REFERENCE_VIEW_SETS.list(project)
+                )
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            return
         if parsed.path == "/api/randomrealm/blender/github-share/status":
             query = urllib.parse.parse_qs(parsed.query)
             refresh_remote = query.get("refresh", ["0"])[0].strip().lower() in {"1", "true", "yes"}
@@ -1123,6 +1157,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith("/api/reference-views/") and not self.require_local_request():
+            return
         try:
             if parsed.path == "/api/wallpapers/upload":
                 self.send_json(upload_wallpapers(self.read_multipart_files()))
@@ -1138,6 +1174,43 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/randomrealm/blender/upload-texture":
                 self.send_json(upload_blender_replacement_texture(self.read_multipart_files(MAX_WORKZONE_UPLOAD_BYTES)))
+                return
+            if parsed.path == "/api/reference-views/image":
+                if not self.require_local_request():
+                    return
+                query = urllib.parse.parse_qs(parsed.query)
+                files = self.read_multipart_files(MAX_REFERENCE_VIEW_UPLOAD_BYTES)
+                if len(files) != 1:
+                    raise ValueError("Upload exactly one reference image")
+                self.send_json(REFERENCE_VIEW_SETS.upload(
+                    query.get("project", [""])[0],
+                    query.get("key", [""])[0],
+                    query.get("direction", [""])[0],
+                    files[0],
+                ))
+                return
+            if parsed.path == "/api/reference-views/upsert":
+                fields, files = self.read_multipart_form(MAX_REFERENCE_VIEW_TRANSACTION_BYTES)
+                if set(fields) != {"manifest"}:
+                    raise ValueError("Reference view transaction requires one manifest field")
+                if len(fields["manifest"].encode("utf-8")) > MAX_REFERENCE_VIEW_REQUEST_BYTES:
+                    raise ValueError("Reference view manifest is too large")
+                try:
+                    payload = json.loads(fields["manifest"])
+                except json.JSONDecodeError as error:
+                    raise ValueError("Reference view manifest field is invalid JSON") from error
+                if not isinstance(payload, dict):
+                    raise ValueError("Reference view manifest field must contain an object")
+                uploads = {}
+                for file in files:
+                    field = str(file.pop("field", ""))
+                    if not field.startswith("image."):
+                        raise ValueError("Reference image form field is invalid")
+                    direction = field.removeprefix("image.").strip().casefold()
+                    if direction in uploads:
+                        raise ValueError("Reference image direction is duplicated")
+                    uploads[direction] = file
+                self.send_json(REFERENCE_VIEW_SETS.upsert(payload, uploads))
                 return
             if parsed.path == "/api/steamwork/gamecontent/upload":
                 self.send_json(import_steamwork_files("gameContent", self.read_multipart_files(MAX_STEAMWORK_UPLOAD_BYTES)))
@@ -1157,9 +1230,12 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 self.send_json(stage_steamwork_asset_files(requirement_id, self.read_multipart_files(MAX_STEAMWORK_UPLOAD_BYTES)))
                 return
 
-            payload = self.read_json_body(
-                MAX_FEEDBACK_REQUEST_BYTES if parsed.path == "/api/feedback/submit" else None
-            )
+            request_limit = None
+            if parsed.path == "/api/feedback/submit":
+                request_limit = MAX_FEEDBACK_REQUEST_BYTES
+            elif parsed.path.startswith("/api/reference-views/"):
+                request_limit = MAX_REFERENCE_VIEW_REQUEST_BYTES
+            payload = self.read_json_body(request_limit)
             if parsed.path == "/api/console/window-session":
                 if not self.require_local_request():
                     return
@@ -1169,6 +1245,31 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if not self.require_local_request():
                     return
                 self.send_json(sync_builtin_media(payload.get("kind", "all")))
+                return
+            if parsed.path == "/api/reference-views/save":
+                if not self.require_local_request():
+                    return
+                self.send_json(REFERENCE_VIEW_SETS.save(payload))
+                return
+            if parsed.path == "/api/reference-views/rename":
+                if not self.require_local_request():
+                    return
+                self.send_json(REFERENCE_VIEW_SETS.rename(payload))
+                return
+            if parsed.path == "/api/reference-views/normalize":
+                if not self.require_local_request():
+                    return
+                self.send_json(REFERENCE_VIEW_SETS.normalize_names(payload))
+                return
+            if parsed.path == "/api/reference-views/remove-view":
+                if not self.require_local_request():
+                    return
+                self.send_json(REFERENCE_VIEW_SETS.remove_view(payload))
+                return
+            if parsed.path == "/api/reference-views/delete":
+                if not self.require_local_request():
+                    return
+                self.send_json(REFERENCE_VIEW_SETS.delete(payload))
                 return
             if parsed.path == "/api/wallpapers/apply":
                 self.send_json(apply_wallpaper(payload.get("path", "")))
@@ -1233,6 +1334,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/randomrealm/blender/github-share/config":
                 self.send_json(BLENDER_GITHUB_SHARE.save(payload))
+                return
+            if parsed.path == "/api/randomrealm/blender/github-share/rename":
+                self.send_json(BLENDER_GITHUB_SHARE.rename(payload))
                 return
             if parsed.path == "/api/randomrealm/blender/github-share/add":
                 self.send_json(BLENDER_GITHUB_SHARE.add_project(payload))
@@ -1594,6 +1698,60 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if not files:
             raise ValueError("no files were uploaded")
         return files
+
+    def read_multipart_form(self, max_bytes):
+        content_type = self.headers.get("Content-Type", "")
+        boundary_match = re.search(r'boundary="?([^";]+)"?', content_type)
+        if not boundary_match:
+            raise ValueError("missing multipart boundary")
+
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if length <= 0:
+            raise ValueError("empty multipart request")
+        if length > max_bytes:
+            raise ValueError("reference view transaction is too large")
+
+        body = self.rfile.read(length)
+        boundary = b"--" + boundary_match.group(1).encode("utf-8")
+        fields = {}
+        files = []
+        for raw_part in body.split(boundary):
+            part = raw_part
+            if part.startswith(b"\r\n"):
+                part = part[2:]
+            if part.endswith(b"--"):
+                part = part[:-2]
+            if part.endswith(b"\r\n"):
+                part = part[:-2]
+            if not part or part == b"--":
+                continue
+
+            header_blob, separator, data = part.partition(b"\r\n\r\n")
+            if not separator:
+                raise ValueError("invalid multipart form part")
+            headers_text = header_blob.decode("utf-8", errors="replace")
+            disposition = next(
+                (line for line in headers_text.splitlines() if line.lower().startswith("content-disposition:")),
+                "",
+            )
+            name_match = re.search(r'(?:^|;)\s*name="([^"]+)"', disposition, re.IGNORECASE)
+            if not name_match:
+                raise ValueError("multipart form part is missing a name")
+            name = name_match.group(1).strip()
+            filename_match = re.search(r'(?:^|;)\s*filename="([^"]*)"', disposition, re.IGNORECASE)
+            if filename_match:
+                filename = filename_match.group(1).strip()
+                if not filename:
+                    raise ValueError("reference image filename is empty")
+                files.append({"field": name, "filename": filename, "data": data})
+                continue
+            if name in fields:
+                raise ValueError("multipart form field is duplicated")
+            try:
+                fields[name] = data.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise ValueError("multipart form text must use UTF-8") from error
+        return fields, files
 
 
 def ensure_wallpaper_dir():
@@ -2376,6 +2534,9 @@ def blender_project_path(value):
     if not is_blender_project_path(target):
         raise ValueError("Blender project was not found or is outside the configured project roots")
     return target
+
+
+REFERENCE_VIEW_SETS = ReferenceViewSetService(blender_project_path)
 
 
 def same_filesystem_path(left, right):

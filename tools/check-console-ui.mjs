@@ -39,6 +39,14 @@ function staticChecks() {
 
   const appSource = readFileSync(join(projectRoot, "app.js"), "utf8");
   new Function(appSource);
+  assert(
+    !appSource.includes("\u00c2\u00b7")
+      && !appSource.includes("\u00c3\u00d7")
+      && !appSource.includes("\u00e2\u2122\u00ab")
+      && !appSource.includes("\u00e2\u2013\u00b6")
+      && !appSource.includes("\u00e2\u20ac\u0153"),
+    "known UTF-8 mojibake remains in the UI source"
+  );
   const loudnessProfile = JSON.parse(readFileSync(join(projectRoot, "music-loudness.json"), "utf8"));
   assert(Object.keys(loudnessProfile.tracks || {}).length === 16, "music loudness profile must cover all 16 tracks");
   assert(loudnessProfile.referenceTrack === "Luminescence", "Luminescence must remain the loudness reference");
@@ -53,6 +61,7 @@ function staticChecks() {
   assert(trackCardStart >= 0 && trackCardEnd > trackCardStart, "track card function is missing");
   assert(!trackCardSource.includes('"dblclick"'), "track cards still have a duplicate double-click handler");
   assert(existsSync(join(projectRoot, "blender_github_share.py")), "Blender GitHub Share backend is missing");
+  assert(existsSync(join(projectRoot, "reference_views.py")), "Reference View Set backend is missing");
   const coopCatalog = JSON.parse(readFileSync(join(projectRoot, "github-coop.json"), "utf8"));
   assert(
     coopCatalog.repositories?.length === 1
@@ -70,10 +79,16 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "1.0.2", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "1.0.3", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
+  for (const id of ["referenceViewDisplaySize", "referenceViewDistance", "referenceViewOpacity"]) {
+    assert(
+      new RegExp(`id="${id}"[^>]+step="any"`).test(consoleHtml),
+      `${id} must preserve arbitrary manifest precision`
+    );
+  }
   assert(
     /id="updateProductConsole"[^>]+href="https:\/\/github\.com\/tx74666\/CodexControlConsole\/releases\/latest"/.test(consoleHtml),
     "Codex Console download card is not linked to GitHub Releases"
@@ -89,6 +104,35 @@ function staticChecks() {
   const backendSource = readFileSync(join(projectRoot, "world_console.py"), "utf8");
   assert(backendSource.includes('"/api/media/builtins/sync"'), "built-in media sync API is missing");
   assert(backendSource.includes('"/api/console/window-session"'), "window lifecycle API is missing");
+  assert(
+    backendSource.includes('"/api/reference-views"')
+      && backendSource.includes('"/api/reference-views/image"')
+      && backendSource.includes('"/api/reference-views/upsert"')
+      && backendSource.includes('"/api/reference-views/save"')
+      && backendSource.includes('"/api/reference-views/delete"'),
+    "Reference View Set API is incomplete"
+  );
+  assert(
+    consoleHtml.includes('id="referenceViewPanel"')
+      && consoleHtml.includes('id="blenderCharacterTab"')
+      && consoleHtml.includes('id="blenderCharacterDesignerView"')
+      && consoleHtml.includes('id="referenceViewProject"')
+      && consoleHtml.indexOf('id="blenderCharacterDesignerView"') < consoleHtml.indexOf('id="referenceViewPanel"')
+      && consoleHtml.indexOf('id="referenceViewPanel"') < consoleHtml.indexOf('id="blenderHelperView"')
+      && consoleHtml.match(/data-reference-direction=/g)?.length === 6
+      && appSource.includes('els.referenceViewSave.addEventListener("click", saveReferenceViewSet)')
+      && appSource.includes('fetch("/api/reference-views/upsert"')
+      && !appSource.includes('postJson("/api/reference-views/save"')
+      && !appSource.includes('postJson("/api/reference-views/remove-view"')
+      && appSource.includes("requestToken !== referenceViewLoadToken || project !== referenceViewProjectPath()")
+      && appSource.includes("referenceViewProjectPath() !== referenceViewLoadedProject")
+      && appSource.includes("await loadReferenceViewSets({ quiet: true })"),
+    "Reference View Set UI is not wired"
+  );
+  assert(
+    !/prompt builder|blenderPrompt|blender-prompt/i.test(`${consoleHtml}\n${appSource}\n${readFileSync(join(projectRoot, "styles.css"), "utf8")}`),
+    "Prompt Builder residue is still present"
+  );
   assert(
     appSource.includes('const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store"')
       && appSource.includes("if (storeManagedInstall) {\n    openAddMusicPicker();"),
@@ -302,6 +346,7 @@ async function runBrowserChecks(client) {
     `language indicator is reversed: ${JSON.stringify(languageToggleState)}`
   );
   await clickModule(client, "blender");
+  await checkBlenderTransition(client, "character");
 
   await waitForValue(
     () => evaluate(client, "document.querySelectorAll('#randomRealmBlenderProject option').length"),
@@ -310,6 +355,7 @@ async function runBrowserChecks(client) {
     20000,
     120
   );
+  await checkBlenderTransition(client, "helper");
 
   await waitForValue(
     () => evaluate(client, "document.querySelector('#consoleUpdateCurrent')?.textContent?.trim() || ''"),
@@ -988,12 +1034,25 @@ async function runBrowserChecks(client) {
   })()`);
   assert(collapseState.collapsed && collapseState.expanded, `GitHub Coop collapse behavior is broken: ${JSON.stringify(collapseState)}`);
 
+  const lazyState = await evaluate(client, `({
+    musicCards: document.querySelectorAll('.music-dock .track-card').length,
+    wallpaperCards: document.querySelectorAll('.wallpaper-card').length,
+    steamRoot: document.querySelector('#steamworkAssetRoot')?.textContent?.trim() || ''
+  })`);
+  assert(lazyState.musicCards === 0, "music data loaded before the Music module was opened");
+  assert(lazyState.wallpaperCards === 0, "wallpaper data loaded before the Wallpaper module was opened");
+  assert(lazyState.steamRoot === "", "Steamwork data loaded before the Steamwork module was opened");
+
   if (process.env.CONSOLE_UI_SCREENSHOT) {
     if (["light", "dark"].includes(process.env.CONSOLE_UI_THEME || "")) {
       await evaluate(client, `setTheme(${JSON.stringify(process.env.CONSOLE_UI_THEME)}, { record: false })`);
     }
     const screenshotModule = process.env.CONSOLE_UI_SCREENSHOT_MODULE || "blender";
     if (screenshotModule !== "blender") await clickModule(client, screenshotModule);
+    const screenshotBlenderView = process.env.CONSOLE_UI_SCREENSHOT_BLENDER_VIEW || "";
+    if (screenshotModule === "blender" && ["helper", "character", "builder"].includes(screenshotBlenderView)) {
+      await checkBlenderTransition(client, screenshotBlenderView);
+    }
     if (process.env.CONSOLE_UI_THEME) {
       await evaluate(client, `(() => {
         const target = ${JSON.stringify(process.env.CONSOLE_UI_THEME)};
@@ -1044,15 +1103,6 @@ async function runBrowserChecks(client) {
     if (screenshotModule !== "blender") await clickModule(client, "blender");
   }
 
-  const lazyState = await evaluate(client, `({
-    musicCards: document.querySelectorAll('.music-dock .track-card').length,
-    wallpaperCards: document.querySelectorAll('.wallpaper-card').length,
-    steamRoot: document.querySelector('#steamworkAssetRoot')?.textContent?.trim() || ''
-  })`);
-  assert(lazyState.musicCards === 0, "music data loaded before the Music module was opened");
-  assert(lazyState.wallpaperCards === 0, "wallpaper data loaded before the Wallpaper module was opened");
-  assert(lazyState.steamRoot === "", "Steamwork data loaded before the Steamwork module was opened");
-
   const cleanMusicTitles = await evaluate(client, `[
     displayTrackName("Airborne"),
     displayTrackName("A8 - Airborne"),
@@ -1074,6 +1124,29 @@ async function runBrowserChecks(client) {
     return [style.position, style.width, style.height, style.backgroundImage, style.backgroundSize];
   })()`);
   assert(JSON.stringify(helperBackground) === JSON.stringify(builderBackground), "Blender views use different page backgrounds");
+  await checkBlenderTransition(client, "character");
+  const characterViewState = await evaluate(client, `({
+    active: document.querySelector('.blender-subtab.active')?.dataset.blenderViewTarget || '',
+    panelVisible: !document.querySelector('#referenceViewPanel')?.closest('[data-blender-view]')?.hidden,
+    promptBuilderCount: document.querySelectorAll('.blender-prompt-panel').length,
+    projectOptions: document.querySelectorAll('#referenceViewProject option').length,
+    project: document.querySelector('#referenceViewProject')?.value || '',
+    builderProject: document.querySelector('#randomRealmBlenderProject')?.value || '',
+    projectPath: document.querySelector('#referenceViewProjectPath')?.textContent?.trim() || ''
+  })`);
+  assert(
+    characterViewState.active === "character"
+      && characterViewState.panelVisible
+      && characterViewState.promptBuilderCount === 0,
+    `Character Designer view is incomplete: ${JSON.stringify(characterViewState)}`
+  );
+  assert(
+    characterViewState.projectOptions > 0
+      && characterViewState.project
+      && characterViewState.project === characterViewState.builderProject
+      && characterViewState.projectPath === characterViewState.project,
+    `Character Designer project selection is not synchronized: ${JSON.stringify(characterViewState)}`
+  );
   await checkBlenderTransition(client, "helper");
 
   await clickModule(client, "music");
@@ -1092,6 +1165,30 @@ async function runBrowserChecks(client) {
   assert(musicCardTitles.includes("Airborne"), "Airborne card title is missing");
   assert(musicCardTitles.includes("Ma rose éternelle"), "Ma rose éternelle card title is missing");
   assert(!musicCardTitles.some(title => /^A8\s*-/i.test(title)), `legacy A8 card title remains: ${JSON.stringify(musicCardTitles)}`);
+  const musicGlyphState = await evaluate(client, `(() => {
+    renderMusic();
+    const markers = Array.from(document.querySelectorAll('.music-dock .track-marker'), node => node.textContent);
+    const metadata = Array.from(document.querySelectorAll('.music-dock .track-body span'), node => node.textContent);
+    const workspaceText = document.querySelector('.music-workspace')?.textContent || '';
+    return {
+      markers,
+      metadata,
+      art: document.querySelector('#nowPlayingArt')?.textContent || '',
+      playPause: document.querySelector('#playPauseTrack')?.textContent || '',
+      hasMojibake: workspaceText.includes('\u00c2\u00b7')
+        || workspaceText.includes('\u00c3\u00d7')
+        || workspaceText.includes('\u00e2')
+    };
+  })()`);
+  assert(
+    musicGlyphState.markers.length > 0
+      && musicGlyphState.markers.every(glyph => glyph === '\u25b6' || glyph === '\u266b')
+      && musicGlyphState.metadata.every(value => value.includes('\u00b7'))
+      && musicGlyphState.art === '\u266b'
+      && (musicGlyphState.playPause === '\u25b6' || musicGlyphState.playPause === '\u275a\u275a')
+      && !musicGlyphState.hasMojibake,
+    `music glyph encoding is broken: ${JSON.stringify(musicGlyphState)}`
+  );
   const musicLoudnessState = await evaluate(client, `(() => {
     const reference = tracks.find(track => track.name === "Luminescence");
     const quiet = tracks.find(track => track.name === "Liquid Roller");

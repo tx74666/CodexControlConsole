@@ -1,4 +1,4 @@
-const storageKeys = {
+﻿const storageKeys = {
   language: "codexControl.language.v1",
   theme: "codexControl.theme.v1",
   selectedWallpaper: "codexControl.selectedWallpaper.v1",
@@ -23,7 +23,6 @@ const storageKeys = {
   randomRealmArtContext: "codexControl.randomRealmArtContext.v1",
   consoleView: "codexControl.consoleView.v1",
   blenderView: "codexControl.blenderView.v1",
-  blenderPromptConfig: "codexControl.blenderPromptConfig.v1",
   lyricsHeight: "codexControl.lyricsHeight.v1",
   lyricsLanguages: "codexControl.lyricsLanguages.v1",
   windowSession: "codexControl.windowSession.v1"
@@ -136,16 +135,8 @@ const randomRealmArtTypeLabels = {
   FONT: "Font",
   EMPTY: "Empty"
 };
-const defaultBlenderPromptConfig = {
-  format: "Write the prompt in English. Use sections: Goal, Subject, Style, Image Requirements, Blender Context, Output Constraints, Negative Requirements.",
-  image: "Use a single clean reference image if available. The object should be fully visible, centered, well lit, no watermark, no UI, no text, simple background, suitable for game asset / PBR material work.",
-  style: "stylized realistic, readable silhouette, game-ready, clean material separation",
-  basics: "Target use: RandomRealm / Unity. Preserve scale readability and make the result easy to understand from the selected Blender object.",
-  resolution: "2k",
-  customResolution: "",
-  customWidth: "",
-  customLength: ""
-};
+const referenceViewDirections = ["front", "back", "left", "right", "top", "bottom"];
+const referenceViewImageExtensions = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"];
 const musicStateVersion = 3;
 const releaseMusicLayoutVersion = Math.max(0, Number(releaseDefaults.music?.layoutVersion) || 0);
 const musicReorderCommitRatio = 1 / 3;
@@ -227,42 +218,93 @@ const musicPlayerIcons = {
 
 const i18n = {
   zh: {
-    appTitle: "电脑总控台",
-    managerPageTitle: "管理",
+    referenceViewSectionLabel: "Character Designer",
+    referenceViewTitle: "\u53c2\u8003\u89c6\u56fe\u96c6",
+    referenceViewSetLabel: "\u89c6\u56fe\u96c6",
+    referenceViewSetToolsLabel: "\u96c6\u5408\u5de5\u5177",
+    referenceViewNameLabel: "\u540d\u79f0",
+    referenceViewNew: "\u65b0\u5efa",
+    referenceViewRename: "\u66f4\u540d\u96c6\u540d",
+    referenceViewRenameAllLabel: "\u7edf\u4e00\u66f4\u540d",
+    referenceViewRenameAll: "统一重命名",
+    referenceViewActionHint: "选中合集后，先点击任一方向卡片选择图片，再点 新建 / 更新。",
+    referenceViewSetHint: "先点“选中合集（左上角下拉）”，再点方向卡片；支持拖入或点击选择。按 Enter 可重命名合集名，点 Normalize Names 可统一方向图片文件名。",
+    referenceViewTileHint: "卡片可点：先点卡片选图，再点 Create / Update。",
+    referenceViewRenameHintExtra: "先改合集名（点 Rename Set），再点 Create / Update 保存。",
+    referenceViewRenameHint: "点击“Rename Set”或按 Enter 直接改合集名，随后可用“统一重命名”一次处理合集名与方向图片名。",
+    referenceViewReplaceAction: "替换图片",
+    referenceViewPickAction: "选择/拖入图片",
+    referenceViewImageLoadError: "图片预览失败",
+    referenceViewRenamePrompt: "\u8bf7\u8f93\u5165\u8981\u66f4\u65b0\u7684\u53c2\u8003\u56fe\u96c6\u540d\u79f0",
+    referenceViewRenaming: "\u6b63\u5728\u66f4\u540d",
+    referenceViewRenamed: name => `\u5df2\u66f4\u540d\u4e3a\u201c${name}\u201d`,
+    referenceViewNewSet: "\u65b0\u53c2\u8003\u89c6\u56fe\u96c6",
+    referenceViewDisplaySize: "\u663e\u793a\u5c3a\u5bf8 (m)",
+    referenceViewDistance: "\u8ddd\u79bb (m)",
+    referenceViewOpacity: "\u4e0d\u900f\u660e\u5ea6",
+    referenceViewShowInFront: "\u663e\u793a\u5728\u6700\u524d",
+    referenceViewFront: "\u524d\u89c6\u56fe",
+    referenceViewBack: "\u540e\u89c6\u56fe",
+    referenceViewLeft: "\u5de6\u89c6\u56fe",
+    referenceViewRight: "\u53f3\u89c6\u56fe",
+  referenceViewTop: "\u9876\u89c6\u56fe",
+  referenceViewBottom: "\u5e95\u89c6\u56fe",
+  referenceViewDropImage: "\u62d6\u5165\u6216\u9009\u62e9\u56fe\u7247",
+  referenceViewUntitledSet: "\u672a\u547d\u540d\u96c6",
+  referenceViewNoImage: "\u6682\u65e0\u56fe\u7247",
+  referenceViewEnabled: "\u5f00",
+  referenceViewSave: "\u65b0\u5efa / \u66f4\u65b0",
+  referenceViewHideAll: "\u5168\u90e8\u9690\u85cf",
+  referenceViewShowAll: "\u5168\u90e8\u663e\u793a",
+  referenceViewClear: "\u6e05\u7a7a\u5f53\u524d\u96c6",
+  referenceViewNormalize: "\u7edf\u4e00\u91cd\u547d\u540d",
+  referenceViewReady: "\u5c31\u7eea",
+  referenceViewLoading: "\u6b63\u5728\u8bfb\u53d6\u53c2\u8003\u89c6\u56fe",
+  referenceViewStaged: name => `\u5df2\u6682\u5b58\uff1a${name}`,
+  referenceViewSaved: count => `\u5df2\u5199\u5165 manifest \u00b7 ${count} / 6`,
+  referenceViewNoProject: "\u8bf7\u5148\u9009\u62e9 Blender \u9879\u76ee",
+  referenceViewRenameNoSelection: "\u8bf7\u5148\u9009\u62e9\u4e00\u4e2a\u5df2\u4fdd\u5b58\u7684\u53c2\u8003\u89c6\u56fe\u96c6\u8fdb\u884c\u66f4\u540d",
+  referenceViewNormalizing: "\u6b63\u5728\u91cd\u7f6e\u6587\u4ef6\u540d",
+  referenceViewNormalized: "\u5df2\u91cd\u7f6e\u53c2\u8003\u89c6\u56fe\u6587\u4ef6\u540d",
+  referenceViewConfirmClear: name => `\u6e05\u7a7a\u201c${name}\u201d\u7ba1\u7406\u7684\u53c2\u8003\u56fe\u548c manifest\uff1f\u5176\u4ed6\u6587\u4ef6\u4e0d\u4f1a\u5220\u9664\u3002`,
+  referenceViewCleared: "\u5df2\u6e05\u7a7a\u5f53\u524d\u53c2\u8003\u89c6\u56fe\u96c6",
+  referenceViewFailed: message => `\u53c2\u8003\u89c6\u56fe\u5931\u8d25\uff1a${message}`,
+    appTitle: "ç”µè„‘æ€»æŽ§å°",
+    managerPageTitle: "ç®¡ç†",
     workspacePageTitle: "Console",
     blenderPageTitle: "Blender",
     unityPageTitle: "Unity",
     steamworkPageTitle: "Steamwork",
-    randomRealmPageTitle: "随机领域",
-    wallpaperPageTitle: "桌布",
-    managerNav: "管理",
-    managerSectionLabel: "管理",
+    randomRealmPageTitle: "éšæœºé¢†åŸŸ",
+    wallpaperPageTitle: "æ¡Œå¸ƒ",
+    managerNav: "ç®¡ç†",
+    managerSectionLabel: "ç®¡ç†",
     workspaceNav: "Console",
     blenderNav: "Blender",
     unityNav: "Unity",
     steamworkNav: "Steamwork",
-    randomRealmNav: "随机领域",
-    musicPageTitle: "音乐",
-    wallpaperNav: "桌布",
-    musicNav: "音乐",
+    randomRealmNav: "éšæœºé¢†åŸŸ",
+    musicPageTitle: "éŸ³ä¹",
+    wallpaperNav: "æ¡Œå¸ƒ",
+    musicNav: "éŸ³ä¹",
     archiveToggleTitle: "Archive",
     archiveTitle: "Archive",
-    archiveEmpty: "这里先空着",
-    archiveRestoreTitle: name => `打开 ${name}，双击恢复`,
-    managerTitle: "布局管理",
-    managerStatus: "记忆中",
-    managerTabOrderLabel: "Tab 顺序",
+    archiveEmpty: "è¿™é‡Œå…ˆç©ºç€",
+    archiveRestoreTitle: name => `æ‰“å¼€ ${name}ï¼ŒåŒå‡»æ¢å¤`,
+    managerTitle: "å¸ƒå±€ç®¡ç†",
+    managerStatus: "è®°å¿†ä¸­",
+    managerTabOrderLabel: "Tab é¡ºåº",
     managerArchiveLabel: "Archive",
-    managerDesktopLayoutLabel: "Windows 布局",
-    managerDesktopLayoutValue: "待接入桌面图标快照",
-    managerCurrentLayoutTitle: "当前控制台布局",
-    managerLayoutSlotOne: "当前 Tab 排列",
-    managerLayoutSlotTwo: "收纳箱",
-    managerLayoutSlotThree: "桌面快照",
-    managerLayoutHint: "拖动 tab 改变顺序，拖到 Archive 只会收纳，不会删除。",
-    tutorialModeToggle: "教程模式",
-    tutorialModeOn: "教程模式已打开：显示说明和辅助入口",
-    tutorialModeOff: "教程模式已关闭：只保留关键入口",
+    managerDesktopLayoutLabel: "Windows å¸ƒå±€",
+    managerDesktopLayoutValue: "å¾…æŽ¥å…¥æ¡Œé¢å›¾æ ‡å¿«ç…§",
+    managerCurrentLayoutTitle: "å½“å‰æŽ§åˆ¶å°å¸ƒå±€",
+    managerLayoutSlotOne: "å½“å‰ Tab æŽ’åˆ—",
+    managerLayoutSlotTwo: "æ”¶çº³ç®±",
+    managerLayoutSlotThree: "æ¡Œé¢å¿«ç…§",
+    managerLayoutHint: "æ‹–åŠ¨ tab æ”¹å˜é¡ºåºï¼Œæ‹–åˆ° Archive åªä¼šæ”¶çº³ï¼Œä¸ä¼šåˆ é™¤ã€‚",
+    tutorialModeToggle: "æ•™ç¨‹æ¨¡å¼",
+    tutorialModeOn: "æ•™ç¨‹æ¨¡å¼å·²æ‰“å¼€ï¼šæ˜¾ç¤ºè¯´æ˜Žå’Œè¾…åŠ©å…¥å£",
+    tutorialModeOff: "æ•™ç¨‹æ¨¡å¼å·²å…³é—­ï¼šåªä¿ç•™å…³é”®å…¥å£",
     consoleCommonTab: "\u5e38\u7528",
     consoleCollaborationTab: "\u534f\u4f5c",
     feedbackReviewTitle: "\u6536\u5230\u7684\u56de\u62a5",
@@ -302,56 +344,57 @@ const i18n = {
     builtinMediaUnavailable: "\u672a\u627e\u5230\u5185\u7f6e\u8d44\u6e90",
     builtinMediaAdded: count => `\u5df2\u8865\u5145 ${count} \u9879`,
     builtinMediaFailed: message => `\u540c\u6b65\u5931\u8d25\uff1a${message}`,
-    feedbackTitle: "问题回报",
-    feedbackCategoryLabel: "问题类型",
-    feedbackCategoryBug: "错误",
-    feedbackCategoryLayout: "排版",
-    feedbackCategoryMusic: "音乐",
-    feedbackCategoryUpdate: "更新",
-    feedbackCategoryOther: "其他",
-    feedbackDescriptionPlaceholder: "描述你遇到的问题",
-    feedbackScreenshot: "截图",
-    feedbackRemoveImage: "移除截图",
-    feedbackSend: "发送",
+    feedbackTitle: "é—®é¢˜å›žæŠ¥",
+    feedbackCategoryLabel: "é—®é¢˜ç±»åž‹",
+    feedbackCategoryBug: "é”™è¯¯",
+    feedbackCategoryLayout: "æŽ’ç‰ˆ",
+    feedbackCategoryMusic: "éŸ³ä¹",
+    feedbackCategoryUpdate: "æ›´æ–°",
+    feedbackCategoryOther: "å…¶ä»–",
+    feedbackDescriptionPlaceholder: "æè¿°ä½ é‡åˆ°çš„é—®é¢˜",
+    feedbackScreenshot: "æˆªå›¾",
+    feedbackRemoveImage: "ç§»é™¤æˆªå›¾",
+    feedbackSend: "å‘é€",
     feedbackHitLimit: "Hit Limit",
-    feedbackConnecting: "正在连接",
-    feedbackReady: "可以发送",
-    feedbackNotConfigured: "回报服务尚未连接",
-    feedbackSending: "正在发送",
-    feedbackSent: remaining => `已发送 · 今天还可发送 ${remaining} 条`,
-    feedbackFailed: message => `发送失败：${message}`,
-    feedbackDescriptionShort: "请至少写 10 个字。",
-    feedbackImageTooLarge: "截图不能超过 5 MB。",
-    feedbackImageType: "截图只支持 PNG、JPEG 或 WebP。",
-    feedbackImageReadFailed: "无法读取这张截图。",
+    feedbackConnecting: "æ­£åœ¨è¿žæŽ¥",
+    feedbackReady: "å¯ä»¥å‘é€",
+    feedbackNotConfigured: "å›žæŠ¥æœåŠ¡å°šæœªè¿žæŽ¥",
+    feedbackSending: "æ­£åœ¨å‘é€",
+    feedbackSent: remaining => `å·²å‘é€ \u00b7 ä»Šå¤©è¿˜å¯å‘é€ ${remaining} æ¡`,
+    feedbackFailed: message => `å‘é€å¤±è´¥ï¼š${message}`,
+    feedbackDescriptionShort: "è¯·è‡³å°‘å†™ 10 ä¸ªå­—ã€‚",
+    feedbackImageTooLarge: "æˆªå›¾ä¸èƒ½è¶…è¿‡ 5 MBã€‚",
+    feedbackImageType: "æˆªå›¾åªæ”¯æŒ PNGã€JPEG æˆ– WebPã€‚",
+    feedbackImageReadFailed: "æ— æ³•è¯»å–è¿™å¼ æˆªå›¾ã€‚",
     feedbackScreenshotCount: (count, maximum) => `${count} / ${maximum}`,
-    feedbackImageCount: maximum => `最多选择 ${maximum} 张截图。`,
-    feedbackImagesTotalTooLarge: megabytes => `截图合计不能超过 ${megabytes} MB。`,
-    feedbackInboxTitle: "收件箱",
-    feedbackInboxRefresh: "刷新收件箱",
-    feedbackInboxEmpty: "没有新回报",
-    feedbackInboxResolve: "完成",
-    feedbackInboxResolved: "已完成",
-    feedbackOpenImage: (index, total) => `查看截图 ${index}/${total}`,
-    feedbackInboxMeta: (category, version, date) => `${category} · ${version || "--"} · ${date}`,
-    feedbackAdminSetup: "收件箱连接",
+    feedbackImageCount: maximum => `æœ€å¤šé€‰æ‹© ${maximum} å¼ æˆªå›¾ã€‚`,
+    feedbackImagesTotalTooLarge: megabytes => `æˆªå›¾åˆè®¡ä¸èƒ½è¶…è¿‡ ${megabytes} MBã€‚`,
+    feedbackInboxTitle: "æ”¶ä»¶ç®±",
+    feedbackInboxRefresh: "åˆ·æ–°æ”¶ä»¶ç®±",
+    feedbackInboxEmpty: "æ²¡æœ‰æ–°å›žæŠ¥",
+    feedbackInboxResolve: "å®Œæˆ",
+    feedbackInboxResolved: "å·²å®Œæˆ",
+    feedbackOpenImage: (index, total) => `æŸ¥çœ‹æˆªå›¾ ${index}/${total}`,
+    feedbackInboxMeta: (category, version, date) => `${category} \u00b7 ${version || "--"} \u00b7 ${date}`,
+    feedbackAdminSetup: "æ”¶ä»¶ç®±è¿žæŽ¥",
     feedbackAdminEndpoint: "Cloudflare Worker URL",
     feedbackAdminToken: "Admin token",
-    feedbackAdminSave: "连接",
-    feedbackAdminSaved: "收件箱已连接",
+    feedbackAdminSave: "è¿žæŽ¥",
+    feedbackAdminSaved: "æ”¶ä»¶ç®±å·²è¿žæŽ¥",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
     blenderHelperTab: "Helper",
+    blenderCharacterTab: "Character Designer",
     blenderHelperTitle: "Blender Hub",
     blenderHelperBadge: "\u5730\u56fe",
     blenderHubReady: "\u53ef\u7528",
     blenderHubNext: "\u9884\u7559",
     blenderHubBuilderTitle: "Builder \u5de5\u4f5c\u53f0",
-    blenderHubBuilderBody: "\u8d34\u56fe\u3001Prompt\u3001\u5f53\u524d\u7269\u4f53",
+    blenderHubBuilderBody: "\u8d34\u56fe\u4e0e\u5f53\u524d\u7269\u4f53",
     blenderHubBuildingTitle: "Building \u9879\u76ee",
     blenderHubBuildingBody: "\u5efa\u7b51\u5757\u3001\u6a21\u5757\u3001\u6446\u653e\u89c4\u5219",
-    blenderHubCharacterTitle: "\u89d2\u8272 / X",
-    blenderHubCharacterBody: "\u4eba\u7269\u3001\u88c5\u5907\u3001\u6750\u8d28\u68c0\u67e5",
+    blenderHubCharacterTitle: "Character Designer",
+    blenderHubCharacterBody: "\u53c2\u8003\u56fe\u3001\u89c6\u56fe\u96c6\u4e0e Blender \u653e\u7f6e",
     blenderHubAnimationTitle: "Animation",
     blenderHubAnimationBody: "\u52a8\u4f5c\u3001\u65f6\u95f4\u8f74\u3001\u5bfc\u51fa\u8282\u594f",
     blenderHubTextureTitle: "Texture Lab",
@@ -359,12 +402,12 @@ const i18n = {
     blenderHubBridgeTitle: "Unity Bridge",
     blenderHubBridgeBody: "\u5bfc\u51fa\u3001Temp\u3001\u5bfc\u5165\u68c0\u67e5",
     blenderGithubHubTitle: "GitHub Coop",
-    blenderGithubHubBody: "Blender 项目入口",
+    blenderGithubHubBody: "Blender é¡¹ç›®å…¥å£",
     blenderGithubTitle: "GitHub Coop",
-    blenderGithubToggleTitle: "双击收起或展开 GitHub Coop",
-    blenderGithubAddTitle: "添加已发布的 Blender GitHub 项目",
-    blenderGithubBlendFilesLabel: "GitHub 仓库",
-    blenderGithubLinksLabel: "项目入口",
+    blenderGithubToggleTitle: "åŒå‡»æ”¶èµ·æˆ–å±•å¼€ GitHub Coop",
+    blenderGithubAddTitle: "æ·»åŠ å·²å‘å¸ƒçš„ Blender GitHub é¡¹ç›®",
+    blenderGithubBlendFilesLabel: "GitHub ä»“åº“",
+    blenderGithubLinksLabel: "é¡¹ç›®å…¥å£",
     blenderGithubDesktop: "GitHub Desktop",
     blenderGithubCloud: "\u4e91\u7aef",
     blenderGithubCardLocalTitle: name => `\u5355\u51fb\u9009\u62e9\uff0c\u53cc\u51fb\u5728 GitHub Desktop \u6253\u5f00\uff1a${name}`,
@@ -383,79 +426,83 @@ const i18n = {
     blenderGithubWorkflowSynced: "\u5df2\u4e0e GitHub \u540c\u6b65",
     blenderGithubWorkflowOffline: "\u6682\u65f6\u65e0\u6cd5\u68c0\u67e5\u4e91\u7aef \u00b7 \u5f53\u524d\u663e\u793a\u672c\u673a\u72b6\u6001",
     blenderGithubStateCloud: "\u4e91\u7aef\uff0c\u5c1a\u672a\u4e0b\u8f7d",
-    blenderGithubFolder: "文件",
+    blenderGithubFolder: "æ–‡ä»¶",
     blenderGithubOpenShort: "GitHub",
-    blenderGithubNoBlendFiles: "还没有加入已发布的 GitHub 仓库",
-    blenderGithubCardTitle: name => `单击选择，双击打开 GitHub：${name}`,
-    blenderGithubLoading: "读取中",
-    blenderGithubReady: "就绪",
-    blenderGithubProjectLabel: "GitHub 仓库",
-    blenderGithubRefreshTitle: "刷新 Git 状态",
-    blenderGithubBlendFileLabel: "Blend 文件",
-    blenderGithubBranchLabel: "分支",
+    blenderGithubNoBlendFiles: "è¿˜æ²¡æœ‰åŠ å…¥å·²å‘å¸ƒçš„ GitHub ä»“åº“",
+    blenderGithubCardTitle: name => `å•å‡»é€‰æ‹©ï¼ŒåŒå‡»æ‰“å¼€ GitHubï¼š${name}`,
+    blenderGithubRename: "é‡å‘½å",
+    blenderGithubRenamePrompt: name => `é‡å‘½åæ˜¾ç¤ºåï¼ˆå½“å‰ï¼š${name}ï¼‰`,
+    blenderGithubRenaming: "æ­£åœ¨æ›´æ–°æ˜¾ç¤ºå",
+    blenderGithubRenameDone: "æ˜¾ç¤ºåå·²æ›´æ–°",
+    blenderGithubLoading: "è¯»å–ä¸­",
+    blenderGithubReady: "å°±ç»ª",
+    blenderGithubProjectLabel: "GitHub ä»“åº“",
+    blenderGithubRefreshTitle: "åˆ·æ–° Git çŠ¶æ€",
+    blenderGithubBlendFileLabel: "Blend æ–‡ä»¶",
+    blenderGithubBranchLabel: "åˆ†æ”¯",
     blenderGithubRemoteLabel: "Remote",
-    blenderGithubLastVersionLabel: "最近版本",
-    blenderGithubRepositoryLabel: "GitHub 仓库",
+    blenderGithubLastVersionLabel: "æœ€è¿‘ç‰ˆæœ¬",
+    blenderGithubRepositoryLabel: "GitHub ä»“åº“",
     blenderGithubRepositoryPlaceholder: "https://github.com/owner/repository.git",
-    blenderGithubVisibilityLabel: "可见性",
+    blenderGithubVisibilityLabel: "å¯è§æ€§",
     blenderGithubPrivate: "Private",
     blenderGithubPublic: "Public",
-    blenderGithubVersionLabel: "版本号",
-    blenderGithubMessageLabel: "本次版本说明",
-    blenderGithubMessagePlaceholder: "这个版本改了什么",
-    blenderGithubScopeLabel: "共享范围",
-    blenderGithubScopeCurrent: "仅当前 .blend",
-    blenderGithubScopeProject: "整个项目目录",
-    blenderGithubScopeCustom: "自定义",
-    blenderGithubIncludeLabel: "包含文件",
-    blenderGithubExcludeLabel: "排除文件",
-    blenderGithubChangesLabel: "Git 变更",
-    blenderGithubInitialize: "初始化仓库",
-    blenderGithubCommit: "提交版本",
-    blenderGithubPush: "推送",
-    blenderGithubOpen: "打开 GitHub",
-    blenderGithubStateUninitialized: "未初始化",
-    blenderGithubStateInitialized: "已初始化",
-    blenderGithubStateDirty: "存在未提交修改",
-    blenderGithubStateCommitted: "已提交",
-    blenderGithubStatePendingPush: "待推送",
-    blenderGithubStateBehind: "远端有更新",
-    blenderGithubStateSynced: "已同步",
-    blenderGithubStateGitUnavailable: "Git 不可用",
-    blenderGithubToolsReady: "Git · LFS 已就绪",
-    blenderGithubLfsMissing: "需要安装 Git LFS",
-    blenderGithubGhReady: "GitHub CLI 已登录",
-    blenderGithubGhFallback: "GitHub CLI 未安装或未登录；可填写空仓库 URL",
-    blenderGithubWorkingTreeClean: "工作区干净",
-    blenderGithubMoreChanges: count => `还有 ${count} 项变更`,
-    blenderGithubLastCommit: (hash, subject) => `${hash} · ${subject}`,
-    blenderGithubNoCommit: "还没有提交",
-    blenderGithubSaving: "正在保存项目配置",
-    blenderGithubSaved: "项目配置已保存",
-    blenderGithubInitializedReady: "仓库和 Git LFS 已就绪",
-    blenderGithubInitializedNoRemote: "本地仓库已就绪；填写空 GitHub 仓库 URL 后即可推送",
-    blenderGithubCommitComplete: version => `版本 ${version} 已提交`,
-    blenderGithubPushComplete: "已推送到 GitHub",
-    blenderGithubOpenComplete: "已打开 GitHub 仓库",
-    blenderGithubInitializing: "正在初始化 Git 和 Git LFS",
-    blenderGithubCommitting: "正在提交版本",
-    blenderGithubPushing: "正在推送到 GitHub",
-    blenderGithubOpening: "正在打开 GitHub 仓库",
-    blenderGithubFailed: message => `处理失败：${message}`,
-    blenderGithubPublicConfirm: "Public 仓库所有人都可以访问。确认切换为 Public？",
-    blenderGithubCreateConfirm: name => `没有填写仓库 URL。要使用 GitHub CLI 创建 ${name} 吗？`,
-    blenderGithubReplaceRemoteConfirm: "当前 origin 指向另一个仓库。确认替换它？",
-    blenderGithubSelectProject: "选择 Blender 项目",
-    blenderGithubAddingProject: "正在选择 GitHub 项目",
-    blenderGithubProjectAdded: "GitHub 仓库已加入",
-    blenderGithubOrderFailed: message => `排序保存失败：${message}`,
+    blenderGithubVersionLabel: "ç‰ˆæœ¬å·",
+    blenderGithubMessageLabel: "æœ¬æ¬¡ç‰ˆæœ¬è¯´æ˜Ž",
+    blenderGithubMessagePlaceholder: "è¿™ä¸ªç‰ˆæœ¬æ”¹äº†ä»€ä¹ˆ",
+    blenderGithubScopeLabel: "å…±äº«èŒƒå›´",
+    blenderGithubScopeCurrent: "ä»…å½“å‰ .blend",
+    blenderGithubScopeProject: "æ•´ä¸ªé¡¹ç›®ç›®å½•",
+    blenderGithubScopeCustom: "è‡ªå®šä¹‰",
+    blenderGithubIncludeLabel: "åŒ…å«æ–‡ä»¶",
+    blenderGithubExcludeLabel: "æŽ’é™¤æ–‡ä»¶",
+    blenderGithubChangesLabel: "Git å˜æ›´",
+    blenderGithubInitialize: "åˆå§‹åŒ–ä»“åº“",
+    blenderGithubCommit: "æäº¤ç‰ˆæœ¬",
+    blenderGithubPush: "æŽ¨é€",
+    blenderGithubOpen: "æ‰“å¼€ GitHub",
+    blenderGithubStateUninitialized: "æœªåˆå§‹åŒ–",
+    blenderGithubStateInitialized: "å·²åˆå§‹åŒ–",
+    blenderGithubStateDirty: "å­˜åœ¨æœªæäº¤ä¿®æ”¹",
+    blenderGithubStateCommitted: "å·²æäº¤",
+    blenderGithubStatePendingPush: "å¾…æŽ¨é€",
+    blenderGithubStateBehind: "è¿œç«¯æœ‰æ›´æ–°",
+    blenderGithubStateSynced: "å·²åŒæ­¥",
+    blenderGithubStateGitUnavailable: "Git ä¸å¯ç”¨",
+    blenderGithubToolsReady: "Git \u00b7 LFS å·²å°±ç»ª",
+    blenderGithubLfsMissing: "éœ€è¦å®‰è£… Git LFS",
+    blenderGithubGhReady: "GitHub CLI å·²ç™»å½•",
+    blenderGithubGhFallback: "GitHub CLI æœªå®‰è£…æˆ–æœªç™»å½•ï¼›å¯å¡«å†™ç©ºä»“åº“ URL",
+    blenderGithubWorkingTreeClean: "å·¥ä½œåŒºå¹²å‡€",
+    blenderGithubMoreChanges: count => `è¿˜æœ‰ ${count} é¡¹å˜æ›´`,
+    blenderGithubLastCommit: (hash, subject) => `${hash} \u00b7 ${subject}`,
+    blenderGithubNoCommit: "è¿˜æ²¡æœ‰æäº¤",
+    blenderGithubSaving: "æ­£åœ¨ä¿å­˜é¡¹ç›®é…ç½®",
+    blenderGithubSaved: "é¡¹ç›®é…ç½®å·²ä¿å­˜",
+    blenderGithubInitializedReady: "ä»“åº“å’Œ Git LFS å·²å°±ç»ª",
+    blenderGithubInitializedNoRemote: "æœ¬åœ°ä»“åº“å·²å°±ç»ªï¼›å¡«å†™ç©º GitHub ä»“åº“ URL åŽå³å¯æŽ¨é€",
+    blenderGithubCommitComplete: version => `ç‰ˆæœ¬ ${version} å·²æäº¤`,
+    blenderGithubPushComplete: "å·²æŽ¨é€åˆ° GitHub",
+    blenderGithubOpenComplete: "å·²æ‰“å¼€ GitHub ä»“åº“",
+    blenderGithubInitializing: "æ­£åœ¨åˆå§‹åŒ– Git å’Œ Git LFS",
+    blenderGithubCommitting: "æ­£åœ¨æäº¤ç‰ˆæœ¬",
+    blenderGithubPushing: "æ­£åœ¨æŽ¨é€åˆ° GitHub",
+    blenderGithubOpening: "æ­£åœ¨æ‰“å¼€ GitHub ä»“åº“",
+    blenderGithubFailed: message => `å¤„ç†å¤±è´¥ï¼š${message}`,
+    blenderGithubPublicConfirm: "Public ä»“åº“æ‰€æœ‰äººéƒ½å¯ä»¥è®¿é—®ã€‚ç¡®è®¤åˆ‡æ¢ä¸º Publicï¼Ÿ",
+    blenderGithubCreateConfirm: name => `æ²¡æœ‰å¡«å†™ä»“åº“ URLã€‚è¦ä½¿ç”¨ GitHub CLI åˆ›å»º ${name} å—ï¼Ÿ`,
+    blenderGithubReplaceRemoteConfirm: "å½“å‰ origin æŒ‡å‘å¦ä¸€ä¸ªä»“åº“ã€‚ç¡®è®¤æ›¿æ¢å®ƒï¼Ÿ",
+    blenderGithubSelectProject: "é€‰æ‹© Blender é¡¹ç›®",
+    blenderGithubAddingProject: "æ­£åœ¨é€‰æ‹© GitHub é¡¹ç›®",
+    blenderGithubProjectAdded: "GitHub ä»“åº“å·²åŠ å…¥",
+    blenderGithubOrderFailed: message => `æŽ’åºä¿å­˜å¤±è´¥ï¼š${message}`,
     unitySectionLabel: "Unity",
     unityControlTitle: "Unity Control",
-    unityControlBody: "RandomRealm2 工程入口、素材入口和 Unity 侧发布前检查。",
-    unityBridgeLabel: "桥接状态",
-    unityBridgeTempLabel: "临时导入",
-    unityBridgeReady: "等待 Blender 发送",
-    unityBridgeBody: "Blender 导出到 Unity temp 后，RandomRealm 导入器再把 temp 内容归类到 Builder 生成资产、Prefab 和清单里。",
+    unityControlBody: "RandomRealm2 å·¥ç¨‹å…¥å£ã€ç´ æå…¥å£å’Œ Unity ä¾§å‘å¸ƒå‰æ£€æŸ¥ã€‚",
+    unityBridgeLabel: "æ¡¥æŽ¥çŠ¶æ€",
+    unityBridgeTempLabel: "ä¸´æ—¶å¯¼å…¥",
+    unityBridgeReady: "ç­‰å¾… Blender å‘é€",
+    unityBridgeBody: "Blender å¯¼å‡ºåˆ° Unity temp åŽï¼ŒRandomRealm å¯¼å…¥å™¨å†æŠŠ temp å†…å®¹å½’ç±»åˆ° Builder ç”Ÿæˆèµ„äº§ã€Prefab å’Œæ¸…å•é‡Œã€‚",
     steamworkTitle: "Steamwork",
     steamworkReady: "\u5c31\u7eea",
     steamworkBody: "\u7ba1\u7406 Steamworks\u3001SteamPipe GUI\u3001ContentBuilder/content \u548c\u5ba3\u4f20\u66f4\u65b0\u7d20\u6750\u3002",
@@ -590,205 +637,205 @@ const i18n = {
     steamworkTargetCommunityIcons: "\u5546\u5e97\u9875 > \u793e\u533a\u4e0e\u5ba2\u6237\u7aef\u56fe\u6807",
     steamworkTargetLibraryAssets: "Steamworks > \u8d44\u6599\u5e93\u7d20\u6750",
     steamworkTargetTrailers: "\u5546\u5e97\u9875 > \u9884\u544a\u7247",
-    activeProjectValue: "随机领域 / Blender Assets",
+    activeProjectValue: "éšæœºé¢†åŸŸ / Blender Assets",
     timeLabel: "Time",
-    wallpaperSectionLabel: "预览",
-    wallpaperTitle: "预览",
-    add: "+ 加入",
-    emptyTitle: "等待候选图片",
-    emptyBody: "支持 jpg、png、bmp、webp。",
-    selectedLabel: "当前候选",
-    sizeLabel: "大小",
-    themeDark: "暗色",
-    themeLight: "亮色",
-    readyStatus: "就绪",
-    candidatesSectionLabel: "图库",
-    candidatesTitle: "候选",
-    notSelected: "未选择",
+    wallpaperSectionLabel: "é¢„è§ˆ",
+    wallpaperTitle: "é¢„è§ˆ",
+    add: "+ åŠ å…¥",
+    emptyTitle: "ç­‰å¾…å€™é€‰å›¾ç‰‡",
+    emptyBody: "æ”¯æŒ jpgã€pngã€bmpã€webpã€‚",
+    selectedLabel: "å½“å‰å€™é€‰",
+    sizeLabel: "å¤§å°",
+    themeDark: "æš—è‰²",
+    themeLight: "äº®è‰²",
+    readyStatus: "å°±ç»ª",
+    candidatesSectionLabel: "å›¾åº“",
+    candidatesTitle: "å€™é€‰",
+    notSelected: "æœªé€‰æ‹©",
     noSize: "--",
-    count: count => `${count} 张`,
-    noCandidates: "还没有候选",
-    addHint: "支持 jpg / png / bmp / webp。",
-    cardTitle: name => `${name}\n单击选择，双击应用`,
-    deleteButtonLabel: name => `删除 ${name}`,
-    deletePrompt: "删除？",
-    confirmDeleteAction: "删除",
-    cancelDeleteAction: "取消",
-    added: count => `已加入 ${count} 张桌布。`,
-    applied: name => `已应用：${name}`,
-    deleted: name => `已删除：${name}`,
-    loadFailed: message => `读取桌布失败：${message}`,
-    uploadFailed: message => `加入失败：${message}`,
-    applyFailed: message => `应用失败：${message}`,
-    deleteFailed: message => `删除失败：${message}`,
-    musicTitle: "音乐播放器",
-    nowPlayingLabel: "当前播放",
-    musicEmptyBody: "加入 mp3、wav、m4a、flac、ogg、opus。",
+    count: count => `${count} å¼ `,
+    noCandidates: "è¿˜æ²¡æœ‰å€™é€‰",
+    addHint: "æ”¯æŒ jpg / png / bmp / webpã€‚",
+    cardTitle: name => `${name}\nå•å‡»é€‰æ‹©ï¼ŒåŒå‡»åº”ç”¨`,
+    deleteButtonLabel: name => `åˆ é™¤ ${name}`,
+    deletePrompt: "åˆ é™¤ï¼Ÿ",
+    confirmDeleteAction: "åˆ é™¤",
+    cancelDeleteAction: "å–æ¶ˆ",
+    added: count => `å·²åŠ å…¥ ${count} å¼ æ¡Œå¸ƒã€‚`,
+    applied: name => `å·²åº”ç”¨ï¼š${name}`,
+    deleted: name => `å·²åˆ é™¤ï¼š${name}`,
+    loadFailed: message => `è¯»å–æ¡Œå¸ƒå¤±è´¥ï¼š${message}`,
+    uploadFailed: message => `åŠ å…¥å¤±è´¥ï¼š${message}`,
+    applyFailed: message => `åº”ç”¨å¤±è´¥ï¼š${message}`,
+    deleteFailed: message => `åˆ é™¤å¤±è´¥ï¼š${message}`,
+    musicTitle: "éŸ³ä¹æ’­æ”¾å™¨",
+    nowPlayingLabel: "å½“å‰æ’­æ”¾",
+    musicEmptyBody: "åŠ å…¥ mp3ã€wavã€m4aã€flacã€oggã€opusã€‚",
     lyricsSectionLabel: "Lyrics",
-    lyricsTitle: "歌词",
-    lyricsHide: "收起",
-    lyricsShow: "展开歌词",
-    lyricsEmpty: "这首歌还没有歌词文件。",
-    lyricsLoading: "正在读取歌词。",
-    lyricsInstrumental: "没有可显示的歌词。",
-    lyricsUnsynced: "歌词没有时间轴，作为全文显示。",
-    lyricsLoadFailed: message => `歌词读取失败：${message}`,
-    lyricsButtonLabel: name => `歌词：${name}`,
-    lyricsFindLabel: name => `查找歌词：${name}`,
-    lyricsSeekLabel: line => `跳到歌词：${line}`,
-    lyricsMarkArmed: "已选中，直接填开始/结束时间",
-    lyricsMarkSaved: time => `已标记 ${time}`,
-    lyricsEndMarkSaved: time => `结束点 ${time}`,
-    lyricsStartMarkSaved: time => `开始点 ${time}`,
-    lyricsMarkCancelled: "已撤销这个词缝本次标记",
-    lyricsMarkFailed: message => `标记失败：${message}`,
-    lyricsTimingPick: "同一句歌词右键三下才打开时间编辑（施工中）。",
-    lyricsTimingClose: "关闭时间设置",
-    lyricsTimingStartLabel: "开始变白",
-    lyricsTimingEndLabel: "完全变白",
-    lyricsTimingTimePlaceholder: "分:秒.毫秒",
-    lyricsTimingUseNowStart: "当前作开始",
-    lyricsTimingUseNowEnd: "当前作结束",
-    lyricsTimingSave: "保存",
-    lyricsTimingClear: "撤销本次",
-    lyricsTimingTarget: (word, line) => `正在调：${word || "这一格"} · 第 ${line} 行`,
-    lyricsTimingLineTitle: (line, count) => `第 ${line} 行 · ${count} 个字/词`,
-    lyricsTimingPreviewLabel: "原句",
-    lyricsTimingRowsLabel: "逐字时间",
-    lyricsTimingTokenHeader: "字/词",
-    lyricsTimingStartHeader: "开始",
-    lyricsTimingEndHeader: "结束",
-    lyricsTimingDurationHeader: "时长",
-    lyricsTimingDetailTitle: word => `精调：${word || "这一格"}`,
-    lyricsTimingRangeTitle: (start, end) => start === end ? `精调：${start}` : `精调：${start} 到 ${end}`,
-    lyricsTimingWaveLabel: "声音波形",
-    lyricsTimingSelectLine: "选整句",
-    lyricsTimingRangeDuration: duration => `选区 ${duration}`,
-    lyricsTimingSaveSelected: "保存选中",
-    lyricsTimingSaveLine: "保存本句",
-    lyricsTimingClearLine: "撤销本句本次",
-    lyricsTimingSaved: (start, end) => `已暂存：${start} 到 ${end}`,
-    lyricsTimingRangeSaved: count => `已暂存选中的 ${count} 个字/词`,
-    lyricsTimingLineSaved: count => `已暂存 ${count} 个字/词`,
-    lyricsTimingCleared: "已撤销这个字/词本次设置",
-    lyricsTimingLineCleared: "已撤销这一句本次设置",
-    lyricsTimingLineEmpty: "这一句还没有填完整的时间",
-    lyricsTimingIncomplete: "开始和结束都要填",
-    lyricsTimingInvalid: "时间格式不对，用 1:23.450 或 83.45",
-    lyricsTimingRangeInvalid: "结束时间要晚于开始时间",
-    lyricsTimingOrderInvalid: "后一个词不能压到前一个词里",
-    lyricsTimingOrderCorrected: count => `已按顺序纠正 ${count} 个词`,
-    lyricsTimingWordMoved: word => `已移动 ${word}`,
-    lyricsTimingHoldLabel: "静止区",
-    lyricsTimingHoldHint: "Alt 拖动会保留空隙，空隙不读条。",
-    lyricsTimingHoldInserted: "已加静止区",
-    lyricsTimingHoldRemoved: "已删除静止区",
-    lyricsTimingHoldInsertedBetween: (previous, next) => `已在 ${previous} / ${next} 之间加静止区`,
-    lyricsTimingHoldRemovedBetween: (previous, next) => `已删除 ${previous} / ${next} 之间的静止区`,
-    lyricsTimingHoldTooShort: "这里空间太短，换个位置",
-    lyricsNotFound: name => `没找到歌词：${name}`,
-    lyricsSearchFailed: message => `歌词查找失败：${message}`,
-    previousTrack: "上一首",
-    playTrack: "播放",
-    pauseTrack: "暂停",
-    nextTrack: "下一首",
-    playbackModeSequential: "顺序",
-    playbackModeRepeatAll: "循环",
-    playbackModeRepeatOne: "单曲",
-    playbackModePlayOnce: "一次",
-    playbackModeTitle: label => `播放模式：${label}`,
-    volumeLabel: "音量",
-    musicListTitle: "本地音乐",
-    musicNotSelected: "未选择",
-    trackCount: count => `${count} 首`,
-    noTracks: "还没有音乐",
-    musicLocalEmpty: "从 Library 拖入音乐",
-    musicLocalDropActive: "松开加入本地音乐",
+    lyricsTitle: "æ­Œè¯",
+    lyricsHide: "æ”¶èµ·",
+    lyricsShow: "å±•å¼€æ­Œè¯",
+    lyricsEmpty: "è¿™é¦–æ­Œè¿˜æ²¡æœ‰æ­Œè¯æ–‡ä»¶ã€‚",
+    lyricsLoading: "æ­£åœ¨è¯»å–æ­Œè¯ã€‚",
+    lyricsInstrumental: "æ²¡æœ‰å¯æ˜¾ç¤ºçš„æ­Œè¯ã€‚",
+    lyricsUnsynced: "æ­Œè¯æ²¡æœ‰æ—¶é—´è½´ï¼Œä½œä¸ºå…¨æ–‡æ˜¾ç¤ºã€‚",
+    lyricsLoadFailed: message => `æ­Œè¯è¯»å–å¤±è´¥ï¼š${message}`,
+    lyricsButtonLabel: name => `æ­Œè¯ï¼š${name}`,
+    lyricsFindLabel: name => `æŸ¥æ‰¾æ­Œè¯ï¼š${name}`,
+    lyricsSeekLabel: line => `è·³åˆ°æ­Œè¯ï¼š${line}`,
+    lyricsMarkArmed: "å·²é€‰ä¸­ï¼Œç›´æŽ¥å¡«å¼€å§‹/ç»“æŸæ—¶é—´",
+    lyricsMarkSaved: time => `å·²æ ‡è®° ${time}`,
+    lyricsEndMarkSaved: time => `ç»“æŸç‚¹ ${time}`,
+    lyricsStartMarkSaved: time => `å¼€å§‹ç‚¹ ${time}`,
+    lyricsMarkCancelled: "å·²æ’¤é”€è¿™ä¸ªè¯ç¼æœ¬æ¬¡æ ‡è®°",
+    lyricsMarkFailed: message => `æ ‡è®°å¤±è´¥ï¼š${message}`,
+    lyricsTimingPick: "åŒä¸€å¥æ­Œè¯å³é”®ä¸‰ä¸‹æ‰æ‰“å¼€æ—¶é—´ç¼–è¾‘ï¼ˆæ–½å·¥ä¸­ï¼‰ã€‚",
+    lyricsTimingClose: "å…³é—­æ—¶é—´è®¾ç½®",
+    lyricsTimingStartLabel: "å¼€å§‹å˜ç™½",
+    lyricsTimingEndLabel: "å®Œå…¨å˜ç™½",
+    lyricsTimingTimePlaceholder: "åˆ†:ç§’.æ¯«ç§’",
+    lyricsTimingUseNowStart: "å½“å‰ä½œå¼€å§‹",
+    lyricsTimingUseNowEnd: "å½“å‰ä½œç»“æŸ",
+    lyricsTimingSave: "ä¿å­˜",
+    lyricsTimingClear: "æ’¤é”€æœ¬æ¬¡",
+    lyricsTimingTarget: (word, line) => `æ­£åœ¨è°ƒï¼š${word || "è¿™ä¸€æ ¼"} \u00b7 ç¬¬ ${line} è¡Œ`,
+    lyricsTimingLineTitle: (line, count) => `ç¬¬ ${line} è¡Œ \u00b7 ${count} ä¸ªå­—/è¯`,
+    lyricsTimingPreviewLabel: "åŽŸå¥",
+    lyricsTimingRowsLabel: "é€å­—æ—¶é—´",
+    lyricsTimingTokenHeader: "å­—/è¯",
+    lyricsTimingStartHeader: "å¼€å§‹",
+    lyricsTimingEndHeader: "ç»“æŸ",
+    lyricsTimingDurationHeader: "æ—¶é•¿",
+    lyricsTimingDetailTitle: word => `ç²¾è°ƒï¼š${word || "è¿™ä¸€æ ¼"}`,
+    lyricsTimingRangeTitle: (start, end) => start === end ? `ç²¾è°ƒï¼š${start}` : `ç²¾è°ƒï¼š${start} åˆ° ${end}`,
+    lyricsTimingWaveLabel: "å£°éŸ³æ³¢å½¢",
+    lyricsTimingSelectLine: "é€‰æ•´å¥",
+    lyricsTimingRangeDuration: duration => `é€‰åŒº ${duration}`,
+    lyricsTimingSaveSelected: "ä¿å­˜é€‰ä¸­",
+    lyricsTimingSaveLine: "ä¿å­˜æœ¬å¥",
+    lyricsTimingClearLine: "æ’¤é”€æœ¬å¥æœ¬æ¬¡",
+    lyricsTimingSaved: (start, end) => `å·²æš‚å­˜ï¼š${start} åˆ° ${end}`,
+    lyricsTimingRangeSaved: count => `å·²æš‚å­˜é€‰ä¸­çš„ ${count} ä¸ªå­—/è¯`,
+    lyricsTimingLineSaved: count => `å·²æš‚å­˜ ${count} ä¸ªå­—/è¯`,
+    lyricsTimingCleared: "å·²æ’¤é”€è¿™ä¸ªå­—/è¯æœ¬æ¬¡è®¾ç½®",
+    lyricsTimingLineCleared: "å·²æ’¤é”€è¿™ä¸€å¥æœ¬æ¬¡è®¾ç½®",
+    lyricsTimingLineEmpty: "è¿™ä¸€å¥è¿˜æ²¡æœ‰å¡«å®Œæ•´çš„æ—¶é—´",
+    lyricsTimingIncomplete: "å¼€å§‹å’Œç»“æŸéƒ½è¦å¡«",
+    lyricsTimingInvalid: "æ—¶é—´æ ¼å¼ä¸å¯¹ï¼Œç”¨ 1:23.450 æˆ– 83.45",
+    lyricsTimingRangeInvalid: "ç»“æŸæ—¶é—´è¦æ™šäºŽå¼€å§‹æ—¶é—´",
+    lyricsTimingOrderInvalid: "åŽä¸€ä¸ªè¯ä¸èƒ½åŽ‹åˆ°å‰ä¸€ä¸ªè¯é‡Œ",
+    lyricsTimingOrderCorrected: count => `å·²æŒ‰é¡ºåºçº æ­£ ${count} ä¸ªè¯`,
+    lyricsTimingWordMoved: word => `å·²ç§»åŠ¨ ${word}`,
+    lyricsTimingHoldLabel: "é™æ­¢åŒº",
+    lyricsTimingHoldHint: "Alt æ‹–åŠ¨ä¼šä¿ç•™ç©ºéš™ï¼Œç©ºéš™ä¸è¯»æ¡ã€‚",
+    lyricsTimingHoldInserted: "å·²åŠ é™æ­¢åŒº",
+    lyricsTimingHoldRemoved: "å·²åˆ é™¤é™æ­¢åŒº",
+    lyricsTimingHoldInsertedBetween: (previous, next) => `å·²åœ¨ ${previous} / ${next} ä¹‹é—´åŠ é™æ­¢åŒº`,
+    lyricsTimingHoldRemovedBetween: (previous, next) => `å·²åˆ é™¤ ${previous} / ${next} ä¹‹é—´çš„é™æ­¢åŒº`,
+    lyricsTimingHoldTooShort: "è¿™é‡Œç©ºé—´å¤ªçŸ­ï¼Œæ¢ä¸ªä½ç½®",
+    lyricsNotFound: name => `æ²¡æ‰¾åˆ°æ­Œè¯ï¼š${name}`,
+    lyricsSearchFailed: message => `æ­Œè¯æŸ¥æ‰¾å¤±è´¥ï¼š${message}`,
+    previousTrack: "ä¸Šä¸€é¦–",
+    playTrack: "æ’­æ”¾",
+    pauseTrack: "æš‚åœ",
+    nextTrack: "ä¸‹ä¸€é¦–",
+    playbackModeSequential: "é¡ºåº",
+    playbackModeRepeatAll: "å¾ªçŽ¯",
+    playbackModeRepeatOne: "å•æ›²",
+    playbackModePlayOnce: "ä¸€æ¬¡",
+    playbackModeTitle: label => `æ’­æ”¾æ¨¡å¼ï¼š${label}`,
+    volumeLabel: "éŸ³é‡",
+    musicListTitle: "æœ¬åœ°éŸ³ä¹",
+    musicNotSelected: "æœªé€‰æ‹©",
+    trackCount: count => `${count} é¦–`,
+    noTracks: "è¿˜æ²¡æœ‰éŸ³ä¹",
+    musicLocalEmpty: "ä»Ž Library æ‹–å…¥éŸ³ä¹",
+    musicLocalDropActive: "æ¾å¼€åŠ å…¥æœ¬åœ°éŸ³ä¹",
     musicTierFirst: "1st",
     musicTierSecond: "2nd",
     musicTierThird: "3rd",
-    musicTierDropHint: "拖到这里分级",
-    musicAddHint: "支持 mp3 / wav / m4a / flac / ogg / opus。",
-    musicAddDropTitle: "加入音乐",
-    musicAddDropBody: "粘贴链接",
-    musicPickLocal: "本地文件",
-    musicAddMenuQuestion: "加入音乐",
-    musicAddViaUrl: "YouTube 链接",
-    musicAddViaFile: "MP3 文件",
-    musicAddViaLibrary: "Playlist / 其他",
-    musicPlaylistPlaceholder: "Playlist 链接",
-    musicLinkPlaceholder: "YouTube 链接",
-    musicLinkDownload: "下载",
-    musicUseBrowserCookies: "使用 Edge 登录状态",
+    musicTierDropHint: "æ‹–åˆ°è¿™é‡Œåˆ†çº§",
+    musicAddHint: "æ”¯æŒ mp3 / wav / m4a / flac / ogg / opusã€‚",
+    musicAddDropTitle: "åŠ å…¥éŸ³ä¹",
+    musicAddDropBody: "ç²˜è´´é“¾æŽ¥",
+    musicPickLocal: "æœ¬åœ°æ–‡ä»¶",
+    musicAddMenuQuestion: "åŠ å…¥éŸ³ä¹",
+    musicAddViaUrl: "YouTube é“¾æŽ¥",
+    musicAddViaFile: "MP3 æ–‡ä»¶",
+    musicAddViaLibrary: "Playlist / å…¶ä»–",
+    musicPlaylistPlaceholder: "Playlist é“¾æŽ¥",
+    musicLinkPlaceholder: "YouTube é“¾æŽ¥",
+    musicLinkDownload: "ä¸‹è½½",
+    musicUseBrowserCookies: "ä½¿ç”¨ Edge ç™»å½•çŠ¶æ€",
     musicCookieFile: "cookies.txt",
     musicCookieReady: "cookies OK",
-    musicCookieUploaded: "已导入 YouTube cookies.txt。",
-    musicCookieUploadFailed: message => `导入 cookies 失败：${message}`,
+    musicCookieUploaded: "å·²å¯¼å…¥ YouTube cookies.txtã€‚",
+    musicCookieUploadFailed: message => `å¯¼å…¥ cookies å¤±è´¥ï¼š${message}`,
     musicLibraryTitle: "Library",
     musicLibraryDropTitle: "Add playlist",
-    musicLibraryDropBody: "拖入 YouTube playlist。",
-    musicLibraryReady: "等待 playlist 链接。",
-    musicLibraryEmpty: "Library 还没有音乐",
-    musicLibraryImporting: provider => `正在准备 ${provider} playlist。`,
-    musicLibraryStarted: name => `已开始抓取：${name}`,
-    musicLibraryFailed: message => `Library 导入失败：${message}`,
-    musicLibraryStatusQueued: "等待中",
-    musicLibraryStatusGrabbing: "抓取中",
-    musicLibraryStatusReady: "已完成",
-    musicLibraryStatusFailed: "失败",
-    musicLibraryMeta: (count, expected) => expected ? `${count}/${expected} 首` : `${count} 首`,
-    trackTitle: name => `${name}\n点击播放，右键唤出删除`,
-    deleteTrackLabel: name => `删除 ${name}`,
-    trackMeta: (type, size) => `${type.toUpperCase()} · ${size}`,
-    musicAdded: count => `已加入 ${count} 首音乐。`,
-    musicLyricsAdded: count => `已加入 ${count} 个歌词文件。`,
-    musicDeleted: name => `已删除：${name}`,
-    musicLoadFailed: message => `读取音乐失败：${message}`,
-    musicUploadFailed: message => `加入音乐失败：${message}`,
-    musicPlayFailed: message => `播放失败：${message}`,
-    musicLinkEmpty: "没有读到 URL。",
-    musicLinkChecking: provider => `下载中：${provider}`,
-    musicLinkPrepared: provider => `已识别：${provider}`,
-    musicLinkImported: name => `完成：${name}`,
-    musicPromoted: name => `已加入本地：${name}`,
-    musicPromoteFailed: message => `加入本地失败：${message}`,
-    musicLinkFailed: message => `链接导入失败：${message}`,
-    workspaceTitle: "当前工作",
-    workspaceStatus: "准备中",
-    randomRealmSectionLabel: "随机领域",
-    randomRealmTitle: "随机领域管理",
-    randomRealmStatus: "项目中",
-    randomRealmProjectLabel: "项目",
-    randomRealmUnityLabel: "Unity 工程",
-    randomRealmBuilderLabel: "Builder 系统",
-    randomRealmGroundLabel: "地面页面",
-    randomRealmPipelineLabel: "资产流程",
-    randomRealmCommunityLabel: "社群",
-    randomRealmSurfaceTitle: "地面与场景",
-    randomRealmSurfaceStatus: "预留中",
-    randomRealmSurfaceBody: "这里先给地面页面、建筑放置、场景检查和导出入口留位置。",
-    randomRealmReleaseTitle: "发布控制",
-    randomRealmReleaseBody: "Steamworks、发布包、宣传素材和工程入口。",
-    randomRealmOpenReady: "就绪",
-    randomRealmSteamworks: "Steamworks 后台",
-    randomRealmPublishFolder: "Publish 文件夹",
-    randomRealmProjectFolder: "Unity 工程",
-    randomRealmPromoFolder: "宣传素材",
-    randomRealmOpening: name => `正在打开：${name}`,
-    randomRealmOpened: name => `已打开：${name}`,
-    randomRealmOpenFailed: message => `打开失败：${message}`,
+    musicLibraryDropBody: "æ‹–å…¥ YouTube playlistã€‚",
+    musicLibraryReady: "ç­‰å¾… playlist é“¾æŽ¥ã€‚",
+    musicLibraryEmpty: "Library è¿˜æ²¡æœ‰éŸ³ä¹",
+    musicLibraryImporting: provider => `æ­£åœ¨å‡†å¤‡ ${provider} playlistã€‚`,
+    musicLibraryStarted: name => `å·²å¼€å§‹æŠ“å–ï¼š${name}`,
+    musicLibraryFailed: message => `Library å¯¼å…¥å¤±è´¥ï¼š${message}`,
+    musicLibraryStatusQueued: "ç­‰å¾…ä¸­",
+    musicLibraryStatusGrabbing: "æŠ“å–ä¸­",
+    musicLibraryStatusReady: "å·²å®Œæˆ",
+    musicLibraryStatusFailed: "å¤±è´¥",
+    musicLibraryMeta: (count, expected) => expected ? `${count}/${expected} é¦–` : `${count} é¦–`,
+    trackTitle: name => `${name}\nç‚¹å‡»æ’­æ”¾ï¼Œå³é”®å”¤å‡ºåˆ é™¤`,
+    deleteTrackLabel: name => `åˆ é™¤ ${name}`,
+    trackMeta: (type, size) => `${type.toUpperCase()} \u00b7 ${size}`,
+    musicAdded: count => `å·²åŠ å…¥ ${count} é¦–éŸ³ä¹ã€‚`,
+    musicLyricsAdded: count => `å·²åŠ å…¥ ${count} ä¸ªæ­Œè¯æ–‡ä»¶ã€‚`,
+    musicDeleted: name => `å·²åˆ é™¤ï¼š${name}`,
+    musicLoadFailed: message => `è¯»å–éŸ³ä¹å¤±è´¥ï¼š${message}`,
+    musicUploadFailed: message => `åŠ å…¥éŸ³ä¹å¤±è´¥ï¼š${message}`,
+    musicPlayFailed: message => `æ’­æ”¾å¤±è´¥ï¼š${message}`,
+    musicLinkEmpty: "æ²¡æœ‰è¯»åˆ° URLã€‚",
+    musicLinkChecking: provider => `ä¸‹è½½ä¸­ï¼š${provider}`,
+    musicLinkPrepared: provider => `å·²è¯†åˆ«ï¼š${provider}`,
+    musicLinkImported: name => `å®Œæˆï¼š${name}`,
+    musicPromoted: name => `å·²åŠ å…¥æœ¬åœ°ï¼š${name}`,
+    musicPromoteFailed: message => `åŠ å…¥æœ¬åœ°å¤±è´¥ï¼š${message}`,
+    musicLinkFailed: message => `é“¾æŽ¥å¯¼å…¥å¤±è´¥ï¼š${message}`,
+    workspaceTitle: "å½“å‰å·¥ä½œ",
+    workspaceStatus: "å‡†å¤‡ä¸­",
+    randomRealmSectionLabel: "éšæœºé¢†åŸŸ",
+    randomRealmTitle: "éšæœºé¢†åŸŸç®¡ç†",
+    randomRealmStatus: "é¡¹ç›®ä¸­",
+    randomRealmProjectLabel: "é¡¹ç›®",
+    randomRealmUnityLabel: "Unity å·¥ç¨‹",
+    randomRealmBuilderLabel: "Builder ç³»ç»Ÿ",
+    randomRealmGroundLabel: "åœ°é¢é¡µé¢",
+    randomRealmPipelineLabel: "èµ„äº§æµç¨‹",
+    randomRealmCommunityLabel: "ç¤¾ç¾¤",
+    randomRealmSurfaceTitle: "åœ°é¢ä¸Žåœºæ™¯",
+    randomRealmSurfaceStatus: "é¢„ç•™ä¸­",
+    randomRealmSurfaceBody: "è¿™é‡Œå…ˆç»™åœ°é¢é¡µé¢ã€å»ºç­‘æ”¾ç½®ã€åœºæ™¯æ£€æŸ¥å’Œå¯¼å‡ºå…¥å£ç•™ä½ç½®ã€‚",
+    randomRealmReleaseTitle: "å‘å¸ƒæŽ§åˆ¶",
+    randomRealmReleaseBody: "Steamworksã€å‘å¸ƒåŒ…ã€å®£ä¼ ç´ æå’Œå·¥ç¨‹å…¥å£ã€‚",
+    randomRealmOpenReady: "å°±ç»ª",
+    randomRealmSteamworks: "Steamworks åŽå°",
+    randomRealmPublishFolder: "Publish æ–‡ä»¶å¤¹",
+    randomRealmProjectFolder: "Unity å·¥ç¨‹",
+    randomRealmPromoFolder: "å®£ä¼ ç´ æ",
+    randomRealmOpening: name => `æ­£åœ¨æ‰“å¼€ï¼š${name}`,
+    randomRealmOpened: name => `å·²æ‰“å¼€ï¼š${name}`,
+    randomRealmOpenFailed: message => `æ‰“å¼€å¤±è´¥ï¼š${message}`,
     randomRealmArtTitle: "Art Supporter",
-    randomRealmBlenderProjectLabel: "Blender 项目",
-    randomRealmProjectSearchLabel: "项目搜索",
-    randomRealmProjectSearchPlaceholder: "输入项目名或路径后搜索",
-    randomRealmArtTypeLabel: "对象类型",
-    randomRealmObjectSearchPlaceholder: "搜索物体",
-    randomRealmSyncLiveSelection: "同步选中",
-    randomRealmLiveSynced: name => `已同步 Blender 选中物体：${name}`,
-    randomRealmLiveUnavailable: "没有检测到实时 Blender 选中状态",
-    randomRealmLiveProjectMismatch: "当前 Blender 打开的不是这个项目",
-    randomRealmLiveObjectMissing: name => `Blender 选中的物体不在当前列表：${name}`,
-    randomRealmUsedTexturesLabel: "用到的贴图",
+    randomRealmBlenderProjectLabel: "Blender \u9879\u76ee",
+    randomRealmProjectSearchLabel: "é¡¹ç›®æœç´¢",
+    randomRealmProjectSearchPlaceholder: "è¾“å…¥é¡¹ç›®åæˆ–è·¯å¾„åŽæœç´¢",
+    randomRealmArtTypeLabel: "å¯¹è±¡ç±»åž‹",
+    randomRealmObjectSearchPlaceholder: "æœç´¢ç‰©ä½“",
+    randomRealmSyncLiveSelection: "åŒæ­¥é€‰ä¸­",
+    randomRealmLiveSynced: name => `å·²åŒæ­¥ Blender é€‰ä¸­ç‰©ä½“ï¼š${name}`,
+    randomRealmLiveUnavailable: "æ²¡æœ‰æ£€æµ‹åˆ°å®žæ—¶ Blender é€‰ä¸­çŠ¶æ€",
+    randomRealmLiveProjectMismatch: "å½“å‰ Blender æ‰“å¼€çš„ä¸æ˜¯è¿™ä¸ªé¡¹ç›®",
+    randomRealmLiveObjectMissing: name => `Blender é€‰ä¸­çš„ç‰©ä½“ä¸åœ¨å½“å‰åˆ—è¡¨ï¼š${name}`,
+    randomRealmUsedTexturesLabel: "ç”¨åˆ°çš„è´´å›¾",
     randomRealmTextureManagerTitle: "\u8d34\u56fe\u7ba1\u7406\u5668",
     randomRealmTextureManagerCount: (visible, total) => `${visible}/${total} \u5f20`,
     randomRealmTextureInspectorLabel: "\u9009\u4e2d\u8d34\u56fe",
@@ -801,172 +848,203 @@ const i18n = {
     randomRealmTextureStateReady: "\u53ef\u7528",
     randomRealmTextureStateMissing: "\u7f3a\u5931",
     randomRealmTextureStatePending: "\u5f85\u5e94\u7528",
-    randomRealmTexturesRefreshed: (name, count) => `已刷新 ${name}：${count} 张贴图`,
+    randomRealmTexturesRefreshed: (name, count) => `å·²åˆ·æ–° ${name}ï¼š${count} å¼ è´´å›¾`,
     randomRealmAllMaterials: "All",
     randomRealmOldTextureLabel: "Old",
     randomRealmNewTextureLabel: "New",
-    randomRealmTextureNotSelected: "未选择",
-    randomRealmNewTextureSlot: "新 Map 槽",
-    randomRealmDropNewTexture: "把新贴图或一组 PBR 拖到这里",
-    randomRealmTexturePreviewEmpty: "暂无预览",
-    randomRealmTexturePreviewUnsupported: "无法预览",
-    randomRealmTextureDragHint: "双击打开原文件；拖到 Photoshop 时会尽量按文件投递。路径：",
-    randomRealmNativeDragStarted: "正在用 Windows 原生文件拖拽",
-    randomRealmTextureOpened: (name, app) => `已打开贴图：${name}${app ? `（${app}）` : ""}`,
-    randomRealmTextureOpenFailed: message => `打开贴图失败：${message}`,
-    randomRealmTexturePacked: (name, location) => `已装入 ${location || "textures"}：${name}`,
-    randomRealmTexturePackedMany: (count, location) => `已装箱 ${count} 个贴图包到 ${location || "textures"}。`,
-    randomRealmTextureAutoPackedMany: (count, location) => `已自动装箱 ${count} 个贴图包到 ${location || "textures"}，等 Blender Apply 后会清空 New。`,
-    randomRealmTextureAppliedCleared: count => `Blender 已 Apply，已清空 ${count} 个 New 贴图。`,
+    randomRealmTextureNotSelected: "æœªé€‰æ‹©",
+    randomRealmNewTextureSlot: "æ–° Map æ§½",
+    randomRealmDropNewTexture: "æŠŠæ–°è´´å›¾æˆ–ä¸€ç»„ PBR æ‹–åˆ°è¿™é‡Œ",
+    randomRealmTexturePreviewEmpty: "æš‚æ— é¢„è§ˆ",
+    randomRealmTexturePreviewUnsupported: "æ— æ³•é¢„è§ˆ",
+    randomRealmTextureDragHint: "åŒå‡»æ‰“å¼€åŽŸæ–‡ä»¶ï¼›æ‹–åˆ° Photoshop æ—¶ä¼šå°½é‡æŒ‰æ–‡ä»¶æŠ•é€’ã€‚è·¯å¾„ï¼š",
+    randomRealmNativeDragStarted: "æ­£åœ¨ç”¨ Windows åŽŸç”Ÿæ–‡ä»¶æ‹–æ‹½",
+    randomRealmTextureOpened: (name, app) => `å·²æ‰“å¼€è´´å›¾ï¼š${name}${app ? `ï¼ˆ${app}ï¼‰` : ""}`,
+    randomRealmTextureOpenFailed: message => `æ‰“å¼€è´´å›¾å¤±è´¥ï¼š${message}`,
+    randomRealmTexturePacked: (name, location) => `å·²è£…å…¥ ${location || "textures"}ï¼š${name}`,
+    randomRealmTexturePackedMany: (count, location) => `å·²è£…ç®± ${count} ä¸ªè´´å›¾åŒ…åˆ° ${location || "textures"}ã€‚`,
+    randomRealmTextureAutoPackedMany: (count, location) => `å·²è‡ªåŠ¨è£…ç®± ${count} ä¸ªè´´å›¾åŒ…åˆ° ${location || "textures"}ï¼Œç­‰ Blender Apply åŽä¼šæ¸…ç©º Newã€‚`,
+    randomRealmTextureAppliedCleared: count => `Blender å·² Applyï¼Œå·²æ¸…ç©º ${count} ä¸ª New è´´å›¾ã€‚`,
     randomRealmStageBlankTexture: "+ Map",
-    randomRealmBlankTextureStaged: name => `已加入空贴图槽：${name}`,
-    randomRealmTextureStagedRemoved: name => `已移出待装箱贴图：${name}`,
-    randomRealmTextureRemovalPackaged: (name, packageName) => `已装箱删除指令：${name}${packageName ? `（${packageName}）` : ""}`,
-    randomRealmTexturePackReady: "把新贴图拖进来后会自动装入 Blender textures；Apply 前不会直接修改 Blender。",
-    randomRealmTextureDimensionsUnknown: "尺寸未知",
-    randomRealmTextureDimensionCancelled: "已取消：贴图尺寸没有通过确认",
-    randomRealmTextureSizeMismatchConfirm: (oldSize, newSize) => `贴图尺寸不一致。\n\nOld: ${oldSize}\nNew: ${newSize}\n\n仍然要自动装箱吗？`,
-    randomRealmTextureSizeUnknownConfirm: (oldSize, newSize) => `有贴图尺寸无法确认。\n\nOld: ${oldSize}\nNew: ${newSize}\n\n仍然要自动装箱吗？`,
-    randomRealmArtReady: "就绪",
-    randomRealmBlenderLoading: "正在读取 Blender 项目",
-    randomRealmBlenderProjectLoaded: count => `已找到 ${count} 个 Blender 项目`,
-    randomRealmBlenderNoProject: "没有找到 Blender 项目",
-    randomRealmBlenderNoObject: "没有找到物体",
-    randomRealmBlenderNoTexture: "这个物体还没有贴图",
-    randomRealmMaterialNoTexture: "这个材质没有 image texture",
-    randomRealmMaterialNoTextureHint: "切到 All 或其他材质可以查看已有贴图",
-    randomRealmBlenderObjectLoaded: count => `已读取 ${count} 个物体`,
-    randomRealmTextureUploaded: name => `新贴图已预览：${name}`,
-    randomRealmTextureUploadedMany: (count, kinds) => `已导入 ${count} 张贴图：${kinds}`,
-    randomRealmBlenderActionFailed: message => `处理失败：${message}`,
-    randomRealmCodexObjectLabel: "当前物体",
-    blenderPromptTitle: "Prompt 生成器",
-    blenderPromptFormatLabel: "格式",
-    blenderPromptFormatPlaceholder: "输出结构、语言、段落规则",
-    blenderPromptImageLabel: "图片要求",
-    blenderPromptImagePlaceholder: "参考图、构图、清晰度、背景、水印、材质要求",
-    blenderPromptResolutionLabel: "分辨率",
-    blenderPromptCustomResolutionPlaceholder: "自定义，例如 1536px / 4K / 2048x2048",
-    blenderPromptCustomWidthPlaceholder: "宽度",
-    blenderPromptCustomLengthPlaceholder: "长度",
-    blenderPromptStyleLabel: "风格",
-    blenderPromptStylePlaceholder: "例如：stylized realistic / low poly / hand-painted",
-    blenderPromptBasicsLabel: "基础信息",
-    blenderPromptBasicsPlaceholder: "项目用途、目标平台、比例、性能、限制",
-    blenderPromptOutputLabel: "生成结果",
-    blenderPromptGenerate: "生成 Prompt",
-    blenderPromptCopy: "复制",
-    blenderPromptClear: "清空",
-    blenderPromptCopied: "Prompt 已复制",
-    blenderPromptCleared: "Prompt 已清空",
-    blenderPromptCopyFailed: "复制失败，请手动选中复制",
-    randomRealmSlotsTitle: "随机领域区块",
-    randomRealmSlotBuilder: "Builder / 建筑",
-    randomRealmSlotGround: "Ground / 地面",
-    randomRealmSlotAssets: "Assets / 材质",
-    randomRealmSlotCommunity: "Community / 社群",
-    randomRealmSlotBuilderBody: "建筑、部件、放置规则",
-    randomRealmSlotGroundBody: "地面页面、场景层级",
-    randomRealmSlotAssetsBody: "Blender、Textures、Unity",
-    randomRealmSlotCommunityBody: "发展社群、发布节奏",
-    activeProjectLabel: "项目",
-    nextToolLabel: "下一工具",
-    blenderExportTitle: "Blender 导出工具",
-    reservedStatus: "已预留",
-    sourceFolderLabel: "来源",
-    targetFolderLabel: "目标",
-    ruleLabel: "规则",
-    pendingRule: "待配置",
-    quickSlotsTitle: "快捷区",
+    randomRealmBlankTextureStaged: name => `å·²åŠ å…¥ç©ºè´´å›¾æ§½ï¼š${name}`,
+    randomRealmTextureStagedRemoved: name => `å·²ç§»å‡ºå¾…è£…ç®±è´´å›¾ï¼š${name}`,
+    randomRealmTextureRemovalPackaged: (name, packageName) => `å·²è£…ç®±åˆ é™¤æŒ‡ä»¤ï¼š${name}${packageName ? `ï¼ˆ${packageName}ï¼‰` : ""}`,
+    randomRealmTexturePackReady: "æŠŠæ–°è´´å›¾æ‹–è¿›æ¥åŽä¼šè‡ªåŠ¨è£…å…¥ Blender texturesï¼›Apply å‰ä¸ä¼šç›´æŽ¥ä¿®æ”¹ Blenderã€‚",
+    randomRealmTextureDimensionsUnknown: "å°ºå¯¸æœªçŸ¥",
+    randomRealmTextureDimensionCancelled: "å·²å–æ¶ˆï¼šè´´å›¾å°ºå¯¸æ²¡æœ‰é€šè¿‡ç¡®è®¤",
+    randomRealmTextureSizeMismatchConfirm: (oldSize, newSize) => `è´´å›¾å°ºå¯¸ä¸ä¸€è‡´ã€‚\n\nOld: ${oldSize}\nNew: ${newSize}\n\nä»ç„¶è¦è‡ªåŠ¨è£…ç®±å—ï¼Ÿ`,
+    randomRealmTextureSizeUnknownConfirm: (oldSize, newSize) => `æœ‰è´´å›¾å°ºå¯¸æ— æ³•ç¡®è®¤ã€‚\n\nOld: ${oldSize}\nNew: ${newSize}\n\nä»ç„¶è¦è‡ªåŠ¨è£…ç®±å—ï¼Ÿ`,
+    randomRealmArtReady: "å°±ç»ª",
+    randomRealmBlenderLoading: "æ­£åœ¨è¯»å– Blender é¡¹ç›®",
+    randomRealmBlenderProjectLoaded: count => `å·²æ‰¾åˆ° ${count} ä¸ª Blender é¡¹ç›®`,
+    randomRealmBlenderNoProject: "æ²¡æœ‰æ‰¾åˆ° Blender é¡¹ç›®",
+    randomRealmBlenderNoObject: "æ²¡æœ‰æ‰¾åˆ°ç‰©ä½“",
+    randomRealmBlenderNoTexture: "è¿™ä¸ªç‰©ä½“è¿˜æ²¡æœ‰è´´å›¾",
+    randomRealmMaterialNoTexture: "è¿™ä¸ªæè´¨æ²¡æœ‰ image texture",
+    randomRealmMaterialNoTextureHint: "åˆ‡åˆ° All æˆ–å…¶ä»–æè´¨å¯ä»¥æŸ¥çœ‹å·²æœ‰è´´å›¾",
+    randomRealmBlenderObjectLoaded: count => `å·²è¯»å– ${count} ä¸ªç‰©ä½“`,
+    randomRealmTextureUploaded: name => `æ–°è´´å›¾å·²é¢„è§ˆï¼š${name}`,
+    randomRealmTextureUploadedMany: (count, kinds) => `å·²å¯¼å…¥ ${count} å¼ è´´å›¾ï¼š${kinds}`,
+    randomRealmBlenderActionFailed: message => `å¤„ç†å¤±è´¥ï¼š${message}`,
+    randomRealmCodexObjectLabel: "å½“å‰ç‰©ä½“",
+    randomRealmSlotsTitle: "éšæœºé¢†åŸŸåŒºå—",
+    randomRealmSlotBuilder: "Builder / å»ºç­‘",
+    randomRealmSlotGround: "Ground / åœ°é¢",
+    randomRealmSlotAssets: "Assets / æè´¨",
+    randomRealmSlotCommunity: "Community / ç¤¾ç¾¤",
+    randomRealmSlotBuilderBody: "å»ºç­‘ã€éƒ¨ä»¶ã€æ”¾ç½®è§„åˆ™",
+    randomRealmSlotGroundBody: "åœ°é¢é¡µé¢ã€åœºæ™¯å±‚çº§",
+    randomRealmSlotAssetsBody: "Blenderã€Texturesã€Unity",
+    randomRealmSlotCommunityBody: "å‘å±•ç¤¾ç¾¤ã€å‘å¸ƒèŠ‚å¥",
+    activeProjectLabel: "é¡¹ç›®",
+    nextToolLabel: "ä¸‹ä¸€å·¥å…·",
+    blenderExportTitle: "Blender å¯¼å‡ºå·¥å…·",
+    reservedStatus: "å·²é¢„ç•™",
+    sourceFolderLabel: "æ¥æº",
+    targetFolderLabel: "ç›®æ ‡",
+    ruleLabel: "è§„åˆ™",
+    pendingRule: "å¾…é…ç½®",
+    quickSlotsTitle: "å¿«æ·åŒº",
     workspaceTodoLabel: "Todo",
-    workspaceTodoTitle: "待办清单",
+    workspaceTodoTitle: "å¾…åŠžæ¸…å•",
     workspaceTodoProgress: (done, total) => `${done}/${total}`,
-    workspaceTodoPlaceholder: "写一个新的待办",
-    workspaceTodoCategoryLabel: "待办分类",
-    addWorkspaceTodo: "加入",
-    resetWorkspaceTodo: "重置为新任务清单",
-    githubDownloadsTitle: "GitHub 下载",
-    storeUpdatesTitle: "Microsoft Store 更新",
-    githubDownloadsStatus: "待连接",
-    githubDownloadsReady: "已定位",
-    githubDownloadsMissing: "未连接",
-    githubDownloadsResolving: "正在定位 GitHub Releases...",
-    githubDownloadsBody: "打开 Codex World 的 GitHub Releases 下载页。",
-    githubDownloadsLink: "Release 页面",
-    openGithubDownloads: "打开下载页",
-    githubDownloadsFound: url => `下载页：${url}`,
-    githubDownloadsNotConfigured: "还没有连接 GitHub 仓库。给 Codex World 添加 origin 以后，这里会自动定位到 Releases。",
-    githubDownloadsOpenFailed: message => `打开 GitHub 下载页失败：${message}`,
-    consoleUpdateChecking: "正在检查",
-    consoleUpdateLatest: "已是最新版",
-    consoleUpdateManagedByStore: "由 Microsoft Store 管理",
-    consoleUpdateAvailable: version => `可更新到 v${version}`,
-    consoleUpdateNoRelease: "尚未找到发布版",
-    consoleUpdateAuto: "自动",
-    consoleUpdateRefresh: "检查更新",
-    consoleUpdateInstall: "更新",
-    consoleUpdateDownload: "下载",
-    consoleUpdateInstallProduct: "安装",
-    consoleUpdateOpen: "打开",
+    workspaceTodoPlaceholder: "å†™ä¸€ä¸ªæ–°çš„å¾…åŠž",
+    workspaceTodoCategoryLabel: "å¾…åŠžåˆ†ç±»",
+    addWorkspaceTodo: "åŠ å…¥",
+    resetWorkspaceTodo: "é‡ç½®ä¸ºæ–°ä»»åŠ¡æ¸…å•",
+    githubDownloadsTitle: "GitHub ä¸‹è½½",
+    storeUpdatesTitle: "Microsoft Store æ›´æ–°",
+    githubDownloadsStatus: "å¾…è¿žæŽ¥",
+    githubDownloadsReady: "å·²å®šä½",
+    githubDownloadsMissing: "æœªè¿žæŽ¥",
+    githubDownloadsResolving: "æ­£åœ¨å®šä½ GitHub Releases...",
+    githubDownloadsBody: "æ‰“å¼€ Codex World çš„ GitHub Releases ä¸‹è½½é¡µã€‚",
+    githubDownloadsLink: "Release é¡µé¢",
+    openGithubDownloads: "æ‰“å¼€ä¸‹è½½é¡µ",
+    githubDownloadsFound: url => `ä¸‹è½½é¡µï¼š${url}`,
+    githubDownloadsNotConfigured: "è¿˜æ²¡æœ‰è¿žæŽ¥ GitHub ä»“åº“ã€‚ç»™ Codex World æ·»åŠ  origin ä»¥åŽï¼Œè¿™é‡Œä¼šè‡ªåŠ¨å®šä½åˆ° Releasesã€‚",
+    githubDownloadsOpenFailed: message => `æ‰“å¼€ GitHub ä¸‹è½½é¡µå¤±è´¥ï¼š${message}`,
+    consoleUpdateChecking: "æ­£åœ¨æ£€æŸ¥",
+    consoleUpdateLatest: "å·²æ˜¯æœ€æ–°ç‰ˆ",
+    consoleUpdateManagedByStore: "ç”± Microsoft Store ç®¡ç†",
+    consoleUpdateAvailable: version => `å¯æ›´æ–°åˆ° v${version}`,
+    consoleUpdateNoRelease: "å°šæœªæ‰¾åˆ°å‘å¸ƒç‰ˆ",
+    consoleUpdateAuto: "è‡ªåŠ¨",
+    consoleUpdateRefresh: "æ£€æŸ¥æ›´æ–°",
+    consoleUpdateInstall: "æ›´æ–°",
+    consoleUpdateDownload: "ä¸‹è½½",
+    consoleUpdateInstallProduct: "å®‰è£…",
+    consoleUpdateOpen: "æ‰“å¼€",
     consoleUpdateRelease: "Release",
-    consoleUpdateTop: (name, version) => `更新 ${name} v${version}`,
-    consoleUpdateTopCount: count => `${count} 项更新`,
-    consoleUpdateNotInstalled: "尚未安装",
-    consoleUpdateSource: "源码目录由 GitHub Desktop 管理",
-    consoleUpdateInstalling: "正在安装更新",
-    consoleUpdateRestarting: "正在重启 Codex Console",
-    consoleUpdateConfirm: version => `将自动把 Codex Console 更新到 v${version} 并重新启动。现在继续？`,
-    worldUpdateConfirm: (version, installed) => `将自动${installed ? "更新" : "安装"} Codex World v${version}。现在继续？`,
-    consoleUpdateTimedOut: "更新未能在规定时间内完成。",
-    consoleUninstall: "卸载",
-    consoleUninstallConfirm: name => `将卸载 ${name}，并永久删除它在这台电脑上的设置、缓存和本地资源。Blender 项目、GitHub 仓库和外部桌面布局不会被删除。继续？`,
-    consoleUninstalling: "卸载程序已打开",
-    consoleUninstallFailed: message => `无法打开卸载程序：${message}`,
-    consoleUpdateFailed: message => `更新失败：${message}`,
-    todoGroupPieces: "Pieces / 部件",
-    todoGroupTextures: "Blend -> Unity 贴图",
-    todoGroupStory: "Story / 故事",
+    consoleUpdateTop: (name, version) => `æ›´æ–° ${name} v${version}`,
+    consoleUpdateTopCount: count => `${count} é¡¹æ›´æ–°`,
+    consoleUpdateNotInstalled: "å°šæœªå®‰è£…",
+    consoleUpdateSource: "æºç ç›®å½•ç”± GitHub Desktop ç®¡ç†",
+    consoleUpdateInstalling: "æ­£åœ¨å®‰è£…æ›´æ–°",
+    consoleUpdateRestarting: "æ­£åœ¨é‡å¯ Codex Console",
+    consoleUpdateConfirm: version => `å°†è‡ªåŠ¨æŠŠ Codex Console æ›´æ–°åˆ° v${version} å¹¶é‡æ–°å¯åŠ¨ã€‚çŽ°åœ¨ç»§ç»­ï¼Ÿ`,
+    worldUpdateConfirm: (version, installed) => `å°†è‡ªåŠ¨${installed ? "æ›´æ–°" : "å®‰è£…"} Codex World v${version}ã€‚çŽ°åœ¨ç»§ç»­ï¼Ÿ`,
+    consoleUpdateTimedOut: "æ›´æ–°æœªèƒ½åœ¨è§„å®šæ—¶é—´å†…å®Œæˆã€‚",
+    consoleUninstall: "å¸è½½",
+    consoleUninstallConfirm: name => `å°†å¸è½½ ${name}ï¼Œå¹¶æ°¸ä¹…åˆ é™¤å®ƒåœ¨è¿™å°ç”µè„‘ä¸Šçš„è®¾ç½®ã€ç¼“å­˜å’Œæœ¬åœ°èµ„æºã€‚Blender é¡¹ç›®ã€GitHub ä»“åº“å’Œå¤–éƒ¨æ¡Œé¢å¸ƒå±€ä¸ä¼šè¢«åˆ é™¤ã€‚ç»§ç»­ï¼Ÿ`,
+    consoleUninstalling: "å¸è½½ç¨‹åºå·²æ‰“å¼€",
+    consoleUninstallFailed: message => `æ— æ³•æ‰“å¼€å¸è½½ç¨‹åºï¼š${message}`,
+    consoleUpdateFailed: message => `æ›´æ–°å¤±è´¥ï¼š${message}`,
+    todoGroupPieces: "Pieces / éƒ¨ä»¶",
+    todoGroupTextures: "Blend -> Unity è´´å›¾",
+    todoGroupStory: "Story / æ•…äº‹",
     todoGroupLevel: "LevelMaker / LevelDesigner",
     todoGroupMiniGame: "MiniGame",
-    todoGroupCommunity: "Community / 社群",
-    todoPieceStairs: "楼梯 / Stairs",
-    todoPieceKit: "整理可复用部件清单",
-    todoTexturePipeline: "Downloads 材质先进 Blender，再进 Unity Textures",
-    todoTextureFolder: "每套贴图用英文文件夹包装",
-    todoStorySynopsis: "写故事简介 / 梗概",
-    todoStoryBeats: "整理主线节点",
-    todoLevelBlockout: "做关卡白盒和节奏",
-    todoLevelDesigner: "整理 LevelDesigner 工作项",
-    todoMiniGameSandbox: "保留自由实验位",
-    todoCommunityDevelop: "发展社群",
-    todoEmptyGroup: "这一组先空着",
-    todoDeleteLabel: name => `删除 ${name}`,
-    downloadIntakeLabel: "读取 Downloads",
-    openDownloads: "打开 Downloads",
-    downloadsOpened: "已打开 Downloads。",
-    openDownloadsFailed: message => `打开 Downloads 失败：${message}`,
-    scanDownloads: "扫描下载",
-    importMaterial: "导入材质",
+    todoGroupCommunity: "Community / ç¤¾ç¾¤",
+    todoPieceStairs: "æ¥¼æ¢¯ / Stairs",
+    todoPieceKit: "æ•´ç†å¯å¤ç”¨éƒ¨ä»¶æ¸…å•",
+    todoTexturePipeline: "Downloads æè´¨å…ˆè¿› Blenderï¼Œå†è¿› Unity Textures",
+    todoTextureFolder: "æ¯å¥—è´´å›¾ç”¨è‹±æ–‡æ–‡ä»¶å¤¹åŒ…è£…",
+    todoStorySynopsis: "å†™æ•…äº‹ç®€ä»‹ / æ¢—æ¦‚",
+    todoStoryBeats: "æ•´ç†ä¸»çº¿èŠ‚ç‚¹",
+    todoLevelBlockout: "åšå…³å¡ç™½ç›’å’ŒèŠ‚å¥",
+    todoLevelDesigner: "æ•´ç† LevelDesigner å·¥ä½œé¡¹",
+    todoMiniGameSandbox: "ä¿ç•™è‡ªç”±å®žéªŒä½",
+    todoCommunityDevelop: "å‘å±•ç¤¾ç¾¤",
+    todoEmptyGroup: "è¿™ä¸€ç»„å…ˆç©ºç€",
+    todoDeleteLabel: name => `åˆ é™¤ ${name}`,
+    downloadIntakeLabel: "è¯»å– Downloads",
+    openDownloads: "æ‰“å¼€ Downloads",
+    downloadsOpened: "å·²æ‰“å¼€ Downloadsã€‚",
+    openDownloadsFailed: message => `æ‰“å¼€ Downloads å¤±è´¥ï¼š${message}`,
+    scanDownloads: "æ‰«æä¸‹è½½",
+    importMaterial: "å¯¼å…¥æè´¨",
     renderTextureZoneTitle: "Render Textures",
-    renderTextureZoneBody: "把导出的贴图、截图或 zip 拖到这里，会自动装进英文文件夹。",
-    renderTextureReady: "等待拖入文件。",
-    renderTextureDisabled: "先打开读取 Downloads。",
-    renderTextureDragging: "松手后导入到 Texture 文件夹。",
-    renderTextureImporting: count => `正在整理 ${count} 个文件。`,
-    renderTextureImported: (folder, count) => `已导入 ${count} 个贴图：${folder}`,
-    renderTextureFailed: message => `Workzone 导入失败：${message}`,
-    latestMaterialLabel: "最新候选",
-    noMaterialCandidate: "未发现",
-    materialReady: "准备导入",
-    materialEmpty: "下载文件夹里没有可导入的材质",
-    materialCandidateTitle: name => `${name}\n点击选择，双击导入`,
-    materialCandidateMeta: (type, size) => `${type === "package" ? "压缩包" : "贴图"} · ${size}`,
-    materialLoadFailed: message => `扫描失败：${message}`,
-    materialImporting: name => `正在导入：${name}`,
-    materialImported: (name, count) => `已导入 ${name}，共 ${count} 个贴图。`,
-    materialImportFailed: message => `导入失败：${message}`
+    renderTextureZoneBody: "æŠŠå¯¼å‡ºçš„è´´å›¾ã€æˆªå›¾æˆ– zip æ‹–åˆ°è¿™é‡Œï¼Œä¼šè‡ªåŠ¨è£…è¿›è‹±æ–‡æ–‡ä»¶å¤¹ã€‚",
+    renderTextureReady: "ç­‰å¾…æ‹–å…¥æ–‡ä»¶ã€‚",
+    renderTextureDisabled: "å…ˆæ‰“å¼€è¯»å– Downloadsã€‚",
+    renderTextureDragging: "æ¾æ‰‹åŽå¯¼å…¥åˆ° Texture æ–‡ä»¶å¤¹ã€‚",
+    renderTextureImporting: count => `æ­£åœ¨æ•´ç† ${count} ä¸ªæ–‡ä»¶ã€‚`,
+    renderTextureImported: (folder, count) => `å·²å¯¼å…¥ ${count} ä¸ªè´´å›¾ï¼š${folder}`,
+    renderTextureFailed: message => `Workzone å¯¼å…¥å¤±è´¥ï¼š${message}`,
+    latestMaterialLabel: "æœ€æ–°å€™é€‰",
+    noMaterialCandidate: "æœªå‘çŽ°",
+    materialReady: "å‡†å¤‡å¯¼å…¥",
+    materialEmpty: "ä¸‹è½½æ–‡ä»¶å¤¹é‡Œæ²¡æœ‰å¯å¯¼å…¥çš„æè´¨",
+    materialCandidateTitle: name => `${name}\nç‚¹å‡»é€‰æ‹©ï¼ŒåŒå‡»å¯¼å…¥`,
+    materialCandidateMeta: (type, size) => `${type === "package" ? "åŽ‹ç¼©åŒ…" : "è´´å›¾"} \u00b7 ${size}`,
+    materialLoadFailed: message => `æ‰«æå¤±è´¥ï¼š${message}`,
+    materialImporting: name => `æ­£åœ¨å¯¼å…¥ï¼š${name}`,
+    materialImported: (name, count) => `å·²å¯¼å…¥ ${name}ï¼Œå…± ${count} ä¸ªè´´å›¾ã€‚`,
+    materialImportFailed: message => `å¯¼å…¥å¤±è´¥ï¼š${message}`
   },
   en: {
+    referenceViewSectionLabel: "Character Designer",
+    referenceViewTitle: "Reference View Set",
+    referenceViewSetLabel: "Set",
+    referenceViewSetToolsLabel: "Set tools",
+    referenceViewNameLabel: "Name",
+    referenceViewNew: "New",
+    referenceViewRename: "Rename Set",
+    referenceViewRenameAllLabel: "Rename All",
+    referenceViewRenameAll: "Rename All",
+    referenceViewActionHint: "Pick a set, then click any direction card (or drag an image onto it), then click Create / Update.",
+    referenceViewRenameHintExtra: "Rename the set first (Rename Set), then click Create / Update to save.",
+    referenceViewSetHint: "Select the target set first (left dropdown), then click any direction tile. Drag or click to choose images. Press Enter to rename the set name, and use Normalize Names to standardize image file names.",
+    referenceViewTileHint: "Direction tile actions are clickable: click a tile to pick/replacing an image, then click Create / Update.",
+  referenceViewRenameHint: "Use Rename Set (or Enter) to rename the set, then use Rename All to normalize the set name + direction file names in one go.",
+  referenceViewReplaceAction: "Replace Image",
+  referenceViewPickAction: "Pick / Drop image",
+  referenceViewImageLoadError: "Image preview failed",
+  referenceViewRenamePrompt: "Enter a new reference set name",
+    referenceViewRenaming: "Renaming",
+    referenceViewRenamed: name => `Renamed to: ${name}`,
+    referenceViewNewSet: "New Reference Set",
+    referenceViewDisplaySize: "Display Size (m)",
+    referenceViewDistance: "Distance (m)",
+    referenceViewOpacity: "Opacity",
+    referenceViewShowInFront: "Show In Front",
+    referenceViewFront: "Front",
+    referenceViewBack: "Back",
+    referenceViewLeft: "Left",
+    referenceViewRight: "Right",
+    referenceViewTop: "Top",
+  referenceViewBottom: "Bottom",
+  referenceViewDropImage: "Drop or choose image",
+  referenceViewUntitledSet: "Unnamed Set",
+  referenceViewNoImage: "No image",
+  referenceViewEnabled: "On",
+  referenceViewSave: "Create / Update",
+  referenceViewHideAll: "Hide All",
+  referenceViewShowAll: "Show All",
+  referenceViewClear: "Clear Set",
+  referenceViewNormalize: "Normalize Names",
+  referenceViewReady: "Ready",
+  referenceViewLoading: "Reading reference views",
+  referenceViewStaged: name => `Staged: ${name}`,
+  referenceViewSaved: count => `Manifest updated \u00b7 ${count} / 6`,
+  referenceViewNoProject: "Select a Blender project first",
+  referenceViewRenameNoSelection: "Select a saved set first before renaming",
+  referenceViewNormalizing: "Normalizing names",
+  referenceViewNormalized: "Reference image names normalized",
+  referenceViewConfirmClear: name => `Clear the managed images and manifest for \u201c${name}\u201d? Other files will be preserved.`,
+  referenceViewCleared: "Reference view set cleared",
+  referenceViewFailed: message => `Reference views failed: ${message}`,
     appTitle: "PC Console",
     managerPageTitle: "Manager",
     workspacePageTitle: "Console",
@@ -1016,7 +1094,7 @@ const i18n = {
     desktopLayoutImport: "Import",
     desktopLayoutLoading: "Reading local plans",
     desktopLayoutEmpty: "No desktop layout plans yet",
-    desktopLayoutMeta: (icons, plans) => `${icons} icons · ${plans} plans`,
+    desktopLayoutMeta: (icons, plans) => `${icons} icons \u00b7 ${plans} plans`,
     desktopLayoutReady: "Ready",
     desktopLayoutNotSaved: "Not saved yet",
     desktopLayoutInvalid: "Invalid JSON",
@@ -1025,12 +1103,12 @@ const i18n = {
     desktopLayoutImported: count => `Imported ${count} plans`,
     desktopLayoutRestoring: "Restoring and checking",
     desktopLayoutRestored: "Restored; checks passed",
-    desktopLayoutRestoreIssues: (missing, mismatches, overlaps) => `Restored · ${missing} missing · ${mismatches} shifted · ${overlaps} overlaps`,
+    desktopLayoutRestoreIssues: (missing, mismatches, overlaps) => `Restored \u00b7 ${missing} missing \u00b7 ${mismatches} shifted \u00b7 ${overlaps} overlaps`,
     desktopLayoutSaving: "Backing up and saving",
     desktopLayoutSaved: "Backed up and saved",
     desktopLayoutFailed: message => `Desktop layout failed: ${message}`,
-    desktopLayoutConfirmRestore: name => `Restore desktop icon positions from “${name}”?`,
-    desktopLayoutConfirmSave: name => `Back up the JSON, then replace “${name}” with the current desktop?`,
+    desktopLayoutConfirmRestore: name => `Restore desktop icon positions from "${name}"?`,
+    desktopLayoutConfirmSave: name => `Back up the JSON, then replace "${name}" with the current desktop?`,
     desktopLayoutGuide: "Restore checks overlaps, missing icons, and position drift. Save current always backs up the existing JSON first. Plans and backups are never uploaded.",
     builtinMediaTitle: "Built-in Resources",
     builtinMusicLabel: "Built-in Music",
@@ -1058,7 +1136,7 @@ const i18n = {
     feedbackReady: "Ready to send",
     feedbackNotConfigured: "Feedback is not connected yet",
     feedbackSending: "Sending",
-    feedbackSent: remaining => `Sent · ${remaining} left today`,
+    feedbackSent: remaining => `Sent \u00b7 ${remaining} left today`,
     feedbackFailed: message => `Could not send: ${message}`,
     feedbackDescriptionShort: "Please enter at least 10 characters.",
     feedbackImageTooLarge: "Screenshot must be 5 MB or smaller.",
@@ -1073,7 +1151,7 @@ const i18n = {
     feedbackInboxResolve: "Resolve",
     feedbackInboxResolved: "Resolved",
     feedbackOpenImage: (index, total) => `Screenshot ${index}/${total}`,
-    feedbackInboxMeta: (category, version, date) => `${category} · ${version || "--"} · ${date}`,
+    feedbackInboxMeta: (category, version, date) => `${category} \u00b7 ${version || "--"} \u00b7 ${date}`,
     feedbackAdminSetup: "Inbox connection",
     feedbackAdminEndpoint: "Cloudflare Worker URL",
     feedbackAdminToken: "Admin token",
@@ -1082,16 +1160,17 @@ const i18n = {
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
     blenderHelperTab: "Helper",
+    blenderCharacterTab: "Character Designer",
     blenderHelperTitle: "Blender Hub",
     blenderHelperBadge: "Map",
     blenderHubReady: "Ready",
     blenderHubNext: "Next",
     blenderHubBuilderTitle: "Builder Workbench",
-    blenderHubBuilderBody: "Textures, prompts, selected object",
+    blenderHubBuilderBody: "Textures and selected object",
     blenderHubBuildingTitle: "Building Projects",
     blenderHubBuildingBody: "Blocks, modules, placement rules",
-    blenderHubCharacterTitle: "Character Lab",
-    blenderHubCharacterBody: "Characters, outfits, material checks",
+    blenderHubCharacterTitle: "Character Designer",
+    blenderHubCharacterBody: "Reference images, view sets, and Blender placement",
     blenderHubAnimationTitle: "Animation",
     blenderHubAnimationBody: "Actions, timeline, export rhythm",
     blenderHubTextureTitle: "Texture Lab",
@@ -1127,6 +1206,10 @@ const i18n = {
     blenderGithubOpenShort: "GitHub",
     blenderGithubNoBlendFiles: "No published GitHub repositories added",
     blenderGithubCardTitle: name => `Click to select; double-click to open GitHub: ${name}`,
+    blenderGithubRename: "Rename",
+    blenderGithubRenamePrompt: name => `Rename display name (current: ${name})`,
+    blenderGithubRenaming: "Updating display name",
+    blenderGithubRenameDone: "Display name updated",
     blenderGithubLoading: "Loading",
     blenderGithubReady: "Ready",
     blenderGithubProjectLabel: "GitHub Repository",
@@ -1162,13 +1245,13 @@ const i18n = {
     blenderGithubStateBehind: "Remote Updated",
     blenderGithubStateSynced: "Synced",
     blenderGithubStateGitUnavailable: "Git Unavailable",
-    blenderGithubToolsReady: "Git · LFS ready",
+    blenderGithubToolsReady: "Git \u00b7 LFS ready",
     blenderGithubLfsMissing: "Git LFS is required",
     blenderGithubGhReady: "GitHub CLI signed in",
     blenderGithubGhFallback: "GitHub CLI is unavailable or signed out; paste an empty repository URL",
     blenderGithubWorkingTreeClean: "Working tree clean",
     blenderGithubMoreChanges: count => `${count} more change${count === 1 ? "" : "s"}`,
-    blenderGithubLastCommit: (hash, subject) => `${hash} · ${subject}`,
+    blenderGithubLastCommit: (hash, subject) => `${hash} \u00b7 ${subject}`,
     blenderGithubNoCommit: "No commits yet",
     blenderGithubSaving: "Saving project settings",
     blenderGithubSaved: "Project settings saved",
@@ -1391,8 +1474,8 @@ const i18n = {
     lyricsTimingUseNowEnd: "Use now as end",
     lyricsTimingSave: "Save",
     lyricsTimingClear: "Undo this change",
-    lyricsTimingTarget: (word, line) => `Editing: ${word || "this slot"} · line ${line}`,
-    lyricsTimingLineTitle: (line, count) => `Line ${line} · ${count} words/chars`,
+    lyricsTimingTarget: (word, line) => `Editing: ${word || "this slot"} \u00b7 line ${line}`,
+    lyricsTimingLineTitle: (line, count) => `Line ${line} \u00b7 ${count} words/chars`,
     lyricsTimingPreviewLabel: "Line preview",
     lyricsTimingRowsLabel: "Word timing",
     lyricsTimingTokenHeader: "Word",
@@ -1479,7 +1562,7 @@ const i18n = {
     musicLibraryMeta: (count, expected) => expected ? `${count}/${expected} tracks` : `${count} tracks`,
     trackTitle: name => `${name}\nClick to play, right-click for delete`,
     deleteTrackLabel: name => `Delete ${name}`,
-    trackMeta: (type, size) => `${type.toUpperCase()} · ${size}`,
+    trackMeta: (type, size) => `${type.toUpperCase()} \u00b7 ${size}`,
     musicAdded: count => `Added ${count} track${count === 1 ? "" : "s"}.`,
     musicLyricsAdded: count => `Added ${count} lyric file${count === 1 ? "" : "s"}.`,
     musicDeleted: name => `Deleted: ${name}`,
@@ -1580,26 +1663,6 @@ const i18n = {
     randomRealmTextureUploadedMany: (count, kinds) => `Imported ${count} textures: ${kinds}`,
     randomRealmBlenderActionFailed: message => `Action failed: ${message}`,
     randomRealmCodexObjectLabel: "Current Object",
-    blenderPromptTitle: "Prompt Builder",
-    blenderPromptFormatLabel: "Format",
-    blenderPromptFormatPlaceholder: "Output structure, language, and section rules",
-    blenderPromptImageLabel: "Image Requirements",
-    blenderPromptImagePlaceholder: "Reference image, framing, clarity, background, watermark, material requirements",
-    blenderPromptResolutionLabel: "Resolution",
-    blenderPromptCustomResolutionPlaceholder: "Custom, e.g. 1536px / 4K / 2048x2048",
-    blenderPromptCustomWidthPlaceholder: "Width",
-    blenderPromptCustomLengthPlaceholder: "Length",
-    blenderPromptStyleLabel: "Style",
-    blenderPromptStylePlaceholder: "Stylized realistic / low poly / hand-painted...",
-    blenderPromptBasicsLabel: "Base Info",
-    blenderPromptBasicsPlaceholder: "Project use, target platform, scale, performance, constraints Codex should remember",
-    blenderPromptOutputLabel: "Generated Prompt",
-    blenderPromptGenerate: "Generate Prompt",
-    blenderPromptCopy: "Copy",
-    blenderPromptClear: "Clear",
-    blenderPromptCopied: "Prompt copied",
-    blenderPromptCleared: "Prompt cleared",
-    blenderPromptCopyFailed: "Copy failed; select and copy manually",
     randomRealmSlotsTitle: "Project Areas",
     randomRealmSlotBuilder: "Builder / Buildings",
     randomRealmSlotGround: "Ground / Scene",
@@ -1700,7 +1763,7 @@ const i18n = {
     materialReady: "Ready to import",
     materialEmpty: "No importable materials in Downloads",
     materialCandidateTitle: name => `${name}\nClick to select, double-click to import`,
-    materialCandidateMeta: (type, size) => `${type === "package" ? "Package" : "Texture"} · ${size}`,
+    materialCandidateMeta: (type, size) => `${type === "package" ? "Package" : "Texture"} \u00b7 ${size}`,
     materialLoadFailed: message => `Scan failed: ${message}`,
     materialImporting: name => `Importing: ${name}`,
     materialImported: (name, count) => `Imported ${name}, ${count} texture${count === 1 ? "" : "s"}.`,
@@ -1924,6 +1987,7 @@ const els = {
   blenderGithubState: document.getElementById("blenderGithubState"),
   blenderGithubAdd: document.getElementById("blenderGithubAdd"),
   blenderGithubProject: document.getElementById("blenderGithubProject"),
+  blenderGithubRename: document.getElementById("blenderGithubRename"),
   blenderGithubBlendCards: document.getElementById("blenderGithubBlendCards"),
   blenderGithubProjectPath: document.getElementById("blenderGithubProjectPath"),
   blenderGithubRefresh: document.getElementById("blenderGithubRefresh"),
@@ -1980,19 +2044,28 @@ const els = {
   randomRealmTextureFileInput: document.getElementById("randomRealmTextureFileInput"),
   randomRealmStageBlankTexture: document.getElementById("randomRealmStageBlankTexture"),
   randomRealmArtStatus: document.getElementById("randomRealmArtStatus"),
-  blenderPromptFormat: document.getElementById("blenderPromptFormat"),
-  blenderPromptImage: document.getElementById("blenderPromptImage"),
-  blenderPromptResolution: document.getElementById("blenderPromptResolution"),
-  blenderPromptCustomResolution: document.getElementById("blenderPromptCustomResolution"),
-  blenderPromptCustomWidth: document.getElementById("blenderPromptCustomWidth"),
-  blenderPromptCustomLength: document.getElementById("blenderPromptCustomLength"),
-  blenderPromptStyle: document.getElementById("blenderPromptStyle"),
-  blenderPromptBasics: document.getElementById("blenderPromptBasics"),
-  blenderPromptOutput: document.getElementById("blenderPromptOutput"),
-  generateBlenderPrompt: document.getElementById("generateBlenderPrompt"),
-  copyBlenderPrompt: document.getElementById("copyBlenderPrompt"),
-  clearBlenderPrompt: document.getElementById("clearBlenderPrompt"),
-  blenderPromptStatus: document.getElementById("blenderPromptStatus")
+  referenceViewPanel: document.getElementById("referenceViewPanel"),
+  referenceViewProject: document.getElementById("referenceViewProject"),
+  referenceViewProjectPath: document.getElementById("referenceViewProjectPath"),
+  referenceViewCount: document.getElementById("referenceViewCount"),
+  referenceViewSetSelect: document.getElementById("referenceViewSetSelect"),
+  referenceViewName: document.getElementById("referenceViewName"),
+  referenceViewRename: document.getElementById("referenceViewRename"),
+  referenceViewRenameAll: document.getElementById("referenceViewRenameAll"),
+  referenceViewNew: document.getElementById("referenceViewNew"),
+  referenceViewSetHint: document.getElementById("referenceViewSetHint"),
+  referenceViewRenameHintExtra: document.getElementById("referenceViewRenameHintExtra"),
+  referenceViewDisplaySize: document.getElementById("referenceViewDisplaySize"),
+  referenceViewDistance: document.getElementById("referenceViewDistance"),
+  referenceViewOpacity: document.getElementById("referenceViewOpacity"),
+  referenceViewShowInFront: document.getElementById("referenceViewShowInFront"),
+  referenceViewSlots: document.getElementById("referenceViewSlots"),
+  referenceViewFileInput: document.getElementById("referenceViewFileInput"),
+  referenceViewSave: document.getElementById("referenceViewSave"),
+  referenceViewToggleAll: document.getElementById("referenceViewToggleAll"),
+  referenceViewClear: document.getElementById("referenceViewClear"),
+  referenceViewNormalize: document.getElementById("referenceViewNormalize"),
+  referenceViewStatus: document.getElementById("referenceViewStatus")
 };
 
 let wallpapers = [];
@@ -2000,7 +2073,7 @@ let tracks = [];
 let selectedWallpaperPath = localStorage.getItem(storageKeys.selectedWallpaper) || "";
 let wallpaperOrder = loadWallpaperOrder();
 let selectedTrackPath = localStorage.getItem(storageKeys.selectedTrack) || "";
-let language = localStorage.getItem(storageKeys.language) || "zh";
+let language = normalizeUiLanguage(localStorage.getItem(storageKeys.language));
 let theme = normalizeTheme(localStorage.getItem(storageKeys.theme));
 let pendingDeletePath = "";
 let draggedWallpaperPath = "";
@@ -2154,9 +2227,20 @@ let pendingSteamworkAssetSlot = "";
 let steamworkThumbsEnabled = false;
 let workspaceTodoGroups = loadWorkspaceTodos();
 let randomRealmArtContext = loadRandomRealmArtContext();
-let blenderPromptConfig = loadBlenderPromptConfig();
 let randomRealmBlenderProjects = [];
 let randomRealmBlenderObjects = [];
+let referenceViewSets = [];
+let referenceViewCurrentKey = "";
+let referenceViewCurrentSet = null;
+let referenceViewBusy = false;
+let referenceViewLoading = false;
+let referenceViewLoadedProject = "";
+let referenceViewPickDirection = "";
+let referenceViewLoadToken = 0;
+const referenceViewPendingFiles = new Map();
+const referenceViewPendingRemovals = new Set();
+const referenceViewObjectUrls = new Map();
+const referenceViewImageLoadErrors = new Set();
 let randomRealmLoadedObjectsProject = "";
 let randomRealmSelectedOldTexture = null;
 let randomRealmSelectedMaterial = "";
@@ -2469,10 +2553,10 @@ async function loadModuleData(id) {
       if (hasMaterialWorkspace && downloadIntakeEnabled) await loadMaterialCandidates();
       break;
     case "blender":
-      if (hasRandomRealmArtTools()) {
+      if (hasRandomRealmArtTools() && activeBlenderView !== "helper") {
         await loadRandomRealmBlenderProjects({ limit: 40, loadObjects: activeBlenderView === "builder" });
       }
-      if (hasBlenderGithubShare() && !blenderGithubShareState && !blenderGithubBusy) {
+      if (activeBlenderView === "helper" && hasBlenderGithubShare() && !blenderGithubShareState && !blenderGithubBusy) {
         await loadBlenderGithubShare({ detect: true });
       }
       break;
@@ -2610,7 +2694,7 @@ function setConsoleWorkspaceView(value, options = {}) {
 }
 
 function normalizeBlenderWorkspaceView(value) {
-  return value === "builder" ? "builder" : "helper";
+  return ["helper", "character", "builder"].includes(value) ? value : "helper";
 }
 
 function setBlenderWorkspaceView(value, options = {}) {
@@ -2622,6 +2706,7 @@ function setBlenderWorkspaceView(value, options = {}) {
   }
   const buttons = Array.from(document.querySelectorAll("[data-blender-view-target]"));
   const activeButtonIndex = Math.max(0, buttons.findIndex(button => button.dataset.blenderViewTarget === activeBlenderView));
+  const previousButtonIndex = Math.max(0, buttons.findIndex(button => button.dataset.blenderViewTarget === previousView));
   document.querySelector(".blender-subnav")?.style.setProperty("--blender-subtab-index", String(activeButtonIndex));
   for (const button of buttons) {
     const active = button.dataset.blenderViewTarget === activeBlenderView;
@@ -2635,6 +2720,13 @@ function setBlenderWorkspaceView(value, options = {}) {
       const project = els.randomRealmBlenderProject?.value || "";
       if (project && randomRealmLoadedObjectsProject !== project) {
         loadRandomRealmBlenderObjects();
+      }
+    } else if (activeBlenderView === "character") {
+      const project = referenceViewProjectPath();
+      if (!project && hasRandomRealmArtTools()) {
+        loadRandomRealmBlenderProjects({ limit: 40, loadObjects: false });
+      } else if (project !== referenceViewLoadedProject) {
+        loadReferenceViewSets({ quiet: true });
       }
     } else if (!blenderGithubShareState && !blenderGithubBusy) {
       loadBlenderGithubShare({ detect: true });
@@ -2664,7 +2756,7 @@ function setBlenderWorkspaceView(value, options = {}) {
     view.classList.remove("entering", "leaving");
     view.style.transform = "";
   }
-  stage?.classList.remove("switching", "to-helper", "to-builder");
+  stage?.classList.remove("switching");
 
   if (!shouldAnimate) {
     for (const view of views) {
@@ -2682,7 +2774,7 @@ function setBlenderWorkspaceView(value, options = {}) {
     + (parseFloat(stageStyle.borderTopWidth) || 0)
     + (parseFloat(stageStyle.borderBottomWidth) || 0);
   const targetViewName = activeBlenderView;
-  const direction = activeBlenderView === "builder" ? 1 : -1;
+  const direction = activeButtonIndex > previousButtonIndex ? 1 : -1;
   const slideDistance = Math.ceil(stage.getBoundingClientRect().width + 8);
   const nextStart = `translate3d(${direction * slideDistance}px, 0, 0)`;
   const oldEnd = `translate3d(${-direction * slideDistance}px, 0, 0)`;
@@ -2695,7 +2787,7 @@ function setBlenderWorkspaceView(value, options = {}) {
   const targetHeight = Math.max(nextView.getBoundingClientRect().height + stageVerticalChrome, 1);
 
   stage.style.height = `${targetHeight}px`;
-  stage.classList.add("switching", activeBlenderView === "builder" ? "to-builder" : "to-helper");
+  stage.classList.add("switching");
   nextView.style.transform = nextStart;
   oldView.style.transform = neutral;
   stage.getBoundingClientRect();
@@ -2714,7 +2806,7 @@ function setBlenderWorkspaceView(value, options = {}) {
       view.classList.remove("entering", "leaving");
       view.style.transform = "";
     }
-    stage.classList.remove("switching", "to-helper", "to-builder");
+    stage.classList.remove("switching");
     stage.style.height = "";
   };
 
@@ -3975,7 +4067,9 @@ function renderModuleNavs() {
 }
 
 function text(key, ...args) {
-  const value = i18n[language][key];
+  const languageBundle = i18n[language] || i18n.zh;
+  const fallbackBundle = i18n.en;
+  const value = languageBundle?.[key] ?? fallbackBundle?.[key] ?? key;
   return typeof value === "function" ? value(...args) : value;
 }
 
@@ -4202,6 +4296,7 @@ async function loadConsoleConfig() {
 }
 
 function applyLanguage() {
+  language = normalizeUiLanguage(language);
   document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
   for (const node of document.querySelectorAll("[data-i18n]")) {
     node.textContent = text(node.dataset.i18n);
@@ -4209,6 +4304,9 @@ function applyLanguage() {
   for (const node of document.querySelectorAll("[data-i18n-aria]")) {
     node.setAttribute("aria-label", text(node.dataset.i18nAria));
     node.title = text(node.dataset.i18nAria);
+  }
+  for (const node of document.querySelectorAll("[data-i18n-title]")) {
+    node.title = text(node.dataset.i18nTitle);
   }
   for (const node of document.querySelectorAll("[data-i18n-placeholder]")) {
     node.setAttribute("placeholder", text(node.dataset.i18nPlaceholder));
@@ -5095,13 +5193,13 @@ function renderWallpapers() {
     card.appendChild(image);
 
     const label = document.createElement("span");
-    label.textContent = `${item.name} · ${formatBytes(item.size)}`;
+    label.textContent = `${item.name} \u00b7 ${formatBytes(item.size)}`;
     card.appendChild(label);
 
     const deleteButton = document.createElement("button");
     deleteButton.className = "delete-wallpaper-button";
     deleteButton.type = "button";
-    deleteButton.textContent = "×";
+    deleteButton.textContent = "\u00d7";
     deleteButton.title = text("deleteButtonLabel", item.name);
     deleteButton.setAttribute("aria-label", text("deleteButtonLabel", item.name));
     deleteButton.addEventListener("click", event => {
@@ -5287,6 +5385,26 @@ function normalizePlaybackMode(mode) {
 
 function normalizeTheme(mode) {
   return mode === "dark" ? "dark" : "light";
+}
+
+function normalizeUiLanguage(value) {
+  const normalized = String(value || "zh").trim().toLowerCase();
+  const aliases = {
+    zh: "zh",
+    chinese: "zh",
+    ch: "zh",
+    cn: "zh",
+    cs: "zh",
+    "zh-cn": "zh",
+    "zh_cn": "zh",
+    "zh-hk": "zh",
+    "zh-tw": "zh",
+    en: "en",
+    english: "en",
+    us: "en",
+    "en-us": "en"
+  };
+  return aliases[normalized] || (normalized.startsWith("en") ? "en" : "zh");
 }
 
 function nextTheme(mode = theme) {
@@ -7494,7 +7612,7 @@ function createTrackCard(item) {
 
   const marker = document.createElement("div");
   marker.className = "track-marker";
-  marker.textContent = item.path === selectedTrackPath && !els.audioPlayer.paused ? "♫" : "▶";
+  marker.textContent = item.path === selectedTrackPath && !els.audioPlayer.paused ? "\u266b" : "\u25b6";
   card.appendChild(marker);
 
   const body = document.createElement("div");
@@ -7863,7 +7981,7 @@ function renderLyricsPanel() {
         : text("nowPlayingLabel");
     const languageOptions = musicLyricsLanguageOptions(selected);
     const activeLanguage = languageOptions.length > 1 ? preferredMusicLyricsLanguage(selected).toUpperCase() : "";
-    const label = activeLanguage ? `${baseLabel} · ${activeLanguage}` : baseLabel;
+    const label = activeLanguage ? `${baseLabel} \u00b7 ${activeLanguage}` : baseLabel;
     els.nowPlayingArt.classList.toggle("has-lyrics", hasCachedLyrics);
     els.nowPlayingArt.classList.toggle("can-find-lyrics", Boolean(selectedPath));
     els.nowPlayingArt.classList.toggle("lyrics-searching", Boolean(selectedPath && musicLyricsLookupPath === selectedPath));
@@ -8961,13 +9079,13 @@ function parseLyricsEditorTime(value) {
   let raw = String(value || "").trim();
   if (!raw) return NaN;
   raw = raw
-    .replace(/[：]/g, ":")
+    .replace(/[ï¼š]/g, ":")
     .replace(/\s+/g, "")
     .replace(/[\uff1a]/g, ":")
     .replace(/\u5206/gi, ":")
     .replace(/\u79d2/gi, "")
-    .replace(/分/gi, ":")
-    .replace(/秒/gi, "")
+    .replace(/åˆ†/gi, ":")
+    .replace(/ç§’/gi, "")
     .replace(/m/gi, ":")
     .replace(/s/gi, "");
   if (/^\d+(?:\.\d+)?$/.test(raw)) return Number(raw);
@@ -11013,7 +11131,7 @@ function renderMusic() {
     els.trackCurrentTime.textContent = "0:00";
     els.trackDuration.textContent = "0:00";
     els.trackSeek.value = "0";
-    els.playPauseTrack.textContent = "▶";
+    els.playPauseTrack.textContent = "\u25b6";
     els.playPauseTrack.setAttribute("aria-label", text("playTrack"));
     els.playPauseTrack.title = text("playTrack");
     clearMusicLyrics(text("lyricsEmpty"));
@@ -11046,7 +11164,7 @@ function renderMusic() {
     musicLyricsAnalysis = null;
   }
 
-  els.playPauseTrack.textContent = els.audioPlayer.paused ? "▶" : "❚❚";
+  els.playPauseTrack.textContent = els.audioPlayer.paused ? "\u25b6" : "\u275a\u275a";
   const playLabel = els.audioPlayer.paused ? text("playTrack") : text("pauseTrack");
   els.playPauseTrack.setAttribute("aria-label", playLabel);
   els.playPauseTrack.title = playLabel;
@@ -12005,7 +12123,7 @@ function renderFeedback() {
       remove.type = "button";
       remove.disabled = feedbackBusy;
       remove.setAttribute("aria-label", text("feedbackRemoveImage"));
-      remove.textContent = "×";
+      remove.textContent = "\u00d7";
       remove.addEventListener("click", () => removeFeedbackImage(entry));
       item.append(image, remove);
       els.feedbackPreview.appendChild(item);
@@ -12400,63 +12518,6 @@ async function saveFeedbackAdminConfig(event) {
   }
 }
 
-function parseLegacyCustomResolution(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  if (!raw) return { width: "", length: "" };
-  const kMatch = raw.match(/^(\d+(?:\.\d+)?)\s*k$/);
-  if (kMatch) {
-    const pixels = String(Math.round(Number(kMatch[1]) * 1024));
-    return { width: pixels, length: pixels };
-  }
-  const numbers = raw.match(/\d+(?:\.\d+)?/g) || [];
-  if (numbers.length >= 2) {
-    return { width: String(Math.round(Number(numbers[0]))), length: String(Math.round(Number(numbers[1]))) };
-  }
-  if (numbers.length === 1) {
-    const pixels = String(Math.round(Number(numbers[0])));
-    return { width: pixels, length: pixels };
-  }
-  return { width: "", length: "" };
-}
-
-function normalizeResolutionPart(value) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-  const number = Math.round(Number(raw));
-  return Number.isFinite(number) && number > 0 ? String(number) : "";
-}
-
-function normalizeBlenderPromptConfig(value) {
-  const source = value && typeof value === "object" ? value : {};
-  const resolution = ["1k", "2k", "custom"].includes(source.resolution) ? source.resolution : defaultBlenderPromptConfig.resolution;
-  const legacy = parseLegacyCustomResolution(source.customResolution);
-  const customWidth = normalizeResolutionPart(source.customWidth) || legacy.width;
-  const customLength = normalizeResolutionPart(source.customLength) || legacy.length;
-  return {
-    format: typeof source.format === "string" ? source.format : defaultBlenderPromptConfig.format,
-    image: typeof source.image === "string" ? source.image : defaultBlenderPromptConfig.image,
-    style: typeof source.style === "string" ? source.style : defaultBlenderPromptConfig.style,
-    basics: typeof source.basics === "string" ? source.basics : defaultBlenderPromptConfig.basics,
-    resolution,
-    customResolution: customWidth && customLength ? `${customWidth}x${customLength}` : "",
-    customWidth,
-    customLength
-  };
-}
-
-function loadBlenderPromptConfig() {
-  try {
-    const raw = localStorage.getItem(storageKeys.blenderPromptConfig);
-    return raw ? normalizeBlenderPromptConfig(JSON.parse(raw)) : normalizeBlenderPromptConfig(defaultBlenderPromptConfig);
-  } catch {
-    return normalizeBlenderPromptConfig(defaultBlenderPromptConfig);
-  }
-}
-
-function saveBlenderPromptConfig() {
-  localStorage.setItem(storageKeys.blenderPromptConfig, JSON.stringify(blenderPromptConfig));
-}
-
 function loadRandomRealmArtContext() {
   try {
     const value = JSON.parse(localStorage.getItem(storageKeys.randomRealmArtContext) || "{}");
@@ -12485,7 +12546,6 @@ function updateRandomRealmArtContext() {
     object: els.randomRealmBlenderObject?.value || randomRealmArtContext.object || ""
   };
   saveRandomRealmArtContext();
-  updateBlenderPromptOutput();
 }
 
 function hasBlenderGithubShare() {
@@ -12647,6 +12707,54 @@ function clearBlenderGithubCardClick() {
   }
 }
 
+function blenderGithubNormalizeProjectValue(value) {
+  return String(value || "")
+    .replace(/\\/g, "/")
+    .toLocaleLowerCase();
+}
+
+function blenderGithubFindProject(projectPathOrUrl = "") {
+  const projects = Array.isArray(blenderGithubShareState?.collection?.projects)
+    ? blenderGithubShareState.collection.projects
+    : [];
+  const targetPath = blenderGithubNormalizeProjectValue(projectPathOrUrl);
+  const targetSlug = blenderGithubRepositorySlug(projectPathOrUrl);
+  for (const project of projects) {
+    const repositoryUrl = String(project?.repositoryUrl || "");
+    const path = String(project?.path || "");
+    const directory = String(project?.directory || "");
+    const sameRepository = targetSlug && repositoryUrl && blenderGithubRepositorySlug(repositoryUrl) === targetSlug;
+    const samePath = targetPath && (blenderGithubNormalizeProjectValue(path) === targetPath || blenderGithubNormalizeProjectValue(directory) === targetPath);
+    if (sameRepository || samePath) return project;
+  }
+  return null;
+}
+
+function getSelectedBlenderGithubProjectCard() {
+  if (!els.blenderGithubBlendCards) return null;
+  const selectedCard = els.blenderGithubBlendCards.querySelector('.blender-github-blend-card[aria-selected="true"]')
+    || els.blenderGithubBlendCards.querySelector(".blender-github-blend-card");
+  if (!selectedCard) return null;
+  const projectKey = selectedCard.dataset.repositoryUrl || selectedCard.dataset.projectPath || "";
+  const resolved = blenderGithubFindProject(projectKey)
+    || blenderGithubFindProject(selectedCard.dataset.projectPath || "")
+    || blenderGithubFindProject(selectedCard.dataset.repositoryUrl || "");
+  const fallbackProjectPath = selectedCard.dataset.projectPath || "";
+  const fallbackRepositoryUrl = selectedCard.dataset.repositoryUrl || "";
+  return {
+    element: selectedCard,
+    projectPath: fallbackProjectPath,
+    repositoryUrl: fallbackRepositoryUrl,
+    project: resolved || {
+      path: fallbackProjectPath,
+      repositoryUrl: fallbackRepositoryUrl,
+      name: (fallbackRepositoryUrl || fallbackProjectPath).split(/[\\/]/).pop() || "",
+      downloaded: selectedCard.dataset.downloaded === "true",
+      directory: selectedCard.dataset.localPath || ""
+    }
+  };
+}
+
 function renderBlenderGithubBlendCards(state) {
   if (!els.blenderGithubBlendCards) return;
   const project = state?.project || {};
@@ -12705,7 +12813,29 @@ function renderBlenderGithubBlendCards(state) {
     const versionBadge = document.createElement("span");
     versionBadge.className = "blender-github-version";
     versionBadge.textContent = blenderGithubVersionText(repository.version);
-    card.append(mark, copy, versionBadge);
+    const renameButton = document.createElement("button");
+    renameButton.type = "button";
+    renameButton.className = "blender-github-card-action";
+    renameButton.textContent = text("blenderGithubRename");
+    renameButton.title = text("blenderGithubRename");
+    renameButton.setAttribute("aria-label", text("blenderGithubRename"));
+    renameButton.tabIndex = 0;
+    renameButton.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (blenderGithubBusy) return;
+      clearBlenderGithubCardClick();
+      void renameBlenderGithubProject(repository);
+    });
+    renameButton.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (blenderGithubBusy) return;
+      clearBlenderGithubCardClick();
+      void renameBlenderGithubProject(repository);
+    });
+    card.append(mark, copy, versionBadge, renameButton);
     card.addEventListener("click", () => {
       if (blenderGithubDraggedPath || blenderGithubBusy) return;
       clearBlenderGithubCardClick();
@@ -12722,6 +12852,37 @@ function renderBlenderGithubBlendCards(state) {
       openBlenderGithubTarget("desktop", identifier, repositoryUrl);
     });
     els.blenderGithubBlendCards.appendChild(card);
+  }
+}
+
+async function renameBlenderGithubProject(repository) {
+  if (!repository || blenderGithubBusy) return;
+  const currentName = repository.displayName || repository.name || repository.file || repository.repositoryUrl || "";
+  const nextName = window.prompt(
+    text("blenderGithubRenamePrompt", currentName),
+    currentName
+  );
+  if (nextName === null) return;
+
+  const displayName = String(nextName).trim();
+  if (!displayName || displayName === currentName) {
+    return;
+  }
+
+  const project = String(repository.path || repository.repositoryUrl || "");
+  setBlenderGithubBusy(true, text("blenderGithubRenaming"));
+  try {
+    const payload = await postJson("/api/randomrealm/blender/github-share/rename", {
+      project,
+      repositoryUrl: String(repository.repositoryUrl || ""),
+      displayName,
+    });
+    renderBlenderGithubShare(payload);
+    setBlenderGithubStatus(text("blenderGithubRenameDone"));
+  } catch (error) {
+    setBlenderGithubStatus(text("blenderGithubFailed", error.message));
+  } finally {
+    setBlenderGithubBusy(false);
   }
 }
 
@@ -12756,10 +12917,14 @@ function syncBlenderGithubProjectContext(projectPath) {
   }
   randomRealmArtContext.project = projectPath;
   saveRandomRealmArtContext();
-  if (els.randomRealmBlenderProject && Array.from(els.randomRealmBlenderProject.options).some(option => option.value === projectPath)) {
-    els.randomRealmBlenderProject.value = projectPath;
-    updateRandomRealmProjectAddress();
+  let selected = false;
+  for (const select of [els.randomRealmBlenderProject, els.referenceViewProject].filter(Boolean)) {
+    if (Array.from(select.options).some(option => option.value === projectPath)) {
+      select.value = projectPath;
+      selected = true;
+    }
   }
+  if (selected) updateRandomRealmProjectAddress();
 }
 
 function renderBlenderGithubTools(state) {
@@ -12831,12 +12996,14 @@ function updateBlenderGithubActionState() {
   const tools = state.tools || {};
   const hasProject = Boolean(els.blenderGithubProject?.value || state.project?.path || state.project?.repositoryUrl);
   const downloaded = state.project?.downloaded !== false && Boolean(state.project?.path && state.project?.directory);
+  const canRename = !blenderGithubBusy && !!getSelectedBlenderGithubProjectCard()?.project;
 
   for (const control of els.blenderGithubSharePanel.querySelectorAll("input, select, textarea")) {
     control.disabled = blenderGithubBusy;
   }
   if (els.blenderGithubAdd) els.blenderGithubAdd.disabled = blenderGithubBusy;
   if (els.blenderGithubRefresh) els.blenderGithubRefresh.disabled = blenderGithubBusy;
+  if (els.blenderGithubRename) els.blenderGithubRename.disabled = !canRename;
   if (els.blenderGithubDesktop) els.blenderGithubDesktop.disabled = blenderGithubBusy || !hasProject;
   if (els.blenderGithubDesktop) {
     const workflow = blenderGithubWorkflowDetails(state);
@@ -13140,161 +13307,9 @@ async function openBlenderGithubTarget(target, projectOverride = "", repositoryO
   }
 }
 
-function readBlenderPromptConfigFromForm() {
-  return normalizeBlenderPromptConfig({
-    format: els.blenderPromptFormat?.value || "",
-    image: els.blenderPromptImage?.value || "",
-    resolution: els.blenderPromptResolution?.value || defaultBlenderPromptConfig.resolution,
-    customWidth: els.blenderPromptCustomWidth?.value || "",
-    customLength: els.blenderPromptCustomLength?.value || "",
-    style: els.blenderPromptStyle?.value || "",
-    basics: els.blenderPromptBasics?.value || ""
-  });
-}
-
-function renderBlenderPromptBuilder() {
-  if (!els.blenderPromptOutput) return;
-  if (els.blenderPromptFormat) els.blenderPromptFormat.value = blenderPromptConfig.format;
-  if (els.blenderPromptImage) els.blenderPromptImage.value = blenderPromptConfig.image;
-  if (els.blenderPromptResolution) els.blenderPromptResolution.value = blenderPromptConfig.resolution;
-  if (els.blenderPromptCustomWidth) els.blenderPromptCustomWidth.value = blenderPromptConfig.customWidth;
-  if (els.blenderPromptCustomLength) els.blenderPromptCustomLength.value = blenderPromptConfig.customLength;
-  if (els.blenderPromptStyle) els.blenderPromptStyle.value = blenderPromptConfig.style;
-  if (els.blenderPromptBasics) els.blenderPromptBasics.value = blenderPromptConfig.basics;
-  renderBlenderPromptResolution();
-  updateBlenderPromptOutput();
-}
-
-function renderBlenderPromptResolution() {
-  const isCustom = (els.blenderPromptResolution?.value || blenderPromptConfig.resolution) === "custom";
-  if (els.blenderPromptCustomResolution) {
-    els.blenderPromptCustomResolution.hidden = !isCustom;
-  }
-}
-
-function blenderPromptResolutionText(config = blenderPromptConfig) {
-  const safeConfig = normalizeBlenderPromptConfig(config);
-  if (safeConfig.resolution === "custom") {
-    return safeConfig.customWidth && safeConfig.customLength
-      ? `${safeConfig.customWidth}x${safeConfig.customLength}`
-      : "custom resolution";
-  }
-  return safeConfig.resolution.toUpperCase();
-}
-
-function setBlenderPromptStatus(message) {
-  if (els.blenderPromptStatus) {
-    els.blenderPromptStatus.textContent = message || text("randomRealmArtReady");
-  }
-}
-
 function selectedRandomRealmProject() {
-  const path = els.randomRealmBlenderProject?.value || randomRealmArtContext.project || "";
+  const path = els.referenceViewProject?.value || els.randomRealmBlenderProject?.value || randomRealmArtContext.project || "";
   return randomRealmBlenderProjects.find(item => item.path === path) || (path ? { path, name: path.split(/[\\/]/).pop() } : null);
-}
-
-function blenderPromptContextLines() {
-  const project = selectedRandomRealmProject();
-  const object = selectedRandomRealmObject();
-  const textures = Array.isArray(object?.textures) ? object.textures : [];
-  const materials = Array.isArray(object?.materials) ? object.materials : [];
-  const lines = [
-    `Project: ${project?.name || "Unknown"}${project?.path ? ` (${project.path})` : ""}`,
-    `Art Type: ${randomRealmArtContext.type || els.randomRealmArtType?.value || defaultRandomRealmArtTypes[0]}`,
-    `Selected Object: ${object?.name || randomRealmArtContext.object || "Not selected"}`,
-    `Object Type: ${object?.type || "Unknown"}`,
-    `Materials: ${materials.length ? materials.join(", ") : "None listed"}`,
-    `Textures: ${textures.length ? textures.map(item => item.file || item.name || item.path).join(", ") : "None listed"}`,
-    `Selected Material: ${randomRealmSelectedMaterial || "Auto"}`,
-    `Selected Old Texture: ${randomRealmSelectedOldTexture?.file || randomRealmSelectedOldTexture?.name || "Not selected"}`
-  ];
-  if (randomRealmNewTexture?.name) {
-    lines.push(`Staged Texture Package Input: ${randomRealmNewTexture.name}`);
-  }
-  return lines;
-}
-
-function generateBlenderPromptText(config = blenderPromptConfig) {
-  const safeConfig = normalizeBlenderPromptConfig(config);
-  return [
-    "Generate or revise a Blender/Unity game asset prompt using the context below.",
-    "",
-    "Goal:",
-    `- Prepare clear instructions for a ${randomRealmArtContext.type || defaultRandomRealmArtTypes[0]} asset workflow.`,
-    "",
-    "Format Requirements:",
-    safeConfig.format,
-    "",
-    "Image Requirements:",
-    safeConfig.image,
-    `Texture / image resolution requirement: ${blenderPromptResolutionText(safeConfig)}.`,
-    "",
-    "Style:",
-    safeConfig.style,
-    "",
-    "Base Info:",
-    safeConfig.basics,
-    "",
-    "Blender Context:",
-    ...blenderPromptContextLines().map(line => `- ${line}`),
-    "",
-    "Output Constraints:",
-    "- Be concrete and production-oriented.",
-    "- Keep names, object references, texture paths, and constraints intact.",
-    `- Target texture/reference image resolution: ${blenderPromptResolutionText(safeConfig)}.`,
-    "- If something is missing, state the assumption instead of inventing hidden project facts.",
-    "",
-    "Negative Requirements:",
-    "- No watermark, no UI text, no random extra objects, no muddy silhouette, no unrelated decorative clutter."
-  ].join("\n");
-}
-
-function updateBlenderPromptOutput() {
-  if (!els.blenderPromptOutput) return;
-  const nextConfig = els.blenderPromptFormat ? readBlenderPromptConfigFromForm() : blenderPromptConfig;
-  blenderPromptConfig = nextConfig;
-  saveBlenderPromptConfig();
-  els.blenderPromptOutput.value = generateBlenderPromptText(nextConfig);
-}
-
-function generateBlenderPrompt() {
-  updateBlenderPromptOutput();
-  setBlenderPromptStatus(text("randomRealmArtReady"));
-}
-
-function clearBlenderPrompt() {
-  blenderPromptConfig = { format: "", image: "", style: "", basics: "", resolution: "2k", customResolution: "", customWidth: "", customLength: "" };
-  if (els.blenderPromptFormat) els.blenderPromptFormat.value = "";
-  if (els.blenderPromptImage) els.blenderPromptImage.value = "";
-  if (els.blenderPromptResolution) els.blenderPromptResolution.value = "2k";
-  if (els.blenderPromptCustomWidth) els.blenderPromptCustomWidth.value = "";
-  if (els.blenderPromptCustomLength) els.blenderPromptCustomLength.value = "";
-  if (els.blenderPromptStyle) els.blenderPromptStyle.value = "";
-  if (els.blenderPromptBasics) els.blenderPromptBasics.value = "";
-  if (els.blenderPromptOutput) els.blenderPromptOutput.value = "";
-  renderBlenderPromptResolution();
-  saveBlenderPromptConfig();
-  setBlenderPromptStatus(text("blenderPromptCleared"));
-}
-
-async function copyBlenderPrompt() {
-  if (!els.blenderPromptOutput) return;
-  updateBlenderPromptOutput();
-  const value = els.blenderPromptOutput.value;
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-    } else {
-      els.blenderPromptOutput.focus();
-      els.blenderPromptOutput.select();
-      document.execCommand("copy");
-    }
-    setBlenderPromptStatus(text("blenderPromptCopied"));
-  } catch {
-    els.blenderPromptOutput.focus();
-    els.blenderPromptOutput.select();
-    setBlenderPromptStatus(text("blenderPromptCopyFailed"));
-  }
 }
 
 function renderRandomRealmArtTypes() {
@@ -13321,6 +13336,610 @@ function setRandomRealmArtStatus(message) {
   randomRealmArtNotice = message || "";
   if (els.randomRealmArtStatus) {
     els.randomRealmArtStatus.textContent = randomRealmArtNotice || text("randomRealmArtReady");
+  }
+}
+
+function referenceViewProjectPath() {
+  return els.referenceViewProject?.value || els.randomRealmBlenderProject?.value || "";
+}
+
+function blankReferenceView() {
+  return {
+    file: null,
+    enabled: false,
+    flipHorizontal: false,
+    flipVertical: false,
+    distanceMeters: null,
+    displaySizeMeters: null,
+    opacity: null
+  };
+}
+
+function blankReferenceViewSet() {
+  return {
+    key: "",
+    name: text("referenceViewNewSet"),
+    placement: {
+      origin: [0, 0, 0],
+      displaySizeMeters: 1,
+      distanceMeters: 10,
+      opacity: 0.35,
+      showInFront: true
+    },
+    views: Object.fromEntries(referenceViewDirections.map(direction => [direction, blankReferenceView()]))
+  };
+}
+
+function referenceViewDirectionLabel(direction) {
+  const key = `referenceView${direction.charAt(0).toUpperCase()}${direction.slice(1)}`;
+  return text(key) || direction;
+}
+
+function referenceViewSetDisplayName(referenceViewSet) {
+  return String(referenceViewSet?.name || "").trim() || text("referenceViewUntitledSet");
+}
+
+function releaseReferenceViewObjectUrl(direction) {
+  const url = referenceViewObjectUrls.get(direction);
+  if (url) URL.revokeObjectURL(url);
+  referenceViewObjectUrls.delete(direction);
+}
+
+function clearReferenceViewPending() {
+  for (const direction of referenceViewDirections) releaseReferenceViewObjectUrl(direction);
+  referenceViewImageLoadErrors.clear();
+  referenceViewPendingFiles.clear();
+  referenceViewPendingRemovals.clear();
+}
+
+function openReferenceViewPicker(direction) {
+  if (!direction || referenceViewBusy || referenceViewLoading) return;
+  referenceViewPickDirection = direction;
+  els.referenceViewFileInput?.click();
+}
+
+function setReferenceViewStatus(message) {
+  if (els.referenceViewStatus) {
+    els.referenceViewStatus.textContent = message || text("referenceViewReady");
+  }
+}
+
+function setReferenceViewBusy(busy) {
+  referenceViewBusy = Boolean(busy);
+  updateReferenceViewDisabledState();
+}
+
+function setReferenceViewLoading(loading) {
+  referenceViewLoading = Boolean(loading);
+  updateReferenceViewDisabledState();
+}
+
+function updateReferenceViewDisabledState() {
+  const disabled = referenceViewBusy || referenceViewLoading;
+  els.referenceViewPanel?.classList.toggle("busy", disabled);
+  for (const control of [
+    els.referenceViewSetSelect,
+    els.referenceViewName,
+    els.referenceViewRename,
+    els.referenceViewRenameAll,
+    els.referenceViewNew,
+    els.referenceViewDisplaySize,
+    els.referenceViewDistance,
+    els.referenceViewOpacity,
+    els.referenceViewShowInFront,
+    els.referenceViewSave,
+    els.referenceViewToggleAll,
+    els.referenceViewClear,
+    els.referenceViewNormalize,
+    els.referenceViewFileInput,
+    els.referenceViewProject,
+    els.randomRealmBlenderProject
+  ]) {
+    if (control) control.disabled = disabled;
+  }
+  for (const control of els.referenceViewSlots?.querySelectorAll("button, input") || []) {
+    control.disabled = disabled;
+  }
+  if (els.referenceViewRename) {
+    const canRename = Boolean(referenceViewCurrentKey) && !disabled;
+    els.referenceViewRename.disabled = !canRename;
+  }
+}
+
+function referenceViewInput(selector, direction) {
+  return els.referenceViewSlots?.querySelector(`[${selector}="${direction}"]`) || null;
+}
+
+function referenceViewImageUrl(referenceSet, direction) {
+  if (!referenceSet?.key || !referenceSet.views?.[direction]?.file) return "";
+  const params = new URLSearchParams({
+    project: referenceViewProjectPath(),
+    key: referenceSet.key,
+    direction,
+    v: referenceSet.updatedAt || "1"
+  });
+  return `/api/reference-views/image?${params}`;
+}
+
+function referenceViewDisplayCount() {
+  return referenceViewDirections.filter(direction => {
+    if (referenceViewPendingFiles.has(direction)) return true;
+    if (referenceViewPendingRemovals.has(direction)) return false;
+    return Boolean(referenceViewCurrentSet?.views?.[direction]?.file);
+  }).length;
+}
+
+function renderReferenceViewSlots() {
+  if (!els.referenceViewSlots) return;
+  const current = referenceViewCurrentSet || blankReferenceViewSet();
+  for (const direction of referenceViewDirections) {
+    const view = { ...blankReferenceView(), ...(current.views?.[direction] || {}) };
+    const pending = referenceViewPendingFiles.get(direction);
+    const removed = referenceViewPendingRemovals.has(direction);
+    const preview = referenceViewInput("data-reference-view-preview", direction);
+    const fileLabel = referenceViewInput("data-reference-view-file", direction);
+    const pick = referenceViewInput("data-reference-view-pick", direction);
+    const enabled = referenceViewInput("data-reference-view-enabled", direction);
+    const flipH = referenceViewInput("data-reference-view-flip-h", direction);
+    const flipV = referenceViewInput("data-reference-view-flip-v", direction);
+    const slot = els.referenceViewSlots.querySelector(`[data-reference-direction="${direction}"]`);
+    const meta = slot?.querySelector(".reference-view-slot-meta");
+    const setLabel = referenceViewSetDisplayName(referenceViewCurrentSet);
+    const directionLabel = referenceViewDirectionLabel(direction);
+    if (!removed && !pending) {
+      referenceViewImageLoadErrors.delete(direction);
+    }
+    if (pending) {
+      referenceViewImageLoadErrors.delete(direction);
+    }
+    let previewUrl = "";
+    let hasLoadError = false;
+    if (pending) {
+      previewUrl = referenceViewObjectUrls.get(direction) || "";
+    } else if (!removed) {
+      previewUrl = referenceViewImageUrl(current, direction);
+      hasLoadError = referenceViewImageLoadErrors.has(direction);
+    }
+    const hasPreview = Boolean(previewUrl) && !hasLoadError;
+    if (preview) {
+      preview.hidden = !hasPreview;
+      if (hasPreview) {
+        preview.src = previewUrl;
+        preview.onload = () => {
+          referenceViewImageLoadErrors.delete(direction);
+        };
+        preview.onerror = () => {
+          referenceViewImageLoadErrors.add(direction);
+          if (preview) preview.hidden = true;
+          if (meta) {
+            meta.textContent = text("referenceViewImageLoadError");
+            meta.hidden = false;
+          }
+          renderReferenceViewSlots();
+        };
+      } else {
+        preview.removeAttribute("src");
+        preview.onload = null;
+        preview.onerror = null;
+        if (hasLoadError) referenceViewImageLoadErrors.delete(direction);
+      }
+      if (!hasPreview && !pending && !removed && hasLoadError && fileLabel) {
+        fileLabel.textContent = fileLabel.textContent || text("referenceViewNoImage");
+      };
+    }
+    const isEmpty = !hasPreview;
+    const shouldShowMeta = isEmpty || Boolean(pending) || Boolean(removed);
+    if (fileLabel) {
+      fileLabel.textContent = pending?.name
+        || (!removed && (view.originalName || String(view.file || "").split("/").pop()))
+        || text("referenceViewDropImage");
+    }
+    const fileText = fileLabel?.textContent || text("referenceViewNoImage");
+    const actionHint = isEmpty || removed ? text("referenceViewPickAction") : text("referenceViewReplaceAction");
+    const isLoadError = isEmpty && Boolean(referenceViewImageLoadErrors.has(direction)) && !pending && !removed;
+    if (pick) {
+      pick.title = `${setLabel} · ${directionLabel} · ${fileText}`;
+      pick.setAttribute("aria-label", `${text("referenceViewDropImage")} ${directionLabel}`);
+      pick.dataset.pickHint = actionHint;
+      pick.dataset.pickHintDirection = directionLabel;
+    }
+    const clickHint = slot?.querySelector(`[data-reference-view-click-hint="${direction}"]`);
+    if (clickHint) {
+      clickHint.textContent = actionHint;
+    }
+    if (slot) {
+      slot.title = `${directionLabel} · ${text("referenceViewReplaceAction")}`;
+      slot.setAttribute("role", "button");
+      slot.setAttribute("tabindex", "0");
+      slot.setAttribute("aria-label", `${actionHint} ${directionLabel}`);
+      slot.classList.add("ready-to-pick");
+    }
+    if (enabled) enabled.checked = Boolean(view.enabled);
+    if (flipH) flipH.checked = Boolean(view.flipHorizontal);
+    if (flipV) flipV.checked = Boolean(view.flipVertical);
+    slot?.classList.toggle("empty", isEmpty);
+    slot?.classList.toggle("has-image", hasPreview);
+    slot?.classList.toggle("pending", Boolean(pending || removed));
+    slot?.classList.toggle("image-load-error", isLoadError);
+    if (meta) {
+      if (pending || removed) {
+        meta.textContent = text("referenceViewDropImage");
+      } else if (isLoadError) {
+        meta.textContent = text("referenceViewImageLoadError");
+      } else {
+        meta.textContent = hasPreview
+          ? `${fileText} · ${text("referenceViewReplaceAction")}`
+          : `${fileText} · ${text("referenceViewPickAction")}`;
+      }
+      meta.hidden = false;
+    }
+  }
+  const count = referenceViewDisplayCount();
+  if (els.referenceViewCount) els.referenceViewCount.textContent = `${count} / 6`;
+  updateReferenceViewToggleLabel();
+}
+
+function renderReferenceViewSetOptions() {
+  if (!els.referenceViewSetSelect) return;
+  els.referenceViewSetSelect.innerHTML = "";
+  const createOption = document.createElement("option");
+  createOption.value = "";
+  createOption.textContent = text("referenceViewNewSet");
+  els.referenceViewSetSelect.appendChild(createOption);
+  for (const item of referenceViewSets) {
+    const option = document.createElement("option");
+    option.value = item.key;
+    const name = referenceViewSetDisplayName(item);
+    option.textContent = `${name} (${item.viewCount || 0}/6)`;
+    option.title = name;
+    els.referenceViewSetSelect.appendChild(option);
+  }
+  els.referenceViewSetSelect.value = referenceViewCurrentKey;
+}
+
+function showReferenceViewSet(referenceSet) {
+  clearReferenceViewPending();
+  referenceViewCurrentSet = JSON.parse(JSON.stringify(referenceSet || blankReferenceViewSet()));
+  referenceViewCurrentKey = referenceViewCurrentSet.key || "";
+  const placement = referenceViewCurrentSet.placement || {};
+  const hasSet = Boolean(referenceViewCurrentKey);
+  if (els.referenceViewSetHint) {
+    els.referenceViewSetHint.textContent = text("referenceViewSetHint");
+  }
+  if (els.referenceViewRenameHintExtra) {
+    els.referenceViewRenameHintExtra.hidden = !hasSet;
+  }
+  const setDisplayName = referenceViewSetDisplayName(referenceViewCurrentSet);
+  if (els.referenceViewName) els.referenceViewName.value = setDisplayName;
+  if (els.referenceViewRename) {
+    if (referenceViewCurrentKey) {
+      els.referenceViewRename.title = `Rename set: ${setDisplayName}`;
+      els.referenceViewRename.setAttribute("aria-label", `Rename set: ${setDisplayName}`);
+      els.referenceViewRename.disabled = referenceViewBusy || referenceViewLoading;
+      if (els.referenceViewRenameAll) {
+        els.referenceViewRenameAll.disabled = referenceViewBusy || referenceViewLoading;
+        els.referenceViewRenameAll.title = `Rename set and files for: ${setDisplayName}`;
+        els.referenceViewRenameAll.setAttribute("aria-label", `Rename set and files for ${setDisplayName}`);
+      }
+    } else {
+      els.referenceViewRename.title = text("referenceViewRenameNoSelection");
+      els.referenceViewRename.setAttribute("aria-label", text("referenceViewRenameNoSelection"));
+      els.referenceViewRename.disabled = true;
+      if (els.referenceViewRenameAll) {
+        els.referenceViewRenameAll.disabled = true;
+        els.referenceViewRenameAll.title = text("referenceViewRenameNoSelection");
+        els.referenceViewRenameAll.setAttribute("aria-label", text("referenceViewRenameNoSelection"));
+      }
+    }
+  }
+  if (els.referenceViewDisplaySize) els.referenceViewDisplaySize.value = String(placement.displaySizeMeters ?? 1);
+  if (els.referenceViewDistance) els.referenceViewDistance.value = String(placement.distanceMeters ?? 10);
+  if (els.referenceViewOpacity) els.referenceViewOpacity.value = String(placement.opacity ?? 0.35);
+  if (els.referenceViewShowInFront) els.referenceViewShowInFront.checked = placement.showInFront !== false;
+  renderReferenceViewSetOptions();
+  renderReferenceViewSlots();
+}
+
+function newReferenceViewSet() {
+  showReferenceViewSet(blankReferenceViewSet());
+  setReferenceViewStatus(text("referenceViewReady"));
+  els.referenceViewName?.focus();
+  els.referenceViewName?.select();
+}
+
+async function loadReferenceViewSets(options = {}) {
+  if (!els.referenceViewPanel) return;
+  const requestToken = ++referenceViewLoadToken;
+  const project = referenceViewProjectPath();
+  const projectChanged = project !== referenceViewLoadedProject;
+  setReferenceViewLoading(true);
+  if (!project) {
+    referenceViewLoadedProject = "";
+    referenceViewSets = [];
+    showReferenceViewSet(blankReferenceViewSet());
+    setReferenceViewStatus(text("referenceViewNoProject"));
+    if (requestToken === referenceViewLoadToken) setReferenceViewLoading(false);
+    return;
+  }
+  if (projectChanged || !options.quiet) {
+    referenceViewSets = [];
+    showReferenceViewSet(blankReferenceViewSet());
+  }
+  if (!options.quiet) {
+    setReferenceViewStatus(text("referenceViewLoading"));
+  }
+  try {
+    const response = await fetch(`/api/reference-views?project=${encodeURIComponent(project)}`, { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (requestToken !== referenceViewLoadToken || project !== referenceViewProjectPath()) return;
+    referenceViewLoadedProject = project;
+    referenceViewSets = Array.isArray(payload.sets) ? payload.sets : [];
+    const requestedKey = options.selectKey ?? referenceViewCurrentKey;
+    const selected = referenceViewSets.find(item => item.key === requestedKey) || referenceViewSets[0] || blankReferenceViewSet();
+    showReferenceViewSet(selected);
+    if (!options.quiet) setReferenceViewStatus(text("referenceViewReady"));
+  } catch (error) {
+    if (requestToken !== referenceViewLoadToken || project !== referenceViewProjectPath()) return;
+    referenceViewSets = [];
+    showReferenceViewSet(blankReferenceViewSet());
+    setReferenceViewStatus(text("referenceViewFailed", error.message));
+  } finally {
+    if (requestToken === referenceViewLoadToken) setReferenceViewLoading(false);
+  }
+}
+
+function referenceViewPayloadFromForm() {
+  const project = referenceViewProjectPath();
+  if (!project) throw new Error(text("referenceViewNoProject"));
+  const name = (els.referenceViewName?.value || "").trim();
+  if (!name) throw new Error(text("referenceViewNameLabel"));
+  for (const input of [els.referenceViewDisplaySize, els.referenceViewDistance, els.referenceViewOpacity]) {
+    if (input && !input.checkValidity()) throw new Error(input.validationMessage);
+  }
+  const placement = referenceViewCurrentSet?.placement || {};
+  const views = {};
+  for (const direction of referenceViewDirections) {
+    const currentView = { ...blankReferenceView(), ...(referenceViewCurrentSet?.views?.[direction] || {}) };
+    views[direction] = {
+      enabled: Boolean(referenceViewInput("data-reference-view-enabled", direction)?.checked),
+      flipHorizontal: Boolean(referenceViewInput("data-reference-view-flip-h", direction)?.checked),
+      flipVertical: Boolean(referenceViewInput("data-reference-view-flip-v", direction)?.checked),
+      distanceMeters: currentView.distanceMeters ?? null,
+      displaySizeMeters: currentView.displaySizeMeters ?? null,
+      opacity: currentView.opacity ?? null
+    };
+  }
+  return {
+    project,
+    key: referenceViewCurrentKey,
+    name,
+    placement: {
+      origin: Array.isArray(placement.origin) && placement.origin.length === 3 ? placement.origin : [0, 0, 0],
+      displaySizeMeters: Number(els.referenceViewDisplaySize?.value),
+      distanceMeters: Number(els.referenceViewDistance?.value),
+      opacity: Number(els.referenceViewOpacity?.value),
+      showInFront: Boolean(els.referenceViewShowInFront?.checked)
+    },
+    views
+  };
+}
+
+async function upsertReferenceViewSet(draft) {
+  const formData = new FormData();
+  formData.append("manifest", JSON.stringify({
+    ...draft,
+    removeDirections: Array.from(referenceViewPendingRemovals)
+  }));
+  for (const direction of referenceViewDirections) {
+    const file = referenceViewPendingFiles.get(direction);
+    if (file) formData.append(`image.${direction}`, file, file.name);
+  }
+  const response = await fetch("/api/reference-views/upsert", { method: "POST", body: formData });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  return payload;
+}
+
+async function saveReferenceViewSet() {
+  if (referenceViewBusy || referenceViewLoading) return;
+  setReferenceViewBusy(true);
+  try {
+    const draft = referenceViewPayloadFromForm();
+    const response = await upsertReferenceViewSet(draft);
+    const key = response.set?.key;
+    if (!key) throw new Error("Reference set key was not returned");
+    clearReferenceViewPending();
+    await loadReferenceViewSets({ selectKey: key, quiet: true });
+    setReferenceViewStatus(text("referenceViewSaved", response.set?.viewCount ?? referenceViewDisplayCount()));
+  } catch (error) {
+    setReferenceViewStatus(text("referenceViewFailed", error.message));
+  } finally {
+    setReferenceViewBusy(false);
+  }
+}
+
+async function renameReferenceViewSet(nextName = null) {
+  if (referenceViewBusy || referenceViewLoading) return;
+  if (!referenceViewCurrentKey) {
+    setReferenceViewStatus(text("referenceViewRenameNoSelection"));
+    return;
+  }
+  const currentName = referenceViewSetDisplayName(referenceViewCurrentSet);
+  const nextNameOrPrompt = nextName == null
+    ? String(window.prompt(text("referenceViewRenamePrompt"), currentName) || "").trim()
+    : String(nextName || "").trim();
+  const normalizedNextName = nextNameOrPrompt;
+  if (!normalizedNextName || normalizedNextName === currentName) return;
+  setReferenceViewBusy(true);
+  setReferenceViewStatus(text("referenceViewRenaming"));
+  try {
+    const payload = await postJson("/api/reference-views/rename", {
+      project: referenceViewProjectPath(),
+      key: referenceViewCurrentKey,
+      name: normalizedNextName
+    });
+    const nextKey = payload.set?.key || referenceViewCurrentKey;
+    if (els.referenceViewName) {
+      els.referenceViewName.value = payload.set?.name || normalizedNextName;
+    }
+    await loadReferenceViewSets({ selectKey: nextKey, quiet: true });
+    setReferenceViewStatus(text("referenceViewRenamed", payload.set?.name || normalizedNextName));
+  } catch (error) {
+    setReferenceViewStatus(text("referenceViewFailed", error.message));
+  } finally {
+    setReferenceViewBusy(false);
+  }
+}
+
+function renameReferenceViewSetFromInput() {
+  if (!referenceViewCurrentKey || referenceViewBusy || referenceViewLoading) return;
+  const currentName = referenceViewSetDisplayName(referenceViewCurrentSet);
+  const nextName = (els.referenceViewName?.value || "").trim();
+  if (!nextName || nextName === currentName) return;
+  void renameReferenceViewSet(nextName);
+}
+
+async function normalizeReferenceViewNames() {
+  if (referenceViewBusy || referenceViewLoading) return;
+  if (!referenceViewCurrentKey) {
+    setReferenceViewStatus(text("referenceViewRenameNoSelection"));
+    return;
+  }
+  setReferenceViewBusy(true);
+  setReferenceViewStatus(text("referenceViewNormalizing"));
+  try {
+    const payload = await postJson("/api/reference-views/normalize", {
+      project: referenceViewProjectPath(),
+      key: referenceViewCurrentKey
+    });
+    const nextKey = payload.set?.key || referenceViewCurrentKey;
+    await loadReferenceViewSets({ selectKey: nextKey, quiet: true });
+    setReferenceViewStatus(text("referenceViewNormalized"));
+  } catch (error) {
+    setReferenceViewStatus(text("referenceViewFailed", error.message));
+  } finally {
+    setReferenceViewBusy(false);
+  }
+}
+
+async function renameAndNormalizeReferenceViewSet() {
+  if (referenceViewBusy || referenceViewLoading) return;
+  if (!referenceViewCurrentKey) {
+    setReferenceViewStatus(text("referenceViewRenameNoSelection"));
+    return;
+  }
+  const currentName = referenceViewSetDisplayName(referenceViewCurrentSet);
+  const requestedName = (els.referenceViewName?.value || "").trim();
+  let nextKey = referenceViewCurrentKey;
+  setReferenceViewBusy(true);
+  setReferenceViewStatus(text("referenceViewNormalizing"));
+  try {
+    if (requestedName && requestedName !== currentName) {
+      const renamePayload = await postJson("/api/reference-views/rename", {
+        project: referenceViewProjectPath(),
+        key: nextKey,
+        name: requestedName
+      });
+      nextKey = renamePayload.set?.key || nextKey;
+      if (els.referenceViewName) {
+        els.referenceViewName.value = renamePayload.set?.name || requestedName;
+      }
+    }
+    const normalizePayload = await postJson("/api/reference-views/normalize", {
+      project: referenceViewProjectPath(),
+      key: nextKey
+    });
+    const finalKey = normalizePayload.set?.key || nextKey;
+    await loadReferenceViewSets({ selectKey: finalKey, quiet: true });
+    setReferenceViewStatus(text("referenceViewNormalized"));
+  } catch (error) {
+    setReferenceViewStatus(text("referenceViewFailed", error.message));
+  } finally {
+    setReferenceViewBusy(false);
+  }
+}
+
+function stageReferenceViewFile(direction, file) {
+  if (referenceViewBusy || referenceViewLoading || !referenceViewDirections.includes(direction) || !file) return;
+  const filename = String(file.name || "");
+  const extension = filename.includes(".") ? `.${filename.split(".").pop().toLowerCase()}` : "";
+  if (!referenceViewImageExtensions.includes(extension)) {
+    setReferenceViewStatus(text("referenceViewFailed", "PNG, JPEG, WebP, BMP, or TIFF required"));
+    return;
+  }
+  if (file.size > 64 * 1024 * 1024) {
+    setReferenceViewStatus(text("referenceViewFailed", "Image is larger than 64 MB"));
+    return;
+  }
+  releaseReferenceViewObjectUrl(direction);
+  referenceViewPendingFiles.set(direction, file);
+  referenceViewPendingRemovals.delete(direction);
+  referenceViewObjectUrls.set(direction, URL.createObjectURL(file));
+  if (referenceViewCurrentSet?.views?.[direction]) {
+    referenceViewCurrentSet.views[direction].enabled = true;
+  }
+  renderReferenceViewSlots();
+  setReferenceViewStatus(text("referenceViewStaged", filename));
+}
+
+function removeReferenceView(direction) {
+  if (referenceViewBusy || referenceViewLoading || !referenceViewDirections.includes(direction)) return;
+  releaseReferenceViewObjectUrl(direction);
+  referenceViewPendingFiles.delete(direction);
+  if (referenceViewCurrentSet?.views?.[direction]?.file) referenceViewPendingRemovals.add(direction);
+  else referenceViewPendingRemovals.delete(direction);
+  if (referenceViewCurrentSet?.views?.[direction]) {
+    referenceViewCurrentSet.views[direction].enabled = false;
+  }
+  renderReferenceViewSlots();
+}
+
+function updateReferenceViewToggleLabel() {
+  if (!els.referenceViewToggleAll) return;
+  const anyEnabled = referenceViewDirections.some(direction => referenceViewInput("data-reference-view-enabled", direction)?.checked);
+  const key = anyEnabled ? "referenceViewHideAll" : "referenceViewShowAll";
+  els.referenceViewToggleAll.dataset.i18n = key;
+  els.referenceViewToggleAll.dataset.i18nTitle = key;
+  els.referenceViewToggleAll.textContent = text(key);
+  els.referenceViewToggleAll.title = text(key);
+}
+
+function toggleAllReferenceViews() {
+  if (referenceViewBusy || referenceViewLoading) return;
+  const anyEnabled = referenceViewDirections.some(direction => referenceViewInput("data-reference-view-enabled", direction)?.checked);
+  for (const direction of referenceViewDirections) {
+    const input = referenceViewInput("data-reference-view-enabled", direction);
+    if (input) input.checked = !anyEnabled;
+    if (referenceViewCurrentSet?.views?.[direction]) {
+      referenceViewCurrentSet.views[direction].enabled = !anyEnabled;
+    }
+  }
+  updateReferenceViewToggleLabel();
+}
+
+async function clearCurrentReferenceViewSet() {
+  if (referenceViewBusy || referenceViewLoading) return;
+  if (!referenceViewCurrentKey) {
+    newReferenceViewSet();
+    return;
+  }
+  const name = referenceViewCurrentSet?.name || referenceViewCurrentKey;
+  if (!window.confirm(text("referenceViewConfirmClear", name))) return;
+  setReferenceViewBusy(true);
+  try {
+    await postJson("/api/reference-views/delete", {
+      project: referenceViewProjectPath(),
+      key: referenceViewCurrentKey
+    });
+    referenceViewCurrentKey = "";
+    await loadReferenceViewSets({ selectKey: "", quiet: true });
+    newReferenceViewSet();
+    setReferenceViewStatus(text("referenceViewCleared"));
+  } catch (error) {
+    setReferenceViewStatus(text("referenceViewFailed", error.message));
+  } finally {
+    setReferenceViewBusy(false);
   }
 }
 
@@ -13375,39 +13994,69 @@ function setRandomRealmObjectPickerOpen(open) {
 
 function renderRandomRealmBlenderProjects() {
   if (!els.randomRealmBlenderProject) return;
-  els.randomRealmBlenderProject.innerHTML = "";
+  const projectSelects = [els.randomRealmBlenderProject, els.referenceViewProject].filter(Boolean);
+  for (const select of projectSelects) select.innerHTML = "";
   if (!randomRealmBlenderProjects.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = text("randomRealmBlenderNoProject");
-    els.randomRealmBlenderProject.appendChild(option);
+    for (const select of projectSelects) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = text("randomRealmBlenderNoProject");
+      select.appendChild(option);
+    }
     if (els.randomRealmProjectPath) {
       els.randomRealmProjectPath.textContent = "";
+    }
+    if (els.referenceViewProjectPath) {
+      els.referenceViewProjectPath.textContent = "";
     }
     renderBlenderGithubProjectOptions(blenderGithubShareState?.project?.path || "");
     return;
   }
-  for (const project of randomRealmBlenderProjects) {
-    const option = document.createElement("option");
-    option.value = project.path;
-    option.textContent = project.name || project.file || project.path;
-    els.randomRealmBlenderProject.appendChild(option);
+  for (const select of projectSelects) {
+    for (const project of randomRealmBlenderProjects) {
+      const option = document.createElement("option");
+      option.value = project.path;
+      option.textContent = project.name || project.file || project.path;
+      select.appendChild(option);
+    }
   }
   const saved = randomRealmArtContext.project;
-  els.randomRealmBlenderProject.value = randomRealmBlenderProjects.some(item => item.path === saved)
+  const selected = randomRealmBlenderProjects.some(item => item.path === saved)
     ? saved
     : randomRealmBlenderProjects[0].path;
+  for (const select of projectSelects) select.value = selected;
   updateRandomRealmProjectAddress();
-  renderBlenderGithubProjectOptions(blenderGithubShareState?.project?.path || els.randomRealmBlenderProject.value);
+  renderBlenderGithubProjectOptions(blenderGithubShareState?.project?.path || selected);
 }
 
 function updateRandomRealmProjectAddress() {
   const project = selectedRandomRealmProject();
-  const path = project?.path || els.randomRealmBlenderProject?.value || "";
+  const path = project?.path || referenceViewProjectPath();
   if (els.randomRealmProjectPath) {
     els.randomRealmProjectPath.textContent = path;
   }
-  updateBlenderPromptOutput();
+  if (els.referenceViewProjectPath) {
+    els.referenceViewProjectPath.textContent = path;
+  }
+}
+
+function selectRandomRealmBlenderProject(projectPath, options = {}) {
+  const nextProject = String(projectPath || "");
+  for (const select of [els.randomRealmBlenderProject, els.referenceViewProject].filter(Boolean)) {
+    if (Array.from(select.options).some(option => option.value === nextProject)) {
+      select.value = nextProject;
+    }
+  }
+  randomRealmArtContext.project = nextProject;
+  randomRealmLoadedObjectsProject = "";
+  randomRealmLastLiveObject = "";
+  randomRealmLiveSelectedObjects = [];
+  updateRandomRealmProjectAddress();
+  saveRandomRealmArtContext();
+  loadReferenceViewSets();
+  if (options.loadObjects !== false) {
+    loadRandomRealmBlenderObjects();
+  }
 }
 
 function filteredRandomRealmObjects() {
@@ -13440,7 +14089,7 @@ function renderRandomRealmBlenderObjects() {
       const option = document.createElement("option");
       option.value = item.name;
       option.textContent = randomRealmObjectLabel(item);
-      option.textContent = `${item.name} · ${item.type || "Object"}`;
+      option.textContent = `${item.name} \u00b7 ${item.type || "Object"}`;
       option.textContent = randomRealmObjectLabel(item);
       option.title = [
         item.name,
@@ -14113,7 +14762,7 @@ function randomRealmStagedDraftForTexture(drafts, texture) {
 }
 
 function randomRealmStagedTextureKindLabel(texture) {
-  return texture?.inferredKind ? randomRealmTextureKindLabel(texture.inferredKind) : (language === "zh" ? "未识别" : "Unknown");
+  return texture?.inferredKind ? randomRealmTextureKindLabel(texture.inferredKind) : (language === "zh" ? "æœªè¯†åˆ«" : "Unknown");
 }
 
 function randomRealmStagedKindSummary(textures) {
@@ -14595,7 +15244,7 @@ function renderRandomRealmUsedTextures() {
       remove.type = "button";
       remove.className = "texture-remove-button";
       remove.setAttribute("aria-label", `Remove ${randomRealmTextureDisplayName(texture, 54)}`);
-      remove.textContent = "×";
+      remove.textContent = "\u00d7";
       remove.addEventListener("click", event => {
         event.preventDefault();
         event.stopPropagation();
@@ -14652,7 +15301,6 @@ function confirmRandomRealmObjectSelection() {
   setRandomRealmObjectPickerOpen(false);
   renderRandomRealmUsedTextures();
   scheduleRandomRealmTextureAutoPack();
-  updateBlenderPromptOutput();
 }
 
 function clearRandomRealmObjectSearch() {
@@ -14808,6 +15456,9 @@ async function loadRandomRealmBlenderProjects(options = {}) {
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     randomRealmBlenderProjects = Array.isArray(payload.projects) ? payload.projects : [];
     renderRandomRealmBlenderProjects();
+    if (referenceViewProjectPath() !== referenceViewLoadedProject) {
+      await loadReferenceViewSets({ quiet: true });
+    }
     if (els.randomRealmBlenderProject.value) {
       if (loadObjects) {
         await loadRandomRealmBlenderObjects();
@@ -17816,6 +18467,13 @@ if (els.blenderGithubRefresh) {
     refreshRemote: true
   }));
 }
+if (els.blenderGithubRename) {
+  els.blenderGithubRename.addEventListener("click", () => {
+    const selected = getSelectedBlenderGithubProjectCard();
+    if (!selected?.project) return;
+    void renameBlenderGithubProject(selected.project);
+  });
+}
 if (els.blenderGithubBlendCards) {
   els.blenderGithubBlendCards.addEventListener("dragstart", event => {
     const card = event.target.closest(".blender-github-blend-card");
@@ -17928,34 +18586,6 @@ for (const field of [
   field.addEventListener("input", updateRandomRealmArtContext);
   field.addEventListener("change", updateRandomRealmArtContext);
 }
-for (const field of [
-  els.blenderPromptFormat,
-  els.blenderPromptImage,
-  els.blenderPromptCustomWidth,
-  els.blenderPromptCustomLength,
-  els.blenderPromptStyle,
-  els.blenderPromptBasics
-].filter(Boolean)) {
-  field.addEventListener("input", updateBlenderPromptOutput);
-}
-if (els.blenderPromptResolution) {
-  els.blenderPromptResolution.addEventListener("change", () => {
-    renderBlenderPromptResolution();
-    updateBlenderPromptOutput();
-    if (els.blenderPromptResolution.value === "custom") {
-      els.blenderPromptCustomWidth?.focus();
-    }
-  });
-}
-if (els.generateBlenderPrompt) {
-  els.generateBlenderPrompt.addEventListener("click", generateBlenderPrompt);
-}
-if (els.copyBlenderPrompt) {
-  els.copyBlenderPrompt.addEventListener("click", copyBlenderPrompt);
-}
-if (els.clearBlenderPrompt) {
-  els.clearBlenderPrompt.addEventListener("click", clearBlenderPrompt);
-}
 if (els.randomRealmProjectSearch) {
   els.randomRealmProjectSearch.addEventListener("input", scheduleRandomRealmProjectSearch);
   els.randomRealmProjectSearch.addEventListener("keydown", event => {
@@ -17971,13 +18601,121 @@ if (els.randomRealmProjectSearch) {
 }
 if (els.randomRealmBlenderProject) {
   els.randomRealmBlenderProject.addEventListener("change", () => {
-    randomRealmArtContext.project = els.randomRealmBlenderProject.value;
-    randomRealmLoadedObjectsProject = "";
-    randomRealmLastLiveObject = "";
-    randomRealmLiveSelectedObjects = [];
-    updateRandomRealmProjectAddress();
-    saveRandomRealmArtContext();
-    loadRandomRealmBlenderObjects();
+    selectRandomRealmBlenderProject(els.randomRealmBlenderProject.value, { loadObjects: true });
+  });
+}
+if (els.referenceViewProject) {
+  els.referenceViewProject.addEventListener("change", () => {
+    selectRandomRealmBlenderProject(els.referenceViewProject.value, { loadObjects: false });
+  });
+}
+if (els.referenceViewSetSelect) {
+  els.referenceViewSetSelect.addEventListener("change", () => {
+    const selected = referenceViewSets.find(item => item.key === els.referenceViewSetSelect.value);
+    showReferenceViewSet(selected || blankReferenceViewSet());
+    setReferenceViewStatus(text("referenceViewReady"));
+  });
+}
+if (els.referenceViewNew) {
+  els.referenceViewNew.addEventListener("click", newReferenceViewSet);
+}
+if (els.referenceViewRename) {
+  els.referenceViewRename.addEventListener("click", renameReferenceViewSet);
+}
+if (els.referenceViewName) {
+  els.referenceViewName.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      renameReferenceViewSetFromInput();
+    }
+  });
+  els.referenceViewName.addEventListener("blur", () => {
+    renameReferenceViewSetFromInput();
+  });
+}
+if (els.referenceViewSave) {
+  els.referenceViewSave.addEventListener("click", saveReferenceViewSet);
+}
+if (els.referenceViewToggleAll) {
+  els.referenceViewToggleAll.addEventListener("click", toggleAllReferenceViews);
+}
+if (els.referenceViewClear) {
+  els.referenceViewClear.addEventListener("click", clearCurrentReferenceViewSet);
+}
+if (els.referenceViewNormalize) {
+  els.referenceViewNormalize.addEventListener("click", normalizeReferenceViewNames);
+}
+if (els.referenceViewRenameAll) {
+  els.referenceViewRenameAll.addEventListener("click", renameAndNormalizeReferenceViewSet);
+}
+if (els.referenceViewFileInput) {
+  els.referenceViewFileInput.addEventListener("change", event => {
+    const file = event.target.files?.[0];
+    if (file && referenceViewPickDirection) stageReferenceViewFile(referenceViewPickDirection, file);
+    event.target.value = "";
+  });
+}
+if (els.referenceViewSlots) {
+  els.referenceViewSlots.addEventListener("click", event => {
+    const remove = event.target.closest("[data-reference-view-remove]");
+    if (remove) {
+      removeReferenceView(remove.dataset.referenceViewRemove);
+      return;
+    }
+    const pick = event.target.closest("[data-reference-view-pick]");
+    if (pick) {
+      openReferenceViewPicker(pick.dataset.referenceViewPick);
+      return;
+    }
+    if (event.target.closest(".reference-view-slot-tools")) {
+      return;
+    }
+    if (event.target.closest("input")) {
+      return;
+    }
+    const slot = event.target.closest(".reference-view-slot[data-reference-direction]");
+    if (slot) {
+      openReferenceViewPicker(slot.dataset.referenceDirection);
+    }
+  });
+  els.referenceViewSlots.addEventListener("keydown", event => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const slot = event.target.closest(".reference-view-slot[data-reference-direction]");
+    if (!slot || event.target.closest("input") || event.target.closest("button")) return;
+    event.preventDefault();
+    openReferenceViewPicker(slot.dataset.referenceDirection);
+  });
+  els.referenceViewSlots.addEventListener("change", event => {
+    const input = event.target;
+    const direction = input.dataset.referenceViewEnabled
+      || input.dataset.referenceViewFlipH
+      || input.dataset.referenceViewFlipV
+      || "";
+    if (!direction || !referenceViewCurrentSet?.views?.[direction]) return;
+    const view = referenceViewCurrentSet.views[direction];
+    if (input.dataset.referenceViewEnabled) view.enabled = input.checked;
+    if (input.dataset.referenceViewFlipH) view.flipHorizontal = input.checked;
+    if (input.dataset.referenceViewFlipV) view.flipVertical = input.checked;
+    updateReferenceViewToggleLabel();
+  });
+  els.referenceViewSlots.addEventListener("dragover", event => {
+    const slot = event.target.closest("[data-reference-direction]");
+    if (!slot) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    slot.classList.add("drag-over");
+  });
+  els.referenceViewSlots.addEventListener("dragleave", event => {
+    const slot = event.target.closest("[data-reference-direction]");
+    if (slot && !slot.contains(event.relatedTarget)) slot.classList.remove("drag-over");
+  });
+  els.referenceViewSlots.addEventListener("drop", event => {
+    const slot = event.target.closest("[data-reference-direction]");
+    if (!slot) return;
+    event.preventDefault();
+    slot.classList.remove("drag-over");
+    const file = event.dataTransfer?.files?.[0];
+    if (file) stageReferenceViewFile(slot.dataset.referenceDirection, file);
   });
 }
 if (els.randomRealmSyncLiveSelection) {
@@ -18261,13 +18999,6 @@ document.addEventListener("keydown", event => {
     setMusicAddMenuOpen(false);
     els.addMusic?.focus();
   }
-  if (event.ctrlKey && event.altKey && event.key === "Backspace" && els.clearBlenderPrompt) {
-    const active = document.activeElement;
-    if (active?.closest?.(".blender-prompt-panel")) {
-      event.preventDefault();
-      clearBlenderPrompt();
-    }
-  }
 });
 
 const savedVolume = Number(localStorage.getItem(storageKeys.volume));
@@ -18287,7 +19018,6 @@ setBlenderWorkspaceView(activeBlenderView, { persist: false });
 loadConsoleConfig();
 restoreInitialModuleUrl();
 renderRandomRealmArtContext();
-renderBlenderPromptBuilder();
 runtimeActivityReady = true;
 syncRuntimeActivity({ resume: true });
 loadProductUpdateStatuses({ check: true, quiet: true });

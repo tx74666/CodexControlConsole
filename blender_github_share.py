@@ -182,6 +182,10 @@ def _repository_web_url(value) -> str:
     return f"https://github.com/{match.group('owner')}/{match.group('repo').removesuffix('.git')}"
 
 
+def _safe_display_name(value) -> str:
+    return _safe_text(value, 120).strip()
+
+
 class BlenderGithubShareService:
     def __init__(
         self,
@@ -206,14 +210,14 @@ class BlenderGithubShareService:
                 payload = json.loads(self.config_file.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 payload = {}
-            if not isinstance(payload, dict):
-                payload = {}
-            projects = payload.get("projects")
-            if not isinstance(projects, dict):
-                projects = {}
-            project_order = payload.get("projectOrder")
-            if not isinstance(project_order, list):
-                project_order = []
+        if not isinstance(payload, dict):
+            payload = {}
+        projects = payload.get("projects")
+        if not isinstance(projects, dict):
+            projects = {}
+        project_order = payload.get("projectOrder")
+        if not isinstance(project_order, list):
+            project_order = []
             if not project_order:
                 project_order = [
                     record.get("blendFile")
@@ -268,16 +272,53 @@ class BlenderGithubShareService:
                     if slug and path:
                         repository_paths[slug] = path
 
+        return {
+            "version": 3,
+            "lastProject": _safe_text(payload.get("lastProject"), 1000),
+            "lastRepository": _repository_web_url(payload.get("lastRepository")),
+            "projectOrder": cleaned_project_order,
+            "repositoryOrder": repository_order,
+            "repositoryPaths": repository_paths,
+            "repositoryDisplayNames": {
+                (_repository_slug(_safe_text(raw_key, 220)) or _safe_text(raw_key, 220)): _safe_display_name(value)
+                for raw_key, value in (payload.get("repositoryDisplayNames") or {}).items()
+                if _safe_text(raw_key, 220)
+            },
+            "fileOrder": file_order,
+            "projects": projects,
+        }
+
+    def _read_repository_display_names(self) -> dict[str, str]:
+        store = self._read_store()
+        raw = store.get("repositoryDisplayNames")
+        if isinstance(raw, dict):
             return {
-                "version": 3,
-                "lastProject": _safe_text(payload.get("lastProject"), 1000),
-                "lastRepository": _repository_web_url(payload.get("lastRepository")),
-                "projectOrder": cleaned_project_order,
-                "repositoryOrder": repository_order,
-                "repositoryPaths": repository_paths,
-                "fileOrder": file_order,
-                "projects": projects,
+                _safe_text(key, 220): _safe_display_name(value)
+                for key, value in raw.items()
+                if _safe_text(key, 220)
             }
+        return {}
+
+    def _get_repository_display_name(self, repository_url: str) -> str:
+        slug = _repository_slug(repository_url)
+        if not slug:
+            return ""
+        return _safe_display_name(self._read_repository_display_names().get(slug))
+
+    def _set_repository_display_name(self, store: dict, repository_url: str, display_name: str) -> None:
+        slug = _repository_slug(repository_url)
+        if not slug:
+            return
+        display_names = dict(store.get("repositoryDisplayNames") or {})
+        safe_name = _safe_display_name(display_name)
+        if safe_name:
+            display_names[slug] = safe_name
+        else:
+            display_names.pop(slug, None)
+        if display_names:
+            store["repositoryDisplayNames"] = display_names
+        elif "repositoryDisplayNames" in store:
+            store.pop("repositoryDisplayNames", None)
 
     def _read_catalog(self) -> list[dict]:
         if not self.catalog_file:
@@ -306,6 +347,7 @@ class BlenderGithubShareService:
             seen.add(slug)
             repositories.append({
                 "name": _safe_text(record.get("name"), 120) or repository_web_url.rsplit("/", 1)[-1],
+                "displayName": _safe_text(record.get("displayName"), 120),
                 "file": _safe_text(record.get("blendFile"), 260),
                 "path": "",
                 "directory": "",
@@ -425,10 +467,16 @@ class BlenderGithubShareService:
                     continue
                 if repository_key in seen_repositories:
                     continue
+                display_name = _safe_display_name(config.get("displayName"))
+                if not display_name:
+                    display_name = _safe_display_name(self._get_repository_display_name(repository_url))
+                if not display_name:
+                    display_name = repository_url.rstrip("/").rsplit("/", 1)[-1] or root.name
                 seen_roots.add(root_key)
                 seen_repositories.add(repository_key)
                 projects.append({
-                    "name": repository_url.rstrip("/").rsplit("/", 1)[-1] or root.name,
+                    "name": display_name,
+                    "displayName": display_name,
                     "file": representative.name,
                     "path": str(representative),
                     "directory": str(root),
@@ -452,6 +500,7 @@ class BlenderGithubShareService:
         selected_git: dict | None = None,
     ) -> list[dict]:
         local_projects = self._local_project_collection(selected_file, selected_config, selected_git)
+        repository_display_names = self._read_repository_display_names()
         local_by_repository = {
             _repository_slug(item.get("repositoryUrl")): item
             for item in local_projects
@@ -463,17 +512,23 @@ class BlenderGithubShareService:
         for catalog_entry in self._read_catalog():
             slug = _repository_slug(catalog_entry["repositoryUrl"])
             local = local_by_repository.pop(slug, None)
+            default_name = _safe_display_name(catalog_entry.get("displayName")) or _safe_display_name(catalog_entry.get("name"))
             if local:
                 merged = dict(catalog_entry)
                 merged.update(local)
-                merged["name"] = catalog_entry["name"]
+                merged["displayName"] = _safe_display_name(local.get("displayName") or repository_display_names.get(slug) or catalog_entry.get("displayName") or catalog_entry.get("name"))
+                merged["name"] = merged["displayName"]
                 merged["file"] = local.get("file") or catalog_entry.get("file", "")
                 merged["version"] = local.get("version") or catalog_entry.get("version", "")
                 merged["defaultBranch"] = local.get("defaultBranch") or catalog_entry.get("defaultBranch", "main")
                 merged["catalog"] = True
                 projects.append(merged)
             else:
-                projects.append(dict(catalog_entry))
+                display_name = _safe_display_name(repository_display_names.get(slug) or default_name)
+                catalog = dict(catalog_entry)
+                catalog["displayName"] = display_name
+                catalog["name"] = display_name
+                projects.append(catalog)
             seen.add(slug)
 
         for local in local_projects:
@@ -597,6 +652,7 @@ class BlenderGithubShareService:
             "repositoryUrl": "",
             "visibility": "private",
             "scope": "current",
+            "displayName": "",
             "includePatterns": list(DEFAULT_INCLUDE_PATTERNS),
             "excludePatterns": list(DEFAULT_EXCLUDE_PATTERNS),
             "version": "v0.1.0",
@@ -612,6 +668,7 @@ class BlenderGithubShareService:
         config["repositoryUrl"] = _safe_text(config.get("repositoryUrl"), 500)
         config["visibility"] = "public" if config.get("visibility") == "public" else "private"
         config["scope"] = config.get("scope") if config.get("scope") in {"current", "project", "custom"} else "current"
+        config["displayName"] = _safe_display_name(config.get("displayName"))
         config["includePatterns"] = _split_patterns(config.get("includePatterns"), DEFAULT_INCLUDE_PATTERNS)
         config["excludePatterns"] = _split_patterns(config.get("excludePatterns"), DEFAULT_EXCLUDE_PATTERNS)
         config["version"] = _safe_text(config.get("version"), 48) or "v0.1.0"
@@ -630,6 +687,8 @@ class BlenderGithubShareService:
             if scope not in {"current", "project", "custom"}:
                 raise ValueError("Unknown share scope")
             config["scope"] = scope
+        if "displayName" in payload:
+            config["displayName"] = _safe_display_name(payload.get("displayName"))
         if "includePatterns" in payload:
             config["includePatterns"] = _split_patterns(payload.get("includePatterns"))
         if "excludePatterns" in payload:
@@ -654,6 +713,7 @@ class BlenderGithubShareService:
             store["projects"][_path_key(blend_file)] = record
             self._pin_in_store(store, blend_file)
             self._pin_repository_in_store(store, config.get("repositoryUrl", ""), blend_file)
+            self._set_repository_display_name(store, config.get("repositoryUrl", ""), config.get("displayName", ""))
             store["lastProject"] = str(blend_file)
             self._write_store(store)
 
@@ -953,11 +1013,19 @@ class BlenderGithubShareService:
         }
 
     def _cloud_status(self, repository: dict, collection: list[dict]) -> dict:
+        repository_name = (
+            _safe_display_name(repository.get("displayName"))
+            or self._get_repository_display_name(repository.get("repositoryUrl"))
+            or repository.get("name", "").strip()
+            or repository.get("repositoryUrl", "").rstrip("/").rsplit("/", 1)[-1]
+            or ""
+        )
         config = self._default_config()
         config.update({
             "repositoryUrl": repository.get("remoteUrl") or repository["repositoryUrl"],
             "visibility": repository.get("visibility") or "private",
             "version": repository.get("version") or "v0.1.0",
+            "displayName": repository_name,
         })
         git = {
             "initialized": False,
@@ -986,8 +1054,9 @@ class BlenderGithubShareService:
             "ok": True,
             "collection": {"projects": collection},
             "project": {
-                "name": repository["name"],
-                "rootName": repository["name"],
+                "name": repository_name,
+                "displayName": repository_name,
+                "rootName": repository.get("name", repository_name),
                 "path": "",
                 "directory": "",
                 "repositoryUrl": repository["repositoryUrl"],
@@ -1229,6 +1298,43 @@ try {
         result["message"] = "Project share settings saved"
         return result
 
+    def rename(self, payload: dict) -> dict:
+        raw_project = _safe_text(payload.get("project"), 1000)
+        raw_repository = _safe_text(payload.get("repositoryUrl"), 500)
+        display_name = _safe_display_name(payload.get("displayName"))
+        if not display_name:
+            raise ValueError("Display name is required")
+        repository = self._repository_selection({
+            "project": raw_project,
+            "repositoryUrl": raw_repository,
+        })
+        repository_url = repository.get("repositoryUrl") or _repository_web_url(raw_repository)
+        if not repository_url:
+            raise ValueError("No repository selected")
+
+        with self._config_lock:
+            store = self._read_store()
+            self._set_repository_display_name(store, repository_url, display_name)
+            repository_path = _safe_text(repository.get("path"), 1000)
+            if repository_path:
+                path = Path(repository_path)
+                path_key = _path_key(path)
+                projects = dict(store.get("projects", {}))
+                record = dict(projects.get(path_key, {}))
+                if not isinstance(record, dict):
+                    record = {}
+                record["displayName"] = display_name
+                record["blendFile"] = str(path)
+                record["projectRoot"] = str(path.parent)
+                record["updated"] = datetime.now(timezone.utc).isoformat()
+                record["repositoryUrl"] = record.get("repositoryUrl") or repository.get("repositoryUrl") or ""
+                projects[path_key] = record
+                store["projects"] = projects
+                store["lastProject"] = str(path)
+            self._pin_repository_in_store(store, repository_url, Path(repository_path) if repository_path else None)
+            self._write_store(store)
+        return self.status(raw_project or repository_url)
+
     def _append_missing_lines(self, path: Path, lines, heading="") -> list[str]:
         try:
             existing = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -1424,12 +1530,19 @@ try {
             root, blend_file, _ = self._resolve_project(raw_project)
             config = self._stored_config(blend_file)
             git = self._git_status(root, blend_file)
+            repository_url = git.get("repositoryWebUrl") or _repository_web_url(config.get("repositoryUrl"))
+            display_name = _safe_display_name(config.get("displayName"))
+            if not display_name:
+                display_name = _safe_display_name(self._get_repository_display_name(repository_url))
+            if not display_name:
+                display_name = blend_file.stem
             return {
-                "name": blend_file.stem,
+                "name": display_name,
+                "displayName": display_name,
                 "file": blend_file.name,
                 "path": str(blend_file),
                 "directory": str(root),
-                "repositoryUrl": git.get("repositoryWebUrl") or _repository_web_url(config.get("repositoryUrl")),
+                "repositoryUrl": repository_url,
                 "remoteUrl": git.get("remoteUrl") or config.get("repositoryUrl", ""),
                 "version": git.get("lastTag") or config.get("version", ""),
                 "state": git.get("state") or "uninitialized",
@@ -1453,8 +1566,10 @@ try {
         remote_url = raw_repository or (raw_project if _github_match(raw_project) else "")
         if remote_url:
             web_url = _repository_web_url(remote_url)
+            display_name = _safe_display_name(self._get_repository_display_name(web_url)) or web_url.rsplit("/", 1)[-1]
             return {
-                "name": web_url.rsplit("/", 1)[-1],
+                "name": display_name,
+                "displayName": display_name,
                 "file": "",
                 "path": "",
                 "directory": "",
@@ -1471,12 +1586,19 @@ try {
         root, blend_file, _ = self._resolve_project(raw_project)
         config = self._stored_config(blend_file)
         git = self._git_status(root, blend_file)
+        repository_url = git.get("repositoryWebUrl") or _repository_web_url(config.get("repositoryUrl"))
+        display_name = _safe_display_name(config.get("displayName"))
+        if not display_name:
+            display_name = _safe_display_name(self._get_repository_display_name(repository_url))
+        if not display_name:
+            display_name = blend_file.stem
         return {
-            "name": blend_file.stem,
+            "name": display_name,
+            "displayName": display_name,
             "file": blend_file.name,
             "path": str(blend_file),
             "directory": str(root),
-            "repositoryUrl": git.get("repositoryWebUrl") or _repository_web_url(config.get("repositoryUrl")),
+            "repositoryUrl": repository_url,
             "remoteUrl": git.get("remoteUrl") or config.get("repositoryUrl", ""),
             "version": git.get("lastTag") or config.get("version", ""),
             "state": git.get("state") or "uninitialized",

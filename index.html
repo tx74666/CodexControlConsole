@@ -50,7 +50,7 @@
       }
     })();
   </script>
-<link rel="stylesheet" href="styles.css?v=control-console-1011">
+<link rel="stylesheet" href="styles.css?v=control-console-1018">
 </head>
 <body>
   <main class="app-shell">
@@ -162,7 +162,7 @@
         <div class="github-download-actions" aria-label="Product downloads">
           <a id="updateProductConsole" class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="true" data-update-product="console">
             <span>Codex Console</span>
-            <small id="updateProductConsoleBadge" class="update-product-badge">v1.0.2</small>
+            <small id="updateProductConsoleBadge" class="update-product-badge">v1.0.3</small>
           </a>
           <a id="updateProductWorld" class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="false" data-update-product="world">
             <span>Codex World</span>
@@ -172,7 +172,7 @@
 
         <div class="console-update-bar">
           <div class="console-update-copy">
-            <span id="consoleUpdateCurrent" class="workspace-pill">v1.0.2</span>
+            <span id="consoleUpdateCurrent" class="workspace-pill">v1.0.3</span>
             <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
             <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
           </div>
@@ -432,6 +432,7 @@
         <div class="blender-subnav" role="tablist" aria-label="Blender workspace">
           <span class="blender-subtab-drop" aria-hidden="true"></span>
           <button id="blenderHelperTab" class="blender-subtab active" type="button" role="tab" aria-selected="true" aria-controls="blenderHelperView" data-blender-view-target="helper" data-i18n="blenderHelperTab">Helper</button>
+          <button id="blenderCharacterTab" class="blender-subtab" type="button" role="tab" aria-selected="false" aria-controls="blenderCharacterDesignerView" data-blender-view-target="character" data-i18n="blenderCharacterTab">Character Designer</button>
           <button id="blenderBuilderTab" class="blender-subtab" type="button" role="tab" aria-selected="false" aria-controls="blenderBuilderView" data-blender-view-target="builder" data-i18n="blenderBuilderTab">Builder</button>
         </div>
 
@@ -555,57 +556,187 @@
         </div>
           </article>
 
-          <article id="blenderPromptPanel" class="panel blender-prompt-panel">
-        <div class="panel-head">
-          <div>
-            <div class="section-label" data-i18n="blenderSectionLabel">Blender</div>
-            <h2 data-i18n="blenderPromptTitle">Prompt Builder</h2>
-          </div>
-          <div class="panel-actions">
-            <button id="generateBlenderPrompt" class="ghost-button primary-action" type="button" data-i18n="blenderPromptGenerate">Generate Prompt</button>
-            <button id="copyBlenderPrompt" class="ghost-button" type="button" data-i18n="blenderPromptCopy">Copy</button>
-            <button id="clearBlenderPrompt" class="ghost-button" type="button" data-i18n="blenderPromptClear" title="Ctrl+Alt+Backspace">Clear</button>
-          </div>
-        </div>
+        </section>
 
-        <div class="blender-prompt-grid">
-          <label class="codex-art-field">
-            <span data-i18n="blenderPromptFormatLabel">Format</span>
-            <textarea id="blenderPromptFormat" rows="4" data-i18n-placeholder="blenderPromptFormatPlaceholder"></textarea>
-          </label>
-          <label class="codex-art-field">
-            <span data-i18n="blenderPromptImageLabel">Image Requirements</span>
-            <textarea id="blenderPromptImage" rows="4" data-i18n-placeholder="blenderPromptImagePlaceholder"></textarea>
-          </label>
-          <label class="codex-art-field">
-            <span data-i18n="blenderPromptResolutionLabel">Resolution</span>
-            <div class="resolution-control">
-              <select id="blenderPromptResolution">
-                <option value="1k">1K</option>
-                <option value="2k">2K</option>
-                <option value="custom">Custom</option>
-              </select>
-              <div id="blenderPromptCustomResolution" class="resolution-custom-grid" hidden>
-                <input id="blenderPromptCustomWidth" type="number" min="1" step="1" inputmode="numeric" data-i18n-placeholder="blenderPromptCustomWidthPlaceholder">
-                <input id="blenderPromptCustomLength" type="number" min="1" step="1" inputmode="numeric" data-i18n-placeholder="blenderPromptCustomLengthPlaceholder">
+        <section id="blenderCharacterDesignerView" class="blender-subview" data-blender-view="character" role="tabpanel" aria-labelledby="blenderCharacterTab" hidden>
+          <article id="referenceViewPanel" class="panel reference-view-panel">
+            <div class="panel-head reference-view-head">
+              <div>
+                <div class="section-label" data-i18n="referenceViewSectionLabel">Character Designer</div>
+                <h2 data-i18n="referenceViewTitle">Reference View Set</h2>
+              </div>
+              <span id="referenceViewCount" class="workspace-pill">0 / 6</span>
+            </div>
+
+            <div class="reference-view-project-row">
+              <label class="codex-art-field">
+                <span data-i18n="randomRealmBlenderProjectLabel">Blender Project</span>
+                <select id="referenceViewProject"></select>
+                <small id="referenceViewProjectPath" class="field-path"></small>
+              </label>
+            </div>
+
+            <div class="reference-view-set-row">
+              <label class="codex-art-field">
+                <span data-i18n="referenceViewSetLabel">Set</span>
+                <select id="referenceViewSetSelect"></select>
+              </label>
+              <div class="reference-view-name-inline">
+                <label class="codex-art-field">
+                  <span data-i18n="referenceViewNameLabel">Name</span>
+                  <input id="referenceViewName" type="text" maxlength="120" value="Reference Set">
+                  <small class="reference-view-inline-hint" data-i18n="referenceViewRenameHint">Press Enter to rename this set name.</small>
+                </label>
+                <div class="reference-view-name-actions">
+                  <span class="reference-view-sub-label" data-i18n="referenceViewRenameAllLabel">Rename All</span>
+                  <div class="reference-view-name-line">
+                    <button id="referenceViewRename" class="ghost-button reference-view-action" type="button" data-i18n-title="referenceViewRename" data-i18n="referenceViewRename" title="Rename current set">Rename Set</button>
+                    <button id="referenceViewRenameAll" class="ghost-button reference-view-action primary-action" type="button" data-i18n-title="referenceViewRenameAll" data-i18n="referenceViewRenameAll" title="Rename set + direction image filenames">Rename All</button>
+                  </div>
+                </div>
+              </div>
+              <div class="reference-view-set-actions-wrap">
+                <small class="reference-view-sub-label" data-i18n="referenceViewSetToolsLabel">Set tools</small>
+                <div class="reference-view-set-actions">
+                  <button id="referenceViewNew" class="ghost-button reference-view-action" type="button" data-i18n-title="referenceViewNewSet" data-i18n="referenceViewNew" title="Create a new set">New</button>
+                  <button id="referenceViewNormalize" class="ghost-button reference-view-action" type="button" data-i18n-title="referenceViewNormalize" data-i18n="referenceViewNormalize" title="Auto-normalize direction file names">Normalize Names</button>
+                </div>
               </div>
             </div>
-          </label>
-          <label class="codex-art-field">
-            <span data-i18n="blenderPromptStyleLabel">Style</span>
-            <textarea id="blenderPromptStyle" rows="3" data-i18n-placeholder="blenderPromptStylePlaceholder"></textarea>
-          </label>
-          <label class="codex-art-field">
-            <span data-i18n="blenderPromptBasicsLabel">Base Info</span>
-            <textarea id="blenderPromptBasics" rows="3" data-i18n-placeholder="blenderPromptBasicsPlaceholder"></textarea>
-          </label>
-          <label class="codex-art-field wide">
-            <span data-i18n="blenderPromptOutputLabel">Generated Prompt</span>
-            <textarea id="blenderPromptOutput" class="prompt-output" rows="10" readonly></textarea>
-          </label>
-          <p id="blenderPromptStatus" class="tool-status wide" data-i18n="randomRealmArtReady">Ready</p>
-        </div>
+            <p id="referenceViewActionHint" class="manager-hint reference-view-hint" data-i18n="referenceViewActionHint">
+              Choose a set, then click or drag an image into any direction card, then click Create / Update.
+            </p>
+            <p id="referenceViewSetHint" class="manager-hint reference-view-hint" data-i18n="referenceViewSetHint">
+              Select a set, then click a direction card to replace that image. Drag or click to choose.
+            </p>
+            <p id="referenceViewTileHint" class="manager-hint reference-view-hint reference-view-click-hint" data-i18n="referenceViewTileHint">
+              Click a direction card first, or drag image files onto it, then click Create / Update.
+            </p>
+            <p id="referenceViewRenameHintExtra" class="manager-hint reference-view-hint reference-view-rename-hint" data-i18n="referenceViewRenameHintExtra" hidden>
+              Use Rename Set first, then Save/Update to keep the new name.
+            </p>
+
+            <div class="reference-view-settings">
+              <label class="codex-art-field">
+                <span data-i18n="referenceViewDisplaySize">Display Size (m)</span>
+                <input id="referenceViewDisplaySize" type="number" min="0.001" max="1000000" step="any" value="1">
+              </label>
+              <label class="codex-art-field">
+                <span data-i18n="referenceViewDistance">Distance (m)</span>
+                <input id="referenceViewDistance" type="number" min="0" max="1000000" step="any" value="10">
+              </label>
+              <label class="codex-art-field">
+                <span data-i18n="referenceViewOpacity">Opacity</span>
+                <input id="referenceViewOpacity" type="number" min="0" max="1" step="any" value="0.35">
+              </label>
+              <label class="reference-view-check reference-view-front-check">
+                <input id="referenceViewShowInFront" type="checkbox" checked>
+                <span data-i18n="referenceViewShowInFront">Show In Front</span>
+              </label>
+            </div>
+
+            <div id="referenceViewSlots" class="reference-view-slots">
+              <div class="reference-view-slot" data-reference-direction="front">
+                <button class="reference-view-pick" type="button" data-reference-view-pick="front">
+                  <img alt="" data-reference-view-preview="front" hidden>
+                  <strong data-i18n="referenceViewFront">Front</strong>
+                  <small data-reference-view-file="front">Drop or choose image</small>
+                  <span class="reference-view-slot-meta" data-reference-view-meta="front" data-i18n="referenceViewDropImage">Drop image here</span>
+                  <span class="reference-view-slot-click-hint" data-reference-view-click-hint="front" data-i18n="referenceViewPickAction">Pick / Drop image</span>
+                </button>
+                <div class="reference-view-slot-tools">
+                  <label><input type="checkbox" data-reference-view-enabled="front"><span data-i18n="referenceViewEnabled">On</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-h="front"><span>H</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-v="front"><span>V</span></label>
+                  <button type="button" data-reference-view-remove="front" title="Remove">&times;</button>
+                </div>
+              </div>
+              <div class="reference-view-slot" data-reference-direction="back">
+                <button class="reference-view-pick" type="button" data-reference-view-pick="back">
+                  <img alt="" data-reference-view-preview="back" hidden>
+                  <strong data-i18n="referenceViewBack">Back</strong>
+                  <small data-reference-view-file="back">Drop or choose image</small>
+                  <span class="reference-view-slot-meta" data-reference-view-meta="back" data-i18n="referenceViewDropImage">Drop image here</span>
+                  <span class="reference-view-slot-click-hint" data-reference-view-click-hint="back" data-i18n="referenceViewPickAction">Pick / Drop image</span>
+                </button>
+                <div class="reference-view-slot-tools">
+                  <label><input type="checkbox" data-reference-view-enabled="back"><span data-i18n="referenceViewEnabled">On</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-h="back"><span>H</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-v="back"><span>V</span></label>
+                  <button type="button" data-reference-view-remove="back" title="Remove">&times;</button>
+                </div>
+              </div>
+              <div class="reference-view-slot" data-reference-direction="left">
+                <button class="reference-view-pick" type="button" data-reference-view-pick="left">
+                  <img alt="" data-reference-view-preview="left" hidden>
+                  <strong data-i18n="referenceViewLeft">Left</strong>
+                  <small data-reference-view-file="left">Drop or choose image</small>
+                  <span class="reference-view-slot-meta" data-reference-view-meta="left" data-i18n="referenceViewDropImage">Drop image here</span>
+                  <span class="reference-view-slot-click-hint" data-reference-view-click-hint="left" data-i18n="referenceViewPickAction">Pick / Drop image</span>
+                </button>
+                <div class="reference-view-slot-tools">
+                  <label><input type="checkbox" data-reference-view-enabled="left"><span data-i18n="referenceViewEnabled">On</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-h="left"><span>H</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-v="left"><span>V</span></label>
+                  <button type="button" data-reference-view-remove="left" title="Remove">&times;</button>
+                </div>
+              </div>
+              <div class="reference-view-slot" data-reference-direction="right">
+                <button class="reference-view-pick" type="button" data-reference-view-pick="right">
+                  <img alt="" data-reference-view-preview="right" hidden>
+                  <strong data-i18n="referenceViewRight">Right</strong>
+                  <small data-reference-view-file="right">Drop or choose image</small>
+                  <span class="reference-view-slot-meta" data-reference-view-meta="right" data-i18n="referenceViewDropImage">Drop image here</span>
+                  <span class="reference-view-slot-click-hint" data-reference-view-click-hint="right" data-i18n="referenceViewPickAction">Pick / Drop image</span>
+                </button>
+                <div class="reference-view-slot-tools">
+                  <label><input type="checkbox" data-reference-view-enabled="right"><span data-i18n="referenceViewEnabled">On</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-h="right"><span>H</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-v="right"><span>V</span></label>
+                  <button type="button" data-reference-view-remove="right" title="Remove">&times;</button>
+                </div>
+              </div>
+              <div class="reference-view-slot" data-reference-direction="top">
+                <button class="reference-view-pick" type="button" data-reference-view-pick="top">
+                  <img alt="" data-reference-view-preview="top" hidden>
+                  <strong data-i18n="referenceViewTop">Top</strong>
+                  <small data-reference-view-file="top">Drop or choose image</small>
+                  <span class="reference-view-slot-meta" data-reference-view-meta="top" data-i18n="referenceViewDropImage">Drop image here</span>
+                  <span class="reference-view-slot-click-hint" data-reference-view-click-hint="top" data-i18n="referenceViewPickAction">Pick / Drop image</span>
+                </button>
+                <div class="reference-view-slot-tools">
+                  <label><input type="checkbox" data-reference-view-enabled="top"><span data-i18n="referenceViewEnabled">On</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-h="top"><span>H</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-v="top"><span>V</span></label>
+                  <button type="button" data-reference-view-remove="top" title="Remove">&times;</button>
+                </div>
+              </div>
+              <div class="reference-view-slot" data-reference-direction="bottom">
+                <button class="reference-view-pick" type="button" data-reference-view-pick="bottom">
+                  <img alt="" data-reference-view-preview="bottom" hidden>
+                  <strong data-i18n="referenceViewBottom">Bottom</strong>
+                  <small data-reference-view-file="bottom">Drop or choose image</small>
+                  <span class="reference-view-slot-meta" data-reference-view-meta="bottom" data-i18n="referenceViewDropImage">Drop image here</span>
+                  <span class="reference-view-slot-click-hint" data-reference-view-click-hint="bottom" data-i18n="referenceViewPickAction">Pick / Drop image</span>
+                </button>
+                <div class="reference-view-slot-tools">
+                  <label><input type="checkbox" data-reference-view-enabled="bottom"><span data-i18n="referenceViewEnabled">On</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-h="bottom"><span>H</span></label>
+                  <label><input type="checkbox" data-reference-view-flip-v="bottom"><span>V</span></label>
+                  <button type="button" data-reference-view-remove="bottom" title="Remove">&times;</button>
+                </div>
+              </div>
+            </div>
+            <input id="referenceViewFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,image/tiff" hidden>
+
+            <div class="reference-view-actions">
+              <button id="referenceViewSave" class="ghost-button reference-view-action primary-action" type="button" data-i18n-title="referenceViewSave" data-i18n="referenceViewSave" title="Create or update this set">Create / Update</button>
+              <button id="referenceViewToggleAll" class="ghost-button reference-view-action" type="button" data-i18n="referenceViewHideAll" data-i18n-title="referenceViewHideAll" title="Show or hide all direction cards">Hide All</button>
+              <button id="referenceViewClear" class="ghost-button danger-action reference-view-action" type="button" data-i18n-title="referenceViewClear" data-i18n="referenceViewClear" title="Clear current set">Clear Set</button>
+            </div>
+            <p id="referenceViewStatus" class="tool-status" data-i18n="referenceViewReady">Ready</p>
           </article>
+
         </section>
 
         <section id="blenderHelperView" class="blender-subview active" data-blender-view="helper" role="tabpanel" aria-labelledby="blenderHelperTab">
@@ -622,18 +753,18 @@
               <button class="blender-hub-card active" type="button" data-blender-view-jump="builder">
                 <span class="blender-hub-kicker" data-i18n="blenderHubReady">Ready</span>
                 <strong data-i18n="blenderHubBuilderTitle">Builder Workbench</strong>
-                <small data-i18n="blenderHubBuilderBody">Textures, prompt building, selected object.</small>
+                <small data-i18n="blenderHubBuilderBody">Textures and selected object.</small>
               </button>
               <article class="blender-hub-card">
                 <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
                 <strong data-i18n="blenderHubBuildingTitle">Building Projects</strong>
                 <small data-i18n="blenderHubBuildingBody">Blocks, modules, placement rules.</small>
               </article>
-              <article class="blender-hub-card">
-                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
-                <strong data-i18n="blenderHubCharacterTitle">Character Lab</strong>
-                <small data-i18n="blenderHubCharacterBody">Characters, outfits, material checks.</small>
-              </article>
+              <button class="blender-hub-card" type="button" data-blender-view-jump="character">
+                <span class="blender-hub-kicker" data-i18n="blenderHubReady">Ready</span>
+                <strong data-i18n="blenderHubCharacterTitle">Character Designer</strong>
+                <small data-i18n="blenderHubCharacterBody">Reference images and Blender placement.</small>
+              </button>
               <article class="blender-hub-card">
                 <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
                 <strong data-i18n="blenderHubAnimationTitle">Animation</strong>
@@ -661,6 +792,7 @@
               <div class="blender-github-head-tools">
                 <button id="blenderGithubAdd" class="icon-button blender-github-add" type="button" title="Add Blender project" aria-label="Add Blender project" data-i18n-aria="blenderGithubAddTitle">+</button>
                 <select id="blenderGithubProject" class="blender-github-project-picker" aria-label="Blender project" data-i18n-aria="blenderGithubProjectLabel"></select>
+                <button id="blenderGithubRename" class="ghost-button primary-action" type="button" data-i18n="blenderGithubRename" data-i18n-title="blenderGithubRename" title="Rename selected project">Rename</button>
                 <button id="blenderGithubRefresh" class="icon-button blender-github-refresh" type="button" title="Refresh Git status" aria-label="Refresh Git status" data-i18n-aria="blenderGithubRefreshTitle">&#x21bb;</button>
               </div>
             </div>
@@ -927,7 +1059,7 @@
 
         <div class="music-player">
           <div class="music-now">
-            <button id="nowPlayingArt" class="track-art" type="button" aria-label="Lyrics" aria-expanded="false">♫</button>
+            <button id="nowPlayingArt" class="track-art" type="button" aria-label="Lyrics" aria-expanded="false">&#9835;</button>
             <div class="music-now-body">
               <span data-i18n="nowPlayingLabel">当前播放</span>
               <div class="music-now-title-row">
@@ -939,7 +1071,7 @@
 
           <div class="music-controls" aria-label="Music controls">
             <button id="previousTrack" class="icon-button" type="button" data-i18n-aria="previousTrack"><span class="skip-icon skip-previous" aria-hidden="true"></span></button>
-            <button id="playPauseTrack" class="play-button" type="button" data-i18n-aria="playTrack">▶</button>
+            <button id="playPauseTrack" class="play-button" type="button" data-i18n-aria="playTrack">&#9654;</button>
             <button id="nextTrack" class="icon-button" type="button" data-i18n-aria="nextTrack"><span class="skip-icon skip-next" aria-hidden="true"></span></button>
             <button id="playbackModeToggle" class="mode-button" type="button" aria-label="Playback mode">
               <span class="mode-icon" aria-hidden="true"></span>
@@ -1020,6 +1152,6 @@
   <audio id="audioPlayer" preload="metadata"></audio>
 
 <script src="/api/release-defaults.js"></script>
-<script src="app.js?v=control-console-1011"></script>
+<script src="app.js?v=control-console-1018"></script>
 </body>
 </html>

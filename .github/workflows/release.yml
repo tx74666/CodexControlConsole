@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release version, for example v1.0.2
+        description: Release version, for example v1.0.3
         required: true
-        default: v1.0.2
+        default: v1.0.3
   push:
     tags:
       - "v*"
@@ -81,6 +81,7 @@ jobs:
           python tools/check-clean-uninstall.py
           python tools/check-wallpaper-style.py
           python tools/check-built-in-media-sync.py
+          python tools/check-reference-views.py
           python tools/check-release-security.py
           node --test services/feedback-relay/test/feedback.test.js
 
@@ -197,7 +198,7 @@ jobs:
 
             Download only **CodexControlConsole-Setup-x64.exe**.
 
-            Codex Console v1.0.2 keeps the publisher's current 16-track tiers and ordering, starts faster with a leaner Windows package, and synchronizes the publisher's local installation after a direct GitHub release.
+            Codex Console v1.0.3 fixes music and control glyph encoding, preserves the publisher's 16-track tiers and ordering, and adds the Character Designer Reference View Set workflow for Blender projects.
 
             This download is published only after every packaged Windows executable is signed with the same trusted identity, all signatures are verified, and Microsoft Defender accepts the final Setup.
 
@@ -210,7 +211,7 @@ jobs:
 
             只需下载 **CodexControlConsole-Setup-x64.exe**。
 
-            Codex Console v1.0.2 会保留发布者当前的 16 首歌曲分级与顺序；精简 Windows 安装包以加快启动，并在直接发布 GitHub 版本后同步发布者本机安装。
+            Codex Console v1.0.3 修复了音乐与控制图标乱码，保留发布者的 16 首歌曲分级与顺序，并加入适用于 Blender 项目的 Character Designer 六视图工作流。
 
             这个下载包只会在所有 Windows 可执行文件均由同一可信身份签名、签名全部验证通过，并且最终安装包通过 Microsoft Defender 扫描后发布。
 

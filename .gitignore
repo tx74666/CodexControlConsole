@@ -34,6 +34,7 @@ wallpapers/*
 # Release/build output
 build/
 dist/
+dist-*/
 release/
 *.zip
 *.apk
