@@ -47,6 +47,11 @@ function staticChecks() {
       && !appSource.includes("\u00e2\u20ac\u0153"),
     "known UTF-8 mojibake remains in the UI source"
   );
+  assert(
+    appSource.includes("function repairLegacyUiText(value)")
+      && appSource.includes('return repairLegacyUiText(typeof value === "function" ? value(...args) : value);'),
+    "legacy Chinese UI text repair is missing"
+  );
   const loudnessProfile = JSON.parse(readFileSync(join(projectRoot, "music-loudness.json"), "utf8"));
   assert(Object.keys(loudnessProfile.tracks || {}).length === 16, "music loudness profile must cover all 16 tracks");
   assert(loudnessProfile.referenceTrack === "Luminescence", "Luminescence must remain the loudness reference");
@@ -101,9 +106,43 @@ function staticChecks() {
   assert(/id="consoleUninstall"/.test(consoleHtml), "product uninstall control is missing");
   assert(/id="builtinMediaMusicSync"/.test(consoleHtml), "built-in music sync control is missing");
   assert(/id="builtinMediaWallpapersSync"/.test(consoleHtml), "built-in wallpaper sync control is missing");
+  assert(
+    consoleHtml.includes('id="consoleCollaborationView"')
+      && consoleHtml.includes('id="collaborationFeedbackTab"')
+      && consoleHtml.includes('id="collaborationDownloadsTab"')
+      && consoleHtml.includes('id="collaborationFeedbackView"')
+      && consoleHtml.includes('id="collaborationDownloadsView"')
+      && !consoleHtml.includes('id="consoleDownloadsTab"')
+      && !consoleHtml.includes('id="consoleDownloadsView"')
+      && consoleHtml.match(/data-console-view-target=/g)?.length === 2
+      && consoleHtml.match(/data-collaboration-view-target=/g)?.length === 2
+      && consoleHtml.includes('id="downloadMapPlugin"')
+      && consoleHtml.includes('id="blenderHubPanel"')
+      && consoleHtml.includes('id="blenderGithubSharePanel"')
+      && consoleHtml.includes('<option value="character-designer">Character Designer</option>')
+      && consoleHtml.includes('<option value="rr-helper">RR Helper</option>')
+      && consoleHtml.indexOf('id="consoleCollaborationView"') < consoleHtml.indexOf('id="collaborationDownloadsView"')
+      && consoleHtml.indexOf('id="collaborationDownloadsView"') < consoleHtml.indexOf('id="blenderHubPanel"')
+      && consoleHtml.indexOf('id="blenderHubPanel"') < consoleHtml.indexOf('id="blenderGithubSharePanel"')
+      && consoleHtml.indexOf('id="blenderGithubSharePanel"') < consoleHtml.indexOf('id="collaborationFeedbackView"'),
+    "Console Collaboration subviews are incomplete"
+  );
+  assert(
+    !consoleHtml.includes('id="blenderHelperTab"')
+      && !consoleHtml.includes('id="blenderHelperView"')
+      && consoleHtml.match(/data-blender-view-target=/g)?.length === 2
+      && appSource.includes('return value === "builder" ? "builder" : "character";'),
+    "Blender Helper was not fully migrated into Console Download Map"
+  );
   const backendSource = readFileSync(join(projectRoot, "world_console.py"), "utf8");
   assert(backendSource.includes('"/api/media/builtins/sync"'), "built-in media sync API is missing");
   assert(backendSource.includes('"/api/console/window-session"'), "window lifecycle API is missing");
+  assert(
+    existsSync(join(projectRoot, "download_map.py"))
+      && backendSource.includes('"/api/workspace/download-map"')
+      && backendSource.includes('"/api/workspace/download-map/open"'),
+    "Download Map backend is incomplete"
+  );
   assert(
     backendSource.includes('"/api/reference-views"')
       && backendSource.includes('"/api/reference-views/image"')
@@ -118,7 +157,6 @@ function staticChecks() {
       && consoleHtml.includes('id="blenderCharacterDesignerView"')
       && consoleHtml.includes('id="referenceViewProject"')
       && consoleHtml.indexOf('id="blenderCharacterDesignerView"') < consoleHtml.indexOf('id="referenceViewPanel"')
-      && consoleHtml.indexOf('id="referenceViewPanel"') < consoleHtml.indexOf('id="blenderHelperView"')
       && consoleHtml.match(/data-reference-direction=/g)?.length === 6
       && appSource.includes('els.referenceViewSave.addEventListener("click", saveReferenceViewSet)')
       && appSource.includes('fetch("/api/reference-views/upsert"')
@@ -326,6 +364,53 @@ async function checkBlenderTransition(client, target) {
   assert(finalState.active === target && !finalState.switching, `${target} transition did not settle cleanly`);
 }
 
+async function checkRapidBlenderTransitions(client) {
+  const immediate = await evaluate(client, `(() => {
+    setBlenderWorkspaceView('builder', { animate: false, persist: false });
+    document.querySelector('[data-blender-view-target="character"]')?.click();
+    document.querySelector('[data-blender-view-target="builder"]')?.click();
+    document.querySelector('[data-blender-view-target="character"]')?.click();
+    const views = Array.from(document.querySelectorAll('[data-blender-view]'));
+    return {
+      active: document.querySelector('.blender-subtab.active')?.dataset.blenderViewTarget || '',
+      switching: document.querySelector('.blender-view-stage')?.classList.contains('switching') || false,
+      visible: views.filter(view => !view.hidden).map(view => view.dataset.blenderView),
+      transient: views.filter(view => view.classList.contains('entering') || view.classList.contains('leaving')).map(view => view.dataset.blenderView)
+    };
+  })()`);
+  assert(
+    immediate.active === "character"
+      && immediate.switching
+      && immediate.visible.length === 2
+      && immediate.visible.includes("builder")
+      && immediate.visible.includes("character"),
+    `rapid Blender switching stacked stale views: ${JSON.stringify(immediate)}`
+  );
+
+  const settled = await waitForValue(
+    () => evaluate(client, `(() => {
+      const stage = document.querySelector('.blender-view-stage');
+      const views = Array.from(document.querySelectorAll('[data-blender-view]'));
+      return {
+        active: document.querySelector('.blender-subtab.active')?.dataset.blenderViewTarget || '',
+        switching: stage?.classList.contains('switching') || false,
+        stageHeight: stage?.style.height || '',
+        visible: views.filter(view => !view.hidden).map(view => view.dataset.blenderView),
+        transient: views.filter(view => view.classList.contains('entering') || view.classList.contains('leaving')).length
+      };
+    })()`),
+    state => state.active === "character"
+      && !state.switching
+      && state.stageHeight === ""
+      && state.transient === 0
+      && JSON.stringify(state.visible) === JSON.stringify(["character"]),
+    "rapid Blender switching did not settle to one view",
+    2200,
+    10
+  );
+  assert(settled.visible.length === 1, `rapid Blender switching left overlapping views: ${JSON.stringify(settled)}`);
+}
+
 async function runBrowserChecks(client) {
   await waitForDocument(client);
   const languageToggleState = await evaluate(client, `(() => {
@@ -346,7 +431,9 @@ async function runBrowserChecks(client) {
     `language indicator is reversed: ${JSON.stringify(languageToggleState)}`
   );
   await clickModule(client, "blender");
-  await checkBlenderTransition(client, "character");
+  await evaluate(client, `setBlenderWorkspaceView('character', { animate: false, persist: false })`);
+  await checkBlenderTransition(client, "builder");
+  await checkRapidBlenderTransitions(client);
 
   await waitForValue(
     () => evaluate(client, "document.querySelectorAll('#randomRealmBlenderProject option').length"),
@@ -355,8 +442,6 @@ async function runBrowserChecks(client) {
     20000,
     120
   );
-  await checkBlenderTransition(client, "helper");
-
   await waitForValue(
     () => evaluate(client, "document.querySelector('#consoleUpdateCurrent')?.textContent?.trim() || ''"),
     value => value === `v${expectedAppVersion}`,
@@ -594,13 +679,15 @@ async function runBrowserChecks(client) {
     active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
     commonVisible: !document.querySelector('#consoleCommonView')?.hidden,
     collaborationHidden: Boolean(document.querySelector('#consoleCollaborationView')?.hidden),
-    tabs: document.querySelectorAll('[data-console-view-target]').length
+    tabs: document.querySelectorAll('[data-console-view-target]').length,
+    collaborationTabs: document.querySelectorAll('[data-collaboration-view-target]').length
   })`);
   assert(
     consoleCommonState.active === "common"
       && consoleCommonState.commonVisible
       && consoleCommonState.collaborationHidden
-      && consoleCommonState.tabs === 2,
+      && consoleCommonState.tabs === 2
+      && consoleCommonState.collaborationTabs === 2,
     `Console common view is not the stable default: ${JSON.stringify(consoleCommonState)}`
   );
   await evaluate(client, `document.querySelector('[data-console-view-target="collaboration"]')?.click()`);
@@ -613,8 +700,12 @@ async function runBrowserChecks(client) {
   );
   const consoleCollaborationState = await evaluate(client, `({
     active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
+    nestedActive: document.querySelector('.collaboration-subnav .console-subtab.active')?.dataset.collaborationViewTarget || '',
     commonHidden: Boolean(document.querySelector('#consoleCommonView')?.hidden),
     collaborationVisible: !document.querySelector('#consoleCollaborationView')?.hidden,
+    feedbackSubviewVisible: !document.querySelector('#collaborationFeedbackView')?.hidden,
+    downloadsSubviewHidden: Boolean(document.querySelector('#collaborationDownloadsView')?.hidden),
+    nestedTabs: document.querySelectorAll('[data-collaboration-view-target]').length,
     feedbackVisible: document.querySelector('#feedbackPanel')?.getBoundingClientRect().height > 0,
     quotaHidden: Boolean(document.querySelector('#feedbackQuota')?.hidden),
     quotaRendered: document.querySelector('#feedbackQuota')?.getClientRects().length > 0,
@@ -623,8 +714,12 @@ async function runBrowserChecks(client) {
   })`);
   assert(
     consoleCollaborationState.active === "collaboration"
+      && consoleCollaborationState.nestedActive === "feedback"
       && consoleCollaborationState.commonHidden
       && consoleCollaborationState.collaborationVisible
+      && consoleCollaborationState.feedbackSubviewVisible
+      && consoleCollaborationState.downloadsSubviewHidden
+      && consoleCollaborationState.nestedTabs === 2
       && consoleCollaborationState.feedbackVisible
       && consoleCollaborationState.quotaHidden
       && !consoleCollaborationState.quotaRendered
@@ -743,6 +838,92 @@ async function runBrowserChecks(client) {
       && !feedbackLimitState.renderedAfterReset,
     `feedback daily and burst limits are confused: ${JSON.stringify(feedbackLimitState)}`
   );
+  await evaluate(client, `document.querySelector('[data-collaboration-view-target="downloads"]')?.click()`);
+  await waitForValue(
+    () => evaluate(client, `({
+      plugins: downloadMapState?.plugins?.length || 0,
+      rows: document.querySelectorAll('#downloadMapEntries .download-map-row').length,
+      busy: downloadMapBusy,
+      coopReady: Boolean(blenderGithubShareState),
+      coopBusy: blenderGithubBusy
+    })`),
+    value => value.plugins === 2 && value.rows === 4 && !value.busy && value.coopReady && !value.coopBusy,
+    "Console Download Map did not initialize",
+    30000,
+    100
+  );
+  const consoleDownloadMapState = await evaluate(client, `(async () => {
+    const api = await fetch('/api/workspace/download-map', { cache: 'no-store' }).then(response => response.json());
+    const selector = document.querySelector('#downloadMapPlugin');
+    selector.value = 'rr-helper';
+    selector.dispatchEvent(new Event('change', { bubbles: true }));
+    return {
+      active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
+      nestedActive: document.querySelector('.collaboration-subnav .console-subtab.active')?.dataset.collaborationViewTarget || '',
+      commonHidden: Boolean(document.querySelector('#consoleCommonView')?.hidden),
+      collaborationVisible: !document.querySelector('#consoleCollaborationView')?.hidden,
+      feedbackHidden: Boolean(document.querySelector('#collaborationFeedbackView')?.hidden),
+      downloadsVisible: !document.querySelector('#collaborationDownloadsView')?.hidden,
+      options: Array.from(selector.options).map(option => option.value),
+      selected: selector.value,
+      name: document.querySelector('#downloadMapPluginName')?.textContent?.trim() || '',
+      rows: Array.from(document.querySelectorAll('#downloadMapEntries .download-map-row')).map(row => ({
+        target: row.dataset.target,
+        unavailable: row.classList.contains('unavailable'),
+        buttonDisabled: Boolean(row.querySelector('button')?.disabled),
+        value: row.querySelector('.download-map-value')?.textContent?.trim() || ''
+      })),
+      apiPlugins: api.plugins?.map(plugin => plugin.id) || [],
+      hubInsideDownloads: document.querySelector('#blenderHubPanel')?.closest('#collaborationDownloadsView')?.id === 'collaborationDownloadsView',
+      coopInsideDownloads: document.querySelector('#blenderGithubSharePanel')?.closest('#collaborationDownloadsView')?.id === 'collaborationDownloadsView',
+      coopVisible: document.querySelector('#blenderGithubSharePanel')?.getBoundingClientRect().height > 0,
+      blenderTabs: Array.from(document.querySelectorAll('[data-blender-view-target]'), tab => tab.dataset.blenderViewTarget),
+      helperViewCount: document.querySelectorAll('#blenderHelperTab, #blenderHelperView').length,
+      translatedTitle: document.querySelector('#workspaceTitle')?.textContent?.trim() || '',
+      translatedMusicNav: text('musicNav'),
+      mojibake: document.body.innerText.match(/[ÃÂâäåæçèï][^\\s]*/g) || []
+    };
+  })()`, true);
+  assert(
+    consoleDownloadMapState.active === "collaboration"
+      && consoleDownloadMapState.nestedActive === "downloads"
+      && consoleDownloadMapState.commonHidden
+      && consoleDownloadMapState.collaborationVisible
+      && consoleDownloadMapState.feedbackHidden
+      && consoleDownloadMapState.downloadsVisible
+      && consoleDownloadMapState.options.join(",") === "character-designer,rr-helper"
+      && consoleDownloadMapState.selected === "rr-helper"
+      && consoleDownloadMapState.name === "RR Helper"
+      && consoleDownloadMapState.rows.map(row => row.target).join(",") === "repository,source,installed,package"
+      && consoleDownloadMapState.rows.every(row => row.unavailable === row.buttonDisabled)
+      && consoleDownloadMapState.apiPlugins.join(",") === "character-designer,rr-helper"
+      && consoleDownloadMapState.hubInsideDownloads
+      && consoleDownloadMapState.coopInsideDownloads
+      && consoleDownloadMapState.coopVisible
+      && consoleDownloadMapState.blenderTabs.join(",") === "character,builder"
+      && consoleDownloadMapState.helperViewCount === 0
+      && consoleDownloadMapState.translatedTitle === "GitHub 下载"
+      && consoleDownloadMapState.translatedMusicNav === "音乐"
+      && consoleDownloadMapState.mojibake.length === 0,
+    `Console Download Map is incomplete: ${JSON.stringify(consoleDownloadMapState)}`
+  );
+  const blenderMapJump = await evaluate(client, `(() => {
+    document.querySelector('#blenderHubPanel [data-blender-view-jump="builder"]')?.click();
+    return {
+      module: document.querySelector('.module-link.active')?.dataset.moduleId || '',
+      view: document.querySelector('.blender-subtab.active')?.dataset.blenderViewTarget || '',
+      visible: !document.querySelector('#blenderBuilderView')?.hidden
+    };
+  })()`);
+  assert(
+    blenderMapJump.module === "blender" && blenderMapJump.view === "builder" && blenderMapJump.visible,
+    `Blender Hub map did not open Builder: ${JSON.stringify(blenderMapJump)}`
+  );
+  await evaluate(client, `(() => {
+    activateModule('workspace', false);
+    setConsoleWorkspaceView('collaboration', { persist: false });
+    setCollaborationWorkspaceView('downloads', { persist: false });
+  })()`);
   await evaluate(client, `document.querySelector('[data-console-view-target="common"]')?.click()`);
   await waitForValue(
     () => evaluate(client, `({
@@ -782,7 +963,11 @@ async function runBrowserChecks(client) {
       && /CodexControlConsole[\\/]desktop-layout/i.test(desktopLayoutUi.dataDirectory),
     `desktop layout UI is incomplete or not device-local: ${JSON.stringify(desktopLayoutUi)}`
   );
-  await clickModule(client, "blender");
+  await clickModule(client, "workspace");
+  await evaluate(client, `(() => {
+    setConsoleWorkspaceView('collaboration', { persist: false });
+    setCollaborationWorkspaceView('downloads', { persist: false });
+  })()`);
 
   await waitForValue(
     () => evaluate(client, `({
@@ -820,7 +1005,7 @@ async function runBrowserChecks(client) {
     120
   );
   const shareState = await evaluate(client, `({
-    visible: !document.querySelector('#blenderGithubSharePanel')?.hidden,
+    visible: document.querySelector('#blenderGithubSharePanel')?.getBoundingClientRect().height > 0,
     title: document.querySelector('#blenderGithubSharePanel h2')?.textContent?.trim() || '',
     state: document.querySelector('#blenderGithubState')?.dataset.state || '',
     cards: document.querySelectorAll('#blenderGithubBlendCards .blender-github-blend-card').length,
@@ -1047,10 +1232,16 @@ async function runBrowserChecks(client) {
     if (["light", "dark"].includes(process.env.CONSOLE_UI_THEME || "")) {
       await evaluate(client, `setTheme(${JSON.stringify(process.env.CONSOLE_UI_THEME)}, { record: false })`);
     }
-    const screenshotModule = process.env.CONSOLE_UI_SCREENSHOT_MODULE || "blender";
-    if (screenshotModule !== "blender") await clickModule(client, screenshotModule);
+    const screenshotModule = process.env.CONSOLE_UI_SCREENSHOT_MODULE || "workspace";
+    await clickModule(client, screenshotModule);
+    if (screenshotModule === "workspace") {
+      await evaluate(client, `(() => {
+        setConsoleWorkspaceView('collaboration', { persist: false });
+        setCollaborationWorkspaceView('downloads', { persist: false });
+      })()`);
+    }
     const screenshotBlenderView = process.env.CONSOLE_UI_SCREENSHOT_BLENDER_VIEW || "";
-    if (screenshotModule === "blender" && ["helper", "character", "builder"].includes(screenshotBlenderView)) {
+    if (screenshotModule === "blender" && ["character", "builder"].includes(screenshotBlenderView)) {
       await checkBlenderTransition(client, screenshotBlenderView);
     }
     if (process.env.CONSOLE_UI_THEME) {
@@ -1100,8 +1291,10 @@ async function runBrowserChecks(client) {
       captureBeyondViewport: false
     });
     writeFileSync(process.env.CONSOLE_UI_SCREENSHOT, Buffer.from(screenshot.data, "base64"));
-    if (screenshotModule !== "blender") await clickModule(client, "blender");
   }
+
+  await clickModule(client, "blender");
+  await evaluate(client, `setBlenderWorkspaceView('character', { animate: false, persist: false })`);
 
   const cleanMusicTitles = await evaluate(client, `[
     displayTrackName("Airborne"),
@@ -1113,7 +1306,7 @@ async function runBrowserChecks(client) {
     `legacy A8 branding remains in music titles: ${JSON.stringify(cleanMusicTitles)}`
   );
 
-  const helperBackground = await evaluate(client, `(() => {
+  const characterBackground = await evaluate(client, `(() => {
     const style = getComputedStyle(document.body, '::before');
     return [style.position, style.width, style.height, style.backgroundImage, style.backgroundSize];
   })()`);
@@ -1123,7 +1316,7 @@ async function runBrowserChecks(client) {
     const style = getComputedStyle(document.body, '::before');
     return [style.position, style.width, style.height, style.backgroundImage, style.backgroundSize];
   })()`);
-  assert(JSON.stringify(helperBackground) === JSON.stringify(builderBackground), "Blender views use different page backgrounds");
+  assert(JSON.stringify(characterBackground) === JSON.stringify(builderBackground), "Blender views use different page backgrounds");
   await checkBlenderTransition(client, "character");
   const characterViewState = await evaluate(client, `({
     active: document.querySelector('.blender-subtab.active')?.dataset.blenderViewTarget || '',
@@ -1147,8 +1340,6 @@ async function runBrowserChecks(client) {
       && characterViewState.projectPath === characterViewState.project,
     `Character Designer project selection is not synchronized: ${JSON.stringify(characterViewState)}`
   );
-  await checkBlenderTransition(client, "helper");
-
   await clickModule(client, "music");
   await waitForValue(
     () => evaluate(client, `({
@@ -1656,9 +1847,9 @@ async function main() {
       await delay(120);
       const initialView = await evaluate(
         client,
-        "document.querySelector('.blender-subtab.active')?.dataset.blenderViewTarget || 'helper'"
+        "document.querySelector('.blender-subtab.active')?.dataset.blenderViewTarget || 'character'"
       );
-      const alternateView = initialView === "helper" ? "builder" : "helper";
+      const alternateView = initialView === "builder" ? "character" : "builder";
       await checkBlenderTransition(client, alternateView);
       await checkBlenderTransition(client, initialView);
       console.log(`PASS Blender transitions (${cacheVersion})`);

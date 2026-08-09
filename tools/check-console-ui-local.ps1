@@ -34,6 +34,11 @@ $previousCloudProjects = $env:CONSOLE_UI_ALLOW_CLOUD_PROJECTS
 $process = $null
 
 try {
+  & $Python (Join-Path $PSScriptRoot "check-download-map.py")
+  if ($LASTEXITCODE -ne 0) {
+    throw "Download Map checks failed with exit code $LASTEXITCODE."
+  }
+
   $env:CODEX_CONTROL_DATA_DIR = $temporary
   $env:CONSOLE_UI_ALLOW_CLOUD_PROJECTS = "true"
   $process = Start-Process `

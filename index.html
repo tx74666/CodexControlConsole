@@ -50,7 +50,7 @@
       }
     })();
   </script>
-<link rel="stylesheet" href="styles.css?v=control-console-1018">
+  <link rel="stylesheet" href="styles.css?v=control-console-1025">
 </head>
 <body>
   <main class="app-shell">
@@ -148,47 +148,6 @@
 
       <div class="console-view-stage">
         <section id="consoleCommonView" class="workspace-grid console-minimal-grid console-subview active" data-console-view="common" role="tabpanel" aria-labelledby="consoleCommonTab">
-      <article class="panel github-download-panel">
-        <div class="panel-head">
-          <div>
-            <div id="workspaceSourceLabel" class="section-label">GitHub</div>
-            <h2 id="workspaceTitle" data-i18n="githubDownloadsTitle">GitHub 下载</h2>
-          </div>
-          <div class="panel-actions">
-            <button id="tutorialModeToggle" class="ghost-button tutorial-toggle" type="button" aria-pressed="false" data-i18n="tutorialModeToggle">教程模式</button>
-          </div>
-        </div>
-
-        <div class="github-download-actions" aria-label="Product downloads">
-          <a id="updateProductConsole" class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="true" data-update-product="console">
-            <span>Codex Console</span>
-            <small id="updateProductConsoleBadge" class="update-product-badge">v1.0.3</small>
-          </a>
-          <a id="updateProductWorld" class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="false" data-update-product="world">
-            <span>Codex World</span>
-            <small id="updateProductWorldBadge" class="update-product-badge">--</small>
-          </a>
-        </div>
-
-        <div class="console-update-bar">
-          <div class="console-update-copy">
-            <span id="consoleUpdateCurrent" class="workspace-pill">v1.0.3</span>
-            <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
-            <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
-          </div>
-          <div class="console-update-controls">
-            <label class="console-update-toggle">
-              <input id="consoleUpdateAuto" type="checkbox" checked>
-              <span data-i18n="consoleUpdateAuto">自动</span>
-            </label>
-            <button id="consoleUpdateRefresh" class="icon-button console-update-refresh" type="button" title="检查更新" aria-label="检查更新" data-i18n-aria="consoleUpdateRefresh">&#x21bb;</button>
-            <button id="consoleUpdateInstall" class="ghost-button primary-action" type="button" hidden data-i18n="consoleUpdateInstall">更新</button>
-            <button id="consoleUninstall" class="ghost-button danger-action" type="button" hidden data-i18n="consoleUninstall">卸载</button>
-          </div>
-        </div>
-        <p id="consoleUpdateError" class="console-update-error" role="status" aria-live="polite" hidden></p>
-      </article>
-
       <article class="panel desktop-layout-panel" aria-labelledby="desktopLayoutTitle">
         <div class="panel-head">
           <div>
@@ -257,7 +216,159 @@
       </section>
         </section>
 
-        <section id="consoleCollaborationView" class="workspace-grid console-minimal-grid console-subview" data-console-view="collaboration" role="tabpanel" aria-labelledby="consoleCollaborationTab" hidden>
+        <section id="consoleCollaborationView" class="console-subview collaboration-shell" data-console-view="collaboration" role="tabpanel" aria-labelledby="consoleCollaborationTab" hidden>
+          <div class="console-subnav collaboration-subnav" role="tablist" aria-label="Collaboration workspace">
+            <span class="console-subtab-drop" aria-hidden="true"></span>
+            <button id="collaborationFeedbackTab" class="console-subtab active" type="button" role="tab" aria-selected="true" aria-controls="collaborationFeedbackView" data-collaboration-view-target="feedback" data-i18n="feedbackTitle">问题回报</button>
+            <button id="collaborationDownloadsTab" class="console-subtab" type="button" role="tab" aria-selected="false" aria-controls="collaborationDownloadsView" data-collaboration-view-target="downloads" data-i18n="consoleDownloadsTab">下载地图</button>
+          </div>
+
+          <div class="collaboration-view-stage">
+        <section id="collaborationDownloadsView" class="workspace-grid console-minimal-grid collaboration-subview" data-collaboration-view="downloads" role="tabpanel" aria-labelledby="collaborationDownloadsTab" hidden>
+      <article class="panel github-download-panel">
+        <div class="panel-head">
+          <div>
+            <div id="workspaceSourceLabel" class="section-label">GitHub</div>
+            <h2 id="workspaceTitle" data-i18n="githubDownloadsTitle">GitHub 下载</h2>
+          </div>
+          <div class="panel-actions">
+            <button id="tutorialModeToggle" class="ghost-button tutorial-toggle" type="button" aria-pressed="false" data-i18n="tutorialModeToggle">教程模式</button>
+          </div>
+        </div>
+
+        <div class="github-download-actions" aria-label="Product downloads">
+          <a id="updateProductConsole" class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="true" data-update-product="console">
+            <span>Codex Console</span>
+            <small id="updateProductConsoleBadge" class="update-product-badge">v1.0.3</small>
+          </a>
+          <a id="updateProductWorld" class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="false" data-update-product="world">
+            <span>Codex World</span>
+            <small id="updateProductWorldBadge" class="update-product-badge">--</small>
+          </a>
+        </div>
+
+        <div class="console-update-bar">
+          <div class="console-update-copy">
+            <span id="consoleUpdateCurrent" class="workspace-pill">v1.0.3</span>
+            <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
+            <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
+          </div>
+          <div class="console-update-controls">
+            <label class="console-update-toggle">
+              <input id="consoleUpdateAuto" type="checkbox" checked>
+              <span data-i18n="consoleUpdateAuto">自动</span>
+            </label>
+            <button id="consoleUpdateRefresh" class="icon-button console-update-refresh" type="button" title="检查更新" aria-label="检查更新" data-i18n-aria="consoleUpdateRefresh">&#x21bb;</button>
+            <button id="consoleUpdateInstall" class="ghost-button primary-action" type="button" hidden data-i18n="consoleUpdateInstall">更新</button>
+            <button id="consoleUninstall" class="ghost-button danger-action" type="button" hidden data-i18n="consoleUninstall">卸载</button>
+          </div>
+        </div>
+        <p id="consoleUpdateError" class="console-update-error" role="status" aria-live="polite" hidden></p>
+      </article>
+
+      <article class="panel download-map-panel" aria-labelledby="downloadMapTitle">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Blender</div>
+            <h2 id="downloadMapTitle" data-i18n="downloadMapTitle">插件地图</h2>
+          </div>
+          <div class="download-map-tools">
+            <label>
+              <span class="visually-hidden" data-i18n="downloadMapPluginLabel">Blender 插件</span>
+              <select id="downloadMapPlugin" aria-label="Blender 插件" data-i18n-aria="downloadMapPluginLabel">
+                <option value="character-designer">Character Designer</option>
+                <option value="rr-helper">RR Helper</option>
+              </select>
+            </label>
+            <button id="downloadMapRefresh" class="icon-button" type="button" title="刷新下载地图" aria-label="刷新下载地图" data-i18n-aria="downloadMapRefresh">&#x21bb;</button>
+          </div>
+        </div>
+
+        <div class="download-map-summary">
+          <strong id="downloadMapPluginName">Character Designer</strong>
+          <span id="downloadMapPluginVersion" class="workspace-pill">--</span>
+        </div>
+        <div id="downloadMapEntries" class="download-map-list" aria-live="polite">
+          <div class="download-map-loading" data-i18n="downloadMapLoading">正在定位</div>
+        </div>
+        <p id="downloadMapStatus" class="download-map-status" role="status" aria-live="polite"></p>
+      </article>
+
+      <article id="blenderHubPanel" class="panel blender-helper-panel" aria-labelledby="blenderHubTitle">
+        <div class="panel-head">
+          <div>
+            <div class="section-label" data-i18n="blenderSectionLabel">Blender</div>
+            <h2 id="blenderHubTitle" data-i18n="blenderHelperTitle">Blender Hub</h2>
+          </div>
+          <span class="workspace-pill" data-i18n="blenderHelperBadge">Map</span>
+        </div>
+
+        <div class="blender-hub-grid">
+          <button class="blender-hub-card active" type="button" data-blender-view-jump="builder">
+            <span class="blender-hub-kicker" data-i18n="blenderHubReady">Ready</span>
+            <strong data-i18n="blenderHubBuilderTitle">Builder Workbench</strong>
+            <small data-i18n="blenderHubBuilderBody">Textures and selected object.</small>
+          </button>
+          <article class="blender-hub-card">
+            <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
+            <strong data-i18n="blenderHubBuildingTitle">Building Projects</strong>
+            <small data-i18n="blenderHubBuildingBody">Blocks, modules, placement rules.</small>
+          </article>
+          <button class="blender-hub-card" type="button" data-blender-view-jump="character">
+            <span class="blender-hub-kicker" data-i18n="blenderHubReady">Ready</span>
+            <strong data-i18n="blenderHubCharacterTitle">Character Designer</strong>
+            <small data-i18n="blenderHubCharacterBody">Reference images and Blender placement.</small>
+          </button>
+          <article class="blender-hub-card">
+            <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
+            <strong data-i18n="blenderHubAnimationTitle">Animation</strong>
+            <small data-i18n="blenderHubAnimationBody">Actions, timeline, export rhythm.</small>
+          </article>
+          <article class="blender-hub-card">
+            <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
+            <strong data-i18n="blenderHubTextureTitle">Texture Lab</strong>
+            <small data-i18n="blenderHubTextureBody">PBR, size checks, replacement packs.</small>
+          </article>
+          <article class="blender-hub-card">
+            <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
+            <strong data-i18n="blenderHubBridgeTitle">Unity Bridge</strong>
+            <small data-i18n="blenderHubBridgeBody">Export, temp folder, import checks.</small>
+          </article>
+        </div>
+      </article>
+
+      <article id="blenderGithubSharePanel" class="panel blender-github-panel">
+        <div class="panel-head blender-github-head">
+          <h2 id="blenderGithubToggle" role="button" tabindex="0" aria-expanded="true" aria-controls="blenderGithubBody" aria-label="Collapse or expand GitHub Coop" data-i18n-aria="blenderGithubToggleTitle">
+            <span data-i18n="blenderGithubTitle">GitHub Coop</span>
+            <span id="blenderGithubState" class="blender-github-state-dot" data-state="loading" title="Loading"></span>
+          </h2>
+          <div class="blender-github-head-tools">
+            <button id="blenderGithubAdd" class="icon-button blender-github-add" type="button" title="Add Blender project" aria-label="Add Blender project" data-i18n-aria="blenderGithubAddTitle">+</button>
+            <select id="blenderGithubProject" class="blender-github-project-picker" aria-label="Blender project" data-i18n-aria="blenderGithubProjectLabel"></select>
+            <button id="blenderGithubRename" class="ghost-button primary-action" type="button" data-i18n="blenderGithubRename" data-i18n-title="blenderGithubRename" title="Rename selected project">Rename</button>
+            <button id="blenderGithubRefresh" class="icon-button blender-github-refresh" type="button" title="Refresh Git status" aria-label="Refresh Git status" data-i18n-aria="blenderGithubRefreshTitle">&#x21bb;</button>
+          </div>
+        </div>
+
+        <div id="blenderGithubBody" class="blender-github-body">
+          <div id="blenderGithubBlendCards" class="blender-github-blend-cards" role="listbox" aria-label="Blend files" data-i18n-aria="blenderGithubBlendFilesLabel"></div>
+
+          <div class="blender-github-dock">
+            <p id="blenderGithubWorkflow" class="blender-github-workflow" data-state="loading" aria-live="polite"></p>
+            <p class="blender-github-guide tutorial-only" data-i18n="blenderGithubGuide">Not downloaded: double-click the card to Clone, then use + to select the .blend file. Fetch/Pull before editing; Commit + Push when finished.</p>
+            <nav class="blender-github-links" aria-label="Project links" data-i18n-aria="blenderGithubLinksLabel">
+              <button id="blenderGithubDesktop" class="blender-github-link" type="button" data-i18n="blenderGithubDesktop">GitHub Desktop</button>
+              <button id="blenderGithubFolder" class="blender-github-link" type="button" data-i18n="blenderGithubFolder">Files</button>
+              <button id="blenderGithubOpen" class="blender-github-link" type="button" data-i18n="blenderGithubOpenShort">GitHub</button>
+            </nav>
+          </div>
+          <p id="blenderGithubStatus" class="blender-github-notice" role="status" aria-live="polite" hidden></p>
+        </div>
+      </article>
+        </section>
+
+        <section id="collaborationFeedbackView" class="workspace-grid console-minimal-grid collaboration-subview active" data-collaboration-view="feedback" role="tabpanel" aria-labelledby="collaborationFeedbackTab">
       <article id="feedbackPanel" class="panel feedback-panel" aria-labelledby="feedbackTitle">
         <div class="panel-head">
           <div>
@@ -314,6 +425,8 @@
           </form>
         </details>
       </article>
+        </section>
+          </div>
         </section>
       </div>
     </section>
@@ -431,8 +544,7 @@
       <div class="blender-shell">
         <div class="blender-subnav" role="tablist" aria-label="Blender workspace">
           <span class="blender-subtab-drop" aria-hidden="true"></span>
-          <button id="blenderHelperTab" class="blender-subtab active" type="button" role="tab" aria-selected="true" aria-controls="blenderHelperView" data-blender-view-target="helper" data-i18n="blenderHelperTab">Helper</button>
-          <button id="blenderCharacterTab" class="blender-subtab" type="button" role="tab" aria-selected="false" aria-controls="blenderCharacterDesignerView" data-blender-view-target="character" data-i18n="blenderCharacterTab">Character Designer</button>
+          <button id="blenderCharacterTab" class="blender-subtab active" type="button" role="tab" aria-selected="true" aria-controls="blenderCharacterDesignerView" data-blender-view-target="character" data-i18n="blenderCharacterTab">Character Designer</button>
           <button id="blenderBuilderTab" class="blender-subtab" type="button" role="tab" aria-selected="false" aria-controls="blenderBuilderView" data-blender-view-target="builder" data-i18n="blenderBuilderTab">Builder</button>
         </div>
 
@@ -558,7 +670,7 @@
 
         </section>
 
-        <section id="blenderCharacterDesignerView" class="blender-subview" data-blender-view="character" role="tabpanel" aria-labelledby="blenderCharacterTab" hidden>
+        <section id="blenderCharacterDesignerView" class="blender-subview active" data-blender-view="character" role="tabpanel" aria-labelledby="blenderCharacterTab">
           <article id="referenceViewPanel" class="panel reference-view-panel">
             <div class="panel-head reference-view-head">
               <div>
@@ -739,80 +851,6 @@
 
         </section>
 
-        <section id="blenderHelperView" class="blender-subview active" data-blender-view="helper" role="tabpanel" aria-labelledby="blenderHelperTab">
-          <article class="panel blender-helper-panel">
-            <div class="panel-head">
-              <div>
-                <div class="section-label" data-i18n="blenderSectionLabel">Blender</div>
-                <h2 data-i18n="blenderHelperTitle">Helper Hub</h2>
-              </div>
-              <span class="workspace-pill" data-i18n="blenderHelperBadge">Map</span>
-            </div>
-
-            <div class="blender-hub-grid">
-              <button class="blender-hub-card active" type="button" data-blender-view-jump="builder">
-                <span class="blender-hub-kicker" data-i18n="blenderHubReady">Ready</span>
-                <strong data-i18n="blenderHubBuilderTitle">Builder Workbench</strong>
-                <small data-i18n="blenderHubBuilderBody">Textures and selected object.</small>
-              </button>
-              <article class="blender-hub-card">
-                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
-                <strong data-i18n="blenderHubBuildingTitle">Building Projects</strong>
-                <small data-i18n="blenderHubBuildingBody">Blocks, modules, placement rules.</small>
-              </article>
-              <button class="blender-hub-card" type="button" data-blender-view-jump="character">
-                <span class="blender-hub-kicker" data-i18n="blenderHubReady">Ready</span>
-                <strong data-i18n="blenderHubCharacterTitle">Character Designer</strong>
-                <small data-i18n="blenderHubCharacterBody">Reference images and Blender placement.</small>
-              </button>
-              <article class="blender-hub-card">
-                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
-                <strong data-i18n="blenderHubAnimationTitle">Animation</strong>
-                <small data-i18n="blenderHubAnimationBody">Actions, timeline, export rhythm.</small>
-              </article>
-              <article class="blender-hub-card">
-                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
-                <strong data-i18n="blenderHubTextureTitle">Texture Lab</strong>
-                <small data-i18n="blenderHubTextureBody">PBR, size checks, replacement packs.</small>
-              </article>
-              <article class="blender-hub-card">
-                <span class="blender-hub-kicker" data-i18n="blenderHubNext">Next</span>
-                <strong data-i18n="blenderHubBridgeTitle">Unity Bridge</strong>
-                <small data-i18n="blenderHubBridgeBody">Export, temp folder, import checks.</small>
-              </article>
-            </div>
-          </article>
-
-          <article id="blenderGithubSharePanel" class="panel blender-github-panel">
-            <div class="panel-head blender-github-head">
-              <h2 id="blenderGithubToggle" role="button" tabindex="0" aria-expanded="true" aria-controls="blenderGithubBody" aria-label="Collapse or expand GitHub Coop" data-i18n-aria="blenderGithubToggleTitle">
-                <span data-i18n="blenderGithubTitle">GitHub Coop</span>
-                <span id="blenderGithubState" class="blender-github-state-dot" data-state="loading" title="Loading"></span>
-              </h2>
-              <div class="blender-github-head-tools">
-                <button id="blenderGithubAdd" class="icon-button blender-github-add" type="button" title="Add Blender project" aria-label="Add Blender project" data-i18n-aria="blenderGithubAddTitle">+</button>
-                <select id="blenderGithubProject" class="blender-github-project-picker" aria-label="Blender project" data-i18n-aria="blenderGithubProjectLabel"></select>
-                <button id="blenderGithubRename" class="ghost-button primary-action" type="button" data-i18n="blenderGithubRename" data-i18n-title="blenderGithubRename" title="Rename selected project">Rename</button>
-                <button id="blenderGithubRefresh" class="icon-button blender-github-refresh" type="button" title="Refresh Git status" aria-label="Refresh Git status" data-i18n-aria="blenderGithubRefreshTitle">&#x21bb;</button>
-              </div>
-            </div>
-
-            <div id="blenderGithubBody" class="blender-github-body">
-              <div id="blenderGithubBlendCards" class="blender-github-blend-cards" role="listbox" aria-label="Blend files" data-i18n-aria="blenderGithubBlendFilesLabel"></div>
-
-              <div class="blender-github-dock">
-                <p id="blenderGithubWorkflow" class="blender-github-workflow" data-state="loading" aria-live="polite"></p>
-                <p class="blender-github-guide tutorial-only" data-i18n="blenderGithubGuide">Not downloaded: double-click the card to Clone, then use + to select the .blend file. Fetch/Pull before editing; Commit + Push when finished.</p>
-                <nav class="blender-github-links" aria-label="Project links" data-i18n-aria="blenderGithubLinksLabel">
-                  <button id="blenderGithubDesktop" class="blender-github-link" type="button" data-i18n="blenderGithubDesktop">GitHub Desktop</button>
-                  <button id="blenderGithubFolder" class="blender-github-link" type="button" data-i18n="blenderGithubFolder">Files</button>
-                  <button id="blenderGithubOpen" class="blender-github-link" type="button" data-i18n="blenderGithubOpenShort">GitHub</button>
-                </nav>
-              </div>
-              <p id="blenderGithubStatus" class="blender-github-notice" role="status" aria-live="polite" hidden></p>
-            </div>
-          </article>
-        </section>
         </div>
       </div>
     </section>
@@ -1152,6 +1190,6 @@
   <audio id="audioPlayer" preload="metadata"></audio>
 
 <script src="/api/release-defaults.js"></script>
-<script src="app.js?v=control-console-1018"></script>
+<script src="app.js?v=control-console-1025"></script>
 </body>
 </html>

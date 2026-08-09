@@ -567,11 +567,19 @@ h2 {
 
 .console-workspace,
 .console-view-stage,
-.console-subview {
+.console-subview,
+.collaboration-view-stage,
+.collaboration-subview {
   min-width: 0;
 }
 
 .console-workspace {
+  display: grid;
+  gap: 12px;
+}
+
+.collaboration-shell,
+.collaboration-view-stage {
   display: grid;
   gap: 12px;
 }
@@ -581,6 +589,7 @@ h2 {
 }
 
 .console-subview[hidden],
+.collaboration-subview[hidden],
 .feedback-review-panel[hidden] {
   display: none !important;
 }
@@ -621,7 +630,7 @@ h2 {
 }
 
 .blender-subnav {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .console-subnav {
@@ -662,7 +671,7 @@ h2 {
 }
 
 .blender-subtab-drop {
-  width: calc((100% - 24px) / 3);
+  width: calc((100% - 16px) / 2);
 }
 
 .console-subtab-drop {
@@ -837,6 +846,110 @@ h2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
+}
+
+.download-map-panel {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.panel-head > .download-map-tools,
+.download-map-summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.download-map-tools label {
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.download-map-tools select {
+  width: min(260px, 36vw);
+  min-width: 180px;
+  min-height: 36px;
+}
+
+.download-map-tools .icon-button {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  font-size: 18px;
+}
+
+.download-map-summary {
+  justify-content: space-between;
+  padding-top: 2px;
+}
+
+.download-map-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-map-list {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+}
+
+.download-map-row {
+  min-width: 0;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr) 34px;
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+}
+
+.download-map-kind {
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.download-map-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-map-row.unavailable .download-map-value {
+  color: var(--muted);
+}
+
+.icon-button.download-map-open {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  font-size: 17px;
+}
+
+.download-map-loading,
+.download-map-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.download-map-loading {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+}
+
+.download-map-status:empty {
+  display: none;
 }
 
 .github-download-link {
@@ -1503,6 +1616,29 @@ h2 {
 
   .console-update-controls {
     justify-content: flex-end;
+  }
+
+  .download-map-panel .panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .download-map-tools,
+  .download-map-tools select {
+    width: 100%;
+  }
+
+  .download-map-tools label {
+    width: auto;
+  }
+
+  .download-map-tools select {
+    min-width: 0;
+  }
+
+  .download-map-row {
+    grid-template-columns: 78px minmax(0, 1fr) 32px;
+    gap: 7px;
   }
 }
 

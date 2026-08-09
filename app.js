@@ -19,9 +19,11 @@
   downloadIntake: "codexControl.downloadIntake.v1",
   workspaceTodos: "codexControl.workspaceTodos.v1",
   tutorialMode: "codexControl.tutorialMode.v1",
+  downloadMapPlugin: "codexControl.downloadMapPlugin.v1",
   updateProduct: "codexControl.updateProduct.v1",
   randomRealmArtContext: "codexControl.randomRealmArtContext.v1",
   consoleView: "codexControl.consoleView.v1",
+  collaborationView: "codexControl.collaborationView.v1",
   blenderView: "codexControl.blenderView.v1",
   lyricsHeight: "codexControl.lyricsHeight.v1",
   lyricsLanguages: "codexControl.lyricsLanguages.v1",
@@ -307,6 +309,21 @@ const i18n = {
     tutorialModeOff: "æ•™ç¨‹æ¨¡å¼å·²å…³é—­ï¼šåªä¿ç•™å…³é”®å…¥å£",
     consoleCommonTab: "\u5e38\u7528",
     consoleCollaborationTab: "\u534f\u4f5c",
+    consoleDownloadsTab: "\u4e0b\u8f7d\u5730\u56fe",
+    downloadMapTitle: "\u63d2\u4ef6\u5730\u56fe",
+    downloadMapPluginLabel: "Blender \u63d2\u4ef6",
+    downloadMapRefresh: "\u5237\u65b0\u4e0b\u8f7d\u5730\u56fe",
+    downloadMapLoading: "\u6b63\u5728\u5b9a\u4f4d",
+    downloadMapEmpty: "\u6682\u65e0\u63d2\u4ef6",
+    downloadMapRepository: "GitHub",
+    downloadMapSource: "\u6e90\u7801",
+    downloadMapInstalled: "\u5df2\u5b89\u88c5",
+    downloadMapPackage: "\u5b89\u88c5\u5305",
+    downloadMapMissing: "\u672a\u627e\u5230",
+    downloadMapOpenTarget: label => `\u6253\u5f00${label}`,
+    downloadMapOpened: label => `\u5df2\u6253\u5f00${label}`,
+    downloadMapLoadFailed: message => `\u4e0b\u8f7d\u5730\u56fe\u8bfb\u53d6\u5931\u8d25\uff1a${message}`,
+    downloadMapOpenFailed: message => `\u6253\u5f00\u5931\u8d25\uff1a${message}`,
     feedbackReviewTitle: "\u6536\u5230\u7684\u56de\u62a5",
     desktopLayoutTitle: "\u684c\u9762\u5e03\u5c40",
     desktopLayoutLocalOnly: "\u4ec5\u672c\u673a",
@@ -383,7 +400,6 @@ const i18n = {
     feedbackAdminSaved: "æ”¶ä»¶ç®±å·²è¿žæŽ¥",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
-    blenderHelperTab: "Helper",
     blenderCharacterTab: "Character Designer",
     blenderHelperTitle: "Blender Hub",
     blenderHelperBadge: "\u5730\u56fe",
@@ -1083,6 +1099,21 @@ const i18n = {
     tutorialModeOff: "Tutorial mode is off: showing only key actions",
     consoleCommonTab: "Common",
     consoleCollaborationTab: "Collaboration",
+    consoleDownloadsTab: "Download Map",
+    downloadMapTitle: "Plugin Map",
+    downloadMapPluginLabel: "Blender plugin",
+    downloadMapRefresh: "Refresh download map",
+    downloadMapLoading: "Locating",
+    downloadMapEmpty: "No plugins yet",
+    downloadMapRepository: "GitHub",
+    downloadMapSource: "Source",
+    downloadMapInstalled: "Installed",
+    downloadMapPackage: "Package",
+    downloadMapMissing: "Not found",
+    downloadMapOpenTarget: label => `Open ${label}`,
+    downloadMapOpened: label => `Opened ${label}`,
+    downloadMapLoadFailed: message => `Could not read the download map: ${message}`,
+    downloadMapOpenFailed: message => `Could not open: ${message}`,
     feedbackReviewTitle: "Received reports",
     desktopLayoutTitle: "Desktop Layout",
     desktopLayoutLocalOnly: "This device",
@@ -1159,7 +1190,6 @@ const i18n = {
     feedbackAdminSaved: "Inbox connected",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
-    blenderHelperTab: "Helper",
     blenderCharacterTab: "Character Designer",
     blenderHelperTitle: "Blender Hub",
     blenderHelperBadge: "Map",
@@ -1830,6 +1860,12 @@ const els = {
   managerArchivedTabs: document.getElementById("managerArchivedTabs"),
   managerLayoutOrder: document.getElementById("managerLayoutOrder"),
   tutorialModeToggle: document.getElementById("tutorialModeToggle"),
+  downloadMapPlugin: document.getElementById("downloadMapPlugin"),
+  downloadMapPluginName: document.getElementById("downloadMapPluginName"),
+  downloadMapPluginVersion: document.getElementById("downloadMapPluginVersion"),
+  downloadMapEntries: document.getElementById("downloadMapEntries"),
+  downloadMapRefresh: document.getElementById("downloadMapRefresh"),
+  downloadMapStatus: document.getElementById("downloadMapStatus"),
   feedbackPanel: document.getElementById("feedbackPanel"),
   feedbackReviewPanel: document.getElementById("feedbackReviewPanel"),
   feedbackForm: document.getElementById("feedbackForm"),
@@ -2172,7 +2208,11 @@ let materialNotice = "";
 let renderTextureNotice = "";
 let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) === "true";
 let tutorialMode = localStorage.getItem(storageKeys.tutorialMode) === "true";
-let activeConsoleView = normalizeConsoleWorkspaceView(localStorage.getItem(storageKeys.consoleView));
+const storedConsoleView = localStorage.getItem(storageKeys.consoleView);
+let activeConsoleView = normalizeConsoleWorkspaceView(storedConsoleView);
+let activeCollaborationView = normalizeCollaborationWorkspaceView(
+  localStorage.getItem(storageKeys.collaborationView) || (storedConsoleView === "downloads" ? "downloads" : "feedback")
+);
 let activeBlenderView = normalizeBlenderWorkspaceView(localStorage.getItem(storageKeys.blenderView));
 let blenderViewTransitionTimer = 0;
 let blenderViewTransitionFrame = 0;
@@ -2187,6 +2227,10 @@ let blenderGithubCardClickTimer = null;
 let blenderGithubDraggedPath = "";
 let blenderGithubDropCommitted = false;
 let githubDownloadsInfo = null;
+let downloadMapState = null;
+let downloadMapBusy = false;
+let downloadMapNotice = "";
+let selectedDownloadMapPluginId = localStorage.getItem(storageKeys.downloadMapPlugin) || "character-designer";
 const initialConsoleVersion = String(els.consoleUpdateCurrent?.textContent || "").replace(/^v/i, "").trim();
 let productUpdateStates = {
   console: initialConsoleVersion ? {
@@ -2553,11 +2597,8 @@ async function loadModuleData(id) {
       if (hasMaterialWorkspace && downloadIntakeEnabled) await loadMaterialCandidates();
       break;
     case "blender":
-      if (hasRandomRealmArtTools() && activeBlenderView !== "helper") {
+      if (hasRandomRealmArtTools()) {
         await loadRandomRealmBlenderProjects({ limit: 40, loadObjects: activeBlenderView === "builder" });
-      }
-      if (activeBlenderView === "helper" && hasBlenderGithubShare() && !blenderGithubShareState && !blenderGithubBusy) {
-        await loadBlenderGithubShare({ detect: true });
       }
       break;
     case "unity":
@@ -2659,10 +2700,15 @@ function applyModuleHistory(id) {
 }
 
 function normalizeConsoleWorkspaceView(value) {
-  return value === "collaboration" ? "collaboration" : "common";
+  return value === "collaboration" || value === "downloads" ? "collaboration" : "common";
+}
+
+function normalizeCollaborationWorkspaceView(value) {
+  return value === "downloads" ? "downloads" : "feedback";
 }
 
 function setConsoleWorkspaceView(value, options = {}) {
+  if (value === "downloads") activeCollaborationView = "downloads";
   activeConsoleView = normalizeConsoleWorkspaceView(value);
   if (options.persist !== false) {
     localStorage.setItem(storageKeys.consoleView, activeConsoleView);
@@ -2685,16 +2731,50 @@ function setConsoleWorkspaceView(value, options = {}) {
   }
 
   if (activeConsoleView === "collaboration") {
+    setCollaborationWorkspaceView(activeCollaborationView, { persist: options.persist !== false });
+  }
+}
+
+function setCollaborationWorkspaceView(value, options = {}) {
+  activeCollaborationView = normalizeCollaborationWorkspaceView(value);
+  if (options.persist !== false) {
+    localStorage.setItem(storageKeys.collaborationView, activeCollaborationView);
+  }
+
+  const buttons = Array.from(document.querySelectorAll("[data-collaboration-view-target]"));
+  const activeButtonIndex = Math.max(0, buttons.findIndex(button => button.dataset.collaborationViewTarget === activeCollaborationView));
+  document.querySelector(".collaboration-subnav")?.style.setProperty("--blender-subtab-index", String(activeButtonIndex));
+  for (const button of buttons) {
+    const active = button.dataset.collaborationViewTarget === activeCollaborationView;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+  }
+
+  for (const view of document.querySelectorAll("[data-collaboration-view]")) {
+    const active = view.dataset.collaborationView === activeCollaborationView;
+    view.hidden = !active;
+    view.classList.toggle("active", active);
+  }
+
+  if (activeCollaborationView === "feedback") {
     if (!feedbackConfig && !feedbackConfigBusy) {
       loadFeedbackConfig({ quiet: true });
     } else if (feedbackConfig?.adminEnabled && !feedbackInboxBusy) {
       loadFeedbackInbox({ quiet: true });
     }
+  } else {
+    if (!downloadMapState && !downloadMapBusy) {
+      loadDownloadMap({ quiet: true });
+    }
+    if (hasBlenderGithubShare() && !blenderGithubShareState && !blenderGithubBusy) {
+      loadBlenderGithubShare({ detect: true });
+    }
   }
 }
 
 function normalizeBlenderWorkspaceView(value) {
-  return ["helper", "character", "builder"].includes(value) ? value : "helper";
+  return value === "builder" ? "builder" : "character";
 }
 
 function setBlenderWorkspaceView(value, options = {}) {
@@ -2728,8 +2808,6 @@ function setBlenderWorkspaceView(value, options = {}) {
       } else if (project !== referenceViewLoadedProject) {
         loadReferenceViewSets({ quiet: true });
       }
-    } else if (!blenderGithubShareState && !blenderGithubBusy) {
-      loadBlenderGithubShare({ detect: true });
     }
   }
 
@@ -2753,10 +2831,14 @@ function setBlenderWorkspaceView(value, options = {}) {
   }
   blenderViewTransitionAnimations = [];
   for (const view of views) {
+    const previous = view.dataset.blenderView === previousView;
+    view.hidden = !previous;
+    view.classList.toggle("active", previous);
     view.classList.remove("entering", "leaving");
     view.style.transform = "";
   }
   stage?.classList.remove("switching");
+  if (stage) stage.style.height = "";
 
   if (!shouldAnimate) {
     for (const view of views) {
@@ -2819,12 +2901,17 @@ function setBlenderWorkspaceView(value, options = {}) {
     finalPaintScheduled = true;
     window.clearTimeout(blenderViewTransitionTimer);
     window.cancelAnimationFrame(blenderViewTransitionFrame);
-    blenderViewTransitionFrame = window.requestAnimationFrame(() => {
-      blenderViewTransitionFrame = window.requestAnimationFrame(() => {
-        blenderViewTransitionFrame = 0;
-        blenderViewTransitionTimer = window.setTimeout(cleanup, 40);
-      });
-    });
+    blenderViewTransitionFrame = 0;
+    oldView.style.transform = oldEnd;
+    nextView.style.transform = neutral;
+    for (const animation of blenderViewTransitionAnimations) {
+      try {
+        animation.cancel();
+      } catch {}
+    }
+    blenderViewTransitionAnimations = [];
+    stage.getBoundingClientRect();
+    blenderViewTransitionTimer = window.setTimeout(cleanup, 32);
   };
 
   if (typeof nextView.animate !== "function" || typeof oldView.animate !== "function") {
@@ -4066,11 +4153,38 @@ function renderModuleNavs() {
   renderModuleArchive();
 }
 
+const windows1252ByteMap = new Map([
+  [0x20ac, 0x80], [0x201a, 0x82], [0x0192, 0x83], [0x201e, 0x84],
+  [0x2026, 0x85], [0x2020, 0x86], [0x2021, 0x87], [0x02c6, 0x88],
+  [0x2030, 0x89], [0x0160, 0x8a], [0x2039, 0x8b], [0x0152, 0x8c],
+  [0x017d, 0x8e], [0x2018, 0x91], [0x2019, 0x92], [0x201c, 0x93],
+  [0x201d, 0x94], [0x2022, 0x95], [0x2013, 0x96], [0x2014, 0x97],
+  [0x02dc, 0x98], [0x2122, 0x99], [0x0161, 0x9a], [0x203a, 0x9b],
+  [0x0153, 0x9c], [0x017e, 0x9e], [0x0178, 0x9f]
+]);
+
+function repairLegacyUiText(value) {
+  if (language !== "zh" || typeof value !== "string" || !/[ÃÂâäåæçèéï]/.test(value)) return value;
+  const bytes = [];
+  for (const character of value) {
+    const code = character.codePointAt(0);
+    if (code <= 0xff) bytes.push(code);
+    else if (windows1252ByteMap.has(code)) bytes.push(windows1252ByteMap.get(code));
+    else return value;
+  }
+  try {
+    const repaired = new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes));
+    return /[\u3400-\u9fff]/u.test(repaired) ? repaired : value;
+  } catch {
+    return value;
+  }
+}
+
 function text(key, ...args) {
   const languageBundle = i18n[language] || i18n.zh;
   const fallbackBundle = i18n.en;
   const value = languageBundle?.[key] ?? fallbackBundle?.[key] ?? key;
-  return typeof value === "function" ? value(...args) : value;
+  return repairLegacyUiText(typeof value === "function" ? value(...args) : value);
 }
 
 function formatClock(date) {
@@ -4329,6 +4443,7 @@ function applyLanguage() {
   }
   if (hasWorkspace) {
     renderGithubDownloads();
+    renderDownloadMap();
     renderConsoleUpdate();
     renderDesktopLayout();
     renderBuiltinMedia();
@@ -11429,6 +11544,142 @@ async function openGithubDownloads() {
   }
 }
 
+const downloadMapEntryKeys = {
+  repository: "downloadMapRepository",
+  source: "downloadMapSource",
+  installed: "downloadMapInstalled",
+  package: "downloadMapPackage"
+};
+
+function downloadMapEntryLabel(entryId) {
+  return text(downloadMapEntryKeys[entryId] || entryId);
+}
+
+function selectedDownloadMapPlugin() {
+  const plugins = Array.isArray(downloadMapState?.plugins) ? downloadMapState.plugins : [];
+  return plugins.find(plugin => plugin.id === selectedDownloadMapPluginId) || plugins[0] || null;
+}
+
+function compactDownloadMapValue(entry) {
+  const value = String(entry?.value || "");
+  return entry?.kind === "url" ? value.replace(/^https?:\/\//i, "") : value;
+}
+
+function renderDownloadMap() {
+  if (!els.downloadMapEntries) return;
+  const plugins = Array.isArray(downloadMapState?.plugins) ? downloadMapState.plugins : [];
+  const ids = plugins.map(plugin => plugin.id);
+
+  if (els.downloadMapPlugin && plugins.length) {
+    const optionIds = Array.from(els.downloadMapPlugin.options).map(option => option.value);
+    if (optionIds.join("\n") !== ids.join("\n")) {
+      els.downloadMapPlugin.replaceChildren(...plugins.map(plugin => {
+        const option = document.createElement("option");
+        option.value = plugin.id;
+        option.textContent = plugin.name;
+        return option;
+      }));
+    }
+    if (!ids.includes(selectedDownloadMapPluginId)) {
+      selectedDownloadMapPluginId = ids[0];
+    }
+    els.downloadMapPlugin.value = selectedDownloadMapPluginId;
+  }
+
+  const plugin = selectedDownloadMapPlugin();
+  if (els.downloadMapPluginName) {
+    els.downloadMapPluginName.textContent = plugin?.name || text("downloadMapEmpty");
+  }
+  if (els.downloadMapPluginVersion) {
+    els.downloadMapPluginVersion.textContent = plugin?.version ? `v${plugin.version}` : "--";
+    els.downloadMapPluginVersion.hidden = !plugin;
+  }
+  if (els.downloadMapPlugin) els.downloadMapPlugin.disabled = downloadMapBusy || !plugins.length;
+  if (els.downloadMapRefresh) els.downloadMapRefresh.disabled = downloadMapBusy;
+  if (els.downloadMapStatus) els.downloadMapStatus.textContent = downloadMapNotice;
+
+  els.downloadMapEntries.replaceChildren();
+  if (!plugin) {
+    const empty = document.createElement("div");
+    empty.className = "download-map-loading";
+    empty.textContent = downloadMapBusy ? text("downloadMapLoading") : text("downloadMapEmpty");
+    els.downloadMapEntries.appendChild(empty);
+    return;
+  }
+
+  for (const entry of plugin.entries || []) {
+    const label = downloadMapEntryLabel(entry.id);
+    const row = document.createElement("div");
+    row.className = `download-map-row${entry.available ? "" : " unavailable"}`;
+    row.dataset.plugin = plugin.id;
+    row.dataset.target = entry.id;
+
+    const kind = document.createElement("span");
+    kind.className = "download-map-kind";
+    kind.textContent = label;
+
+    const value = document.createElement("span");
+    value.className = "download-map-value";
+    value.textContent = entry.available ? compactDownloadMapValue(entry) : text("downloadMapMissing");
+    value.title = entry.available ? String(entry.value || "") : text("downloadMapMissing");
+
+    const open = document.createElement("button");
+    open.className = "icon-button download-map-open";
+    open.type = "button";
+    open.textContent = "\u2197";
+    open.disabled = downloadMapBusy || !entry.available;
+    open.title = text("downloadMapOpenTarget", label);
+    open.setAttribute("aria-label", text("downloadMapOpenTarget", label));
+    open.addEventListener("click", () => openDownloadMapTarget(plugin.id, entry.id));
+
+    if (entry.available) {
+      row.title = text("downloadMapOpenTarget", label);
+      row.addEventListener("dblclick", () => openDownloadMapTarget(plugin.id, entry.id));
+    }
+    row.append(kind, value, open);
+    els.downloadMapEntries.appendChild(row);
+  }
+}
+
+async function loadDownloadMap(options = {}) {
+  if (!hasWorkspace || !els.downloadMapEntries || downloadMapBusy) return;
+  downloadMapBusy = true;
+  if (!options.quiet) downloadMapNotice = text("downloadMapLoading");
+  renderDownloadMap();
+  try {
+    const response = await fetch("/api/workspace/download-map", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    downloadMapState = payload;
+    downloadMapNotice = "";
+  } catch (error) {
+    downloadMapState = { plugins: [] };
+    downloadMapNotice = text("downloadMapLoadFailed", error.message);
+  } finally {
+    downloadMapBusy = false;
+    renderDownloadMap();
+  }
+}
+
+async function openDownloadMapTarget(pluginId, targetId) {
+  if (downloadMapBusy) return;
+  downloadMapBusy = true;
+  downloadMapNotice = "";
+  renderDownloadMap();
+  try {
+    await postJson("/api/workspace/download-map/open", {
+      plugin: pluginId,
+      target: targetId
+    });
+    downloadMapNotice = text("downloadMapOpened", downloadMapEntryLabel(targetId));
+  } catch (error) {
+    downloadMapNotice = text("downloadMapOpenFailed", error.message);
+  } finally {
+    downloadMapBusy = false;
+    renderDownloadMap();
+  }
+}
+
 const updateProductIds = ["console", "world"];
 
 function updateProductName(product) {
@@ -18410,6 +18661,20 @@ for (const button of document.querySelectorAll("[data-console-view-target]")) {
     setConsoleWorkspaceView(next?.dataset.consoleViewTarget);
   });
 }
+for (const button of document.querySelectorAll("[data-collaboration-view-target]")) {
+  button.addEventListener("click", () => setCollaborationWorkspaceView(button.dataset.collaborationViewTarget));
+  button.addEventListener("keydown", event => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const buttons = Array.from(document.querySelectorAll("[data-collaboration-view-target]"));
+    const currentIndex = buttons.indexOf(button);
+    if (currentIndex < 0) return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const next = buttons[(currentIndex + direction + buttons.length) % buttons.length];
+    next?.focus();
+    setCollaborationWorkspaceView(next?.dataset.collaborationViewTarget);
+  });
+}
 for (const button of document.querySelectorAll("[data-blender-view-target]")) {
   button.addEventListener("click", () => setBlenderWorkspaceView(button.dataset.blenderViewTarget));
   button.addEventListener("keydown", event => {
@@ -18425,7 +18690,10 @@ for (const button of document.querySelectorAll("[data-blender-view-target]")) {
   });
 }
 for (const trigger of document.querySelectorAll("[data-blender-view-jump]")) {
-  trigger.addEventListener("click", () => setBlenderWorkspaceView(trigger.dataset.blenderViewJump));
+  trigger.addEventListener("click", () => {
+    setBlenderWorkspaceView(trigger.dataset.blenderViewJump, { animate: false });
+    activateModuleFromUser("blender", true);
+  });
 }
 for (const trigger of document.querySelectorAll("[data-blender-helper-jump]")) {
   trigger.addEventListener("click", () => {
@@ -18885,6 +19153,17 @@ if (hasWorkspace && els.githubDownloadsLink) {
       event.preventDefault();
     }
   });
+}
+if (hasWorkspace && els.downloadMapPlugin) {
+  els.downloadMapPlugin.addEventListener("change", () => {
+    selectedDownloadMapPluginId = els.downloadMapPlugin.value || "character-designer";
+    localStorage.setItem(storageKeys.downloadMapPlugin, selectedDownloadMapPluginId);
+    downloadMapNotice = "";
+    renderDownloadMap();
+  });
+}
+if (hasWorkspace && els.downloadMapRefresh) {
+  els.downloadMapRefresh.addEventListener("click", () => loadDownloadMap());
 }
 if (els.consoleUpdateAuto) {
   els.consoleUpdateAuto.addEventListener("change", saveProductUpdatePreference);

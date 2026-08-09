@@ -42,6 +42,7 @@ from desktop_layout import DesktopLayoutService
 from feedback_service import FeedbackService, FeedbackServiceError
 from app_uninstall import AppUninstallService
 from console_window_session import ConsoleWindowSessionService
+from download_map import DownloadMapService
 from reference_views import ReferenceViewSetService
 
 
@@ -396,6 +397,10 @@ BLENDER_GITHUB_SHARE = BlenderGithubShareService(
     catalog_file=BLENDER_GITHUB_COOP_CATALOG_FILE,
     live_selection_file=BLENDER_LIVE_SELECTION_FILE,
     live_selection_max_age=BLENDER_LIVE_SELECTION_MAX_AGE_SECONDS,
+)
+DOWNLOAD_MAP = DownloadMapService(
+    project_roots=BLENDER_PROJECT_ROOTS,
+    randomrealm_project_dir=RANDOMREALM_PROJECT_DIR,
 )
 DESKTOP_LAYOUT = DesktopLayoutService(APP_DIR)
 STEAMWORKS_APP_ID = os.environ.get("CODEX_CONTROL_STEAMWORKS_APP_ID", "3983670").strip() or "3983670"
@@ -1110,6 +1115,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/workspace/github-downloads":
             self.send_json(github_downloads_state())
             return
+        if parsed.path == "/api/workspace/download-map":
+            if not self.require_local_request():
+                return
+            self.send_json(download_map_state())
+            return
         if parsed.path == "/api/steamwork/assets":
             self.send_json(steamwork_assets_state())
             return
@@ -1322,6 +1332,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/workspace/open-github-downloads":
                 self.send_json(open_github_downloads())
+                return
+            if parsed.path == "/api/workspace/download-map/open":
+                if not self.require_local_request():
+                    return
+                self.send_json(open_download_map_target(payload))
                 return
             if parsed.path == "/api/steamwork/open-asset":
                 self.send_json(open_steamwork_asset(payload.get("path", "")))
@@ -2321,6 +2336,32 @@ def open_github_downloads():
         raise ValueError("Codex World GitHub Releases URL is not configured yet")
     open_url_resource(state["url"])
     return state
+
+
+def download_map_state():
+    return DOWNLOAD_MAP.state(blender_executable=find_blender_executable())
+
+
+def open_download_map_target(payload):
+    target = DOWNLOAD_MAP.target(
+        str(payload.get("plugin", "") or "").strip(),
+        str(payload.get("target", "") or "").strip(),
+        blender_executable=find_blender_executable(),
+    )
+    entry = target["entry"]
+    if entry["kind"] == "url":
+        result = open_url_resource(entry["value"])
+    elif entry["kind"] == "folder":
+        result = open_folder_resource(entry["value"])
+    elif entry["kind"] == "file":
+        result = open_file_resource(entry["value"])
+    else:
+        raise ValueError("unsupported download map target")
+    return {
+        **result,
+        "plugin": target["plugin"]["id"],
+        "target": entry["id"],
+    }
 
 
 def open_randomrealm_resource(resource_id):
