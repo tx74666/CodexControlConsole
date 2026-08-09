@@ -25,9 +25,15 @@ def main():
     release_helper = (ROOT / "tools" / "publish-release.ps1").read_text(encoding="utf-8")
     requirements = (ROOT / "tools" / "windows-release-requirements.txt").read_text(encoding="utf-8")
 
-    require("Require Artifact Signing configuration" in workflow, "signing configuration is not mandatory")
+    unsigned_approval = (ROOT / ".github" / "unsigned-release-approval.txt").read_text(encoding="utf-8").splitlines()
+    require(unsigned_approval[:1] == ["v1.0.3"], "the unsigned exception must name exactly v1.0.3")
+    require("Resolve Artifact Signing policy" in workflow, "signing policy is missing")
     require("azure/artifact-signing-action@v2" in workflow, "current Artifact Signing action is not used")
     require("if: ${{ vars.ARTIFACT_SIGNING_ENDPOINT" not in workflow, "signing can still be skipped")
+    require(workflow.count("if: env.SIGNING_ENABLED == 'true'") == 4, "signing steps do not share one explicit policy")
+    require('$approvalFile = ".github/unsigned-release-approval.txt"' in workflow, "unsigned approval is not auditable")
+    require('$approvedTag -eq $env:RELEASE_TAG' in workflow, "unsigned approval is not restricted to one tag")
+    require("The unsigned approval file does not match" in workflow, "future unsigned releases do not fail closed")
 
     application = position(workflow, "-Stage Application")
     sign_application = position(workflow, "Sign application PE files")
@@ -107,7 +113,7 @@ def main():
     require("check-package-footprint.py" in release_helper, "direct publishing does not test packaged startup")
     require("check-console-ui-local.ps1" in release_helper, "release UI checks still depend on an installed version")
 
-    print("PASS release signing and Defender gates are fail-closed")
+    print("PASS release signing and Defender gates are fail-closed outside the explicit v1.0.3 exception")
 
 
 if __name__ == "__main__":
