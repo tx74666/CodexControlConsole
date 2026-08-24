@@ -5,12 +5,18 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from feedback_service import FeedbackService, FeedbackServiceError  # noqa: E402
+from feedback_service import (  # noqa: E402
+    MAX_BINARY_RESPONSE_BYTES,
+    MAX_JSON_RESPONSE_BYTES,
+    FeedbackService,
+    FeedbackServiceError,
+)
 
 
 def require(condition, message):
@@ -20,6 +26,10 @@ def require(condition, message):
 
 class RelayHandler(BaseHTTPRequestHandler):
     requests = []
+    redirect_target = ""
+    stream_bytes_sent = 0
+    stream_stopped = threading.Event()
+    stream_total = 16 * 1024 * 1024
 
     def log_message(self, *args):
         return
@@ -34,6 +44,50 @@ class RelayHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.requests.append(("GET", self.path, self.headers.get("Authorization", ""), None))
+        if self.path == "/v1/admin/relative-redirect":
+            self.send_response(302)
+            self.send_header("Location", "/v1/admin/relative-final")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path == "/v1/admin/relative-final":
+            self.send_payload({"ok": True})
+            return
+        if self.path == "/v1/admin/cross-origin-redirect":
+            self.send_response(302)
+            self.send_header("Location", self.redirect_target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path == "/v1/stream-too-large":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            chunk = b" " * (64 * 1024)
+            type(self).stream_bytes_sent = 0
+            try:
+                while type(self).stream_bytes_sent < type(self).stream_total:
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                    type(self).stream_bytes_sent += len(chunk)
+                    time.sleep(0.002)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            finally:
+                type(self).stream_stopped.set()
+            return
+        if self.path == "/v1/binary-too-large":
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(MAX_BINARY_RESPONSE_BYTES + 1))
+            self.end_headers()
+            return
+        if self.path == "/v1/error-too-large":
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(MAX_JSON_RESPONSE_BYTES + 1))
+            self.end_headers()
+            return
         if self.path == "/v1/config":
             self.send_payload({
                 "siteKey": "test-site-key",
@@ -93,11 +147,34 @@ class RelayHandler(BaseHTTPRequestHandler):
         self.send_payload({"ok": True, "status": payload.get("status")})
 
 
+class CaptureHandler(BaseHTTPRequestHandler):
+    requests = []
+
+    def log_message(self, *args):
+        return
+
+    def do_GET(self):
+        type(self).requests.append((self.path, self.headers.get("Authorization", "")))
+        body = b'{"ok":true}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
 def main():
     RelayHandler.requests = []
+    RelayHandler.stream_bytes_sent = 0
+    RelayHandler.stream_stopped.clear()
+    CaptureHandler.requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), RelayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    capture_server = ThreadingHTTPServer(("127.0.0.1", 0), CaptureHandler)
+    capture_thread = threading.Thread(target=capture_server.serve_forever, daemon=True)
+    capture_thread.start()
+    RelayHandler.redirect_target = f"http://127.0.0.1:{capture_server.server_port}/capture"
     endpoint = f"http://127.0.0.1:{server.server_port}"
 
     try:
@@ -180,6 +257,55 @@ def main():
             require(inbox["newCount"] == 1, "inbox was not loaded")
             admin_request = next(item for item in RelayHandler.requests if item[1].startswith("/v1/admin/reports?"))
             require(admin_request[2] == f"Bearer {token}", "admin request did not use the local token")
+
+            redirected = service._request("GET", "/v1/admin/relative-redirect", admin=True)
+            require(redirected.get("ok") is True, "same-origin relative redirect was blocked")
+            relative_final = next(
+                item for item in RelayHandler.requests if item[1] == "/v1/admin/relative-final"
+            )
+            require(relative_final[2] == f"Bearer {token}", "same-origin redirect lost authorization")
+
+            try:
+                service._request("GET", "/v1/admin/cross-origin-redirect", admin=True)
+            except FeedbackServiceError as error:
+                require(error.status == 502, "cross-origin redirect did not fail as a bad gateway")
+                require(error.code == "redirect_blocked", "cross-origin redirect failure was unclear")
+            else:
+                raise AssertionError("cross-origin admin redirect was followed")
+            require(not CaptureHandler.requests, "cross-origin redirect reached the target server")
+
+            try:
+                service._request("GET", "/v1/stream-too-large")
+            except FeedbackServiceError as error:
+                require(error.status == 502, "oversized response did not fail as a bad gateway")
+                require(error.code == "response_too_large", "oversized response failure was unclear")
+            else:
+                raise AssertionError("oversized response without Content-Length was accepted")
+            require(RelayHandler.stream_stopped.wait(2), "oversized response stream did not stop")
+            require(
+                RelayHandler.stream_bytes_sent <= MAX_JSON_RESPONSE_BYTES + 512 * 1024,
+                "oversized response was consumed beyond the bounded-read margin",
+            )
+            require(
+                RelayHandler.stream_bytes_sent < RelayHandler.stream_total,
+                "oversized response stream was consumed in full",
+            )
+
+            for response_path, response_kind in (
+                ("/v1/binary-too-large", "binary"),
+                ("/v1/error-too-large", "HTTP error"),
+            ):
+                try:
+                    service._request("GET", response_path)
+                except FeedbackServiceError as error:
+                    require(error.status == 502, f"oversized {response_kind} was not rejected")
+                    require(
+                        error.code == "response_too_large",
+                        f"oversized {response_kind} failure was unclear",
+                    )
+                else:
+                    raise AssertionError(f"oversized {response_kind} response was accepted")
+
             image, content_type = service.report_image("123e4567-e89b-12d3-a456-426614174000", 1)
             require(content_type == "image/png" and image.startswith(b"\x89PNG"), "private image proxy failed")
             require(service.update_status("123e4567-e89b-12d3-a456-426614174000", "resolved")["status"] == "resolved", "status update failed")
@@ -187,6 +313,9 @@ def main():
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+        capture_server.shutdown()
+        capture_server.server_close()
+        capture_thread.join(timeout=2)
 
     print("PASS Codex Console feedback service")
 

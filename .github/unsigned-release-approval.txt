@@ -1,2 +1,0 @@
-v1.0.3
-One-time publisher approval: release only after the final Setup passes Microsoft Defender in GitHub Actions.

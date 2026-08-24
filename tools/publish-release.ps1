@@ -162,11 +162,18 @@ while ((Get-Date) -lt $Deadline) {
   try {
     $Release = Invoke-RestMethod -Uri $ReleaseApi -Headers $Headers -TimeoutSec 20
     $Assets = @($Release.assets)
-    if ($Assets.Count -ne 1 -or $Assets[0].name -ne "CodexControlConsole-Setup-x64.exe") {
-      throw "Release exists but does not contain exactly one Windows x64 Setup."
+    $ExpectedAssets = @(
+      "CodexControlConsole-Setup-x64.exe",
+      "CodexControlConsole-Windows-x64.zip"
+    )
+    $ActualAssets = @($Assets | ForEach-Object { $_.name } | Sort-Object)
+    if (($ActualAssets -join "`n") -ne (($ExpectedAssets | Sort-Object) -join "`n")) {
+      throw "Release exists but its Windows downloads are incomplete: $($ActualAssets -join ', ')."
     }
     Write-Host "Release ready: $($Release.html_url)"
-    Write-Host "Download: $($Assets[0].browser_download_url)"
+    foreach ($Asset in ($Assets | Sort-Object name)) {
+      Write-Host "Download: $($Asset.browser_download_url)"
+    }
     exit 0
   } catch {
     Write-Host "Waiting for GitHub Actions to publish $Tag..."

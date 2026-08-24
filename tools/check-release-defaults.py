@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -52,7 +53,7 @@ def start_server(data_dir, port):
     environment["CODEX_CONTROL_WALLPAPERS_DIR"] = str(ROOT / "wallpapers")
     process = subprocess.Popen(
         [
-            os.environ.get("PYTHON", "python"),
+            sys.executable,
             str(ROOT / "world_console.py"),
             "--host", "127.0.0.1",
             "--port", str(port),

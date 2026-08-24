@@ -50,7 +50,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-1025">
+  <link rel="stylesheet" href="styles.css?v=control-console-1040">
 </head>
 <body>
   <main class="app-shell">
@@ -170,7 +170,7 @@
           <span id="desktopLayoutStatus" role="status" aria-live="polite"></span>
         </div>
         <p id="desktopLayoutPath" class="desktop-layout-path tutorial-only"></p>
-        <p class="desktop-layout-guide tutorial-only" data-i18n="desktopLayoutGuide">恢复后会自动检查重叠、缺失和位置偏差。保存当前版会先备份原 JSON；方案与备份不会上传。</p>
+        <p class="desktop-layout-guide tutorial-only" data-i18n="desktopLayoutGuide">Windows 当前排列始终是基准；每 3 天只读取并记录一次。开机不会自动重排，恢复只能手动执行；方案与备份不会上传。</p>
       </article>
 
       <article class="panel builtin-media-panel" aria-labelledby="builtinMediaTitle">
@@ -206,7 +206,7 @@
         </div>
         <div class="todo-composer">
           <select id="workspaceTodoCategory" aria-label="Todo category" data-i18n-aria="workspaceTodoCategoryLabel"></select>
-          <input id="workspaceTodoInput" type="text" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
+          <input id="workspaceTodoInput" type="text" aria-label="写一个新的待办" data-i18n-aria="workspaceTodoPlaceholder" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
           <button id="addWorkspaceTodo" class="ghost-button primary-action" type="button" data-i18n="addWorkspaceTodo">加入</button>
         </div>
         <div class="todo-composer-actions">
@@ -217,15 +217,9 @@
         </section>
 
         <section id="consoleCollaborationView" class="console-subview collaboration-shell" data-console-view="collaboration" role="tabpanel" aria-labelledby="consoleCollaborationTab" hidden>
-          <div class="console-subnav collaboration-subnav" role="tablist" aria-label="Collaboration workspace">
-            <span class="console-subtab-drop" aria-hidden="true"></span>
-            <button id="collaborationFeedbackTab" class="console-subtab active" type="button" role="tab" aria-selected="true" aria-controls="collaborationFeedbackView" data-collaboration-view-target="feedback" data-i18n="feedbackTitle">问题回报</button>
-            <button id="collaborationDownloadsTab" class="console-subtab" type="button" role="tab" aria-selected="false" aria-controls="collaborationDownloadsView" data-collaboration-view-target="downloads" data-i18n="consoleDownloadsTab">下载地图</button>
-          </div>
-
           <div class="collaboration-view-stage">
-        <section id="collaborationDownloadsView" class="workspace-grid console-minimal-grid collaboration-subview" data-collaboration-view="downloads" role="tabpanel" aria-labelledby="collaborationDownloadsTab" hidden>
-      <article class="panel github-download-panel">
+        <section id="collaborationDownloadsView" class="workspace-grid console-minimal-grid collaboration-section" aria-labelledby="workspaceTitle">
+      <article id="githubDownloadsPanel" class="panel github-download-panel collaboration-collapsible">
         <div class="panel-head">
           <div>
             <div id="workspaceSourceLabel" class="section-label">GitHub</div>
@@ -233,13 +227,15 @@
           </div>
           <div class="panel-actions">
             <button id="tutorialModeToggle" class="ghost-button tutorial-toggle" type="button" aria-pressed="false" data-i18n="tutorialModeToggle">教程模式</button>
+            <button id="githubDownloadsCollapse" class="icon-button collaboration-collapse-button" type="button" data-collaboration-collapse aria-expanded="true" aria-controls="githubDownloadsBody" aria-label="折叠或展开此面板" data-i18n-aria="collaborationPanelToggleTitle"></button>
           </div>
         </div>
 
+        <div id="githubDownloadsBody" class="collaboration-panel-body">
         <div class="github-download-actions" aria-label="Product downloads">
           <a id="updateProductConsole" class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="true" data-update-product="console">
             <span>Codex Console</span>
-            <small id="updateProductConsoleBadge" class="update-product-badge">v1.0.3</small>
+            <small id="updateProductConsoleBadge" class="update-product-badge">v1.0.4</small>
           </a>
           <a id="updateProductWorld" class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="false" data-update-product="world">
             <span>Codex World</span>
@@ -249,7 +245,7 @@
 
         <div class="console-update-bar">
           <div class="console-update-copy">
-            <span id="consoleUpdateCurrent" class="workspace-pill">v1.0.3</span>
+            <span id="consoleUpdateCurrent" class="workspace-pill">v1.0.4</span>
             <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
             <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
           </div>
@@ -264,12 +260,12 @@
           </div>
         </div>
         <p id="consoleUpdateError" class="console-update-error" role="status" aria-live="polite" hidden></p>
+        </div>
       </article>
 
-      <article class="panel download-map-panel" aria-labelledby="downloadMapTitle">
+      <article id="downloadMapPanel" class="panel download-map-panel collaboration-collapsible" aria-labelledby="downloadMapTitle">
         <div class="panel-head">
           <div>
-            <div class="section-label">Blender</div>
             <h2 id="downloadMapTitle" data-i18n="downloadMapTitle">插件地图</h2>
           </div>
           <div class="download-map-tools">
@@ -281,9 +277,11 @@
               </select>
             </label>
             <button id="downloadMapRefresh" class="icon-button" type="button" title="刷新下载地图" aria-label="刷新下载地图" data-i18n-aria="downloadMapRefresh">&#x21bb;</button>
+            <button id="downloadMapCollapse" class="icon-button collaboration-collapse-button" type="button" data-collaboration-collapse aria-expanded="true" aria-controls="downloadMapBody" aria-label="折叠或展开此面板" data-i18n-aria="collaborationPanelToggleTitle"></button>
           </div>
         </div>
 
+        <div id="downloadMapBody" class="collaboration-panel-body">
         <div class="download-map-summary">
           <strong id="downloadMapPluginName">Character Designer</strong>
           <span id="downloadMapPluginVersion" class="workspace-pill">--</span>
@@ -292,17 +290,21 @@
           <div class="download-map-loading" data-i18n="downloadMapLoading">正在定位</div>
         </div>
         <p id="downloadMapStatus" class="download-map-status" role="status" aria-live="polite"></p>
+        </div>
       </article>
 
-      <article id="blenderHubPanel" class="panel blender-helper-panel" aria-labelledby="blenderHubTitle">
+      <article id="blenderHubPanel" class="panel blender-helper-panel collaboration-collapsible" aria-labelledby="blenderHubTitle">
         <div class="panel-head">
           <div>
-            <div class="section-label" data-i18n="blenderSectionLabel">Blender</div>
             <h2 id="blenderHubTitle" data-i18n="blenderHelperTitle">Blender Hub</h2>
           </div>
-          <span class="workspace-pill" data-i18n="blenderHelperBadge">Map</span>
+          <div class="panel-actions">
+            <span class="workspace-pill" data-i18n="blenderHelperBadge">Map</span>
+            <button id="blenderHubCollapse" class="icon-button collaboration-collapse-button" type="button" data-collaboration-collapse aria-expanded="true" aria-controls="blenderHubBody" aria-label="折叠或展开此面板" data-i18n-aria="collaborationPanelToggleTitle"></button>
+          </div>
         </div>
 
+        <div id="blenderHubBody" class="collaboration-panel-body">
         <div class="blender-hub-grid">
           <button class="blender-hub-card active" type="button" data-blender-view-jump="builder">
             <span class="blender-hub-kicker" data-i18n="blenderHubReady">Ready</span>
@@ -335,15 +337,17 @@
             <small data-i18n="blenderHubBridgeBody">Export, temp folder, import checks.</small>
           </article>
         </div>
+        </div>
       </article>
 
-      <article id="blenderGithubSharePanel" class="panel blender-github-panel">
+      <article id="blenderGithubSharePanel" class="panel blender-github-panel collaboration-collapsible">
         <div class="panel-head blender-github-head">
-          <h2 id="blenderGithubToggle" role="button" tabindex="0" aria-expanded="true" aria-controls="blenderGithubBody" aria-label="Collapse or expand GitHub Coop" data-i18n-aria="blenderGithubToggleTitle">
+          <h2>
             <span data-i18n="blenderGithubTitle">GitHub Coop</span>
             <span id="blenderGithubState" class="blender-github-state-dot" data-state="loading" title="Loading"></span>
           </h2>
           <div class="blender-github-head-tools">
+            <button id="blenderGithubToggle" class="icon-button collaboration-collapse-button" type="button" data-collaboration-collapse aria-expanded="true" aria-controls="blenderGithubBody" aria-label="折叠或展开此面板" data-i18n-aria="collaborationPanelToggleTitle"></button>
             <button id="blenderGithubAdd" class="icon-button blender-github-add" type="button" title="Add Blender project" aria-label="Add Blender project" data-i18n-aria="blenderGithubAddTitle">+</button>
             <select id="blenderGithubProject" class="blender-github-project-picker" aria-label="Blender project" data-i18n-aria="blenderGithubProjectLabel"></select>
             <button id="blenderGithubRename" class="ghost-button primary-action" type="button" data-i18n="blenderGithubRename" data-i18n-title="blenderGithubRename" title="Rename selected project">Rename</button>
@@ -351,7 +355,7 @@
           </div>
         </div>
 
-        <div id="blenderGithubBody" class="blender-github-body">
+        <div id="blenderGithubBody" class="blender-github-body collaboration-panel-body">
           <div id="blenderGithubBlendCards" class="blender-github-blend-cards" role="listbox" aria-label="Blend files" data-i18n-aria="blenderGithubBlendFilesLabel"></div>
 
           <div class="blender-github-dock">
@@ -368,17 +372,24 @@
       </article>
         </section>
 
-        <section id="collaborationFeedbackView" class="workspace-grid console-minimal-grid collaboration-subview active" data-collaboration-view="feedback" role="tabpanel" aria-labelledby="collaborationFeedbackTab">
-      <article id="feedbackPanel" class="panel feedback-panel" aria-labelledby="feedbackTitle">
+        <section id="collaborationFeedbackView" class="workspace-grid console-minimal-grid collaboration-section" aria-labelledby="feedbackPanelTitle">
+      <article id="feedbackPanel" class="panel feedback-panel collaboration-collapsible" aria-labelledby="feedbackPanelTitle">
         <div class="panel-head">
           <div>
-            <div class="section-label">Feedback</div>
-            <h2 id="feedbackTitle" data-i18n="feedbackTitle">问题回报</h2>
+            <h2 id="feedbackPanelTitle" data-i18n="feedbackPanelTitle">反馈</h2>
           </div>
-          <span id="feedbackQuota" class="workspace-pill" hidden>Hit Limit</span>
+          <div class="feedback-head-tools">
+            <select id="feedbackViewSelect" class="feedback-view-select" aria-label="反馈视图" data-i18n-aria="feedbackViewLabel">
+              <option value="report" data-i18n="feedbackTitle">问题回报</option>
+              <option value="received" data-i18n="feedbackReviewTitle" hidden disabled>收到的回报</option>
+            </select>
+            <span id="feedbackQuota" class="workspace-pill" hidden>Hit Limit</span>
+            <button id="feedbackPanelCollapse" class="icon-button collaboration-collapse-button" type="button" data-collaboration-collapse aria-expanded="true" aria-controls="feedbackPanelBody" aria-label="折叠或展开此面板" data-i18n-aria="collaborationPanelToggleTitle"></button>
+          </div>
         </div>
 
-        <form id="feedbackForm" class="feedback-form">
+        <div id="feedbackPanelBody" class="collaboration-panel-body">
+        <form id="feedbackForm" class="feedback-form feedback-mode-view" data-feedback-mode="report">
           <select id="feedbackCategory" aria-label="问题类型" data-i18n-aria="feedbackCategoryLabel">
             <option value="bug" data-i18n="feedbackCategoryBug">错误</option>
             <option value="layout" data-i18n="feedbackCategoryLayout">排版</option>
@@ -386,7 +397,7 @@
             <option value="update" data-i18n="feedbackCategoryUpdate">更新</option>
             <option value="other" data-i18n="feedbackCategoryOther">其他</option>
           </select>
-          <textarea id="feedbackDescription" rows="3" maxlength="4000" data-i18n-placeholder="feedbackDescriptionPlaceholder" placeholder="描述你遇到的问题"></textarea>
+          <textarea id="feedbackDescription" rows="3" maxlength="4000" aria-label="描述你遇到的问题" data-i18n-aria="feedbackDescriptionPlaceholder" data-i18n-placeholder="feedbackDescriptionPlaceholder" placeholder="描述你遇到的问题"></textarea>
           <div class="feedback-actions">
             <button id="feedbackScreenshotButton" class="ghost-button" type="button" data-i18n="feedbackScreenshot">截图</button>
             <input id="feedbackScreenshotInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple hidden>
@@ -397,16 +408,8 @@
           <div id="feedbackTurnstile" class="feedback-turnstile" hidden></div>
           <p id="feedbackStatus" class="feedback-status" role="status" aria-live="polite"></p>
         </form>
-      </article>
 
-      <article id="feedbackReviewPanel" class="panel feedback-review-panel" aria-labelledby="feedbackReviewTitle" hidden>
-        <div class="panel-head">
-          <div>
-            <div class="section-label">Admin</div>
-            <h2 id="feedbackReviewTitle" data-i18n="feedbackReviewTitle">收到的回报</h2>
-          </div>
-        </div>
-
+        <div id="feedbackReviewPanel" class="feedback-review-view feedback-mode-view" data-feedback-mode="received" hidden>
         <section id="feedbackInbox" class="feedback-inbox" aria-labelledby="feedbackInboxTitle" hidden>
           <div class="feedback-inbox-head">
             <h3 id="feedbackInboxTitle" data-i18n="feedbackInboxTitle">收件箱</h3>
@@ -419,11 +422,13 @@
         <details id="feedbackAdminSetup" class="feedback-admin-setup" hidden>
           <summary data-i18n="feedbackAdminSetup">收件箱连接</summary>
           <form id="feedbackAdminForm" class="feedback-admin-form">
-            <input id="feedbackAdminEndpoint" type="url" inputmode="url" autocomplete="off" data-i18n-placeholder="feedbackAdminEndpoint" placeholder="https://worker.example.workers.dev">
-            <input id="feedbackAdminToken" type="password" autocomplete="new-password" data-i18n-placeholder="feedbackAdminToken" placeholder="Admin token">
+            <input id="feedbackAdminEndpoint" type="url" inputmode="url" autocomplete="off" aria-label="反馈服务地址" data-i18n-aria="feedbackAdminEndpoint" data-i18n-placeholder="feedbackAdminEndpoint" placeholder="https://worker.example.workers.dev">
+            <input id="feedbackAdminToken" type="password" autocomplete="new-password" aria-label="管理员令牌" data-i18n-aria="feedbackAdminToken" data-i18n-placeholder="feedbackAdminToken" placeholder="Admin token">
             <button class="ghost-button" type="submit" data-i18n="feedbackAdminSave">连接</button>
           </form>
         </details>
+        </div>
+        </div>
       </article>
         </section>
           </div>
@@ -544,7 +549,7 @@
       <div class="blender-shell">
         <div class="blender-subnav" role="tablist" aria-label="Blender workspace">
           <span class="blender-subtab-drop" aria-hidden="true"></span>
-          <button id="blenderCharacterTab" class="blender-subtab active" type="button" role="tab" aria-selected="true" aria-controls="blenderCharacterDesignerView" data-blender-view-target="character" data-i18n="blenderCharacterTab">Character Designer</button>
+          <button id="blenderCharacterTab" class="blender-subtab active" type="button" role="tab" aria-selected="true" aria-controls="blenderCharacterDesignerView" data-blender-view-target="character" data-i18n="blenderCharacterTab">Common</button>
           <button id="blenderBuilderTab" class="blender-subtab" type="button" role="tab" aria-selected="false" aria-controls="blenderBuilderView" data-blender-view-target="builder" data-i18n="blenderBuilderTab">Builder</button>
         </div>
 
@@ -915,9 +920,9 @@
 
         <div class="randomrealm-release-actions steamwork-actions">
           <button id="openSteamworkDashboard" class="ghost-button primary-action" type="button" data-i18n="steamworkDashboard">Steamworks</button>
-          <button id="openSteamworkGameContent" class="ghost-button" type="button" data-i18n="steamworkGameContent">Content</button>
+          <button id="openSteamworkGameContent" class="ghost-button" type="button" data-i18n="steamworkGameContent">Ship</button>
           <button id="openSteamworkPublishTool" class="ghost-button" type="button" data-i18n="steamworkPublishTool">SteamPipe GUI</button>
-          <button id="openSteamworkArtAsset" class="ghost-button" type="button" data-i18n="steamworkArtAssets">Assets</button>
+          <button id="openSteamworkArtAsset" class="ghost-button" type="button" data-i18n="steamworkArtAssets">Promo Art</button>
         </div>
 
         <details class="steamwork-assets" aria-label="Steamwork asset checklist">
@@ -1179,17 +1184,17 @@
 
   </main>
 
-  <input id="wallpaperFileInput" class="visually-hidden" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp" multiple>
-  <input id="musicFileInput" class="visually-hidden" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.lrc,.txt,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus,text/plain" multiple>
-  <input id="musicCookieFileInput" class="visually-hidden" type="file" accept=".txt,text/plain">
-  <input id="workzoneFileInput" class="visually-hidden" type="file" accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp" multiple>
-  <input id="randomRealmTextureFileInput" class="visually-hidden" type="file" multiple accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp">
-  <input id="steamworkGameContentFileInput" class="visually-hidden" type="file" multiple>
-  <input id="steamworkPublishToolFileInput" class="visually-hidden" type="file" multiple>
-  <input id="steamworkAssetFileInput" class="visually-hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple>
+  <input id="wallpaperFileInput" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp" multiple hidden>
+  <input id="musicFileInput" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.lrc,.txt,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus,text/plain" multiple hidden>
+  <input id="musicCookieFileInput" type="file" accept=".txt,text/plain" hidden>
+  <input id="workzoneFileInput" type="file" accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp" multiple hidden>
+  <input id="randomRealmTextureFileInput" type="file" multiple accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp" hidden>
+  <input id="steamworkGameContentFileInput" type="file" multiple hidden>
+  <input id="steamworkPublishToolFileInput" type="file" multiple hidden>
+  <input id="steamworkAssetFileInput" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple hidden>
   <audio id="audioPlayer" preload="metadata"></audio>
 
 <script src="/api/release-defaults.js"></script>
-<script src="app.js?v=control-console-1025"></script>
+<script src="app.js?v=control-console-1040"></script>
 </body>
 </html>

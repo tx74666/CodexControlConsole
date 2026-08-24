@@ -18,6 +18,8 @@ MIN_DESCRIPTION_LENGTH = 10
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGES = 4
 MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_JSON_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_BINARY_RESPONSE_BYTES = MAX_IMAGE_BYTES
 DEFAULT_DAILY_LIMIT = 10
 ALLOWED_CATEGORIES = ("bug", "layout", "music", "update", "other")
 ALLOWED_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp")
@@ -152,6 +154,69 @@ def _clean_endpoint(value, allow_local=False):
     return endpoint
 
 
+def _url_origin(value):
+    try:
+        parsed = urllib.parse.urlsplit(str(value or ""))
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return None
+        if parsed.username is not None or parsed.password is not None:
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+    scheme = parsed.scheme.lower()
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, parsed.hostname.rstrip(".").lower(), port
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        resolved_url = urllib.parse.urljoin(request.full_url, new_url)
+        if _url_origin(request.full_url) != _url_origin(resolved_url):
+            try:
+                file_pointer.close()
+            except OSError:
+                pass
+            raise FeedbackServiceError(
+                "Feedback service redirected to a different origin.",
+                status=502,
+                code="redirect_blocked",
+            )
+        return super().redirect_request(
+            request,
+            file_pointer,
+            code,
+            message,
+            headers,
+            resolved_url,
+        )
+
+
+_FEEDBACK_OPENER = urllib.request.build_opener(_SameOriginRedirectHandler())
+
+
+def _read_response_limited(response, limit):
+    try:
+        content_length = int(response.headers.get("Content-Length", "") or -1)
+    except (TypeError, ValueError):
+        content_length = -1
+    if content_length > limit:
+        raise FeedbackServiceError(
+            "Feedback service response is too large.",
+            status=502,
+            code="response_too_large",
+        )
+    body = response.read(limit + 1)
+    if len(body) > limit:
+        raise FeedbackServiceError(
+            "Feedback service response is too large.",
+            status=502,
+            code="response_too_large",
+        )
+    return body
+
+
 def _image_type(data):
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -233,32 +298,48 @@ class FeedbackService:
             headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(endpoint + path, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read()
+            with _FEEDBACK_OPENER.open(request, timeout=timeout) as response:
                 content_type = response.headers.get_content_type()
-                if content_type == "application/json":
-                    return json.loads(body.decode("utf-8")) if body else {}
+                is_json = content_type == "application/json" or content_type.endswith("+json")
+                body = _read_response_limited(
+                    response,
+                    MAX_JSON_RESPONSE_BYTES if is_json else MAX_BINARY_RESPONSE_BYTES,
+                )
+                if is_json:
+                    try:
+                        return json.loads(body.decode("utf-8")) if body else {}
+                    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                        raise FeedbackServiceError(
+                            "Feedback service returned an invalid response.",
+                            status=502,
+                            code="invalid_response",
+                        ) from error
                 return {
                     "body": body,
                     "contentType": response.headers.get("Content-Type", "application/octet-stream"),
                 }
         except urllib.error.HTTPError as error:
-            detail = {}
             try:
-                detail = json.loads(error.read().decode("utf-8"))
-                message = str(detail.get("error") or detail.get("message") or "Feedback request failed.")
-            except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
-                message = "Feedback request failed."
-            retry_after = detail.get("retryAfter") if isinstance(detail, dict) else 0
-            if not retry_after:
-                retry_after = error.headers.get("Retry-After", "0")
-            raise FeedbackServiceError(
-                message,
-                status=error.code,
-                code=detail.get("code") if isinstance(detail, dict) else "",
-                retry_after=retry_after,
-                limit_reached=bool(detail.get("limitReached")) if isinstance(detail, dict) else False,
-            ) from error
+                detail = {}
+                try:
+                    detail = json.loads(
+                        _read_response_limited(error, MAX_JSON_RESPONSE_BYTES).decode("utf-8")
+                    )
+                    message = str(detail.get("error") or detail.get("message") or "Feedback request failed.")
+                except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+                    message = "Feedback request failed."
+                retry_after = detail.get("retryAfter") if isinstance(detail, dict) else 0
+                if not retry_after:
+                    retry_after = error.headers.get("Retry-After", "0")
+                raise FeedbackServiceError(
+                    message,
+                    status=error.code,
+                    code=detail.get("code") if isinstance(detail, dict) else "",
+                    retry_after=retry_after,
+                    limit_reached=bool(detail.get("limitReached")) if isinstance(detail, dict) else False,
+                ) from error
+            finally:
+                error.close()
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise FeedbackServiceError("Feedback service is temporarily unavailable.", status=503) from error
 

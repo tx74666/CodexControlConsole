@@ -41,6 +41,15 @@ def file_snapshot(directory):
     }
 
 
+class TempBackedData:
+    def __init__(self, path):
+        self.path = Path(path)
+        self.size = self.path.stat().st_size
+
+    def open(self):
+        return self.path.open("rb")
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="cdesigner-reference-views-") as temporary:
         project_dir = Path(temporary) / "Any Object"
@@ -156,7 +165,14 @@ def main():
         finally:
             Image.MAX_IMAGE_PIXELS = original_pixel_limit
 
-        uploaded = service.upload(str(blend), key, "front", {"filename": "temporary-attachment.png", "data": png})
+        temp_backed_path = Path(temporary) / "temp-backed-reference.png"
+        temp_backed_path.write_bytes(png)
+        uploaded = service.upload(
+            str(blend),
+            key,
+            "front",
+            {"filename": "temporary-attachment.png", "data": TempBackedData(temp_backed_path)},
+        )
         front = uploaded["set"]["views"]["front"]
         assert_true(front["file"].startswith("images/front-") and front["file"].endswith(".png"), "uploaded attachment did not use a stable content-addressed path")
         assert_true(front["enabled"] and front["width"] == 2 and front["height"] == 3, "uploaded view was not configured for Blender")

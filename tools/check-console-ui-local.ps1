@@ -5,6 +5,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$PythonPath = @(
+  (Get-Command $Python -ErrorAction SilentlyContinue).Source,
+  (Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe")
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+if (-not $PythonPath) {
+  throw "Python was not found. Install Python or use the bundled Codex runtime."
+}
+$Python = $PythonPath
+
 if (-not $NodePath) {
   $NodePath = @(
     (Get-Command node -ErrorAction SilentlyContinue).Source,
@@ -37,6 +46,11 @@ try {
   & $Python (Join-Path $PSScriptRoot "check-download-map.py")
   if ($LASTEXITCODE -ne 0) {
     throw "Download Map checks failed with exit code $LASTEXITCODE."
+  }
+
+  & $Python (Join-Path $PSScriptRoot "check-external-app-launcher.py")
+  if ($LASTEXITCODE -ne 0) {
+    throw "External app launcher checks failed with exit code $LASTEXITCODE."
   }
 
   $env:CODEX_CONTROL_DATA_DIR = $temporary

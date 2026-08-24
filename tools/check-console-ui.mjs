@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,8 +9,12 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, "..");
-const baseUrl = new URL(process.argv[2] || "http://127.0.0.1:8898/");
-const transitionOnly = process.argv.includes("--transition-only");
+const commandArguments = process.argv.slice(2);
+const baseUrl = new URL(
+  commandArguments.find(argument => !argument.startsWith("--")) || "http://127.0.0.1:8898/"
+);
+const transitionOnly = commandArguments.includes("--transition-only");
+const staticOnly = commandArguments.includes("--static-only");
 const delay = milliseconds => new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
 const allowEmptyMedia = process.env.CONSOLE_UI_ALLOW_EMPTY_MEDIA === "true";
 const allowAvailableUpdates = process.env.CONSOLE_UI_ALLOW_AVAILABLE_UPDATES === "true";
@@ -20,6 +24,18 @@ let expectedAppVersion = "";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function terminateBrowserTree(browser) {
+  if (process.platform === "win32" && browser.pid) {
+    const result = spawnSync(
+      "taskkill.exe",
+      ["/PID", String(browser.pid), "/T", "/F"],
+      { stdio: "ignore", windowsHide: true }
+    );
+    if (!result.error && result.status === 0) return;
+  }
+  if (browser.exitCode === null) browser.kill("SIGKILL");
 }
 
 function staticChecks() {
@@ -84,7 +100,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "1.0.3", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "1.0.4", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -106,26 +122,142 @@ function staticChecks() {
   assert(/id="consoleUninstall"/.test(consoleHtml), "product uninstall control is missing");
   assert(/id="builtinMediaMusicSync"/.test(consoleHtml), "built-in music sync control is missing");
   assert(/id="builtinMediaWallpapersSync"/.test(consoleHtml), "built-in wallpaper sync control is missing");
+  const collaborationControls = [
+    ["githubDownloadsCollapse", "githubDownloadsBody"],
+    ["downloadMapCollapse", "downloadMapBody"],
+    ["blenderHubCollapse", "blenderHubBody"],
+    ["blenderGithubToggle", "blenderGithubBody"],
+    ["feedbackPanelCollapse", "feedbackPanelBody"]
+  ];
+  assert(
+    collaborationControls.every(([control, body]) => (
+      new RegExp(`<button[^>]+id="${control}"[^>]+data-collaboration-collapse[^>]+aria-controls="${body}"`).test(consoleHtml)
+        && new RegExp(`id="${body}"[^>]+collaboration-panel-body`).test(consoleHtml)
+    )),
+    "Collaboration panels must expose real buttons with controlled bodies"
+  );
+  const programmaticFileInputs = [
+    "wallpaperFileInput",
+    "musicFileInput",
+    "musicCookieFileInput",
+    "workzoneFileInput",
+    "randomRealmTextureFileInput",
+    "steamworkGameContentFileInput",
+    "steamworkPublishToolFileInput",
+    "steamworkAssetFileInput"
+  ];
+  assert(
+    programmaticFileInputs.every(id => new RegExp(`id="${id}"[^>]+hidden`).test(consoleHtml)),
+    "Programmatic Console file inputs must not remain in the keyboard tab order"
+  );
+  const musicHtml = readFileSync(join(projectRoot, "music.html"), "utf8");
+  assert(
+    ["musicFileInput", "musicCookieFileInput"].every(id => new RegExp(`id="${id}"[^>]+hidden`).test(musicHtml)),
+    "Programmatic Music file inputs must not remain in the keyboard tab order"
+  );
+  const workspaceHtml = readFileSync(join(projectRoot, "workspace.html"), "utf8");
+  assert(
+    ["workspaceTodoInput", "feedbackDescription", "feedbackAdminEndpoint", "feedbackAdminToken"]
+      .every(id => id === "workspaceTodoInput"
+        ? new RegExp(`id="${id}"[^>]+data-i18n-aria=`).test(consoleHtml)
+          && new RegExp(`id="${id}"[^>]+data-i18n-aria=`).test(workspaceHtml)
+        : new RegExp(`id="${id}"[^>]+data-i18n-aria=`).test(consoleHtml)),
+    "Text-entry controls are missing stable accessible names"
+  );
+  assert(
+    appSource.includes("function desktopLayoutHistoryRetryDelay(")
+      && appSource.includes("function scheduleDesktopLayoutHistoryRetry()")
+      && appSource.includes("desktopLayoutHistoryRetryMaxMs")
+      && appSource.includes("if (!refreshSucceeded || desktopLayoutState?.history?.due)"),
+    "Desktop layout history refresh does not use bounded retry backoff"
+  );
+  assert(
+    appSource.includes("if (desktopLayoutState.rolledBack)")
+      && appSource.includes('rollback.healthy ? "desktopLayoutRolledBack" : "desktopLayoutRollbackUnhealthy"')
+      && appSource.includes('desktopLayoutNoticeTone = rollback.healthy ? "warning" : "danger"'),
+    "Desktop restore rollback status is not surfaced"
+  );
+  const ensureModuleDataStart = appSource.indexOf("function ensureModuleDataLoaded(");
+  const ensureModuleDataEnd = appSource.indexOf("\nfunction ", ensureModuleDataStart + 1);
+  const ensureModuleDataSource = appSource.slice(ensureModuleDataStart, ensureModuleDataEnd);
+  const consoleWorkspaceStart = appSource.indexOf("function setConsoleWorkspaceView(");
+  const consoleWorkspaceEnd = appSource.indexOf("\nfunction ", consoleWorkspaceStart + 1);
+  const consoleWorkspaceSource = appSource.slice(consoleWorkspaceStart, consoleWorkspaceEnd);
+  const startupStart = appSource.lastIndexOf("\napplyConsoleEdition(consoleEdition, { activate: false, forceRender: true });");
+  const startupSource = appSource.slice(startupStart);
+  assert(
+    ensureModuleDataStart >= 0
+      && ensureModuleDataSource.indexOf("loadedModuleData.add(moduleId)") < ensureModuleDataSource.indexOf(".catch(() => {})")
+      && ensureModuleDataSource.indexOf("loadedModuleData.add(moduleId)") > ensureModuleDataSource.indexOf(".then(succeeded =>")
+      && ensureModuleDataSource.includes("if (succeeded !== false) loadedModuleData.add(moduleId);")
+      && appSource.includes("function loadActiveConsoleWorkspaceViewData()")
+      && consoleWorkspaceSource.includes('runtimeActivityReady && isModuleForeground("workspace")')
+      && appSource.includes("function scheduleProductUpdateStatusCheck(options = {})")
+      && appSource.includes('window.requestIdleCallback(run, { timeout: 1200 })')
+      && startupStart >= 0
+      && startupSource.includes("scheduleProductUpdateStatusCheck();")
+      && !startupSource.includes("loadDesktopLayout({ quiet: true });")
+      && !startupSource.includes("loadBuiltinMedia({ quiet: true });")
+      && !startupSource.includes("loadFeedbackConfig({ quiet: true });"),
+    "Workspace data still bypasses foreground lazy loading or failed loads cannot retry"
+  );
+  const texturePreviewStart = appSource.indexOf("function renderRandomRealmTexturePreview(");
+  const texturePreviewEnd = appSource.indexOf("\nfunction ", texturePreviewStart + 1);
+  const texturePreviewSource = appSource.slice(texturePreviewStart, texturePreviewEnd);
+  assert(
+    texturePreviewStart >= 0
+      && !appSource.includes("preloadRandomRealmTextureDragFile")
+      && appSource.includes("const randomRealmTextureDragCacheMaxEntries = 8;")
+      && appSource.includes("const randomRealmTextureDragCacheMaxBytes = 64 * 1024 * 1024;")
+      && appSource.includes("const controller = new AbortController();")
+      && appSource.includes("function clearRandomRealmTextureDragFileCache()")
+      && texturePreviewSource.includes("imageEl.src = randomRealmTexturePreviewUrl(path);")
+      && texturePreviewSource.includes("imageEl.onpointerenter = () =>")
+      && texturePreviewSource.includes("imageEl.onfocus = () =>")
+      && texturePreviewSource.includes("imageEl.ondragstart = event => {")
+      && !texturePreviewSource.includes("imageEl.tabIndex")
+      && !/^\s*prepareRandomRealmTextureDragFile\(texture\);/m.test(texturePreviewSource)
+      && appSource.includes('event.dataTransfer.setData("text/plain", path);'),
+    "Texture drag files are not demand-loaded through a bounded abortable cache"
+  );
+  assert(
+    appSource.includes("const randomRealmLiveSelectionSuccessDelayMs = 1600;")
+      && appSource.includes("const randomRealmLiveSelectionFailureDelaysMs = [5000, 10000, 30000];")
+      && appSource.includes("function randomRealmLiveSelectionPollDelay(succeeded)")
+      && appSource.includes("randomRealmLiveSelectionPollDelay(succeeded)")
+      && appSource.includes("if (options.immediate) {\n    stopRandomRealmLiveSelectionPolling();"),
+    "Blender live selection polling does not back off or reset on foreground entry"
+  );
   assert(
     consoleHtml.includes('id="consoleCollaborationView"')
-      && consoleHtml.includes('id="collaborationFeedbackTab"')
-      && consoleHtml.includes('id="collaborationDownloadsTab"')
       && consoleHtml.includes('id="collaborationFeedbackView"')
       && consoleHtml.includes('id="collaborationDownloadsView"')
+      && !consoleHtml.includes('id="collaborationFeedbackTab"')
+      && !consoleHtml.includes('id="collaborationDownloadsTab"')
       && !consoleHtml.includes('id="consoleDownloadsTab"')
       && !consoleHtml.includes('id="consoleDownloadsView"')
       && consoleHtml.match(/data-console-view-target=/g)?.length === 2
-      && consoleHtml.match(/data-collaboration-view-target=/g)?.length === 2
+      && !consoleHtml.includes('data-collaboration-view-target=')
+      && !consoleHtml.includes('data-collaboration-view=')
+      && !appSource.includes("setCollaborationWorkspaceView")
       && consoleHtml.includes('id="downloadMapPlugin"')
       && consoleHtml.includes('id="blenderHubPanel"')
       && consoleHtml.includes('id="blenderGithubSharePanel"')
+      && ["githubDownloadsPanel", "downloadMapPanel", "blenderHubPanel", "blenderGithubSharePanel", "feedbackPanel"]
+        .every(id => new RegExp(`id="${id}"[^>]+collaboration-collapsible`).test(consoleHtml))
+      && appSource.includes("function bindCollaborationPanelCollapse()")
+      && appSource.includes("function setFeedbackWorkspaceView(value)")
+      && consoleHtml.includes('id="feedbackViewSelect"')
+      && consoleHtml.includes('id="feedbackReviewPanel" class="feedback-review-view feedback-mode-view"')
+      && consoleHtml.indexOf('<option value="report"') < consoleHtml.indexOf('<option value="received"')
+      && !/<div class="section-label"[^>]*>Blender<\/div>\s*<h2 id="(?:downloadMapTitle|blenderHubTitle)"/.test(consoleHtml)
       && consoleHtml.includes('<option value="character-designer">Character Designer</option>')
       && consoleHtml.includes('<option value="rr-helper">RR Helper</option>')
       && consoleHtml.indexOf('id="consoleCollaborationView"') < consoleHtml.indexOf('id="collaborationDownloadsView"')
       && consoleHtml.indexOf('id="collaborationDownloadsView"') < consoleHtml.indexOf('id="blenderHubPanel"')
       && consoleHtml.indexOf('id="blenderHubPanel"') < consoleHtml.indexOf('id="blenderGithubSharePanel"')
       && consoleHtml.indexOf('id="blenderGithubSharePanel"') < consoleHtml.indexOf('id="collaborationFeedbackView"'),
-    "Console Collaboration subviews are incomplete"
+    "Console Collaboration single-page layout is incomplete"
   );
   assert(
     !consoleHtml.includes('id="blenderHelperTab"')
@@ -133,6 +265,11 @@ function staticChecks() {
       && consoleHtml.match(/data-blender-view-target=/g)?.length === 2
       && appSource.includes('return value === "builder" ? "builder" : "character";'),
     "Blender Helper was not fully migrated into Console Download Map"
+  );
+  assert(
+    appSource.match(/blenderCharacterTab:\s*"Common"/g)?.length === 2
+      && /id="blenderCharacterTab"[^>]*>Common<\/button>/.test(consoleHtml),
+    "Blender Common tab label changed"
   );
   const backendSource = readFileSync(join(projectRoot, "world_console.py"), "utf8");
   assert(backendSource.includes('"/api/media/builtins/sync"'), "built-in media sync API is missing");
@@ -170,6 +307,13 @@ function staticChecks() {
   assert(
     !/prompt builder|blenderPrompt|blender-prompt/i.test(`${consoleHtml}\n${appSource}\n${readFileSync(join(projectRoot, "styles.css"), "utf8")}`),
     "Prompt Builder residue is still present"
+  );
+  assert(
+    /steamworkGameContent:\s*"Ship"/.test(appSource)
+      && /steamworkArtAssets:\s*"Promo Art"/.test(appSource)
+      && consoleHtml.includes('data-i18n="steamworkGameContent">Ship</button>')
+      && consoleHtml.includes('data-i18n="steamworkArtAssets">Promo Art</button>'),
+    "Steamwork action labels must remain Ship and Promo Art"
   );
   assert(
     appSource.includes('const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store"')
@@ -411,6 +555,301 @@ async function checkRapidBlenderTransitions(client) {
   assert(settled.visible.length === 1, `rapid Blender switching left overlapping views: ${JSON.stringify(settled)}`);
 }
 
+async function checkWorkspaceLoadingPolicies(client) {
+  const state = await evaluate(client, `(async () => {
+    const original = {
+      activeModuleId,
+      activeConsoleView,
+      runtimeActivityReady,
+      feedbackConfig,
+      feedbackConfigBusy,
+      feedbackConfigLoaded,
+      downloadMapState,
+      downloadMapBusy,
+      downloadMapLoaded,
+      blenderGithubShareState,
+      blenderGithubBusy,
+      productUpdateStates,
+      productUpdateBusy,
+      productUpdateStatusesLoaded,
+      loadFeedbackConfig,
+      loadDownloadMap,
+      loadBlenderGithubShare,
+      loadProductUpdateStatuses,
+      loadModuleData,
+      requestIdleCallback: window.requestIdleCallback,
+      cancelIdleCallback: window.cancelIdleCallback
+    };
+    const calls = { feedback: 0, downloadMap: 0, github: 0, updates: 0, cancelledIdle: 0 };
+    const originallyLoaded = loadedModuleData.has('unity');
+    const originalLoading = loadingModuleData.get('unity');
+    try {
+      cancelScheduledProductUpdateStatusCheck();
+      runtimeActivityReady = true;
+      feedbackConfig = null;
+      feedbackConfigBusy = false;
+      feedbackConfigLoaded = false;
+      downloadMapState = null;
+      downloadMapBusy = false;
+      downloadMapLoaded = false;
+      blenderGithubShareState = null;
+      blenderGithubBusy = false;
+      loadFeedbackConfig = async () => { calls.feedback += 1; };
+      loadDownloadMap = async () => { calls.downloadMap += 1; };
+      loadBlenderGithubShare = async () => { calls.github += 1; };
+
+      activeModuleId = 'music';
+      setConsoleWorkspaceView('collaboration', { persist: false });
+      await Promise.resolve();
+      const backgroundCalls = { ...calls };
+
+      activeModuleId = 'workspace';
+      setConsoleWorkspaceView('collaboration', { persist: false });
+      await Promise.resolve();
+      const foregroundCalls = { ...calls };
+
+      let idleCallback = null;
+      window.requestIdleCallback = callback => {
+        idleCallback = callback;
+        return 41;
+      };
+      window.cancelIdleCallback = id => {
+        if (id === 41) calls.cancelledIdle += 1;
+      };
+      productUpdateStates = { console: { currentVersion: '1.0.4' }, world: null };
+      productUpdateBusy = false;
+      productUpdateStatusesLoaded = false;
+      loadProductUpdateStatuses = async () => { calls.updates += 1; };
+      await scheduleProductUpdateStatusCheck();
+      const idleScheduled = typeof idleCallback === 'function' && calls.updates === 0;
+      await scheduleProductUpdateStatusCheck({ immediate: true });
+      const workspaceImmediate = calls.updates === 1 && calls.cancelledIdle === 1;
+
+      loadedModuleData.delete('unity');
+      loadingModuleData.delete('unity');
+      let attempts = 0;
+      loadModuleData = async () => {
+        attempts += 1;
+        return attempts > 1;
+      };
+      await ensureModuleDataLoaded('unity');
+      const failedLoadStayedRetryable = !loadedModuleData.has('unity') && !loadingModuleData.has('unity');
+      await ensureModuleDataLoaded('unity');
+      const retryLoaded = attempts === 2 && loadedModuleData.has('unity') && !loadingModuleData.has('unity');
+
+      return {
+        backgroundCalls,
+        foregroundCalls,
+        idleScheduled,
+        workspaceImmediate,
+        failedLoadStayedRetryable,
+        retryLoaded
+      };
+    } finally {
+      cancelScheduledProductUpdateStatusCheck();
+      activeModuleId = original.activeModuleId;
+      activeConsoleView = original.activeConsoleView;
+      runtimeActivityReady = original.runtimeActivityReady;
+      feedbackConfig = original.feedbackConfig;
+      feedbackConfigBusy = original.feedbackConfigBusy;
+      feedbackConfigLoaded = original.feedbackConfigLoaded;
+      downloadMapState = original.downloadMapState;
+      downloadMapBusy = original.downloadMapBusy;
+      downloadMapLoaded = original.downloadMapLoaded;
+      blenderGithubShareState = original.blenderGithubShareState;
+      blenderGithubBusy = original.blenderGithubBusy;
+      productUpdateStates = original.productUpdateStates;
+      productUpdateBusy = original.productUpdateBusy;
+      productUpdateStatusesLoaded = original.productUpdateStatusesLoaded;
+      loadFeedbackConfig = original.loadFeedbackConfig;
+      loadDownloadMap = original.loadDownloadMap;
+      loadBlenderGithubShare = original.loadBlenderGithubShare;
+      loadProductUpdateStatuses = original.loadProductUpdateStatuses;
+      loadModuleData = original.loadModuleData;
+      window.requestIdleCallback = original.requestIdleCallback;
+      window.cancelIdleCallback = original.cancelIdleCallback;
+      loadingModuleData.delete('unity');
+      if (originalLoading) loadingModuleData.set('unity', originalLoading);
+      if (originallyLoaded) loadedModuleData.add('unity');
+      else loadedModuleData.delete('unity');
+      setConsoleWorkspaceView(original.activeConsoleView, { persist: false });
+      renderConsoleUpdate();
+    }
+  })()`, true);
+  assert(
+    state.backgroundCalls.feedback === 0
+      && state.backgroundCalls.downloadMap === 0
+      && state.backgroundCalls.github === 0
+      && state.foregroundCalls.feedback === 1
+      && state.foregroundCalls.downloadMap === 1
+      && state.foregroundCalls.github === 1
+      && state.idleScheduled
+      && state.workspaceImmediate
+      && state.failedLoadStayedRetryable
+      && state.retryLoaded,
+    `Workspace lazy loading policies regressed: ${JSON.stringify(state)}`
+  );
+}
+
+async function checkBlenderPerformancePolicies(client) {
+  const textureState = await evaluate(client, `(async () => {
+    const originalFetch = window.fetch;
+    const texture = { path: 'D:\\\\Textures\\\\policy-test.png', file: 'policy-test.png', exists: true };
+    let requests = 0;
+    try {
+      clearRandomRealmTextureDragFileCache();
+      window.fetch = async (input, init = {}) => {
+        const url = String(input?.url || input || '');
+        if (!url.includes('/api/randomrealm/blender/texture-file/')) return originalFetch(input, init);
+        requests += 1;
+        return new Response(new Blob(['texture'], { type: 'image/png' }), {
+          status: 200,
+          headers: { 'Content-Type': 'image/png', 'Content-Length': '7' }
+        });
+      };
+      const image = document.createElement('img');
+      const empty = document.createElement('small');
+      renderRandomRealmTexturePreview(image, empty, texture);
+      const renderRequests = requests;
+      const previewOnly = image.src.includes('/api/randomrealm/blender/texture-preview?')
+        && !image.src.includes('/api/randomrealm/blender/texture-file/');
+
+      image.dispatchEvent(new PointerEvent('pointerenter'));
+      await randomRealmTextureDragFileCache.get(texture.path)?.promise;
+      const pointerRequests = requests;
+      const pointerCached = cachedRandomRealmTextureDragFile(texture.path)?.size === 7;
+
+      clearRandomRealmTextureDragFileCache();
+      image.dispatchEvent(new FocusEvent('focus'));
+      await randomRealmTextureDragFileCache.get(texture.path)?.promise;
+      const focusRequests = requests;
+
+      clearRandomRealmTextureDragFileCache();
+      const dragData = {};
+      image.ondragstart({
+        dataTransfer: {
+          effectAllowed: '',
+          items: { add() {} },
+          setData(type, value) { dragData[type] = value; }
+        }
+      });
+      await randomRealmTextureDragFileCache.get(texture.path)?.promise;
+      const dragRequests = requests;
+
+      clearRandomRealmTextureDragFileCache();
+      for (let index = 0; index < 10; index += 1) {
+        const path = 'entry-' + index;
+        const record = { file: null, size: 0, controller: null, promise: null };
+        randomRealmTextureDragFileCache.set(path, record);
+        storeRandomRealmTextureDragFile(path, record, { size: 1 });
+      }
+      const countBounded = randomRealmTextureDragFileCache.size === 8
+        && !randomRealmTextureDragFileCache.has('entry-0')
+        && randomRealmTextureDragFileCache.has('entry-9');
+
+      clearRandomRealmTextureDragFileCache();
+      for (let index = 0; index < 4; index += 1) {
+        const path = 'large-' + index;
+        const record = { file: null, size: 0, controller: null, promise: null };
+        randomRealmTextureDragFileCache.set(path, record);
+        storeRandomRealmTextureDragFile(path, record, { size: 20 * 1024 * 1024 });
+      }
+      const bytesBounded = randomRealmTextureDragFileCache.size === 3
+        && randomRealmTextureDragCacheBytes === 60 * 1024 * 1024
+        && !randomRealmTextureDragFileCache.has('large-0');
+
+      clearRandomRealmTextureDragFileCache();
+      const controller = new AbortController();
+      let aborted = false;
+      controller.signal.addEventListener('abort', () => { aborted = true; });
+      randomRealmTextureDragFileCache.set('pending', { file: null, size: 0, controller, promise: null });
+      clearRandomRealmTextureDragFileCache();
+
+      return {
+        renderRequests,
+        previewOnly,
+        pointerRequests,
+        pointerCached,
+        focusRequests,
+        dragRequests,
+        nativePath: dragData['text/plain'] || '',
+        downloadUrl: dragData.DownloadURL || '',
+        countBounded,
+        bytesBounded,
+        aborted,
+        cleared: randomRealmTextureDragFileCache.size === 0 && randomRealmTextureDragCacheBytes === 0
+      };
+    } finally {
+      window.fetch = originalFetch;
+      clearRandomRealmTextureDragFileCache();
+    }
+  })()`, true);
+  assert(
+    textureState.renderRequests === 0
+      && textureState.previewOnly
+      && textureState.pointerRequests === 1
+      && textureState.pointerCached
+      && textureState.focusRequests === 2
+      && textureState.dragRequests === 3
+      && textureState.nativePath === 'D:\\Textures\\policy-test.png'
+      && textureState.downloadUrl.includes('policy-test.png')
+      && textureState.countBounded
+      && textureState.bytesBounded
+      && textureState.aborted
+      && textureState.cleared,
+    `Texture drag cache policy regressed: ${JSON.stringify(textureState)}`
+  );
+
+  const liveSelectionState = await evaluate(client, `(async () => {
+    const originalSync = syncRandomRealmLiveSelection;
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    const scheduled = [];
+    let nextId = 100;
+    try {
+      stopRandomRealmLiveSelectionPolling();
+      const outcomes = [false, false, false, false, true];
+      syncRandomRealmLiveSelection = async () => outcomes.shift();
+      window.setTimeout = (callback, delay) => {
+        const timer = { id: nextId++, callback, delay, cancelled: false };
+        scheduled.push(timer);
+        return timer.id;
+      };
+      window.clearTimeout = id => {
+        const timer = scheduled.find(item => item.id === id);
+        if (timer) timer.cancelled = true;
+      };
+      randomRealmLiveSelectionFailureCount = 0;
+      startRandomRealmLiveSelectionPolling({ immediate: true });
+      for (let index = 0; index < outcomes.length + 5 && outcomes.length; index += 1) {
+        const timer = scheduled.find(item => !item.cancelled && !item.ran);
+        if (!timer) break;
+        timer.ran = true;
+        await timer.callback();
+      }
+      const adaptiveDelays = scheduled.filter(item => !item.cancelled).map(item => item.delay);
+      randomRealmLiveSelectionFailureCount = 3;
+      startRandomRealmLiveSelectionPolling({ immediate: true });
+      const resetDelay = scheduled[scheduled.length - 1]?.delay;
+      const resetFailures = randomRealmLiveSelectionFailureCount;
+      stopRandomRealmLiveSelectionPolling();
+      return { adaptiveDelays, resetDelay, resetFailures };
+    } finally {
+      stopRandomRealmLiveSelectionPolling();
+      syncRandomRealmLiveSelection = originalSync;
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+      startRandomRealmLiveSelectionPolling({ immediate: true });
+    }
+  })()`, true);
+  assert(
+    JSON.stringify(liveSelectionState.adaptiveDelays) === JSON.stringify([0, 5000, 10000, 30000, 30000, 1600])
+      && liveSelectionState.resetDelay === 0
+      && liveSelectionState.resetFailures === 0,
+    `Live selection polling policy regressed: ${JSON.stringify(liveSelectionState)}`
+  );
+}
+
 async function runBrowserChecks(client) {
   await waitForDocument(client);
   const languageToggleState = await evaluate(client, `(() => {
@@ -456,6 +895,8 @@ async function runBrowserChecks(client) {
     60000,
     150
   );
+  await checkWorkspaceLoadingPolicies(client);
+  await checkBlenderPerformancePolicies(client);
   const updateState = await evaluate(client, `({
     current: document.querySelector('#consoleUpdateCurrent')?.textContent?.trim() || '',
     auto: document.querySelector('#consoleUpdateAuto')?.checked,
@@ -687,7 +1128,7 @@ async function runBrowserChecks(client) {
       && consoleCommonState.commonVisible
       && consoleCommonState.collaborationHidden
       && consoleCommonState.tabs === 2
-      && consoleCommonState.collaborationTabs === 2,
+      && consoleCommonState.collaborationTabs === 0,
     `Console common view is not the stable default: ${JSON.stringify(consoleCommonState)}`
   );
   await evaluate(client, `document.querySelector('[data-console-view-target="collaboration"]')?.click()`);
@@ -700,32 +1141,232 @@ async function runBrowserChecks(client) {
   );
   const consoleCollaborationState = await evaluate(client, `({
     active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
-    nestedActive: document.querySelector('.collaboration-subnav .console-subtab.active')?.dataset.collaborationViewTarget || '',
     commonHidden: Boolean(document.querySelector('#consoleCommonView')?.hidden),
     collaborationVisible: !document.querySelector('#consoleCollaborationView')?.hidden,
     feedbackSubviewVisible: !document.querySelector('#collaborationFeedbackView')?.hidden,
-    downloadsSubviewHidden: Boolean(document.querySelector('#collaborationDownloadsView')?.hidden),
+    downloadsSubviewVisible: !document.querySelector('#collaborationDownloadsView')?.hidden,
     nestedTabs: document.querySelectorAll('[data-collaboration-view-target]').length,
     feedbackVisible: document.querySelector('#feedbackPanel')?.getBoundingClientRect().height > 0,
     quotaHidden: Boolean(document.querySelector('#feedbackQuota')?.hidden),
     quotaRendered: document.querySelector('#feedbackQuota')?.getClientRects().length > 0,
-    reviewAvailable: !document.querySelector('#feedbackReviewPanel')?.hidden,
+    selectedFeedbackView: document.querySelector('#feedbackViewSelect')?.value || '',
+    reportVisible: !document.querySelector('#feedbackForm')?.hidden,
+    reviewHidden: Boolean(document.querySelector('#feedbackReviewPanel')?.hidden),
+    receivedOptionAvailable: !document.querySelector('#feedbackViewSelect option[value="received"]')?.hidden
+      && !document.querySelector('#feedbackViewSelect option[value="received"]')?.disabled,
     adminSetupAvailable: Boolean(feedbackConfig?.adminSetupAvailable || feedbackConfig?.adminEnabled)
   })`);
   assert(
     consoleCollaborationState.active === "collaboration"
-      && consoleCollaborationState.nestedActive === "feedback"
       && consoleCollaborationState.commonHidden
       && consoleCollaborationState.collaborationVisible
       && consoleCollaborationState.feedbackSubviewVisible
-      && consoleCollaborationState.downloadsSubviewHidden
-      && consoleCollaborationState.nestedTabs === 2
+      && consoleCollaborationState.downloadsSubviewVisible
+      && consoleCollaborationState.nestedTabs === 0
       && consoleCollaborationState.feedbackVisible
       && consoleCollaborationState.quotaHidden
       && !consoleCollaborationState.quotaRendered
-      && consoleCollaborationState.reviewAvailable === consoleCollaborationState.adminSetupAvailable,
+      && consoleCollaborationState.selectedFeedbackView === "report"
+      && consoleCollaborationState.reportVisible
+      && consoleCollaborationState.reviewHidden
+      && consoleCollaborationState.receivedOptionAvailable === consoleCollaborationState.adminSetupAvailable,
     `Console collaboration view is incomplete: ${JSON.stringify(consoleCollaborationState)}`
   );
+  const feedbackViewState = await evaluate(client, `(() => {
+    const select = document.querySelector('#feedbackViewSelect');
+    const received = select?.querySelector('option[value="received"]');
+    const available = Boolean(received && !received.hidden && !received.disabled);
+    if (available) {
+      select.value = 'received';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const receivedState = {
+      selected: select?.value || '',
+      reportHidden: Boolean(document.querySelector('#feedbackForm')?.hidden),
+      receivedVisible: !document.querySelector('#feedbackReviewPanel')?.hidden
+    };
+    select.value = 'report';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return {
+      available,
+      receivedState,
+      restored: select?.value === 'report'
+        && !document.querySelector('#feedbackForm')?.hidden
+        && Boolean(document.querySelector('#feedbackReviewPanel')?.hidden)
+    };
+  })()`);
+  assert(
+    feedbackViewState.restored
+      && (!feedbackViewState.available || (
+        feedbackViewState.receivedState.selected === "received"
+          && feedbackViewState.receivedState.reportHidden
+          && feedbackViewState.receivedState.receivedVisible
+      )),
+    `Feedback dropdown view switching is incomplete: ${JSON.stringify(feedbackViewState)}`
+  );
+  const feedbackPollingVisibility = await evaluate(client, `(() => {
+    const originalConfig = feedbackConfig;
+    const originalModule = activeModuleId;
+    const originalConsoleView = activeConsoleView;
+    const originalFeedbackView = activeFeedbackView;
+    const body = document.querySelector('#feedbackPanelBody');
+    const originalBodyHidden = Boolean(body?.hidden);
+    try {
+      feedbackConfig = { ...(feedbackConfig || {}), adminEnabled: true };
+      activeModuleId = 'workspace';
+      activeConsoleView = 'collaboration';
+      activeFeedbackView = 'report';
+      if (body) body.hidden = false;
+      const report = feedbackInboxPollingAllowed();
+      activeFeedbackView = 'received';
+      const received = feedbackInboxPollingAllowed();
+      if (body) body.hidden = true;
+      const collapsed = feedbackInboxPollingAllowed();
+      if (body) body.hidden = false;
+      activeConsoleView = 'common';
+      const common = feedbackInboxPollingAllowed();
+      return { report, received, collapsed, common };
+    } finally {
+      feedbackConfig = originalConfig;
+      activeModuleId = originalModule;
+      activeConsoleView = originalConsoleView;
+      activeFeedbackView = originalFeedbackView;
+      if (body) body.hidden = originalBodyHidden;
+      renderFeedback();
+    }
+  })()`);
+  assert(
+    !feedbackPollingVisibility.report
+      && feedbackPollingVisibility.received
+      && !feedbackPollingVisibility.collapsed
+      && !feedbackPollingVisibility.common,
+    `Feedback inbox polling ignores hidden state: ${JSON.stringify(feedbackPollingVisibility)}`
+  );
+  const collaborationCollapseState = await evaluate(client, `(() => {
+    const results = [];
+    for (const id of ['githubDownloadsPanel', 'downloadMapPanel', 'blenderHubPanel', 'blenderGithubSharePanel', 'feedbackPanel']) {
+      const panel = document.getElementById(id);
+      const header = panel?.querySelector(':scope > .panel-head');
+      const toggle = panel?.querySelector('[data-collaboration-collapse]');
+      const body = toggle?.getAttribute('aria-controls')
+        ? document.getElementById(toggle.getAttribute('aria-controls'))
+        : null;
+      toggle?.click();
+      const clickCollapsed = Boolean(
+        panel?.classList.contains('collaboration-panel-collapsed')
+          && toggle?.getAttribute('aria-expanded') === 'false'
+          && body?.hidden
+      );
+      toggle?.click();
+      const clickExpanded = Boolean(
+        !panel?.classList.contains('collaboration-panel-collapsed')
+          && toggle?.getAttribute('aria-expanded') === 'true'
+          && !body?.hidden
+      );
+      header?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      const blankCollapsed = Boolean(
+        panel?.classList.contains('collaboration-panel-collapsed')
+          && toggle?.getAttribute('aria-expanded') === 'false'
+          && body?.hidden
+      );
+      header?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      const blankExpanded = Boolean(
+        !panel?.classList.contains('collaboration-panel-collapsed')
+          && toggle?.getAttribute('aria-expanded') === 'true'
+          && !body?.hidden
+      );
+      results.push({
+        id,
+        button: toggle?.tagName === 'BUTTON' && toggle.tabIndex === 0,
+        controls: Boolean(body && toggle?.getAttribute('aria-controls') === body.id),
+        clickCollapsed,
+        clickExpanded,
+        blankCollapsed,
+        blankExpanded
+      });
+    }
+    const mapPanel = document.querySelector('#downloadMapPanel');
+    const selector = document.querySelector('#downloadMapPlugin');
+    selector?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    return {
+      results,
+      controlSafe: !mapPanel?.classList.contains('collaboration-panel-collapsed')
+    };
+  })()`);
+  assert(
+    collaborationCollapseState.results.every(result => (
+      result.button
+        && result.controls
+        && result.clickCollapsed
+        && result.clickExpanded
+        && result.blankCollapsed
+        && result.blankExpanded
+    ))
+      && collaborationCollapseState.controlSafe,
+    `Collaboration collapse controls are incomplete: ${JSON.stringify(collaborationCollapseState)}`
+  );
+
+  await evaluate(client, `document.querySelector('#githubDownloadsCollapse')?.focus()`);
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13
+  });
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13
+  });
+  const keyboardCollapsed = await evaluate(client, `(() => {
+    const toggle = document.querySelector('#githubDownloadsCollapse');
+    const body = document.querySelector('#githubDownloadsBody');
+    return document.activeElement === toggle && toggle?.getAttribute('aria-expanded') === 'false' && Boolean(body?.hidden);
+  })()`);
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: " ",
+    code: "Space",
+    windowsVirtualKeyCode: 32,
+    nativeVirtualKeyCode: 32
+  });
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: " ",
+    code: "Space",
+    windowsVirtualKeyCode: 32,
+    nativeVirtualKeyCode: 32
+  });
+  const keyboardExpanded = await evaluate(client, `(() => {
+    const toggle = document.querySelector('#githubDownloadsCollapse');
+    return toggle?.getAttribute('aria-expanded') === 'true' && !document.querySelector('#githubDownloadsBody')?.hidden;
+  })()`);
+  assert(keyboardCollapsed && keyboardExpanded, "Collaboration collapse button is not keyboard operable");
+
+  const touchPoint = await evaluate(client, `(() => {
+    const toggle = document.querySelector('#downloadMapCollapse');
+    toggle?.scrollIntoView({ block: 'center' });
+    const rect = toggle?.getBoundingClientRect();
+    return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+  })()`);
+  assert(touchPoint, "Collaboration touch target is missing");
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ ...touchPoint, id: 1, radiusX: 1, radiusY: 1, force: 1 }]
+  });
+  await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await delay(100);
+  const touchCollapsed = await evaluate(client, `(() => {
+    const toggle = document.querySelector('#downloadMapCollapse');
+    return toggle?.getAttribute('aria-expanded') === 'false' && Boolean(document.querySelector('#downloadMapBody')?.hidden);
+  })()`);
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+  await evaluate(client, `document.querySelector('#downloadMapCollapse')?.click()`);
+  assert(touchCollapsed, "Collaboration collapse button is not touch operable");
   const feedbackImagesState = await evaluate(client, `(() => {
     const originalConfig = feedbackConfig;
     try {
@@ -838,7 +1479,6 @@ async function runBrowserChecks(client) {
       && !feedbackLimitState.renderedAfterReset,
     `feedback daily and burst limits are confused: ${JSON.stringify(feedbackLimitState)}`
   );
-  await evaluate(client, `document.querySelector('[data-collaboration-view-target="downloads"]')?.click()`);
   await waitForValue(
     () => evaluate(client, `({
       plugins: downloadMapState?.plugins?.length || 0,
@@ -859,10 +1499,9 @@ async function runBrowserChecks(client) {
     selector.dispatchEvent(new Event('change', { bubbles: true }));
     return {
       active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
-      nestedActive: document.querySelector('.collaboration-subnav .console-subtab.active')?.dataset.collaborationViewTarget || '',
       commonHidden: Boolean(document.querySelector('#consoleCommonView')?.hidden),
       collaborationVisible: !document.querySelector('#consoleCollaborationView')?.hidden,
-      feedbackHidden: Boolean(document.querySelector('#collaborationFeedbackView')?.hidden),
+      feedbackVisible: !document.querySelector('#collaborationFeedbackView')?.hidden,
       downloadsVisible: !document.querySelector('#collaborationDownloadsView')?.hidden,
       options: Array.from(selector.options).map(option => option.value),
       selected: selector.value,
@@ -886,10 +1525,9 @@ async function runBrowserChecks(client) {
   })()`, true);
   assert(
     consoleDownloadMapState.active === "collaboration"
-      && consoleDownloadMapState.nestedActive === "downloads"
       && consoleDownloadMapState.commonHidden
       && consoleDownloadMapState.collaborationVisible
-      && consoleDownloadMapState.feedbackHidden
+      && consoleDownloadMapState.feedbackVisible
       && consoleDownloadMapState.downloadsVisible
       && consoleDownloadMapState.options.join(",") === "character-designer,rr-helper"
       && consoleDownloadMapState.selected === "rr-helper"
@@ -922,7 +1560,6 @@ async function runBrowserChecks(client) {
   await evaluate(client, `(() => {
     activateModule('workspace', false);
     setConsoleWorkspaceView('collaboration', { persist: false });
-    setCollaborationWorkspaceView('downloads', { persist: false });
   })()`);
   await evaluate(client, `document.querySelector('[data-console-view-target="common"]')?.click()`);
   await waitForValue(
@@ -935,16 +1572,77 @@ async function runBrowserChecks(client) {
     10000,
     100
   );
+  const desktopHistoryBackoff = await evaluate(client, `(() => {
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    const originalTimer = desktopLayoutHistoryTimer;
+    const originalAttempted = desktopLayoutHistoryRefreshAttempted;
+    const originalRetryCount = desktopLayoutHistoryRetryCount;
+    const delays = [];
+    try {
+      window.setTimeout = (_callback, delay) => {
+        delays.push(delay);
+        return 9000 + delays.length;
+      };
+      window.clearTimeout = () => {};
+      desktopLayoutHistoryTimer = 0;
+      desktopLayoutHistoryRefreshAttempted = true;
+      desktopLayoutHistoryRetryCount = 0;
+      scheduleDesktopLayoutHistoryRetry();
+      scheduleDesktopLayoutHistoryRetry();
+      desktopLayoutHistoryRetryCount = 100;
+      scheduleDesktopLayoutHistoryRetry();
+      return {
+        delays,
+        base: desktopLayoutHistoryRetryBaseMs,
+        maximum: desktopLayoutHistoryRetryMaxMs
+      };
+    } finally {
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+      desktopLayoutHistoryTimer = originalTimer;
+      desktopLayoutHistoryRefreshAttempted = originalAttempted;
+      desktopLayoutHistoryRetryCount = originalRetryCount;
+    }
+  })()`);
+  assert(
+    desktopHistoryBackoff.delays[0] === desktopHistoryBackoff.base
+      && desktopHistoryBackoff.delays[1] === desktopHistoryBackoff.base * 2
+      && desktopHistoryBackoff.delays[2] === desktopHistoryBackoff.maximum
+      && desktopHistoryBackoff.maximum <= 15 * 60 * 1000,
+    `Desktop history retry backoff is unbounded or can hot-loop: ${JSON.stringify(desktopHistoryBackoff)}`
+  );
   const desktopLayoutUi = await evaluate(client, `(async () => {
     const response = await fetch('/api/console/desktop-layout', { cache: 'no-store' });
     const api = await response.json();
     const panel = document.querySelector('.desktop-layout-panel');
+    desktopLayoutState = api;
+    const current = api.plans?.find(plan => plan.source === 'remembered' || plan.source === 'device');
+    const history = api.plans?.find(plan => plan.source === 'history');
+    if (current) {
+      desktopLayoutState.selectedPlan = current.id;
+      renderDesktopLayout();
+    }
+    const currentSaveDisabled = document.querySelector('#desktopLayoutSave')?.disabled;
+    if (history) {
+      desktopLayoutState.selectedPlan = history.id;
+      renderDesktopLayout();
+    }
+    const historySaveDisabled = document.querySelector('#desktopLayoutSave')?.disabled;
+    if (current) {
+      desktopLayoutState.selectedPlan = current.id;
+      renderDesktopLayout();
+    }
     return {
       visible: Boolean(panel && !panel.closest('[data-module-panel]')?.hidden && panel.getBoundingClientRect().height > 0),
       localOnly: api.localOnly,
       plans: api.plans?.length || 0,
+      historyPlan: Boolean(history),
+      automaticRestore: api.history?.automaticRestore,
+      nativeWindowsLayout: api.startup?.nativeWindowsLayout,
       selected: document.querySelector('#desktopLayoutPlan')?.value || '',
-      saveDisabled: document.querySelector('#desktopLayoutSave')?.disabled,
+      currentSaveDisabled,
+      historySaveDisabled,
       importDisabled: document.querySelector('#desktopLayoutImport')?.disabled,
       controls: ['desktopLayoutRestore', 'desktopLayoutSave', 'desktopLayoutImport'].every(id => Boolean(document.getElementById(id))),
       localLabel: document.querySelector('#desktopLayoutLocalOnly')?.textContent?.trim() || '',
@@ -954,19 +1652,89 @@ async function runBrowserChecks(client) {
   assert(
     desktopLayoutUi.visible
       && desktopLayoutUi.localOnly
-      && desktopLayoutUi.plans >= 1
+      && desktopLayoutUi.plans >= 2
+      && desktopLayoutUi.historyPlan
+      && desktopLayoutUi.automaticRestore === false
+      && desktopLayoutUi.nativeWindowsLayout
       && desktopLayoutUi.selected
-      && !desktopLayoutUi.saveDisabled
+      && !desktopLayoutUi.currentSaveDisabled
+      && desktopLayoutUi.historySaveDisabled
       && !desktopLayoutUi.importDisabled
       && desktopLayoutUi.controls
       && desktopLayoutUi.localLabel
       && /CodexControlConsole[\\/]desktop-layout/i.test(desktopLayoutUi.dataDirectory),
     `desktop layout UI is incomplete or not device-local: ${JSON.stringify(desktopLayoutUi)}`
   );
+  const desktopRollbackUi = await evaluate(client, `(async () => {
+    const originalPostJson = postJson;
+    const originalConfirm = window.confirm;
+    const originalState = desktopLayoutState;
+    const originalNotice = desktopLayoutNotice;
+    const originalTone = desktopLayoutNoticeTone;
+    const originalDetail = desktopLayoutDetail;
+    const plan = selectedDesktopLayoutPlan();
+    try {
+      window.confirm = () => true;
+      const run = async healthy => {
+        postJson = async path => {
+          if (path !== '/api/console/desktop-layout/restore') throw new Error('unexpected endpoint');
+          return {
+            ...originalState,
+            selectedPlan: plan.id,
+            rolledBack: true,
+            verification: { healthy: false, snapshot: 'failed-snapshot.json' },
+            rollback: {
+              healthy,
+              verification: { snapshot: healthy ? 'rollback-ok.json' : 'rollback-failed.json' }
+            }
+          };
+        };
+        desktopLayoutState = { ...originalState, selectedPlan: plan.id };
+        desktopLayoutNotice = '';
+        desktopLayoutNoticeTone = '';
+        desktopLayoutBusy = false;
+        renderDesktopLayout();
+        await restoreDesktopLayout();
+        return {
+          notice: desktopLayoutNotice,
+          tone: desktopLayoutNoticeTone,
+          detail: desktopLayoutDetail,
+          warning: document.querySelector('#desktopLayoutStatus')?.classList.contains('warning'),
+          danger: document.querySelector('#desktopLayoutStatus')?.classList.contains('danger')
+        };
+      };
+      return {
+        healthy: await run(true),
+        unhealthy: await run(false),
+        healthyText: text('desktopLayoutRolledBack'),
+        unhealthyText: text('desktopLayoutRollbackUnhealthy')
+      };
+    } finally {
+      postJson = originalPostJson;
+      window.confirm = originalConfirm;
+      desktopLayoutState = originalState;
+      desktopLayoutNotice = originalNotice;
+      desktopLayoutNoticeTone = originalTone;
+      desktopLayoutDetail = originalDetail;
+      desktopLayoutBusy = false;
+      renderDesktopLayout();
+    }
+  })()`, true);
+  assert(
+    desktopRollbackUi.healthy.notice === desktopRollbackUi.healthyText
+      && desktopRollbackUi.healthy.tone === 'warning'
+      && desktopRollbackUi.healthy.warning
+      && !desktopRollbackUi.healthy.danger
+      && /rollback-ok\.json$/.test(desktopRollbackUi.healthy.detail)
+      && desktopRollbackUi.unhealthy.notice === desktopRollbackUi.unhealthyText
+      && desktopRollbackUi.unhealthy.tone === 'danger'
+      && desktopRollbackUi.unhealthy.danger
+      && /rollback-failed\.json$/.test(desktopRollbackUi.unhealthy.detail),
+    `Desktop restore rollback status is not clear: ${JSON.stringify(desktopRollbackUi)}`
+  );
   await clickModule(client, "workspace");
   await evaluate(client, `(() => {
     setConsoleWorkspaceView('collaboration', { persist: false });
-    setCollaborationWorkspaceView('downloads', { persist: false });
   })()`);
 
   await waitForValue(
@@ -1210,14 +1978,28 @@ async function runBrowserChecks(client) {
   );
 
   const collapseState = await evaluate(client, `(() => {
+    const panel = document.querySelector('#blenderGithubSharePanel');
+    const header = panel?.querySelector(':scope > .panel-head');
     const toggle = document.querySelector('#blenderGithubToggle');
     const body = document.querySelector('#blenderGithubBody');
-    toggle?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    header?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    const blankCollapsed = Boolean(body?.hidden) && toggle?.getAttribute('aria-expanded') === 'false';
+    header?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    const blankExpanded = !body?.hidden && toggle?.getAttribute('aria-expanded') === 'true';
+    toggle?.click();
     const collapsed = Boolean(body?.hidden) && toggle?.getAttribute('aria-expanded') === 'false';
-    toggle?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-    return { collapsed, expanded: !body?.hidden && toggle?.getAttribute('aria-expanded') === 'true' };
+    toggle?.click();
+    return {
+      blankCollapsed,
+      blankExpanded,
+      collapsed,
+      expanded: !body?.hidden && toggle?.getAttribute('aria-expanded') === 'true'
+    };
   })()`);
-  assert(collapseState.collapsed && collapseState.expanded, `GitHub Coop collapse behavior is broken: ${JSON.stringify(collapseState)}`);
+  assert(
+    collapseState.blankCollapsed && collapseState.blankExpanded && collapseState.collapsed && collapseState.expanded,
+    `GitHub Coop collapse behavior is broken: ${JSON.stringify(collapseState)}`
+  );
 
   const lazyState = await evaluate(client, `({
     musicCards: document.querySelectorAll('.music-dock .track-card').length,
@@ -1237,7 +2019,6 @@ async function runBrowserChecks(client) {
     if (screenshotModule === "workspace") {
       await evaluate(client, `(() => {
         setConsoleWorkspaceView('collaboration', { persist: false });
-        setCollaborationWorkspaceView('downloads', { persist: false });
       })()`);
     }
     const screenshotBlenderView = process.env.CONSOLE_UI_SCREENSHOT_BLENDER_VIEW || "";
@@ -1794,6 +2575,10 @@ async function runBrowserChecks(client) {
 
 async function main() {
   const cacheVersion = staticChecks();
+  if (staticOnly) {
+    console.log(`PASS Control Console UI static checks (${cacheVersion})`);
+    return;
+  }
   assert(typeof WebSocket === "function", "Node.js 22 or newer is required for the browser check");
   await fetch(baseUrl, { cache: "no-store" }).then(response => {
     assert(response.ok, `console server returned HTTP ${response.status}`);
@@ -1819,6 +2604,7 @@ async function main() {
   ], { stdio: "ignore", windowsHide: true });
 
   let client;
+  let browserClient;
   try {
     await waitForValue(
       async () => fetch(`http://127.0.0.1:${port}/json/version`).then(response => response.ok).catch(() => false),
@@ -1827,6 +2613,9 @@ async function main() {
       10000,
       100
     );
+    const browserTarget = await fetch(`http://127.0.0.1:${port}/json/version`).then(response => response.json());
+    browserClient = new CdpClient(browserTarget.webSocketDebuggerUrl);
+    await browserClient.open();
     client = await createPageClient(port, new URL("workspace.html", baseUrl).href);
     await client.send("Page.bringToFront");
     await client.send("Emulation.setDeviceMetricsOverride", {
@@ -1859,11 +2648,26 @@ async function main() {
     }
   } finally {
     client?.close();
+    if (browserClient) {
+      await Promise.race([
+        browserClient.send("Browser.close").catch(() => {}),
+        delay(1000)
+      ]);
+      browserClient.close();
+    }
     const browserExit = browser.exitCode === null
       ? new Promise(resolveExit => browser.once("exit", resolveExit))
       : Promise.resolve();
-    browser.kill();
+    terminateBrowserTree(browser);
     await Promise.race([browserExit, delay(3000)]);
+    await waitForValue(
+      async () => fetch(`http://127.0.0.1:${port}/json/version`).then(() => true).catch(() => false),
+      value => !value,
+      "Edge debugging endpoint did not stop",
+      3000,
+      100
+    ).catch(() => {});
+    await delay(1500);
     try {
       rmSync(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 120 });
     } catch (error) {

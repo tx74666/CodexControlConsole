@@ -171,9 +171,10 @@
       <div>
         <img class="logo" src="assets/codex-resource-icon-256.png" alt="">
         <h1>Codex Console</h1>
-        <p>One Windows x64 Setup with Music, Wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.</p>
+        <p>Windows x64 Setup and an optional no-install ZIP with Music, Wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.</p>
         <div class="buttons">
           <a class="button" id="setupDownload" href="https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe">Download Windows x64 Setup</a>
+          <a class="button" id="zipDownload" href="https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Windows-x64.zip">Download no-install ZIP</a>
         </div>
         <ol class="quick-start">
           <li><strong>Open</strong> the downloaded Setup file.</li>
@@ -208,6 +209,7 @@
     const repo = location.pathname.split("/").filter(Boolean)[0] || fallbackRepo;
     const base = `https://github.com/${owner}/${repo}/releases/latest/download`;
     document.getElementById("setupDownload").href = `${base}/CodexControlConsole-Setup-x64.exe`;
+    document.getElementById("zipDownload").href = `${base}/CodexControlConsole-Windows-x64.zip`;
   </script>
 </body>
 </html>

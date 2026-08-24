@@ -104,11 +104,62 @@ def _strict_center(value):
     ]
 
 
+def _upload_data_size(data):
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        return len(data)
+    size = getattr(data, "size", None)
+    if isinstance(size, int) and size >= 0:
+        return size
+    raise ValueError("Reference image data is invalid")
+
+
+def _open_upload_data(data):
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        return io.BytesIO(bytes(data))
+    opener = getattr(data, "open", None)
+    if callable(opener):
+        return opener()
+    raise ValueError("Reference image data is invalid")
+
+
+def _upload_data_sha256(data):
+    digest = hashlib.sha256()
+    remaining = _upload_data_size(data)
+    with _open_upload_data(data) as source:
+        while remaining > 0:
+            chunk = source.read(min(1024 * 1024, remaining))
+            if not chunk:
+                raise ValueError("Reference image data ended unexpectedly")
+            digest.update(chunk)
+            remaining -= len(chunk)
+    return digest.hexdigest()
+
+
+def _upload_data_matches_path(data, path):
+    path = Path(path)
+    size = _upload_data_size(data)
+    try:
+        if path.stat().st_size != size:
+            return False
+        with _open_upload_data(data) as incoming, path.open("rb") as existing:
+            remaining = size
+            while remaining > 0:
+                requested = min(1024 * 1024, remaining)
+                left = incoming.read(requested)
+                right = existing.read(requested)
+                if not left or left != right:
+                    return False
+                remaining -= len(left)
+        return True
+    except OSError:
+        return False
+
+
 def _detected_image_extension(filename, data):
-    if not isinstance(data, (bytes, bytearray)) or not data:
+    size = _upload_data_size(data)
+    if size <= 0:
         raise ValueError("Reference image is empty")
-    payload = bytes(data)
-    if len(payload) > REFERENCE_VIEW_MAX_FILE_BYTES:
+    if size > REFERENCE_VIEW_MAX_FILE_BYTES:
         raise ValueError("Reference image is larger than 64 MB")
     suffix = Path(str(filename or "")).suffix.casefold()
     if suffix not in REFERENCE_VIEW_IMAGE_EXTENSIONS:
@@ -117,14 +168,16 @@ def _detected_image_extension(filename, data):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(payload)) as image:
-                width, height = image.size
-                image_format = str(image.format or "").upper()
-                if width <= 0 or height <= 0 or width * height > REFERENCE_VIEW_MAX_PIXELS:
-                    raise ValueError("Reference image dimensions are outside the supported range")
-                image.verify()
-            with Image.open(io.BytesIO(payload)) as image:
-                image.load()
+            with _open_upload_data(data) as source:
+                with Image.open(source) as image:
+                    width, height = image.size
+                    image_format = str(image.format or "").upper()
+                    if width <= 0 or height <= 0 or width * height > REFERENCE_VIEW_MAX_PIXELS:
+                        raise ValueError("Reference image dimensions are outside the supported range")
+                    image.verify()
+            with _open_upload_data(data) as source:
+                with Image.open(source) as image:
+                    image.load()
     except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
         raise ValueError("Reference image could not be decoded") from error
     detected = {
@@ -245,7 +298,14 @@ def _atomic_bytes(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary.write_bytes(bytes(data))
+        remaining = _upload_data_size(data)
+        with _open_upload_data(data) as source, temporary.open("wb") as destination:
+            while remaining > 0:
+                chunk = source.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ValueError("Reference image data ended unexpectedly")
+                destination.write(chunk)
+                remaining -= len(chunk)
         os.replace(temporary, path)
     finally:
         try:
@@ -660,11 +720,12 @@ class ReferenceViewSetService:
             filename = str(file.get("filename") or "")
             data = file.get("data")
             extension, width, height = _detected_image_extension(filename, data)
-            data = bytes(data)
-            digest = hashlib.sha256(data).hexdigest()
+            size = _upload_data_size(data)
+            digest = _upload_data_sha256(data)
             prepared_uploads[direction] = {
                 "filename": filename,
                 "data": data,
+                "size": size,
                 "extension": extension,
                 "width": width,
                 "height": height,
@@ -707,7 +768,7 @@ class ReferenceViewSetService:
                     "file": relative,
                     "enabled": desired_enabled,
                     "originalName": Path(prepared["filename"].replace("\\", "/")).name,
-                    "bytes": len(prepared["data"]),
+                    "bytes": prepared["size"],
                     "sha256": prepared["digest"],
                     "width": prepared["width"],
                     "height": prepared["height"],
@@ -729,7 +790,7 @@ class ReferenceViewSetService:
                             target.is_symlink()
                             or not _is_inside(target.resolve(), images)
                             or not target.is_file()
-                            or target.read_bytes() != data
+                            or not _upload_data_matches_path(data, target)
                         ):
                             raise ValueError("Reference image content-address collision")
                     else:
@@ -781,7 +842,8 @@ class ReferenceViewSetService:
         filename = str(file.get("filename") or "")
         data = file.get("data")
         extension, width, height = _detected_image_extension(filename, data)
-        digest = hashlib.sha256(bytes(data)).hexdigest()
+        size = _upload_data_size(data)
+        digest = _upload_data_sha256(data)
 
         with self._lock:
             payload = self._read(project, key)
@@ -801,7 +863,7 @@ class ReferenceViewSetService:
                 "file": relative,
                 "enabled": True,
                 "originalName": Path(filename.replace("\\", "/")).name,
-                "bytes": len(data),
+                "bytes": size,
                 "sha256": digest,
                 "width": width,
                 "height": height,

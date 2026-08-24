@@ -24,16 +24,29 @@ def main():
     publisher = (ROOT / "tools" / "publish-direct-github.ps1").read_text(encoding="utf-8")
     release_helper = (ROOT / "tools" / "publish-release.ps1").read_text(encoding="utf-8")
     requirements = (ROOT / "tools" / "windows-release-requirements.txt").read_text(encoding="utf-8")
+    quality_workflow = (ROOT / ".github" / "workflows" / "quality.yml").read_text(encoding="utf-8")
+    quality_script = (ROOT / "tools" / "check-quality.ps1").read_text(encoding="utf-8")
 
-    unsigned_approval = (ROOT / ".github" / "unsigned-release-approval.txt").read_text(encoding="utf-8").splitlines()
-    require(unsigned_approval[:1] == ["v1.0.3"], "the unsigned exception must name exactly v1.0.3")
+    require(not (ROOT / ".github" / "unsigned-release-approval.txt").exists(), "a persistent unsigned release approval still exists")
     require("Resolve Artifact Signing policy" in workflow, "signing policy is missing")
     require("azure/artifact-signing-action@v2" in workflow, "current Artifact Signing action is not used")
     require("if: ${{ vars.ARTIFACT_SIGNING_ENDPOINT" not in workflow, "signing can still be skipped")
     require(workflow.count("if: env.SIGNING_ENABLED == 'true'") == 4, "signing steps do not share one explicit policy")
-    require('$approvalFile = ".github/unsigned-release-approval.txt"' in workflow, "unsigned approval is not auditable")
-    require('$approvedTag -eq $env:RELEASE_TAG' in workflow, "unsigned approval is not restricted to one tag")
-    require("The unsigned approval file does not match" in workflow, "future unsigned releases do not fail closed")
+    require("SIGNING_ENABLED=false" not in workflow, "the release workflow still has an unsigned publishing path")
+    require("unsigned-release-approval" not in workflow, "the release workflow still reads a persistent unsigned approval")
+    require("if ($missing.Count -gt 0)" in workflow, "missing signing configuration does not fail closed")
+    require("Public release blocked. Missing trusted signing configuration" in workflow, "missing signing configuration has no blocking error")
+    require("INPUT_VERSION: ${{ github.event.inputs.version }}" in workflow, "the release input is not passed through the environment")
+    require('$tag = "${{ github.event.inputs.version }}"' not in workflow, "the release input is interpolated into PowerShell source")
+    require('REF: ${{ github.ref }}' in workflow, "the release ref is not passed through the environment")
+    require('refs/heads/main' in workflow, "manual releases are not restricted to main")
+    require('git merge-base --is-ancestor $env:GITHUB_SHA origin/main' in workflow, "release commits are not bound to main history")
+    require('fetch-depth: 0' in workflow, "release checkout cannot verify main ancestry")
+    require('persist-credentials: false' in workflow, "release checkout persists write credentials unnecessarily")
+    require('group: release-${{ github.event.inputs.version || github.ref_name }}' in workflow, "duplicate release runs are not serialized")
+    require("app-manifest.json" in workflow and "$version -ne $manifestVersion" in workflow, "release version is not bound to app-manifest.json")
+    require("Codex Console v${{ env.RELEASE_VERSION }}" in workflow, "release notes do not use the resolved version")
+    require("./tools/check-quality.ps1" in workflow, "the release workflow does not use the shared quality checks")
 
     application = position(workflow, "-Stage Application")
     sign_application = position(workflow, "Sign application PE files")
@@ -41,10 +54,11 @@ def main():
     installer = position(workflow, "-Stage Installer")
     sign_installer = position(workflow, "Sign Windows Setup")
     verify_installer = position(workflow, "Verify signed Windows Setup")
+    zip_archive = position(workflow, "Build signed Windows x64 ZIP")
     defender = position(workflow, "Defender scan release artifacts")
     publish = position(workflow, "Publish GitHub Release")
     require(
-        application < sign_application < verify_application < installer < sign_installer < verify_installer < defender < publish,
+        application < sign_application < verify_application < installer < sign_installer < verify_installer < zip_archive < defender < publish,
         "release security stages are out of order",
     )
 
@@ -52,6 +66,11 @@ def main():
     require("files-folder-recurse: true" in workflow, "application signing is not recursive")
     require("check-authenticode-signatures.ps1" in workflow, "recursive signature verification is missing")
     require("check-defender-artifacts.ps1" in workflow, "Defender release scan is missing")
+    require("Compress-Archive" in workflow, "signed application ZIP is not created")
+    require(
+        workflow.count("CodexControlConsole-Windows-x64.zip") >= 4,
+        "Windows ZIP is not verified, scanned, documented, and published",
+    )
     require('runs-on: windows-2025' in workflow, "release runner is not locked to the known baseline")
     require('python-version: "3.12.10"' in workflow, "release Python is not locked to the known baseline")
     require("windows-release-requirements.txt" in workflow, "release dependencies are not installed from the lock file")
@@ -62,6 +81,8 @@ def main():
     require("upload-artifact" not in audit_workflow, "unsigned audit artifacts must not be uploaded")
     require("action-gh-release" not in audit_workflow, "security audit must not publish a release")
     require("dist-audit" in audit_workflow, "security audit output is not isolated")
+    require("-Version 1.0.2" not in audit_workflow, "security audit still builds a stale hard-coded version")
+    require("-Version $env:APP_VERSION" in audit_workflow, "security audit does not use the manifest version")
 
     require("workflow_dispatch:" in store_audit_workflow, "Store audit cannot be started manually")
     require("push:" not in store_audit_workflow, "Store audit must never run as a publishing trigger")
@@ -113,7 +134,22 @@ def main():
     require("check-package-footprint.py" in release_helper, "direct publishing does not test packaged startup")
     require("check-console-ui-local.ps1" in release_helper, "release UI checks still depend on an installed version")
 
-    print("PASS release signing and Defender gates are fail-closed outside the explicit v1.0.3 exception")
+    require("pull_request:" in quality_workflow, "quality checks do not run for pull requests")
+    require("push:" in quality_workflow and "main" in quality_workflow, "quality checks do not run for main pushes")
+    require("./tools/check-quality.ps1" in quality_workflow, "quality workflow does not use the shared entry point")
+    for required_check in (
+        "check-desktop-layout.py",
+        "check-external-app-launcher.py",
+        "check-build-version.ps1",
+        "check-blender-github-share.py",
+        "check-feedback.py",
+        "services/feedback-relay/test/feedback.test.js",
+        "--check",
+        "app.js",
+    ):
+        require(required_check in quality_script, f"shared quality entry point is missing: {required_check}")
+
+    print("PASS release signing, version, quality, and Defender gates are fail-closed")
 
 
 if __name__ == "__main__":

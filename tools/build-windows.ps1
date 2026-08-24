@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "1.0.3",
+  [string]$Version = "",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
   [ValidateSet("All", "Application", "Installer")]
@@ -14,18 +14,58 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+
+function Resolve-BuildVersion {
+  param(
+    [Parameter(Mandatory = $true)]
+    [object]$Manifest,
+    [AllowEmptyString()]
+    [string]$RequestedVersion = ""
+  )
+
+  $ManifestVersion = ([string]$Manifest.version).Trim()
+  if ($ManifestVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "app-manifest.json version must use semantic versioning, for example 1.0.4."
+  }
+
+  $RequestedVersion = ([string]$RequestedVersion).Trim()
+  if ([string]::IsNullOrWhiteSpace($RequestedVersion)) {
+    return $ManifestVersion
+  }
+  if ($RequestedVersion.StartsWith("v", [System.StringComparison]::OrdinalIgnoreCase)) {
+    $RequestedVersion = $RequestedVersion.Substring(1)
+  }
+  if ($RequestedVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Version must use semantic versioning, for example 1.0.4."
+  }
+  if ($RequestedVersion -ne $ManifestVersion) {
+    throw "Requested version $RequestedVersion does not match app-manifest.json version $ManifestVersion."
+  }
+  return $ManifestVersion
+}
+
+function Assert-BundledBuildVersion {
+  param(
+    [Parameter(Mandatory = $true)]
+    [object]$Manifest,
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedVersion
+  )
+
+  $BundledVersion = ([string]$Manifest.version).Trim()
+  if ($BundledVersion -ne $ExpectedVersion) {
+    throw "Application bundle version $BundledVersion does not match app-manifest.json version $ExpectedVersion. Rebuild the Application stage."
+  }
+}
+
 $SourceManifest = Get-Content -LiteralPath (Join-Path $ProjectRoot "app-manifest.json") -Raw | ConvertFrom-Json
+$Version = Resolve-BuildVersion -Manifest $SourceManifest -RequestedVersion $Version
 if ([string]::IsNullOrWhiteSpace($FeedbackEndpoint)) {
   $FeedbackEndpoint = [string]$SourceManifest.feedbackEndpoint
 }
 if ([string]::IsNullOrWhiteSpace($FeedbackTurnstileSiteKey)) {
   $FeedbackTurnstileSiteKey = [string]$SourceManifest.feedbackTurnstileSiteKey
 }
-$Version = $Version.Trim().TrimStart("v")
-if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-  throw "Version must use semantic versioning, for example 0.4.0."
-}
-
 if (-not [System.IO.Path]::IsPathRooted($OutputDir)) {
   $OutputDir = Join-Path $ProjectRoot $OutputDir
 }
@@ -226,6 +266,12 @@ $AppExe = Join-Path $AppDir "Codex Console.exe"
 if (-not (Test-Path -LiteralPath $AppExe)) {
   throw "Codex Console executable was not created."
 }
+$BundledManifestPath = Join-Path $AppDir "_internal\app-manifest.json"
+if (-not (Test-Path -LiteralPath $BundledManifestPath -PathType Leaf)) {
+  throw "Application bundle manifest is missing: $BundledManifestPath"
+}
+$BundledManifest = Get-Content -LiteralPath $BundledManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+Assert-BundledBuildVersion -Manifest $BundledManifest -ExpectedVersion $Version
 
 if (-not $BuildInstaller) {
   Write-Host "Created application bundle $AppDir"

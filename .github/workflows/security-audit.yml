@@ -42,13 +42,22 @@ jobs:
 
       - name: Verify release security rules
         shell: pwsh
-        run: python tools/check-release-security.py
+        run: ./tools/check-quality.ps1
+
+      - name: Read application version
+        shell: pwsh
+        run: |
+          $version = [string](Get-Content -LiteralPath "app-manifest.json" -Raw -Encoding UTF8 | ConvertFrom-Json).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "app-manifest.json contains an invalid version: $version"
+          }
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build unsigned audit Setup
         shell: pwsh
         run: |
           ./tools/build-windows.ps1 `
-            -Version 1.0.2 `
+            -Version $env:APP_VERSION `
             -OutputDir dist-audit `
             -Stage All `
             -FeedbackEndpoint '${{ vars.CODEX_FEEDBACK_ENDPOINT }}' `

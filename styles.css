@@ -569,7 +569,7 @@ h2 {
 .console-view-stage,
 .console-subview,
 .collaboration-view-stage,
-.collaboration-subview {
+.collaboration-section {
   min-width: 0;
 }
 
@@ -584,13 +584,52 @@ h2 {
   gap: 12px;
 }
 
+.collaboration-collapsible > .panel-head {
+  user-select: none;
+}
+
+.collaboration-panel-body {
+  min-width: 0;
+  display: grid;
+  gap: inherit;
+  align-content: start;
+}
+
+.collaboration-collapsible.collaboration-panel-collapsed {
+  gap: 0;
+}
+
+.collaboration-collapsible.collaboration-panel-collapsed > .collaboration-panel-body,
+.collaboration-panel-body[hidden] {
+  display: none !important;
+}
+
+.collaboration-collapse-button {
+  flex: 0 0 auto;
+}
+
+.collaboration-collapse-button::before {
+  content: "\2212";
+  color: currentColor;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.collaboration-collapse-button[aria-expanded="false"]::before {
+  content: "+";
+}
+
+.collaboration-collapse-button:focus-visible {
+  border-color: var(--line-strong);
+  outline: 2px solid color-mix(in srgb, var(--green) 54%, transparent);
+  outline-offset: 2px;
+}
+
 .console-subnav {
   --blender-subtab-index: 0;
 }
 
-.console-subview[hidden],
-.collaboration-subview[hidden],
-.feedback-review-panel[hidden] {
+.console-subview[hidden] {
   display: none !important;
 }
 
@@ -1173,6 +1212,11 @@ h2 {
   color: #d89b32;
 }
 
+.desktop-layout-summary span.danger {
+  color: #e06464;
+  font-weight: 800;
+}
+
 .desktop-layout-path,
 .desktop-layout-guide {
   margin: 0;
@@ -1256,10 +1300,40 @@ h2 {
   scroll-margin-top: 14px;
 }
 
-.feedback-review-panel {
+.feedback-head-tools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.feedback-view-select {
+  width: min(250px, 32vw);
+  min-width: 180px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--button-bg);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.feedback-view-select:focus {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 14%, transparent);
+}
+
+.feedback-review-view {
   min-width: 0;
   display: grid;
   gap: 12px;
+}
+
+.feedback-mode-view[hidden] {
+  display: none !important;
 }
 
 .feedback-form {
@@ -1621,6 +1695,20 @@ h2 {
   .download-map-panel .panel-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .feedback-panel .panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .feedback-head-tools,
+  .feedback-view-select {
+    width: 100%;
+  }
+
+  .feedback-view-select {
+    min-width: 0;
   }
 
   .download-map-tools,
@@ -2291,13 +2379,6 @@ button.blender-hub-card:active {
   display: flex;
   align-items: center;
   gap: 8px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.blender-github-head h2:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--green) 72%, transparent);
-  outline-offset: 4px;
 }
 
 .blender-github-panel.collapsed {

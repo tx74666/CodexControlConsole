@@ -4,9 +4,13 @@ A Windows control console for music, wallpaper, Blender, Unity, Steamwork, Rando
 
 ## Download / 下载
 
-There is one public package: [CodexControlConsole-Setup-x64.exe](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe).
+Recommended: [CodexControlConsole-Setup-x64.exe](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe), the signed installer with the simplest update path.
 
-公开下载只有一个：[CodexControlConsole-Setup-x64.exe](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe)。
+Alternative: [CodexControlConsole-Windows-x64.zip](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Windows-x64.zip). Extract the `Codex Console` folder and run `Codex Console.exe`; it does not install shortcuts.
+
+推荐下载：[CodexControlConsole-Setup-x64.exe](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe)，这是已签名安装包，后续更新最方便。
+
+免安装备用：[CodexControlConsole-Windows-x64.zip](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Windows-x64.zip)。解压 `Codex Console` 文件夹后运行 `Codex Console.exe`，不会自动创建快捷方式。
 
 Latest release: [github.com/tx74666/CodexControlConsole/releases/latest](https://github.com/tx74666/CodexControlConsole/releases/latest)
 
@@ -57,28 +61,30 @@ Deployment files are under `services/feedback-relay`. The public installer reads
 
 ## Build Locally
 
-Install Python 3.12 x64, PyInstaller, Pillow, yt-dlp, and Inno Setup 7, then run:
+Install Python 3.12 x64 and Inno Setup 7, install the locked Windows build dependencies, then run:
 
 ```powershell
-python -m pip install pyinstaller pillow yt-dlp
-.\tools\build-windows.ps1 -Version 1.0.3 -OutputDir dist
+python -m pip install --only-binary=:all: -r .\tools\windows-release-requirements.txt
+.\tools\build-windows.ps1 -OutputDir dist
 ```
+
+`app-manifest.json` is the single build-version source. `-Version` may be omitted; when supplied for release automation it must match the manifest exactly (an optional leading `v` is accepted).
 
 The result is `dist\CodexControlConsole-Setup-x64.exe`. A local build is unsigned and is only for development and security testing.
 
 ## Publish A Release
 
-The release helper retries intermittent GitHub connections, pushes `main`, creates the version tag, and waits until the single Windows x64 Setup asset is available:
+The release helper retries intermittent GitHub connections, pushes `main`, creates the version tag, and waits until both Windows x64 downloads are available:
 
 ```powershell
-.\tools\publish-release.ps1 -Version 1.0.3
+.\tools\publish-release.ps1 -Version 1.0.4
 ```
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.
 
-Unsigned local builds can never be published by the release helper. The emergency direct-publisher helper accepts only an installer that already has a valid, timestamped, RSA Authenticode signature from a trusted issuer.
+Unsigned builds can never be published by the release workflow or release helper. The emergency direct-publisher helper accepts only an installer that already has a valid, timestamped, RSA Authenticode signature from a trusted issuer.
 
-Public releases are fail-closed. GitHub Actions uses the same Windows 2025, Python 3.12.10, PyInstaller 6.21.0, and dependency baseline as the clean v0.7.0 build. It first builds the application, signs every packaged `exe`, `dll`, and `pyd`, verifies those signatures, builds and signs Setup, recursively verifies again, and finally scans the main executable, native drag helper, and Setup with Microsoft Defender. The workflow stops before publishing if any signature is missing, Defender reports a threat, or any Artifact Signing setting is absent.
+Public releases are fail-closed. GitHub Actions requires every Artifact Signing setting and requires the requested tag version to match `app-manifest.json`. It first runs the shared quality checks, builds the application, signs every packaged `exe`, `dll`, and `pyd`, verifies those signatures, builds and signs Setup, creates the ZIP from that signed application folder, and finally scans the main executable, native drag helper, Setup, and ZIP with Microsoft Defender. The workflow stops before publishing if any signature is missing, Defender reports a threat, or any Artifact Signing setting is absent. There is no committed unsigned-release exception.
 
 The manual `Audit Windows x64 Setup` workflow reproduces the build and Defender scan without signing, uploading, or publishing its temporary installer. Use it to compare a candidate with an earlier release while trusted signing is being configured.
 
@@ -86,16 +92,13 @@ Required repository variables are `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING
 
 ## Checks
 
+The same lightweight, non-building check entry point is used by pull requests, pushes to `main`, and public releases:
+
 ```powershell
-node .\tools\check-console-ui.mjs
-node --test .\services\feedback-relay\test\feedback.test.js
-python .\tools\check-feedback.py
-python .\tools\check-blender-github-share.py
-python .\tools\check-reference-views.py
-python .\tools\check-console-update.py
-python .\tools\check-desktop-layout.py
-python .\tools\check-release-security.py
+.\tools\check-quality.ps1
 ```
+
+It covers Python syntax and core services, desktop layouts, external application launching, Blender collaboration, feedback Worker tests, and static Node syntax checks for the UI. For the full local browser regression, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\check-console-ui-local.ps1` separately.
 
 Blender > Helper > GitHub Coop lists repositories from `github-coop.json`. GitHub Desktop handles authentication, clone, commits, pull, and push.
 

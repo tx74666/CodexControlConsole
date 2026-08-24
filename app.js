@@ -23,7 +23,6 @@
   updateProduct: "codexControl.updateProduct.v1",
   randomRealmArtContext: "codexControl.randomRealmArtContext.v1",
   consoleView: "codexControl.consoleView.v1",
-  collaborationView: "codexControl.collaborationView.v1",
   blenderView: "codexControl.blenderView.v1",
   lyricsHeight: "codexControl.lyricsHeight.v1",
   lyricsLanguages: "codexControl.lyricsLanguages.v1",
@@ -309,6 +308,7 @@ const i18n = {
     tutorialModeOff: "æ•™ç¨‹æ¨¡å¼å·²å…³é—­ï¼šåªä¿ç•™å…³é”®å…¥å£",
     consoleCommonTab: "\u5e38\u7528",
     consoleCollaborationTab: "\u534f\u4f5c",
+    collaborationPanelToggleTitle: "\u6298\u53e0\u6216\u5c55\u5f00\u6b64\u9762\u677f",
     consoleDownloadsTab: "\u4e0b\u8f7d\u5730\u56fe",
     downloadMapTitle: "\u63d2\u4ef6\u5730\u56fe",
     downloadMapPluginLabel: "Blender \u63d2\u4ef6",
@@ -328,8 +328,9 @@ const i18n = {
     desktopLayoutTitle: "\u684c\u9762\u5e03\u5c40",
     desktopLayoutLocalOnly: "\u4ec5\u672c\u673a",
     desktopLayoutPlanLabel: "\u684c\u9762\u5e03\u5c40\u65b9\u6848",
-    desktopLayoutRememberedPlan: "\u5f53\u524d\u6b63\u5f0f\u5e03\u5c40",
+    desktopLayoutRememberedPlan: "\u5f53\u524d\u684c\u9762",
     desktopLayoutDevicePlan: "\u672c\u673a\u5f53\u524d\u684c\u9762",
+    desktopLayoutHistoryPlan: "\u7ea6\u4e03\u5929\u524d",
     desktopLayoutRestore: "\u6062\u590d",
     desktopLayoutSave: "\u4fdd\u5b58\u5f53\u524d\u7248",
     desktopLayoutImport: "\u5bfc\u5165",
@@ -337,6 +338,8 @@ const i18n = {
     desktopLayoutEmpty: "\u8fd8\u6ca1\u6709\u5e03\u5c40\u65b9\u6848",
     desktopLayoutMeta: (icons, plans) => `${icons} \u4e2a\u56fe\u6807 \u00b7 ${plans} \u4e2a\u65b9\u6848`,
     desktopLayoutReady: "\u5c31\u7eea",
+    desktopLayoutAutoReady: days => `\u8ddf\u968f Windows \u00b7 \u6bcf ${days} \u5929\u8bb0\u5f55 \u00b7 \u4ec5\u624b\u52a8\u6062\u590d`,
+    desktopLayoutHistoryBuilding: "\u6b63\u5728\u79ef\u7d2f\u4e03\u5929\u5386\u53f2",
     desktopLayoutNotSaved: "\u5c1a\u672a\u4fdd\u5b58",
     desktopLayoutInvalid: "JSON \u4e0d\u53ef\u7528",
     desktopLayoutToolMissing: "\u672a\u627e\u5230\u5e03\u5c40\u5de5\u5177",
@@ -344,13 +347,15 @@ const i18n = {
     desktopLayoutImported: count => `\u5df2\u5bfc\u5165 ${count} \u4e2a\u65b9\u6848`,
     desktopLayoutRestoring: "\u6b63\u5728\u6062\u590d\u5e76\u68c0\u67e5",
     desktopLayoutRestored: "\u5df2\u6062\u590d\uff0c\u68c0\u67e5\u901a\u8fc7",
+    desktopLayoutRolledBack: "\u6062\u590d\u672a\u901a\u8fc7\u9a8c\u8bc1\uff0c\u5df2\u56de\u5230\u64cd\u4f5c\u524d\u6392\u5217",
+    desktopLayoutRollbackUnhealthy: "\u4e25\u91cd\u8b66\u544a\uff1a\u6062\u590d\u672a\u901a\u8fc7\u9a8c\u8bc1\uff0c\u81ea\u52a8\u56de\u6eda\u4e5f\u672a\u901a\u8fc7\uff1b\u8bf7\u7acb\u5373\u68c0\u67e5\u684c\u9762\u6392\u5217",
     desktopLayoutRestoreIssues: (missing, mismatches, overlaps) => `\u5df2\u6062\u590d \u00b7 \u7f3a\u5931 ${missing} \u00b7 \u504f\u5dee ${mismatches} \u00b7 \u91cd\u53e0 ${overlaps}`,
     desktopLayoutSaving: "\u6b63\u5728\u5907\u4efd\u5e76\u4fdd\u5b58",
     desktopLayoutSaved: "\u5df2\u5907\u4efd\u5e76\u4fdd\u5b58",
     desktopLayoutFailed: message => `\u684c\u9762\u5e03\u5c40\u5931\u8d25\uff1a${message}`,
     desktopLayoutConfirmRestore: name => `\u4f7f\u7528\u201c${name}\u201d\u6062\u590d\u684c\u9762\u56fe\u6807\u4f4d\u7f6e\uff1f`,
     desktopLayoutConfirmSave: name => `\u5148\u5907\u4efd\u539f JSON\uff0c\u518d\u7528\u5f53\u524d\u684c\u9762\u8986\u76d6\u201c${name}\u201d\uff1f`,
-    desktopLayoutGuide: "\u6062\u590d\u540e\u4f1a\u81ea\u52a8\u68c0\u67e5\u91cd\u53e0\u3001\u7f3a\u5931\u548c\u4f4d\u7f6e\u504f\u5dee\u3002\u4fdd\u5b58\u5f53\u524d\u7248\u4f1a\u5148\u5907\u4efd\u539f JSON\uff1b\u65b9\u6848\u4e0e\u5907\u4efd\u4e0d\u4f1a\u4e0a\u4f20\u3002",
+    desktopLayoutGuide: "Windows \u5f53\u524d\u6392\u5217\u59cb\u7ec8\u662f\u57fa\u51c6\uff1b\u6bcf 3 \u5929\u53ea\u8bfb\u53d6\u5e76\u8bb0\u5f55\u4e00\u6b21\u3002\u5f00\u673a\u4e0d\u4f1a\u81ea\u52a8\u91cd\u6392\uff0c\u6062\u590d\u53ea\u80fd\u624b\u52a8\u6267\u884c\uff1b\u65b9\u6848\u4e0e\u5907\u4efd\u4e0d\u4f1a\u4e0a\u4f20\u3002",
     builtinMediaTitle: "\u5185\u7f6e\u8d44\u6e90",
     builtinMusicLabel: "\u5185\u7f6e\u97f3\u4e50",
     builtinWallpapersLabel: "\u5185\u7f6e\u684c\u5e03",
@@ -361,6 +366,8 @@ const i18n = {
     builtinMediaUnavailable: "\u672a\u627e\u5230\u5185\u7f6e\u8d44\u6e90",
     builtinMediaAdded: count => `\u5df2\u8865\u5145 ${count} \u9879`,
     builtinMediaFailed: message => `\u540c\u6b65\u5931\u8d25\uff1a${message}`,
+    feedbackPanelTitle: "\u53cd\u9988",
+    feedbackViewLabel: "\u53cd\u9988\u89c6\u56fe",
     feedbackTitle: "é—®é¢˜å›žæŠ¥",
     feedbackCategoryLabel: "é—®é¢˜ç±»åž‹",
     feedbackCategoryBug: "é”™è¯¯",
@@ -400,7 +407,7 @@ const i18n = {
     feedbackAdminSaved: "æ”¶ä»¶ç®±å·²è¿žæŽ¥",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
-    blenderCharacterTab: "Character Designer",
+    blenderCharacterTab: "Common",
     blenderHelperTitle: "Blender Hub",
     blenderHelperBadge: "\u5730\u56fe",
     blenderHubReady: "\u53ef\u7528",
@@ -524,9 +531,9 @@ const i18n = {
     steamworkBody: "\u7ba1\u7406 Steamworks\u3001SteamPipe GUI\u3001ContentBuilder/content \u548c\u5ba3\u4f20\u66f4\u65b0\u7d20\u6750\u3002",
     steamworkDashboard: "Steamworks",
     steamworkPublishRoot: "ContentBuilder",
-    steamworkGameContent: "Content",
+    steamworkGameContent: "\u53d1\u5e03",
     steamworkPublishTool: "SteamPipe GUI",
-    steamworkArtAssets: "\u7d20\u6750",
+    steamworkArtAssets: "\u5ba3\u4f20\u56fe",
     steamworkGameContentLabel: "Content",
     steamworkGameContentTitle: "\u5bfc\u5165\u6e38\u620f\u5185\u5bb9",
     steamworkGameContentReady: "\u628a\u6e38\u620f\u6784\u5efa\u6587\u4ef6\u62d6\u5230 ContentBuilder/content\u3002",
@@ -839,6 +846,7 @@ const i18n = {
     randomRealmPromoFolder: "å®£ä¼ ç´ æ",
     randomRealmOpening: name => `æ­£åœ¨æ‰“å¼€ï¼š${name}`,
     randomRealmOpened: name => `å·²æ‰“å¼€ï¼š${name}`,
+    randomRealmFocused: name => `\u5df2\u524d\u7f6e：${name}`,
     randomRealmOpenFailed: message => `æ‰“å¼€å¤±è´¥ï¼š${message}`,
     randomRealmArtTitle: "Art Supporter",
     randomRealmBlenderProjectLabel: "Blender \u9879\u76ee",
@@ -1099,6 +1107,7 @@ const i18n = {
     tutorialModeOff: "Tutorial mode is off: showing only key actions",
     consoleCommonTab: "Common",
     consoleCollaborationTab: "Collaboration",
+    collaborationPanelToggleTitle: "Collapse or expand this panel",
     consoleDownloadsTab: "Download Map",
     downloadMapTitle: "Plugin Map",
     downloadMapPluginLabel: "Blender plugin",
@@ -1118,8 +1127,9 @@ const i18n = {
     desktopLayoutTitle: "Desktop Layout",
     desktopLayoutLocalOnly: "This device",
     desktopLayoutPlanLabel: "Desktop layout plan",
-    desktopLayoutRememberedPlan: "Remembered current",
+    desktopLayoutRememberedPlan: "Current desktop",
     desktopLayoutDevicePlan: "Current desktop",
+    desktopLayoutHistoryPlan: "About 7 days ago",
     desktopLayoutRestore: "Restore",
     desktopLayoutSave: "Save current",
     desktopLayoutImport: "Import",
@@ -1127,6 +1137,8 @@ const i18n = {
     desktopLayoutEmpty: "No desktop layout plans yet",
     desktopLayoutMeta: (icons, plans) => `${icons} icons \u00b7 ${plans} plans`,
     desktopLayoutReady: "Ready",
+    desktopLayoutAutoReady: days => `Follows Windows \u00b7 captures every ${days} days \u00b7 manual restore only`,
+    desktopLayoutHistoryBuilding: "Building seven-day history",
     desktopLayoutNotSaved: "Not saved yet",
     desktopLayoutInvalid: "Invalid JSON",
     desktopLayoutToolMissing: "Layout tool not found",
@@ -1134,13 +1146,15 @@ const i18n = {
     desktopLayoutImported: count => `Imported ${count} plans`,
     desktopLayoutRestoring: "Restoring and checking",
     desktopLayoutRestored: "Restored; checks passed",
+    desktopLayoutRolledBack: "Restore verification failed; returned to the pre-operation layout",
+    desktopLayoutRollbackUnhealthy: "Critical warning: restore verification failed and automatic rollback also failed; check the desktop layout immediately",
     desktopLayoutRestoreIssues: (missing, mismatches, overlaps) => `Restored \u00b7 ${missing} missing \u00b7 ${mismatches} shifted \u00b7 ${overlaps} overlaps`,
     desktopLayoutSaving: "Backing up and saving",
     desktopLayoutSaved: "Backed up and saved",
     desktopLayoutFailed: message => `Desktop layout failed: ${message}`,
     desktopLayoutConfirmRestore: name => `Restore desktop icon positions from "${name}"?`,
     desktopLayoutConfirmSave: name => `Back up the JSON, then replace "${name}" with the current desktop?`,
-    desktopLayoutGuide: "Restore checks overlaps, missing icons, and position drift. Save current always backs up the existing JSON first. Plans and backups are never uploaded.",
+    desktopLayoutGuide: "The current Windows arrangement stays authoritative. A read-only capture runs every 3 days; startup never rearranges icons and restore is manual only. Plans and backups are never uploaded.",
     builtinMediaTitle: "Built-in Resources",
     builtinMusicLabel: "Built-in Music",
     builtinWallpapersLabel: "Built-in Wallpapers",
@@ -1151,6 +1165,8 @@ const i18n = {
     builtinMediaUnavailable: "Built-in resources unavailable",
     builtinMediaAdded: count => `Added ${count}`,
     builtinMediaFailed: message => `Sync failed: ${message}`,
+    feedbackPanelTitle: "Feedback",
+    feedbackViewLabel: "Feedback view",
     feedbackTitle: "Report a Problem",
     feedbackCategoryLabel: "Problem type",
     feedbackCategoryBug: "Bug",
@@ -1190,7 +1206,7 @@ const i18n = {
     feedbackAdminSaved: "Inbox connected",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
-    blenderCharacterTab: "Character Designer",
+    blenderCharacterTab: "Common",
     blenderHelperTitle: "Blender Hub",
     blenderHelperBadge: "Map",
     blenderHubReady: "Ready",
@@ -1314,9 +1330,9 @@ const i18n = {
     steamworkBody: "Manage Steamworks, SteamPipe GUI, ContentBuilder/content, and promo/update assets.",
     steamworkDashboard: "Steamworks",
     steamworkPublishRoot: "ContentBuilder",
-    steamworkGameContent: "Content",
+    steamworkGameContent: "Ship",
     steamworkPublishTool: "SteamPipe GUI",
-    steamworkArtAssets: "Assets",
+    steamworkArtAssets: "Promo Art",
     steamworkGameContentLabel: "Content",
     steamworkGameContentTitle: "Import game content",
     steamworkGameContentReady: "Drop game build files into ContentBuilder/content.",
@@ -1629,6 +1645,7 @@ const i18n = {
     randomRealmPromoFolder: "Promo Assets",
     randomRealmOpening: name => `Opening: ${name}`,
     randomRealmOpened: name => `Opened: ${name}`,
+    randomRealmFocused: name => `Brought to front: ${name}`,
     randomRealmOpenFailed: message => `Open failed: ${message}`,
     randomRealmArtTitle: "Art Supporter",
     randomRealmBlenderProjectLabel: "Blender Project",
@@ -1867,6 +1884,7 @@ const els = {
   downloadMapRefresh: document.getElementById("downloadMapRefresh"),
   downloadMapStatus: document.getElementById("downloadMapStatus"),
   feedbackPanel: document.getElementById("feedbackPanel"),
+  feedbackViewSelect: document.getElementById("feedbackViewSelect"),
   feedbackReviewPanel: document.getElementById("feedbackReviewPanel"),
   feedbackForm: document.getElementById("feedbackForm"),
   feedbackCategory: document.getElementById("feedbackCategory"),
@@ -2210,9 +2228,6 @@ let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) ===
 let tutorialMode = localStorage.getItem(storageKeys.tutorialMode) === "true";
 const storedConsoleView = localStorage.getItem(storageKeys.consoleView);
 let activeConsoleView = normalizeConsoleWorkspaceView(storedConsoleView);
-let activeCollaborationView = normalizeCollaborationWorkspaceView(
-  localStorage.getItem(storageKeys.collaborationView) || (storedConsoleView === "downloads" ? "downloads" : "feedback")
-);
 let activeBlenderView = normalizeBlenderWorkspaceView(localStorage.getItem(storageKeys.blenderView));
 let blenderViewTransitionTimer = 0;
 let blenderViewTransitionFrame = 0;
@@ -2229,6 +2244,7 @@ let blenderGithubDropCommitted = false;
 let githubDownloadsInfo = null;
 let downloadMapState = null;
 let downloadMapBusy = false;
+let downloadMapLoaded = false;
 let downloadMapNotice = "";
 let selectedDownloadMapPluginId = localStorage.getItem(storageKeys.downloadMapPlugin) || "character-designer";
 const initialConsoleVersion = String(els.consoleUpdateCurrent?.textContent || "").replace(/^v/i, "").trim();
@@ -2242,9 +2258,18 @@ let productUpdateStates = {
   world: null
 };
 let productUpdateBusy = false;
+let productUpdateStatusesLoaded = false;
+let productUpdateIdleCallback = 0;
+let productUpdateScheduleTimer = 0;
 let selectedUpdateProduct = localStorage.getItem(storageKeys.updateProduct) === "world" ? "world" : "console";
 let desktopLayoutState = null;
 let desktopLayoutBusy = false;
+let desktopLayoutHistoryRefreshing = false;
+let desktopLayoutHistoryRefreshAttempted = false;
+let desktopLayoutHistoryTimer = 0;
+let desktopLayoutHistoryRetryCount = 0;
+const desktopLayoutHistoryRetryBaseMs = 30_000;
+const desktopLayoutHistoryRetryMaxMs = 15 * 60_000;
 let desktopLayoutNotice = "";
 let desktopLayoutNoticeTone = "";
 let desktopLayoutDetail = "";
@@ -2255,6 +2280,8 @@ let builtinMediaNotice = "";
 let builtinMediaNoticeTone = "";
 let feedbackConfig = null;
 let feedbackConfigBusy = false;
+let feedbackConfigLoaded = false;
+let activeFeedbackView = "report";
 let feedbackBusy = false;
 let feedbackNotice = "";
 let feedbackNoticeTone = "";
@@ -2299,10 +2326,16 @@ let randomRealmTextureApplyPollInFlight = false;
 let randomRealmProjectSearchTimer = null;
 let randomRealmObjectPickerOpen = false;
 let randomRealmLiveSelectionTimer = null;
+let randomRealmLiveSelectionFailureCount = 0;
 let randomRealmLastLiveObject = "";
 let randomRealmLiveSelectedObjects = [];
+const randomRealmLiveSelectionSuccessDelayMs = 1600;
+const randomRealmLiveSelectionFailureDelaysMs = [5000, 10000, 30000];
 const randomRealmPreviewableTextureExtensions = [".png", ".jpg", ".jpeg", ".bmp", ".webp"];
 const randomRealmTextureDragFileCache = new Map();
+const randomRealmTextureDragCacheMaxEntries = 8;
+const randomRealmTextureDragCacheMaxBytes = 64 * 1024 * 1024;
+let randomRealmTextureDragCacheBytes = 0;
 const consoleUndoStack = [];
 const consoleRedoStack = [];
 const consoleHistoryLimit = 80;
@@ -2581,34 +2614,34 @@ function restoreInitialModuleUrl() {
 async function loadModuleData(id) {
   switch (id) {
     case "wallpaper":
-      if (hasWallpaper) await loadWallpapers();
-      break;
+      return hasWallpaper ? (await loadWallpapers()) !== false : true;
     case "music":
-      if (hasMusic) await loadMusic();
-      break;
-    case "workspace":
-      if (hasWorkspace) await loadGithubDownloadsInfo();
-      if (els.consoleUpdateStatus && !productUpdateStates.console && !productUpdateStates.world) {
-        await loadProductUpdateStatuses({ check: true, quiet: true });
+      return hasMusic ? (await loadMusic()) !== false : true;
+    case "workspace": {
+      const requests = [];
+      if (hasWorkspace) requests.push(loadGithubDownloadsInfo());
+      if (els.consoleUpdateStatus && !productUpdateStatusesLoaded) {
+        requests.push(scheduleProductUpdateStatusCheck({ immediate: true }));
       }
-      if (els.desktopLayoutPlan && !desktopLayoutState) await loadDesktopLayout({ quiet: true });
-      if (els.builtinMediaMusicSync && !builtinMediaState) await loadBuiltinMedia({ quiet: true });
-      if (els.feedbackForm && !feedbackConfig) await loadFeedbackConfig({ quiet: true });
-      if (hasMaterialWorkspace && downloadIntakeEnabled) await loadMaterialCandidates();
-      break;
+      if (els.desktopLayoutPlan && !desktopLayoutState) requests.push(loadDesktopLayout({ quiet: true }));
+      if (els.builtinMediaMusicSync && !builtinMediaState) requests.push(loadBuiltinMedia({ quiet: true }));
+      if (els.feedbackForm && !feedbackConfigLoaded) requests.push(loadFeedbackConfig({ quiet: true }));
+      if (hasMaterialWorkspace && downloadIntakeEnabled) requests.push(loadMaterialCandidates());
+      const results = await Promise.all(requests);
+      const activeViewLoaded = await loadActiveConsoleWorkspaceViewData();
+      return results.every(result => result !== false) && activeViewLoaded !== false;
+    }
     case "blender":
       if (hasRandomRealmArtTools()) {
-        await loadRandomRealmBlenderProjects({ limit: 40, loadObjects: activeBlenderView === "builder" });
+        return (await loadRandomRealmBlenderProjects({ limit: 40, loadObjects: activeBlenderView === "builder" })) !== false;
       }
-      break;
+      return true;
     case "unity":
-      await loadUnityBridgeStatus();
-      break;
+      return (await loadUnityBridgeStatus()) !== false;
     case "steamwork":
-      if (hasSteamwork) await loadSteamworkAssets();
-      break;
+      return hasSteamwork ? (await loadSteamworkAssets()) !== false : true;
     default:
-      break;
+      return true;
   }
 }
 
@@ -2618,10 +2651,12 @@ function ensureModuleDataLoaded(id = activeModuleId) {
   if (loadingModuleData.has(moduleId)) return loadingModuleData.get(moduleId);
 
   const request = loadModuleData(moduleId)
+    .then(succeeded => {
+      if (succeeded !== false) loadedModuleData.add(moduleId);
+    })
     .catch(() => {})
     .finally(() => {
       loadingModuleData.delete(moduleId);
-      loadedModuleData.add(moduleId);
     });
   loadingModuleData.set(moduleId, request);
   return request;
@@ -2632,6 +2667,9 @@ function syncRuntimeActivity(options = {}) {
 
   if (!document.hidden) {
     ensureModuleDataLoaded(activeModuleId);
+    if (activeModuleId === "workspace") {
+      void loadActiveConsoleWorkspaceViewData();
+    }
   }
 
   syncLyricsAnimationLoop();
@@ -2652,9 +2690,10 @@ function syncRuntimeActivity(options = {}) {
   } else {
     stopRandomRealmLiveSelectionPolling();
     stopRandomRealmTextureApplyPolling();
+    clearRandomRealmTextureDragFileCache();
   }
 
-  if (isModuleForeground("workspace") && feedbackConfig?.adminEnabled) {
+  if (feedbackInboxPollingAllowed()) {
     scheduleFeedbackInboxPolling(options.resume || options.moduleChanged ? 250 : 30000);
   } else {
     stopFeedbackInboxPolling();
@@ -2703,12 +2742,25 @@ function normalizeConsoleWorkspaceView(value) {
   return value === "collaboration" || value === "downloads" ? "collaboration" : "common";
 }
 
-function normalizeCollaborationWorkspaceView(value) {
-  return value === "downloads" ? "downloads" : "feedback";
+async function loadActiveConsoleWorkspaceViewData() {
+  if (!runtimeActivityReady || !isModuleForeground("workspace") || activeConsoleView !== "collaboration") return true;
+  const requests = [];
+  if (!feedbackConfigLoaded && !feedbackConfigBusy) {
+    requests.push(loadFeedbackConfig({ quiet: true }));
+  } else if (feedbackInboxPollingAllowed() && !feedbackInboxBusy) {
+    requests.push(loadFeedbackInbox({ quiet: true }));
+  }
+  if (!downloadMapLoaded && !downloadMapBusy) {
+    requests.push(loadDownloadMap({ quiet: true }));
+  }
+  if (hasBlenderGithubShare() && !blenderGithubShareState && !blenderGithubBusy) {
+    requests.push(loadBlenderGithubShare({ detect: true }));
+  }
+  const results = await Promise.all(requests);
+  return results.every(result => result !== false);
 }
 
 function setConsoleWorkspaceView(value, options = {}) {
-  if (value === "downloads") activeCollaborationView = "downloads";
   activeConsoleView = normalizeConsoleWorkspaceView(value);
   if (options.persist !== false) {
     localStorage.setItem(storageKeys.consoleView, activeConsoleView);
@@ -2730,46 +2782,70 @@ function setConsoleWorkspaceView(value, options = {}) {
     view.classList.toggle("active", active);
   }
 
-  if (activeConsoleView === "collaboration") {
-    setCollaborationWorkspaceView(activeCollaborationView, { persist: options.persist !== false });
+  if (runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "collaboration") {
+    void loadActiveConsoleWorkspaceViewData();
+  }
+  if (feedbackInboxPollingAllowed()) {
+    scheduleFeedbackInboxPolling(250);
+  } else {
+    stopFeedbackInboxPolling();
   }
 }
 
-function setCollaborationWorkspaceView(value, options = {}) {
-  activeCollaborationView = normalizeCollaborationWorkspaceView(value);
-  if (options.persist !== false) {
-    localStorage.setItem(storageKeys.collaborationView, activeCollaborationView);
-  }
+function collaborationPanelCollapsed(panel) {
+  if (!panel) return false;
+  if (panel.id === "blenderGithubSharePanel") return Boolean(els.blenderGithubBody?.hidden);
+  const toggle = panel.querySelector("[data-collaboration-collapse]");
+  const body = toggle?.getAttribute("aria-controls")
+    ? document.getElementById(toggle.getAttribute("aria-controls"))
+    : null;
+  return Boolean(body?.hidden || panel.classList.contains("collaboration-panel-collapsed"));
+}
 
-  const buttons = Array.from(document.querySelectorAll("[data-collaboration-view-target]"));
-  const activeButtonIndex = Math.max(0, buttons.findIndex(button => button.dataset.collaborationViewTarget === activeCollaborationView));
-  document.querySelector(".collaboration-subnav")?.style.setProperty("--blender-subtab-index", String(activeButtonIndex));
-  for (const button of buttons) {
-    const active = button.dataset.collaborationViewTarget === activeCollaborationView;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-selected", active ? "true" : "false");
-    button.tabIndex = active ? 0 : -1;
+function setCollaborationPanelCollapsed(panel, collapsed) {
+  if (!panel) return;
+  const nextCollapsed = Boolean(collapsed);
+  if (panel.id === "blenderGithubSharePanel") {
+    setBlenderGithubExpanded(!nextCollapsed);
+    return;
   }
-
-  for (const view of document.querySelectorAll("[data-collaboration-view]")) {
-    const active = view.dataset.collaborationView === activeCollaborationView;
-    view.hidden = !active;
-    view.classList.toggle("active", active);
+  const toggle = panel.querySelector("[data-collaboration-collapse]");
+  const body = toggle?.getAttribute("aria-controls")
+    ? document.getElementById(toggle.getAttribute("aria-controls"))
+    : null;
+  panel.classList.toggle("collaboration-panel-collapsed", nextCollapsed);
+  if (toggle) toggle.setAttribute("aria-expanded", String(!nextCollapsed));
+  if (body) body.hidden = nextCollapsed;
+  if (panel === els.feedbackPanel) {
+    if (feedbackInboxPollingAllowed()) {
+      if (!feedbackInboxBusy) void loadFeedbackInbox({ quiet: true });
+    } else {
+      stopFeedbackInboxPolling();
+    }
   }
+}
 
-  if (activeCollaborationView === "feedback") {
-    if (!feedbackConfig && !feedbackConfigBusy) {
-      loadFeedbackConfig({ quiet: true });
-    } else if (feedbackConfig?.adminEnabled && !feedbackInboxBusy) {
-      loadFeedbackInbox({ quiet: true });
-    }
-  } else {
-    if (!downloadMapState && !downloadMapBusy) {
-      loadDownloadMap({ quiet: true });
-    }
-    if (hasBlenderGithubShare() && !blenderGithubShareState && !blenderGithubBusy) {
-      loadBlenderGithubShare({ detect: true });
-    }
+function bindCollaborationPanelCollapse() {
+  for (const panel of document.querySelectorAll(".collaboration-collapsible")) {
+    const header = panel.querySelector(":scope > .panel-head");
+    const toggle = panel.querySelector("[data-collaboration-collapse]");
+    if (!header || !toggle) continue;
+    toggle.setAttribute("aria-expanded", String(!collaborationPanelCollapsed(panel)));
+    toggle.addEventListener("click", event => {
+      event.stopPropagation();
+      setCollaborationPanelCollapsed(panel, !collaborationPanelCollapsed(panel));
+    });
+    toggle.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setCollaborationPanelCollapsed(panel, !collaborationPanelCollapsed(panel));
+    });
+    header.addEventListener("dblclick", event => {
+      if (event.target.closest("button, a, input, select, textarea, label, summary")) return;
+      event.preventDefault();
+      setCollaborationPanelCollapsed(panel, !collaborationPanelCollapsed(panel));
+    });
   }
 }
 
@@ -2910,8 +2986,16 @@ function setBlenderWorkspaceView(value, options = {}) {
       } catch {}
     }
     blenderViewTransitionAnimations = [];
+    oldView.hidden = true;
     stage.getBoundingClientRect();
-    blenderViewTransitionTimer = window.setTimeout(cleanup, 32);
+    blenderViewTransitionFrame = window.requestAnimationFrame(() => {
+      if (transitionSequence !== blenderViewTransitionSequence || activeBlenderView !== targetViewName) return;
+      blenderViewTransitionFrame = window.requestAnimationFrame(() => {
+        if (transitionSequence !== blenderViewTransitionSequence || activeBlenderView !== targetViewName) return;
+        blenderViewTransitionFrame = 0;
+        blenderViewTransitionTimer = window.setTimeout(cleanup, 40);
+      });
+    });
   };
 
   if (typeof nextView.animate !== "function" || typeof oldView.animate !== "function") {
@@ -11512,17 +11596,20 @@ function renderGithubDownloads() {
 }
 
 async function loadGithubDownloadsInfo() {
-  if (!hasWorkspace || !els.githubDownloadsMeta) return;
+  if (!hasWorkspace || !els.githubDownloadsMeta) return true;
   els.githubDownloadsMeta.textContent = text("githubDownloadsResolving");
+  let succeeded = true;
   try {
     const response = await fetch("/api/workspace/github-downloads", { cache: "no-store" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     githubDownloadsInfo = payload;
   } catch (error) {
+    succeeded = false;
     githubDownloadsInfo = { configured: false, url: "", error: error.message };
   }
   renderGithubDownloads();
+  return succeeded;
 }
 
 async function openGithubDownloads() {
@@ -11642,8 +11729,10 @@ function renderDownloadMap() {
 }
 
 async function loadDownloadMap(options = {}) {
-  if (!hasWorkspace || !els.downloadMapEntries || downloadMapBusy) return;
+  if (!hasWorkspace || !els.downloadMapEntries) return true;
+  if (downloadMapBusy) return downloadMapLoaded;
   downloadMapBusy = true;
+  let succeeded = true;
   if (!options.quiet) downloadMapNotice = text("downloadMapLoading");
   renderDownloadMap();
   try {
@@ -11653,12 +11742,15 @@ async function loadDownloadMap(options = {}) {
     downloadMapState = payload;
     downloadMapNotice = "";
   } catch (error) {
+    succeeded = false;
     downloadMapState = { plugins: [] };
     downloadMapNotice = text("downloadMapLoadFailed", error.message);
   } finally {
     downloadMapBusy = false;
+    downloadMapLoaded = succeeded;
     renderDownloadMap();
   }
+  return succeeded;
 }
 
 async function openDownloadMapTarget(pluginId, targetId) {
@@ -11854,14 +11946,17 @@ async function fetchProductUpdateStatus(product, options = {}) {
 }
 
 async function loadProductUpdateStatuses(options = {}) {
-  if (!els.consoleUpdateStatus || productUpdateBusy) return;
+  if (!els.consoleUpdateStatus) return true;
+  if (productUpdateBusy) return productUpdateStatusesLoaded;
   productUpdateBusy = true;
+  let succeeded = true;
   renderConsoleUpdate();
   try {
     const results = await Promise.all(updateProductIds.map(async product => {
       try {
         return [product, await fetchProductUpdateStatus(product, options)];
       } catch (error) {
+        succeeded = false;
         return [product, {
           ...(productUpdateStates[product] || {}),
           error: options.quiet ? "" : error.message
@@ -11873,8 +11968,44 @@ async function loadProductUpdateStatuses(options = {}) {
     });
   } finally {
     productUpdateBusy = false;
+    productUpdateStatusesLoaded = succeeded;
     renderConsoleUpdate();
   }
+  return succeeded;
+}
+
+function cancelScheduledProductUpdateStatusCheck() {
+  if (productUpdateIdleCallback && typeof window.cancelIdleCallback === "function") {
+    window.cancelIdleCallback(productUpdateIdleCallback);
+  }
+  if (productUpdateScheduleTimer) {
+    window.clearTimeout(productUpdateScheduleTimer);
+  }
+  productUpdateIdleCallback = 0;
+  productUpdateScheduleTimer = 0;
+}
+
+function scheduleProductUpdateStatusCheck(options = {}) {
+  cancelScheduledProductUpdateStatusCheck();
+  if (!els.consoleUpdateStatus) return Promise.resolve();
+  if (options.immediate) {
+    return loadProductUpdateStatuses({ check: true, quiet: true });
+  }
+  if (productUpdateBusy || productUpdateStatusesLoaded) {
+    return Promise.resolve();
+  }
+
+  const run = () => {
+    productUpdateIdleCallback = 0;
+    productUpdateScheduleTimer = 0;
+    void loadProductUpdateStatuses({ check: true, quiet: true });
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    productUpdateIdleCallback = window.requestIdleCallback(run, { timeout: 1200 });
+  } else {
+    productUpdateScheduleTimer = window.setTimeout(run, 350);
+  }
+  return Promise.resolve();
 }
 
 async function saveProductUpdatePreference() {
@@ -12054,8 +12185,10 @@ function renderBuiltinMedia() {
 }
 
 async function loadBuiltinMedia(options = {}) {
-  if (!els.builtinMediaMusicSync || builtinMediaBusy || builtinMediaLoading) return;
+  if (!els.builtinMediaMusicSync) return true;
+  if (builtinMediaBusy || builtinMediaLoading) return Boolean(builtinMediaState);
   builtinMediaLoading = true;
+  let succeeded = true;
   if (!options.quiet) {
     builtinMediaNotice = text("builtinMediaLoading");
     builtinMediaNoticeTone = "";
@@ -12069,12 +12202,14 @@ async function loadBuiltinMedia(options = {}) {
     builtinMediaNotice = "";
     builtinMediaNoticeTone = "";
   } catch (error) {
+    succeeded = false;
     builtinMediaNotice = text("builtinMediaFailed", error.message);
     builtinMediaNoticeTone = "warning";
   } finally {
     builtinMediaLoading = false;
   }
   renderBuiltinMedia();
+  return succeeded;
 }
 
 async function syncBuiltinMedia(kind) {
@@ -12114,6 +12249,7 @@ function selectedDesktopLayoutPlan() {
 function desktopLayoutPlanName(plan) {
   if (plan?.source === "remembered") return text("desktopLayoutRememberedPlan");
   if (plan?.source === "device") return text("desktopLayoutDevicePlan");
+  if (plan?.source === "history") return text("desktopLayoutHistoryPlan");
   return plan?.name || "";
 }
 
@@ -12141,12 +12277,13 @@ function renderDesktopLayout() {
 
   const selected = selectedDesktopLayoutPlan();
   const toolAvailable = desktopLayoutState?.tool?.available !== false;
-  const canRestore = Boolean(selected?.exists && selected?.valid && toolAvailable && !desktopLayoutBusy);
-  const canSave = Boolean(selected && toolAvailable && !desktopLayoutBusy);
-  els.desktopLayoutPlan.disabled = desktopLayoutBusy || !plans.length;
+  const locked = desktopLayoutBusy || desktopLayoutHistoryRefreshing;
+  const canRestore = Boolean(selected?.exists && selected?.valid && toolAvailable && !locked);
+  const canSave = Boolean(selected && selected?.source !== "history" && toolAvailable && !locked);
+  els.desktopLayoutPlan.disabled = locked || !plans.length;
   if (els.desktopLayoutRestore) els.desktopLayoutRestore.disabled = !canRestore;
   if (els.desktopLayoutSave) els.desktopLayoutSave.disabled = !canSave;
-  if (els.desktopLayoutImport) els.desktopLayoutImport.disabled = desktopLayoutBusy;
+  if (els.desktopLayoutImport) els.desktopLayoutImport.disabled = locked;
 
   if (els.desktopLayoutMeta) {
     els.desktopLayoutMeta.textContent = selected
@@ -12164,25 +12301,32 @@ function renderDesktopLayout() {
       if (!toolAvailable) {
         status = text("desktopLayoutToolMissing");
         tone = "warning";
+      } else if (selected?.source === "history" && !selected.exists) {
+        status = text("desktopLayoutHistoryBuilding");
       } else if (selected && !selected.exists) {
         status = text("desktopLayoutNotSaved");
       } else if (selected && !selected.valid) {
         status = text("desktopLayoutInvalid");
         tone = "warning";
       } else if (selected) {
-        status = text("desktopLayoutReady");
+        status = selected.source === "history"
+          ? text("desktopLayoutReady")
+          : text("desktopLayoutAutoReady", desktopLayoutState?.history?.intervalDays || 3);
         tone = "success";
       }
     }
     els.desktopLayoutStatus.textContent = status;
     els.desktopLayoutStatus.classList.toggle("success", tone === "success");
     els.desktopLayoutStatus.classList.toggle("warning", tone === "warning");
+    els.desktopLayoutStatus.classList.toggle("danger", tone === "danger");
   }
 }
 
 async function loadDesktopLayout(options = {}) {
-  if (!els.desktopLayoutPlan || desktopLayoutBusy) return;
+  if (!els.desktopLayoutPlan) return true;
+  if (desktopLayoutBusy) return Boolean(desktopLayoutState);
   desktopLayoutBusy = true;
+  let succeeded = true;
   if (!options.quiet) {
     desktopLayoutNotice = text("desktopLayoutLoading");
     desktopLayoutNoticeTone = "";
@@ -12196,11 +12340,87 @@ async function loadDesktopLayout(options = {}) {
     desktopLayoutNotice = "";
     desktopLayoutNoticeTone = "";
   } catch (error) {
+    succeeded = false;
     desktopLayoutNotice = text("desktopLayoutFailed", error.message);
     desktopLayoutNoticeTone = "warning";
   } finally {
     desktopLayoutBusy = false;
     renderDesktopLayout();
+    scheduleDesktopLayoutHistoryRefresh();
+  }
+  return succeeded;
+}
+
+function scheduleDesktopLayoutHistoryRefresh() {
+  const history = desktopLayoutState?.history;
+  if (history?.enabled && history.due && desktopLayoutHistoryRefreshAttempted && desktopLayoutHistoryTimer) {
+    return;
+  }
+  if (desktopLayoutHistoryTimer) {
+    window.clearTimeout(desktopLayoutHistoryTimer);
+    desktopLayoutHistoryTimer = 0;
+  }
+  if (!history?.enabled) {
+    desktopLayoutHistoryRefreshAttempted = false;
+    desktopLayoutHistoryRetryCount = 0;
+    return;
+  }
+  if (history.due) {
+    if (!desktopLayoutHistoryRefreshAttempted && !desktopLayoutHistoryRefreshing) {
+      void refreshDesktopLayoutHistory();
+    }
+    return;
+  }
+  desktopLayoutHistoryRefreshAttempted = false;
+  desktopLayoutHistoryRetryCount = 0;
+  const nextCapture = Date.parse(history.nextCaptureAt || "");
+  if (!Number.isFinite(nextCapture)) return;
+  const delay = Math.max(1000, Math.min(2_147_000_000, nextCapture - Date.now()));
+  desktopLayoutHistoryTimer = window.setTimeout(() => {
+    desktopLayoutHistoryTimer = 0;
+    desktopLayoutHistoryRefreshAttempted = false;
+    void refreshDesktopLayoutHistory();
+  }, delay);
+}
+
+function desktopLayoutHistoryRetryDelay(attempt = desktopLayoutHistoryRetryCount) {
+  const exponent = Math.max(0, Math.min(10, Number(attempt) || 0));
+  return Math.min(desktopLayoutHistoryRetryMaxMs, desktopLayoutHistoryRetryBaseMs * (2 ** exponent));
+}
+
+function scheduleDesktopLayoutHistoryRetry() {
+  if (desktopLayoutHistoryTimer) window.clearTimeout(desktopLayoutHistoryTimer);
+  const delay = desktopLayoutHistoryRetryDelay();
+  desktopLayoutHistoryRetryCount = Math.min(10, desktopLayoutHistoryRetryCount + 1);
+  desktopLayoutHistoryTimer = window.setTimeout(() => {
+    desktopLayoutHistoryTimer = 0;
+    desktopLayoutHistoryRefreshAttempted = false;
+    void refreshDesktopLayoutHistory();
+  }, delay);
+}
+
+async function refreshDesktopLayoutHistory() {
+  if (!els.desktopLayoutPlan || desktopLayoutHistoryRefreshing || desktopLayoutHistoryRefreshAttempted) return;
+  desktopLayoutHistoryRefreshAttempted = true;
+  desktopLayoutHistoryRefreshing = true;
+  let refreshSucceeded = false;
+  renderDesktopLayout();
+  try {
+    desktopLayoutState = await postJson("/api/console/desktop-layout/refresh", {}, { timeoutMs: 180000 });
+    desktopLayoutNotice = "";
+    desktopLayoutNoticeTone = "";
+    refreshSucceeded = true;
+  } catch (error) {
+    desktopLayoutNotice = text("desktopLayoutFailed", error.message);
+    desktopLayoutNoticeTone = "warning";
+  } finally {
+    desktopLayoutHistoryRefreshing = false;
+    renderDesktopLayout();
+    if (!refreshSucceeded || desktopLayoutState?.history?.due) {
+      scheduleDesktopLayoutHistoryRetry();
+    } else {
+      scheduleDesktopLayoutHistoryRefresh();
+    }
   }
 }
 
@@ -12237,7 +12457,11 @@ async function restoreDesktopLayout() {
       planId: plan.id
     }, { timeoutMs: 180000 });
     const verification = desktopLayoutState.verification || {};
-    if (verification.healthy) {
+    const rollback = desktopLayoutState.rollback || {};
+    if (desktopLayoutState.rolledBack) {
+      desktopLayoutNotice = text(rollback.healthy ? "desktopLayoutRolledBack" : "desktopLayoutRollbackUnhealthy");
+      desktopLayoutNoticeTone = rollback.healthy ? "warning" : "danger";
+    } else if (verification.healthy) {
       desktopLayoutNotice = text("desktopLayoutRestored");
       desktopLayoutNoticeTone = "success";
     } else {
@@ -12249,7 +12473,7 @@ async function restoreDesktopLayout() {
       );
       desktopLayoutNoticeTone = "warning";
     }
-    desktopLayoutDetail = verification.snapshot || plan.path;
+    desktopLayoutDetail = rollback.verification?.snapshot || verification.snapshot || plan.path;
   } catch (error) {
     desktopLayoutNotice = text("desktopLayoutFailed", error.message);
     desktopLayoutNoticeTone = "warning";
@@ -12342,11 +12566,41 @@ function setFeedbackLimit(reached, retryAfter = 0) {
   }, Math.min(2_147_483_647, Math.ceil(seconds * 1000) + 250));
 }
 
+function feedbackReviewAvailable() {
+  return Boolean(feedbackConfig?.adminSetupAvailable || feedbackConfig?.adminEnabled);
+}
+
+function renderFeedbackWorkspaceView() {
+  const reviewAvailable = feedbackReviewAvailable();
+  if (activeFeedbackView === "received" && !reviewAvailable) activeFeedbackView = "report";
+  if (els.feedbackViewSelect) {
+    const receivedOption = els.feedbackViewSelect.querySelector('option[value="received"]');
+    if (receivedOption) {
+      receivedOption.hidden = !reviewAvailable;
+      receivedOption.disabled = !reviewAvailable;
+    }
+    els.feedbackViewSelect.value = activeFeedbackView;
+  }
+  if (els.feedbackForm) els.feedbackForm.hidden = activeFeedbackView !== "report";
+  if (els.feedbackReviewPanel) els.feedbackReviewPanel.hidden = activeFeedbackView !== "received";
+}
+
+function setFeedbackWorkspaceView(value) {
+  activeFeedbackView = value === "received" && feedbackReviewAvailable() ? "received" : "report";
+  renderFeedback();
+  if (feedbackInboxPollingAllowed() && !feedbackInboxBusy) {
+    loadFeedbackInbox({ quiet: true });
+  } else {
+    stopFeedbackInboxPolling();
+  }
+}
+
 function renderFeedback() {
   if (!els.feedbackForm) return;
+  renderFeedbackWorkspaceView();
   const configured = Boolean(feedbackConfig?.configured);
   if (els.feedbackQuota) {
-    els.feedbackQuota.hidden = !feedbackLimitReached;
+    els.feedbackQuota.hidden = activeFeedbackView !== "report" || !feedbackLimitReached;
     els.feedbackQuota.textContent = text("feedbackHitLimit");
   }
   if (els.feedbackSubmit) els.feedbackSubmit.disabled = feedbackBusy || !configured || feedbackLimitReached;
@@ -12390,9 +12644,6 @@ function renderFeedback() {
     els.feedbackStatus.classList.toggle("warning", feedbackNoticeTone === "warning" || (feedbackConfig && !configured));
   }
 
-  if (els.feedbackReviewPanel) {
-    els.feedbackReviewPanel.hidden = !(feedbackConfig?.adminSetupAvailable || feedbackConfig?.adminEnabled);
-  }
   if (els.feedbackAdminSetup) {
     els.feedbackAdminSetup.hidden = !feedbackConfig?.adminSetupAvailable;
   }
@@ -12516,8 +12767,10 @@ function resetFeedbackTurnstile() {
 }
 
 async function loadFeedbackConfig(options = {}) {
-  if (!els.feedbackForm || feedbackConfigBusy) return;
+  if (!els.feedbackForm) return true;
+  if (feedbackConfigBusy) return feedbackConfigLoaded;
   feedbackConfigBusy = true;
+  let succeeded = true;
   if (!options.quiet) {
     feedbackNotice = text("feedbackConnecting");
     feedbackNoticeTone = "";
@@ -12539,15 +12792,18 @@ async function loadFeedbackConfig(options = {}) {
     feedbackNoticeTone = "";
     renderFeedback();
     await renderFeedbackTurnstile();
-    if (feedbackConfig.adminEnabled) await loadFeedbackInbox({ quiet: true });
+    if (feedbackInboxPollingAllowed()) await loadFeedbackInbox({ quiet: true });
   } catch (error) {
+    succeeded = false;
     feedbackConfig = { configured: false, adminEnabled: false, dailyLimit: 10, maxImageBytes: 5 * 1024 * 1024 };
     feedbackNotice = text("feedbackFailed", error.message);
     feedbackNoticeTone = "warning";
     renderFeedback();
   } finally {
     feedbackConfigBusy = false;
+    feedbackConfigLoaded = succeeded;
   }
+  return succeeded;
 }
 
 async function submitFeedback(event) {
@@ -12695,14 +12951,24 @@ function stopFeedbackInboxPolling() {
   feedbackInboxTimer = 0;
 }
 
+function feedbackInboxPollingAllowed() {
+  return Boolean(
+    feedbackConfig?.adminEnabled
+      && isModuleForeground("workspace")
+      && activeConsoleView === "collaboration"
+      && activeFeedbackView === "received"
+      && !collaborationPanelCollapsed(els.feedbackPanel)
+  );
+}
+
 function scheduleFeedbackInboxPolling(delay = 30000) {
   stopFeedbackInboxPolling();
-  if (!feedbackConfig?.adminEnabled || !isModuleForeground("workspace")) return;
+  if (!feedbackInboxPollingAllowed()) return;
   feedbackInboxTimer = window.setTimeout(() => loadFeedbackInbox({ quiet: true }), delay);
 }
 
 async function loadFeedbackInbox(options = {}) {
-  if (!feedbackConfig?.adminEnabled || feedbackInboxBusy) return;
+  if (!feedbackInboxPollingAllowed() || feedbackInboxBusy) return;
   feedbackInboxBusy = true;
   renderFeedbackInbox();
   try {
@@ -13291,7 +13557,10 @@ function setBlenderGithubExpanded(expanded) {
   const isExpanded = Boolean(expanded);
   if (els.blenderGithubBody) els.blenderGithubBody.hidden = !isExpanded;
   if (els.blenderGithubToggle) els.blenderGithubToggle.setAttribute("aria-expanded", String(isExpanded));
-  els.blenderGithubSharePanel?.classList.toggle("collapsed", !isExpanded);
+  if (els.blenderGithubSharePanel) {
+    els.blenderGithubSharePanel.classList.toggle("collapsed", !isExpanded);
+    els.blenderGithubSharePanel.classList.toggle("collaboration-panel-collapsed", !isExpanded);
+  }
 }
 
 function setBlenderGithubBusy(busy, message = "") {
@@ -13362,7 +13631,7 @@ function blenderGithubSameProject(left, right) {
 }
 
 async function loadBlenderGithubShare(options = {}) {
-  if (!hasBlenderGithubShare()) return;
+  if (!hasBlenderGithubShare()) return true;
   const background = Boolean(options.background);
   const sequence = background ? blenderGithubLoadSequence : ++blenderGithubLoadSequence;
   const selectedProject = options.detect
@@ -13415,9 +13684,11 @@ async function loadBlenderGithubShare(options = {}) {
         });
       }, 120);
     }
+    return true;
   } catch (error) {
     if (sequence !== blenderGithubLoadSequence) return;
     if (!background) setBlenderGithubStatus(text("blenderGithubFailed", error.message));
+    return false;
   } finally {
     if (!background && sequence === blenderGithubLoadSequence) {
       setBlenderGithubBusy(false);
@@ -14206,15 +14477,17 @@ function updateRandomRealmTextureActionState() {
 }
 
 async function loadUnityBridgeStatus() {
-  if (!els.unityBridgeStatus) return;
+  if (!els.unityBridgeStatus) return true;
   try {
     const response = await fetch("/api/randomrealm/unity/bridge-status", { cache: "no-store" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     const count = Array.isArray(payload.packages) ? payload.packages.length : 0;
     els.unityBridgeStatus.textContent = payload.message || (count ? `${count} package${count === 1 ? "" : "s"}` : text("unityBridgeReady"));
+    return true;
   } catch (error) {
     els.unityBridgeStatus.textContent = error.message;
+    return false;
   }
 }
 
@@ -14293,6 +14566,7 @@ function updateRandomRealmProjectAddress() {
 
 function selectRandomRealmBlenderProject(projectPath, options = {}) {
   const nextProject = String(projectPath || "");
+  clearRandomRealmTextureDragFileCache();
   for (const select of [els.randomRealmBlenderProject, els.referenceViewProject].filter(Boolean)) {
     if (Array.from(select.options).some(option => option.value === nextProject)) {
       select.value = nextProject;
@@ -14400,6 +14674,7 @@ async function syncRandomRealmLiveSelection(options = {}) {
     }
     els.randomRealmBlenderObject.value = activeName;
     randomRealmArtContext.object = activeName;
+    clearRandomRealmTextureDragFileCache();
     randomRealmSelectedOldTexture = null;
     randomRealmSelectedMaterial = "";
     randomRealmLastLiveObject = activeName;
@@ -14416,10 +14691,26 @@ async function syncRandomRealmLiveSelection(options = {}) {
   }
 }
 
-function stopRandomRealmLiveSelectionPolling() {
-  if (!randomRealmLiveSelectionTimer) return;
-  window.clearTimeout(randomRealmLiveSelectionTimer);
+function stopRandomRealmLiveSelectionPolling(options = {}) {
+  if (randomRealmLiveSelectionTimer) {
+    window.clearTimeout(randomRealmLiveSelectionTimer);
+  }
   randomRealmLiveSelectionTimer = null;
+  if (options.resetBackoff !== false) {
+    randomRealmLiveSelectionFailureCount = 0;
+  }
+}
+
+function randomRealmLiveSelectionPollDelay(succeeded) {
+  if (succeeded) {
+    randomRealmLiveSelectionFailureCount = 0;
+    return randomRealmLiveSelectionSuccessDelayMs;
+  }
+  const delay = randomRealmLiveSelectionFailureDelaysMs[
+    Math.min(randomRealmLiveSelectionFailureCount, randomRealmLiveSelectionFailureDelaysMs.length - 1)
+  ];
+  randomRealmLiveSelectionFailureCount += 1;
+  return delay;
 }
 
 function startRandomRealmLiveSelectionPolling(options = {}) {
@@ -14427,13 +14718,17 @@ function startRandomRealmLiveSelectionPolling(options = {}) {
     stopRandomRealmLiveSelectionPolling();
     return;
   }
+  if (options.immediate) {
+    stopRandomRealmLiveSelectionPolling();
+  }
   if (randomRealmLiveSelectionTimer) return;
   randomRealmLiveSelectionTimer = window.setTimeout(async () => {
     randomRealmLiveSelectionTimer = null;
     if (!isModuleForeground("blender")) return;
-    await syncRandomRealmLiveSelection({ quiet: true });
-    startRandomRealmLiveSelectionPolling();
-  }, options.immediate ? 0 : 1600);
+    const succeeded = await syncRandomRealmLiveSelection({ quiet: true });
+    if (!isModuleForeground("blender")) return;
+    startRandomRealmLiveSelectionPolling({ delay: randomRealmLiveSelectionPollDelay(succeeded) });
+  }, options.immediate ? 0 : Number(options.delay ?? randomRealmLiveSelectionSuccessDelayMs));
 }
 
 function isRandomRealmPreviewableTexture(path) {
@@ -14473,6 +14768,107 @@ function fileUrlFromWindowsPath(path) {
   return `file:///${parts.join("/")}`;
 }
 
+function evictRandomRealmTextureDragFile(path, expectedRecord = null, options = {}) {
+  const record = randomRealmTextureDragFileCache.get(path);
+  if (!record || (expectedRecord && record !== expectedRecord)) return false;
+  randomRealmTextureDragFileCache.delete(path);
+  randomRealmTextureDragCacheBytes = Math.max(0, randomRealmTextureDragCacheBytes - Number(record.size || 0));
+  if (options.abort !== false) {
+    try {
+      record.controller?.abort();
+    } catch {}
+  }
+  return true;
+}
+
+function touchRandomRealmTextureDragFile(path) {
+  const record = randomRealmTextureDragFileCache.get(path);
+  if (!record) return null;
+  randomRealmTextureDragFileCache.delete(path);
+  randomRealmTextureDragFileCache.set(path, record);
+  return record;
+}
+
+function enforceRandomRealmTextureDragCacheLimits() {
+  while (
+    randomRealmTextureDragFileCache.size > randomRealmTextureDragCacheMaxEntries
+    || randomRealmTextureDragCacheBytes > randomRealmTextureDragCacheMaxBytes
+  ) {
+    const oldest = randomRealmTextureDragFileCache.entries().next().value;
+    if (!oldest) break;
+    evictRandomRealmTextureDragFile(oldest[0], oldest[1]);
+  }
+}
+
+function storeRandomRealmTextureDragFile(path, record, file) {
+  if (randomRealmTextureDragFileCache.get(path) !== record || !file) return null;
+  const size = Number(file.size || 0);
+  record.controller = null;
+  if (!Number.isFinite(size) || size < 0 || size > randomRealmTextureDragCacheMaxBytes) {
+    evictRandomRealmTextureDragFile(path, record, { abort: false });
+    return null;
+  }
+  randomRealmTextureDragCacheBytes = Math.max(0, randomRealmTextureDragCacheBytes - Number(record.size || 0));
+  record.file = file;
+  record.size = size;
+  randomRealmTextureDragCacheBytes += size;
+  touchRandomRealmTextureDragFile(path);
+  enforceRandomRealmTextureDragCacheLimits();
+  return randomRealmTextureDragFileCache.get(path) === record ? file : null;
+}
+
+function clearRandomRealmTextureDragFileCache() {
+  for (const record of randomRealmTextureDragFileCache.values()) {
+    try {
+      record.controller?.abort();
+    } catch {}
+  }
+  randomRealmTextureDragFileCache.clear();
+  randomRealmTextureDragCacheBytes = 0;
+}
+
+function cachedRandomRealmTextureDragFile(path) {
+  return touchRandomRealmTextureDragFile(path)?.file || null;
+}
+
+function prepareRandomRealmTextureDragFile(texture) {
+  const path = texture?.path || "";
+  if (!path) return Promise.resolve(null);
+  const existing = touchRandomRealmTextureDragFile(path);
+  if (existing) return existing.promise || Promise.resolve(existing.file);
+
+  const controller = new AbortController();
+  const record = { file: null, size: 0, controller, promise: null };
+  randomRealmTextureDragFileCache.set(path, record);
+  enforceRandomRealmTextureDragCacheLimits();
+  if (randomRealmTextureDragFileCache.get(path) !== record) return Promise.resolve(null);
+
+  record.promise = fetch(randomRealmTextureDragUrl(texture), { signal: controller.signal })
+    .then(response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const contentLength = Number(response.headers.get("content-length") || 0);
+      if (contentLength > randomRealmTextureDragCacheMaxBytes) throw new Error("Texture is too large to cache");
+      return response.blob();
+    })
+    .then(blob => {
+      if (randomRealmTextureDragFileCache.get(path) !== record) return null;
+      if (blob.size > randomRealmTextureDragCacheMaxBytes) {
+        record.controller = null;
+        evictRandomRealmTextureDragFile(path, record, { abort: false });
+        return null;
+      }
+      const file = new File([blob], randomRealmTextureFilename(texture), {
+        type: blob.type || randomRealmTextureMimeType(texture)
+      });
+      return storeRandomRealmTextureDragFile(path, record, file);
+    })
+    .catch(() => {
+      evictRandomRealmTextureDragFile(path, record, { abort: false });
+      return null;
+    });
+  return record.promise;
+}
+
 function attachRandomRealmTextureDragData(event, texture) {
   const path = texture?.path || "";
   if (!path || !event.dataTransfer) return;
@@ -14480,7 +14876,7 @@ function attachRandomRealmTextureDragData(event, texture) {
   const mimeType = randomRealmTextureMimeType(texture);
   const previewUrl = new URL(randomRealmTextureDragUrl(texture), window.location.href).href;
   const fileUrl = fileUrlFromWindowsPath(path);
-  const cachedFile = randomRealmTextureDragFileCache.get(path)?.file;
+  const cachedFile = cachedRandomRealmTextureDragFile(path);
   event.dataTransfer.effectAllowed = "copy";
   if (cachedFile && event.dataTransfer.items?.add) {
     try {
@@ -14493,26 +14889,6 @@ function attachRandomRealmTextureDragData(event, texture) {
   event.dataTransfer.setData("text/uri-list", `${fileUrl}\n${previewUrl}`);
   event.dataTransfer.setData("text/plain", path);
   event.dataTransfer.setData("text/html", `<img src="${previewUrl}" alt="${filename}">`);
-}
-
-function preloadRandomRealmTextureDragFile(texture) {
-  const path = texture?.path || "";
-  if (!path || randomRealmTextureDragFileCache.has(path)) return;
-  const record = { file: null };
-  randomRealmTextureDragFileCache.set(path, record);
-  fetch(randomRealmTextureDragUrl(texture))
-    .then(response => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.blob();
-    })
-    .then(blob => {
-      record.file = new File([blob], randomRealmTextureFilename(texture), {
-        type: blob.type || randomRealmTextureMimeType(texture)
-      });
-    })
-    .catch(() => {
-      randomRealmTextureDragFileCache.delete(path);
-    });
 }
 
 async function openRandomRealmTextureFile(texture) {
@@ -14570,6 +14946,7 @@ function bindRandomRealmNativeTextureDrag(imageEl, texture) {
   imageEl.onpointerdown = event => {
     if (event.button !== 0) return;
     event.preventDefault();
+    void prepareRandomRealmTextureDragFile(texture);
     dragStart = {
       x: event.clientX,
       y: event.clientY,
@@ -14601,17 +14978,25 @@ function renderRandomRealmTexturePreview(imageEl, emptyEl, texture) {
   const path = texture?.path || "";
   const canPreview = Boolean(path && texture?.exists !== false && isRandomRealmPreviewableTexture(path));
   if (canPreview) {
-    preloadRandomRealmTextureDragFile(texture);
     imageEl.onerror = () => {
       imageEl.hidden = true;
       emptyEl.hidden = false;
       emptyEl.textContent = text("randomRealmTexturePreviewUnsupported");
         emptyEl.title = path;
     };
-    imageEl.src = randomRealmTextureDragUrl(texture);
+    imageEl.src = randomRealmTexturePreviewUrl(path);
     imageEl.draggable = false;
     imageEl.dataset.texturePath = path;
-    imageEl.ondragstart = event => attachRandomRealmTextureDragData(event, texture);
+    imageEl.onpointerenter = () => {
+      void prepareRandomRealmTextureDragFile(texture);
+    };
+    imageEl.onfocus = () => {
+      void prepareRandomRealmTextureDragFile(texture);
+    };
+    imageEl.ondragstart = event => {
+      void prepareRandomRealmTextureDragFile(texture);
+      attachRandomRealmTextureDragData(event, texture);
+    };
     imageEl.ondblclick = event => {
       event.preventDefault();
       openRandomRealmTextureFile(texture);
@@ -14623,6 +15008,8 @@ function renderRandomRealmTexturePreview(imageEl, emptyEl, texture) {
     return;
   }
   imageEl.onerror = null;
+  imageEl.onpointerenter = null;
+  imageEl.onfocus = null;
   imageEl.ondragstart = null;
   imageEl.ondblclick = null;
   imageEl.onpointerdown = null;
@@ -15544,6 +15931,7 @@ function openRandomRealmObjectPicker({ selectText = false } = {}) {
 function confirmRandomRealmObjectSelection() {
   const object = selectedRandomRealmObject();
   if (!object) return;
+  clearRandomRealmTextureDragFileCache();
   randomRealmArtContext.object = object.name;
   randomRealmSelectedOldTexture = null;
   randomRealmSelectedMaterial = "";
@@ -15692,7 +16080,7 @@ function clearRandomRealmNewTexture() {
 }
 
 async function loadRandomRealmBlenderProjects(options = {}) {
-  if (!hasRandomRealmArtTools()) return;
+  if (!hasRandomRealmArtTools()) return true;
   const loadObjects = options.loadObjects !== false;
   const query = (els.randomRealmProjectSearch?.value || "").trim();
   const limit = Math.max(0, Math.min(100, Number(options.limit) || 0));
@@ -15712,7 +16100,7 @@ async function loadRandomRealmBlenderProjects(options = {}) {
     }
     if (els.randomRealmBlenderProject.value) {
       if (loadObjects) {
-        await loadRandomRealmBlenderObjects();
+        if ((await loadRandomRealmBlenderObjects()) === false) return false;
       } else {
         randomRealmBlenderObjects = [];
         renderRandomRealmBlenderObjects();
@@ -15722,8 +16110,10 @@ async function loadRandomRealmBlenderProjects(options = {}) {
       renderRandomRealmBlenderObjects();
       setRandomRealmArtStatus(text("randomRealmBlenderNoProject"));
     }
+    return true;
   } catch (error) {
     setRandomRealmArtStatus(text("randomRealmBlenderActionFailed", error.message));
+    return false;
   }
 }
 
@@ -15738,9 +16128,10 @@ function scheduleRandomRealmProjectSearch() {
 }
 
 async function loadRandomRealmBlenderObjects() {
-  if (!hasRandomRealmArtTools()) return;
+  if (!hasRandomRealmArtTools()) return true;
   const project = els.randomRealmBlenderProject.value;
-  if (!project) return;
+  if (!project) return true;
+  clearRandomRealmTextureDragFileCache();
   setRandomRealmArtStatus(text("randomRealmBlenderLoading"));
   randomRealmSelectedOldTexture = null;
   randomRealmSelectedMaterial = "";
@@ -15757,11 +16148,13 @@ async function loadRandomRealmBlenderObjects() {
     if (!synced) {
       setRandomRealmArtStatus(text("randomRealmBlenderObjectLoaded", randomRealmBlenderObjects.length));
     }
+    return true;
   } catch (error) {
     randomRealmBlenderObjects = [];
     randomRealmLoadedObjectsProject = "";
     renderRandomRealmBlenderObjects();
     setRandomRealmArtStatus(text("randomRealmBlenderActionFailed", error.message));
+    return false;
   }
 }
 
@@ -15774,6 +16167,8 @@ async function refreshRandomRealmSelectedObjectTextures() {
     setRandomRealmArtStatus(text("randomRealmBlenderNoObject"));
     return;
   }
+
+  clearRandomRealmTextureDragFileCache();
 
   const previousMaterial = randomRealmSelectedMaterial;
   const previousTextureIdentity = randomRealmTextureIdentity(randomRealmSelectedOldTexture);
@@ -17019,8 +17414,10 @@ async function loadWallpapers() {
       localStorage.removeItem(storageKeys.selectedWallpaper);
     }
     renderWallpapers();
+    return true;
   } catch (error) {
     setStatus(text("loadFailed", error.message));
+    return false;
   }
 }
 
@@ -17045,22 +17442,24 @@ async function loadMusic() {
     renderMusicLibraries();
     scheduleSelectedLyricsPreload(40);
     scheduleMusicLibraryPoll();
+    return true;
   } catch (error) {
     musicNotice = text("musicLoadFailed", error.message);
     renderMusic();
     renderMusicLibraries();
+    return false;
   }
 }
 
 async function loadMaterialCandidates() {
-  if (!hasMaterialWorkspace) return;
+  if (!hasMaterialWorkspace) return true;
   if (!downloadIntakeEnabled) {
     materialCandidates = [];
     selectedMaterialPath = "";
     materialNotice = text("renderTextureDisabled");
     renderTextureNotice = text("renderTextureDisabled");
     renderMaterialImport();
-    return;
+    return true;
   }
   try {
     const response = await fetch("/api/material-import/candidates", { cache: "no-store" });
@@ -17072,9 +17471,11 @@ async function loadMaterialCandidates() {
     }
     materialNotice = "";
     renderMaterialImport(payload);
+    return true;
   } catch (error) {
     materialNotice = text("materialLoadFailed", error.message);
     renderMaterialImport();
+    return false;
   }
 }
 
@@ -17163,9 +17564,12 @@ async function openRandomRealmResource(id, labelKey) {
   for (const button of buttons) button.disabled = true;
 
   try {
-    await postJson("/api/randomrealm/open-resource", { id });
-    setRandomRealmReleaseStatus(text("randomRealmOpened", label));
-    setSteamworkStatus(text("randomRealmOpened", label));
+    const result = await postJson("/api/randomrealm/open-resource", { id });
+    const status = result.existing && result.activated
+      ? text("randomRealmFocused", label)
+      : text("randomRealmOpened", label);
+    setRandomRealmReleaseStatus(status);
+    setSteamworkStatus(status);
   } catch (error) {
     const message = id === "publishToolFolder"
       ? text("steamworkPublishToolMissing")
@@ -18308,7 +18712,7 @@ function renderSteamworkAssets(state) {
 }
 
 async function loadSteamworkAssets() {
-  if (!hasSteamwork || !els.steamworkAssetList) return;
+  if (!hasSteamwork || !els.steamworkAssetList) return true;
   setSteamworkAssetSummaryText(text("steamworkAssetLoading"));
   setSteamworkAssetRoot("");
   try {
@@ -18317,11 +18721,13 @@ async function loadSteamworkAssets() {
     if (!response.ok) throw new Error(state.error || `HTTP ${response.status}`);
     renderSteamworkAssets(state);
     setSteamworkStatus(text("steamworkAssetSource", state.root || "D:\\ArtAsset"));
+    return true;
   } catch (error) {
     const message = text("steamworkAssetLoadFailed", error.message);
     setSteamworkStatus(message);
     setSteamworkAssetRoot("D:\\ArtAsset");
     setSteamworkAssetSummaryText(message);
+    return false;
   }
 }
 
@@ -18661,20 +19067,7 @@ for (const button of document.querySelectorAll("[data-console-view-target]")) {
     setConsoleWorkspaceView(next?.dataset.consoleViewTarget);
   });
 }
-for (const button of document.querySelectorAll("[data-collaboration-view-target]")) {
-  button.addEventListener("click", () => setCollaborationWorkspaceView(button.dataset.collaborationViewTarget));
-  button.addEventListener("keydown", event => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    const buttons = Array.from(document.querySelectorAll("[data-collaboration-view-target]"));
-    const currentIndex = buttons.indexOf(button);
-    if (currentIndex < 0) return;
-    event.preventDefault();
-    const direction = event.key === "ArrowRight" ? 1 : -1;
-    const next = buttons[(currentIndex + direction + buttons.length) % buttons.length];
-    next?.focus();
-    setCollaborationWorkspaceView(next?.dataset.collaborationViewTarget);
-  });
-}
+bindCollaborationPanelCollapse();
 for (const button of document.querySelectorAll("[data-blender-view-target]")) {
   button.addEventListener("click", () => setBlenderWorkspaceView(button.dataset.blenderViewTarget));
   button.addEventListener("keydown", event => {
@@ -18707,15 +19100,6 @@ for (const trigger of document.querySelectorAll("[data-blender-helper-jump]")) {
 }
 if (els.blenderGithubToggle) {
   setBlenderGithubExpanded(true);
-  els.blenderGithubToggle.addEventListener("dblclick", event => {
-    event.preventDefault();
-    setBlenderGithubExpanded(els.blenderGithubToggle.getAttribute("aria-expanded") !== "true");
-  });
-  els.blenderGithubToggle.addEventListener("keydown", event => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    setBlenderGithubExpanded(els.blenderGithubToggle.getAttribute("aria-expanded") !== "true");
-  });
 }
 if (els.blenderGithubAdd) {
   els.blenderGithubAdd.addEventListener("click", addBlenderGithubProject);
@@ -19026,6 +19410,7 @@ if (els.randomRealmObjectSearch) {
 }
 if (els.randomRealmBlenderObject) {
   els.randomRealmBlenderObject.addEventListener("change", () => {
+    clearRandomRealmTextureDragFileCache();
     randomRealmSelectedOldTexture = null;
     randomRealmSelectedMaterial = "";
     randomRealmAddMapMode = false;
@@ -19210,6 +19595,9 @@ if (els.builtinMediaWallpapersSync) {
 if (els.feedbackForm) {
   els.feedbackForm.addEventListener("submit", submitFeedback);
 }
+if (els.feedbackViewSelect) {
+  els.feedbackViewSelect.addEventListener("change", () => setFeedbackWorkspaceView(els.feedbackViewSelect.value));
+}
 if (els.feedbackScreenshotButton) {
   els.feedbackScreenshotButton.addEventListener("click", () => els.feedbackScreenshotInput?.click());
 }
@@ -19299,8 +19687,5 @@ restoreInitialModuleUrl();
 renderRandomRealmArtContext();
 runtimeActivityReady = true;
 syncRuntimeActivity({ resume: true });
-loadProductUpdateStatuses({ check: true, quiet: true });
-loadDesktopLayout({ quiet: true });
-loadBuiltinMedia({ quiet: true });
-loadFeedbackConfig({ quiet: true });
+scheduleProductUpdateStatusCheck();
 scheduleClockTick();

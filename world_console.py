@@ -11,7 +11,9 @@ import ipaddress
 import json
 import math
 import mimetypes
+import mmap
 import os
+import queue
 import re
 import shutil
 import socket
@@ -43,6 +45,7 @@ from feedback_service import FeedbackService, FeedbackServiceError
 from app_uninstall import AppUninstallService
 from console_window_session import ConsoleWindowSessionService
 from download_map import DownloadMapService
+from external_app_launcher import launch_or_focus_executable
 from reference_views import ReferenceViewSetService
 
 
@@ -584,12 +587,66 @@ MAX_REFERENCE_VIEW_UPLOAD_BYTES = 64 * 1024 * 1024
 MAX_REFERENCE_VIEW_REQUEST_BYTES = 256 * 1024
 MAX_REFERENCE_VIEW_TRANSACTION_BYTES = (6 * MAX_REFERENCE_VIEW_UPLOAD_BYTES) + MAX_REFERENCE_VIEW_REQUEST_BYTES
 MAX_FEEDBACK_REQUEST_BYTES = 18 * 1024 * 1024
+MAX_JSON_REQUEST_BYTES = 1024 * 1024
+FILE_RESPONSE_CHUNK_BYTES = 256 * 1024
+MULTIPART_READ_CHUNK_BYTES = 256 * 1024
+MAX_MULTIPART_HEADER_BYTES = 64 * 1024
+MAX_MULTIPART_PARTS = 512
+MAX_MULTIPART_FILES = 256
+MAX_MULTIPART_IN_MEMORY_BYTES = 2 * 1024 * 1024
+MAX_CONCURRENT_MULTIPART_UPLOADS = 4
+MAX_MULTIPART_SPOOL_BYTES = 2 * 1024 * 1024 * 1024
+MIN_MULTIPART_TEMP_FREE_BYTES = 512 * 1024 * 1024
+HTTP_CONNECTION_IDLE_TIMEOUT_SECONDS = 30
+MAX_HTTP_REQUEST_THREADS = 64
+MAX_TEXTURE_ARCHIVE_MEMBERS = 2048
+MAX_TEXTURE_ARCHIVE_FILE_BYTES = 512 * 1024 * 1024
+MAX_TEXTURE_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024
+MAX_TEXTURE_ARCHIVE_COMPRESSION_RATIO = 500
 GOOGLE_TRANSLATE_ENDPOINT = "https://translation.googleapis.com/language/translate/v2"
 TRANSLATION_TARGET = "zh-TW"
 MUSIC_LIBRARY_LOCK = threading.Lock()
+CONSOLE_STATE_LOCK = threading.RLock()
+MUSIC_STATE_LOCK = threading.RLock()
+MUSIC_LYRIC_MARKS_LOCK = threading.RLock()
+MUSIC_LIBRARY_IMPORT_SCHEDULER_LOCK = threading.Lock()
+MUSIC_LIBRARY_IMPORT_SCHEDULER = None
+MUSIC_LIBRARY_MAX_WORKERS = 2
+MUSIC_LIBRARY_MAX_PENDING = 8
+MUSIC_LIBRARY_MAX_PLAYLIST_ENTRIES = 500
 BLENDER_MUTATION_LOCK = threading.Lock()
 BLENDER_MUTATION_KEYS = {}
 BLENDER_MUTATION_TTL_SECONDS = 8
+
+
+def atomic_write_json(path, payload):
+    """Replace one JSON file through a unique temporary file beside it."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+            descriptor = -1
+            json.dump(payload, output, ensure_ascii=False, indent=2)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            if descriptor >= 0:
+                os.close(descriptor)
+        finally:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
 NEWS_FEEDS = [
     ("BBC World", "https://feeds.bbci.co.uk/news/world/rss.xml"),
@@ -857,21 +914,474 @@ FALLBACK_EVENTS = [
 ]
 
 
+class RequestBodyError(ValueError):
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.status = int(status)
+
+
+class MultipartSpoolReservation:
+    def __init__(self, budget, length):
+        self._budget = budget
+        self.length = int(length)
+        self._released = False
+        self._lock = threading.Lock()
+
+    def release(self):
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        self._budget._release(self.length)
+
+
+class MultipartSpoolBudget:
+    """Non-blocking process-wide limits for temporary multipart request bodies."""
+
+    def __init__(self, max_concurrent, max_bytes, min_free_bytes):
+        self.max_concurrent = max(1, int(max_concurrent))
+        self.max_bytes = max(1, int(max_bytes))
+        self.min_free_bytes = max(0, int(min_free_bytes))
+        self._slots = threading.BoundedSemaphore(self.max_concurrent)
+        self._lock = threading.Lock()
+        self._reserved_bytes = 0
+        self._active_count = 0
+
+    def acquire(self, length, temp_directory):
+        length = int(length)
+        if length <= 0:
+            raise RequestBodyError("multipart spool reservation must be positive.")
+        if length > self.max_bytes:
+            raise RequestBodyError(
+                "multipart temporary storage budget is too small for this request.",
+                status=503,
+            )
+        if not self._slots.acquire(blocking=False):
+            raise RequestBodyError(
+                "too many uploads are already in progress; retry shortly.",
+                status=503,
+            )
+        try:
+            with self._lock:
+                if self._reserved_bytes + length > self.max_bytes:
+                    raise RequestBodyError(
+                        "temporary upload storage is busy; retry shortly.",
+                        status=503,
+                    )
+                try:
+                    free_bytes = shutil.disk_usage(temp_directory).free
+                except OSError:
+                    free_bytes = None
+                if free_bytes is not None and free_bytes < length + self.min_free_bytes:
+                    raise RequestBodyError(
+                        "not enough temporary disk space is available for this upload.",
+                        status=507,
+                    )
+                self._reserved_bytes += length
+                self._active_count += 1
+        except Exception:
+            self._slots.release()
+            raise
+        return MultipartSpoolReservation(self, length)
+
+    def _release(self, length):
+        with self._lock:
+            self._reserved_bytes = max(0, self._reserved_bytes - int(length))
+            self._active_count = max(0, self._active_count - 1)
+        self._slots.release()
+
+    @property
+    def reserved_bytes(self):
+        with self._lock:
+            return self._reserved_bytes
+
+    @property
+    def active_count(self):
+        with self._lock:
+            return self._active_count
+
+
+MULTIPART_SPOOL_BUDGET = MultipartSpoolBudget(
+    MAX_CONCURRENT_MULTIPART_UPLOADS,
+    MAX_MULTIPART_SPOOL_BYTES,
+    MIN_MULTIPART_TEMP_FREE_BYTES,
+)
+
+
+class MultipartFileReader:
+    """Seekable, bounded view over one file part in a temporary request body."""
+
+    def __init__(self, path, offset, length):
+        self._source = Path(path).open("rb")
+        self._offset = int(offset)
+        self._length = int(length)
+        self._position = 0
+        self._source.seek(self._offset)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    @property
+    def closed(self):
+        return self._source.closed
+
+    def close(self):
+        self._source.close()
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self._position
+
+    def seek(self, offset, whence=os.SEEK_SET):
+        if whence == os.SEEK_SET:
+            position = int(offset)
+        elif whence == os.SEEK_CUR:
+            position = self._position + int(offset)
+        elif whence == os.SEEK_END:
+            position = self._length + int(offset)
+        else:
+            raise ValueError("invalid seek origin")
+        if position < 0:
+            raise ValueError("negative seek position")
+        self._position = min(position, self._length)
+        self._source.seek(self._offset + self._position)
+        return self._position
+
+    def read(self, size=-1):
+        remaining = self._length - self._position
+        if remaining <= 0:
+            return b""
+        requested = remaining if size is None or int(size) < 0 else min(int(size), remaining)
+        data = self._source.read(requested)
+        self._position += len(data)
+        return data
+
+
+class MultipartFileData:
+    """Temp-backed upload data without materializing the whole file in memory."""
+
+    def __init__(self, path, offset, length):
+        self.path = Path(path)
+        self.offset = int(offset)
+        self.size = int(length)
+
+    def __bool__(self):
+        return self.size > 0
+
+    def __len__(self):
+        return self.size
+
+    def open(self):
+        return MultipartFileReader(self.path, self.offset, self.size)
+
+
+def uploaded_data_size(data):
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        return len(data)
+    size = getattr(data, "size", None)
+    if isinstance(size, int) and size >= 0:
+        return size
+    raise ValueError("uploaded file data is invalid")
+
+
+def open_uploaded_data(data):
+    if isinstance(data, (bytes, bytearray, memoryview)):
+        return io.BytesIO(bytes(data))
+    opener = getattr(data, "open", None)
+    if callable(opener):
+        return opener()
+    raise ValueError("uploaded file data is invalid")
+
+
+def uploaded_data_bytes(data, max_bytes=None):
+    size = uploaded_data_size(data)
+    if max_bytes is not None and size > int(max_bytes):
+        raise ValueError(f"uploaded file is too large (maximum {int(max_bytes)} bytes)")
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, (bytearray, memoryview)):
+        return bytes(data)
+    with open_uploaded_data(data) as source:
+        payload = source.read(size + 1)
+    if len(payload) != size:
+        raise ValueError("uploaded file data ended unexpectedly")
+    return payload
+
+
+def write_uploaded_data(path, data):
+    path = Path(path)
+    with open_uploaded_data(data) as source, path.open("wb") as destination:
+        remaining = uploaded_data_size(data)
+        while remaining > 0:
+            chunk = source.read(min(MULTIPART_READ_CHUNK_BYTES, remaining))
+            if not chunk:
+                raise ValueError("uploaded file data ended unexpectedly")
+            destination.write(chunk)
+            remaining -= len(chunk)
+
+
+_PRIVATE_REQUEST_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def _normalize_http_hostname(value):
+    hostname = str(value or "").strip()
+    if not hostname or any(character.isspace() for character in hostname):
+        return ""
+
+    address_text = hostname
+    scope = ""
+    if ":" in hostname and "%" in hostname:
+        address_text, scope = hostname.split("%", 1)
+    try:
+        normalized = ipaddress.ip_address(address_text).compressed.casefold()
+        return f"{normalized}%{scope.casefold()}" if scope else normalized
+    except ValueError:
+        pass
+
+    hostname = hostname.rstrip(".")
+    if not hostname or any(character in hostname for character in "/\\@[]"):
+        return ""
+    try:
+        return hostname.encode("idna").decode("ascii").casefold()
+    except UnicodeError:
+        return ""
+
+
+def _discover_local_request_hostnames():
+    candidates = {"localhost", os.environ.get("COMPUTERNAME", "")}
+    for getter in (socket.gethostname, socket.getfqdn):
+        try:
+            candidates.add(getter())
+        except OSError:
+            continue
+    for candidate in tuple(candidates):
+        clean = str(candidate or "").strip().rstrip(".")
+        if clean and "." not in clean:
+            candidates.add(f"{clean}.local")
+    return frozenset(
+        normalized
+        for candidate in candidates
+        if (normalized := _normalize_http_hostname(candidate))
+    )
+
+
+TRUSTED_LOCAL_REQUEST_HOSTNAMES = _discover_local_request_hostnames()
+
+
+def _parse_http_authority(value, default_port):
+    authority = str(value or "").strip()
+    if (
+        not authority
+        or "," in authority
+        or any(character.isspace() for character in authority)
+    ):
+        return None
+
+    # Be liberal for command-line clients that send an unbracketed IPv6 literal
+    # without a port. RFC-compliant Host headers with ports remain bracketed.
+    direct_hostname = _normalize_http_hostname(authority)
+    try:
+        direct_address = ipaddress.ip_address(authority.split("%", 1)[0])
+    except ValueError:
+        direct_address = None
+    if direct_address is not None and direct_hostname:
+        return direct_hostname, int(default_port)
+
+    try:
+        parsed = urllib.parse.urlsplit(f"//{authority}")
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    hostname = _normalize_http_hostname(parsed.hostname)
+    if not hostname:
+        return None
+    return hostname, int(port if port is not None else default_port)
+
+
+def _is_trusted_request_host(value):
+    authority = _parse_http_authority(value, 80)
+    if not authority:
+        return False
+    hostname, _ = authority
+    address_text = hostname.split("%", 1)[0]
+    try:
+        address = ipaddress.ip_address(address_text)
+    except ValueError:
+        return hostname in TRUSTED_LOCAL_REQUEST_HOSTNAMES
+    if getattr(address, "ipv4_mapped", None):
+        address = address.ipv4_mapped
+    if address.is_unspecified or address.is_multicast:
+        return False
+    return (
+        address.is_loopback
+        or address.is_link_local
+        or any(address.version == network.version and address in network for network in _PRIVATE_REQUEST_NETWORKS)
+    )
+
+
+def _client_address_is_loopback(value):
+    try:
+        address = ipaddress.ip_address(str(value or "").split("%", 1)[0])
+    except ValueError:
+        return False
+    if getattr(address, "ipv4_mapped", None):
+        address = address.ipv4_mapped
+    return address.is_loopback
+
+
+def _origin_matches_host(origin, host, request_scheme="http"):
+    scheme = str(request_scheme or "http").strip().casefold()
+    if scheme not in {"http", "https"}:
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(str(origin or "").strip())
+        origin_port = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme.casefold() != scheme
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+
+    default_port = 443 if scheme == "https" else 80
+    host_authority = _parse_http_authority(host, default_port)
+    origin_hostname = _normalize_http_hostname(parsed.hostname)
+    if not host_authority or not origin_hostname:
+        return False
+    return host_authority == (
+        origin_hostname,
+        int(origin_port if origin_port is not None else default_port),
+    )
+
+
+class ConsoleHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTP server with bounded request threads and idle reads."""
+
+    daemon_threads = True
+
+    def __init__(
+        self,
+        server_address,
+        request_handler_class,
+        *,
+        max_request_threads=MAX_HTTP_REQUEST_THREADS,
+        connection_idle_timeout=HTTP_CONNECTION_IDLE_TIMEOUT_SECONDS,
+        bind_and_activate=True,
+    ):
+        max_request_threads = int(max_request_threads)
+        connection_idle_timeout = float(connection_idle_timeout)
+        if max_request_threads <= 0:
+            raise ValueError("max_request_threads must be positive")
+        if connection_idle_timeout <= 0:
+            raise ValueError("connection_idle_timeout must be positive")
+        self.max_request_threads = max_request_threads
+        self.connection_idle_timeout = connection_idle_timeout
+        self._request_slots = threading.BoundedSemaphore(max_request_threads)
+        super().__init__(
+            server_address,
+            request_handler_class,
+            bind_and_activate=bind_and_activate,
+        )
+
+    def get_request(self):
+        request, client_address = super().get_request()
+        request.settimeout(self.connection_idle_timeout)
+        return request, client_address
+
+    def process_request(self, request, client_address):
+        if not self._request_slots.acquire(blocking=False):
+            self._close_overloaded_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            self.shutdown_request(request)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+    def _close_overloaded_request(self, request):
+        try:
+            request.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        finally:
+            self.shutdown_request(request)
+
+
 class ConsoleHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(APP_DIR), **kwargs)
 
     def require_local_request(self):
-        try:
-            address = ipaddress.ip_address(str(self.client_address[0]).split("%", 1)[0])
-            if getattr(address, "ipv4_mapped", None):
-                address = address.ipv4_mapped
-            allowed = address.is_loopback
-        except ValueError:
-            allowed = False
+        allowed = _client_address_is_loopback(self.client_address[0])
         if not allowed:
             self.send_json({"error": "This action is available on this PC only."}, status=403)
         return allowed
+
+    def require_trusted_post_context(self):
+        hosts = self.headers.get_all("Host", [])
+        if len(hosts) != 1 or not _is_trusted_request_host(hosts[0]):
+            self.send_json({"error": "POST Host is not trusted for this PC or LAN."}, status=403)
+            return False
+
+        fetch_sites = self.headers.get_all("Sec-Fetch-Site", [])
+        if any(
+            item.strip().casefold() == "cross-site"
+            for value in fetch_sites
+            for item in value.split(",")
+        ):
+            self.send_json({"error": "Cross-site POST requests are not allowed."}, status=403)
+            return False
+
+        origins = self.headers.get_all("Origin", [])
+        if not origins:
+            # Preserve compatibility with same-machine scripts and native tools.
+            if _client_address_is_loopback(self.client_address[0]):
+                return True
+            self.send_json({"error": "LAN POST requests must include a same-origin Origin."}, status=403)
+            return False
+        request_scheme = "https" if callable(getattr(self.connection, "cipher", None)) else "http"
+        if (
+            len(origins) != 1
+            or not _origin_matches_host(origins[0], hosts[0], request_scheme)
+        ):
+            self.send_json({"error": "POST Origin must match the request Host."}, status=403)
+            return False
+        return True
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -1166,6 +1676,14 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        try:
+            self._dispatch_POST()
+        finally:
+            self._cleanup_multipart_temp_files()
+
+    def _dispatch_POST(self):
+        if not self.require_trusted_post_context():
+            return
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path.startswith("/api/reference-views/") and not self.require_local_request():
             return
@@ -1232,7 +1750,13 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if not self.require_local_request():
                     return
                 self.send_json(DESKTOP_LAYOUT.import_layouts(
-                    self.read_multipart_files(MAX_DESKTOP_LAYOUT_UPLOAD_BYTES)
+                    [
+                        {
+                            "filename": item.get("filename", ""),
+                            "data": uploaded_data_bytes(item.get("data", b""), MAX_DESKTOP_LAYOUT_UPLOAD_BYTES),
+                        }
+                        for item in self.read_multipart_files(MAX_DESKTOP_LAYOUT_UPLOAD_BYTES)
+                    ]
                 ))
                 return
             if parsed.path.startswith("/api/steamwork/assets/stage/"):
@@ -1240,7 +1764,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 self.send_json(stage_steamwork_asset_files(requirement_id, self.read_multipart_files(MAX_STEAMWORK_UPLOAD_BYTES)))
                 return
 
-            request_limit = None
+            request_limit = MAX_JSON_REQUEST_BYTES
             if parsed.path == "/api/feedback/submit":
                 request_limit = MAX_FEEDBACK_REQUEST_BYTES
             elif parsed.path.startswith("/api/reference-views/"):
@@ -1495,6 +2019,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     return
                 self.send_json(DESKTOP_LAYOUT.save(payload))
                 return
+            if parsed.path == "/api/console/desktop-layout/refresh":
+                if not self.require_local_request():
+                    return
+                self.send_json(DESKTOP_LAYOUT.refresh_history(payload))
+                return
             if parsed.path == "/api/console/desktop-layout/restore":
                 if not self.require_local_request():
                     return
@@ -1506,6 +2035,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/startup/install":
                 self.send_json(install_startup_listener())
                 return
+        except RequestBodyError as error:
+            self.send_json({"error": str(error)}, status=error.status)
+            return
         except FeedbackServiceError as error:
             self.send_json(error.payload(), status=error.status)
             return
@@ -1530,12 +2062,21 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             immutable_suffixes = {
                 ".css", ".js", ".ico", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".woff", ".woff2"
             }
-            if versioned and suffix in immutable_suffixes:
+            deployed_install = APP_INSTALL_MODE in {"installed", "portable", "store"}
+            if deployed_install and versioned and suffix in immutable_suffixes:
                 self.send_header("Cache-Control", "public, max-age=31536000, immutable")
             elif parsed.path.startswith("/api/") or suffix in {".html", ".htm"} or parsed.path in CONSOLE_PAGE_PATHS:
                 self.send_header("Cache-Control", "no-store")
             else:
                 self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Permissions-Policy",
+            "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+        )
+        self.send_header("X-Permitted-Cross-Domain-Policies", "none")
         super().end_headers()
 
     def log_message(self, fmt, *args):
@@ -1565,19 +2106,40 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def send_file_response(self, path, content_type, filename=None):
         try:
-            body = path.read_bytes()
+            source = Path(path).open("rb")
         except OSError:
             self.send_json({"error": "not found"}, status=404)
             return
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        if filename:
-            safe_filename = str(filename).replace('"', "")
-            self.send_header("Content-Disposition", f'inline; filename="{safe_filename}"')
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+
+        with source:
+            try:
+                file_size = os.fstat(source.fileno()).st_size
+            except OSError:
+                self.send_json({"error": "not found"}, status=404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            if filename:
+                safe_filename = (
+                    str(filename)
+                    .replace('"', "")
+                    .replace("\r", "")
+                    .replace("\n", "")
+                )
+                self.send_header("Content-Disposition", f'inline; filename="{safe_filename}"')
+            self.send_header("Content-Length", str(file_size))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                remaining = file_size
+                while remaining > 0:
+                    chunk = source.read(min(FILE_RESPONSE_CHUNK_BYTES, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            except (OSError, BrokenPipeError, ConnectionResetError):
+                return
 
     def send_ranged_file_response(self, path, content_type):
         try:
@@ -1652,121 +2214,387 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             return
         self.send_ranged_file_response(path, self.guess_type(str(path)) or "application/octet-stream")
 
-    def read_json_body(self, max_bytes=None):
-        length = int(self.headers.get("Content-Length", "0") or 0)
-        if length <= 0:
+    def read_json_body(self, max_bytes=MAX_JSON_REQUEST_BYTES):
+        if self.headers.get("Transfer-Encoding"):
+            raise RequestBodyError(
+                "Transfer-Encoding is not supported; send Content-Length instead.",
+                status=400,
+            )
+        content_lengths = self.headers.get_all("Content-Length", [])
+        if not content_lengths:
+            raise RequestBodyError(
+                "Content-Length is required for JSON POST requests.",
+                status=411,
+            )
+        if len(content_lengths) != 1:
+            raise RequestBodyError("Content-Length must be sent exactly once.", status=400)
+        raw_length = content_lengths[0].strip()
+        if len(raw_length) > 20 or not re.fullmatch(r"\d+", raw_length):
+            raise RequestBodyError(
+                "Content-Length must be a non-negative decimal integer.",
+                status=400,
+            )
+        length = int(raw_length)
+        if length == 0:
             return {}
         if max_bytes is not None and length > max_bytes:
-            raise FeedbackServiceError("Feedback request is too large.", status=413)
-        body = self.rfile.read(length).decode("utf-8")
+            raise RequestBodyError(
+                f"JSON request body is too large (maximum {int(max_bytes)} bytes).",
+                status=413,
+            )
+        body = self.rfile.read(length)
+        if len(body) != length:
+            raise RequestBodyError("JSON request body ended before Content-Length bytes were received.")
         try:
-            return json.loads(body)
+            text = body.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise RequestBodyError("JSON request body must use UTF-8.") from error
+        try:
+            return json.loads(text)
         except json.JSONDecodeError as error:
-            raise ValueError("invalid json body") from error
+            raise RequestBodyError("JSON request body is invalid.") from error
+
+    def _multipart_headers(self, max_bytes, empty_message, too_large_message):
+        if self.headers.get_all("Transfer-Encoding", []):
+            raise RequestBodyError(
+                "Transfer-Encoding is not supported; send Content-Length instead.",
+                status=400,
+            )
+        content_types = self.headers.get_all("Content-Type", [])
+        if len(content_types) != 1:
+            raise RequestBodyError("Content-Type must be sent exactly once.", status=400)
+        content_type_parts = [part.strip() for part in content_types[0].split(";")]
+        if not content_type_parts or content_type_parts[0].casefold() != "multipart/form-data":
+            raise RequestBodyError("Content-Type must be multipart/form-data.", status=400)
+        parameters = {}
+        for raw_parameter in content_type_parts[1:]:
+            name, separator, value = raw_parameter.partition("=")
+            name = name.strip().casefold()
+            if not separator or not name or name in parameters:
+                raise RequestBodyError("multipart Content-Type parameters are invalid or duplicated.", status=400)
+            value = value.strip()
+            if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+            elif '"' in value:
+                raise RequestBodyError("multipart boundary quoting is invalid.", status=400)
+            parameters[name] = value
+        boundary_text = parameters.get("boundary", "")
+        if (
+            not boundary_text
+            or len(boundary_text) > 70
+            or not re.fullmatch(r"[0-9A-Za-z'()+_,./:=?-]+", boundary_text)
+        ):
+            raise RequestBodyError("missing or invalid multipart boundary.", status=400)
+
+        content_lengths = self.headers.get_all("Content-Length", [])
+        if not content_lengths:
+            raise RequestBodyError("Content-Length is required for multipart POST requests.", status=411)
+        if len(content_lengths) != 1:
+            raise RequestBodyError("Content-Length must be sent exactly once.", status=400)
+        raw_length = content_lengths[0].strip()
+        if len(raw_length) > 20 or not re.fullmatch(r"\d+", raw_length):
+            raise RequestBodyError(
+                "Content-Length must be a non-negative decimal integer.",
+                status=400,
+            )
+        length = int(raw_length)
+        if length <= 0:
+            raise RequestBodyError(empty_message, status=400)
+        if max_bytes is not None and length > int(max_bytes):
+            raise RequestBodyError(
+                f"{too_large_message} (maximum {int(max_bytes)} bytes).",
+                status=413,
+            )
+        return b"--" + boundary_text.encode("ascii"), length
+
+    def _register_multipart_temp_file(self, path, reservation=None):
+        path = Path(path)
+        paths = getattr(self, "_multipart_temp_files", None)
+        if paths is None:
+            paths = []
+            self._multipart_temp_files = paths
+        paths.append(path)
+        if reservation is not None:
+            reservations = getattr(self, "_multipart_temp_reservations", None)
+            if reservations is None:
+                reservations = {}
+                self._multipart_temp_reservations = reservations
+            reservations[path] = reservation
+
+    def _discard_multipart_temp_file(self, path):
+        path = Path(path)
+        paths = getattr(self, "_multipart_temp_files", [])
+        try:
+            paths.remove(path)
+        except ValueError:
+            pass
+        reservations = getattr(self, "_multipart_temp_reservations", {})
+        reservation = reservations.pop(path, None)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        finally:
+            if reservation is not None:
+                reservation.release()
+
+    def _cleanup_multipart_temp_files(self):
+        paths = getattr(self, "_multipart_temp_files", [])
+        reservations = getattr(self, "_multipart_temp_reservations", {})
+        self._multipart_temp_files = []
+        self._multipart_temp_reservations = {}
+        for path in paths:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            finally:
+                reservation = reservations.pop(Path(path), None)
+                if reservation is not None:
+                    reservation.release()
+        for reservation in reservations.values():
+            reservation.release()
+
+    def _spool_multipart_body(self, boundary, length):
+        temp_directory = Path(tempfile.gettempdir())
+        reservation = MULTIPART_SPOOL_BUDGET.acquire(length, temp_directory)
+        descriptor = -1
+        path = None
+        registered = False
+        try:
+            descriptor, raw_path = tempfile.mkstemp(
+                prefix="codex-console-multipart-",
+                suffix=".upload",
+                dir=str(temp_directory),
+            )
+            path = Path(raw_path)
+            self._register_multipart_temp_file(path, reservation)
+            registered = True
+            with os.fdopen(descriptor, "wb") as destination:
+                descriptor = -1
+                remaining = length
+                while remaining > 0:
+                    requested = min(MULTIPART_READ_CHUNK_BYTES, remaining)
+                    chunk = self.rfile.read(requested)
+                    if not chunk:
+                        raise RequestBodyError(
+                            "multipart request body ended before Content-Length bytes were received.",
+                            status=400,
+                        )
+                    if len(chunk) > requested:
+                        raise RequestBodyError("multipart request reader returned too many bytes.", status=400)
+                    destination.write(chunk)
+                    remaining -= len(chunk)
+            return path
+        except Exception:
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if registered:
+                self._discard_multipart_temp_file(path)
+            else:
+                if path is not None:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                reservation.release()
+            raise
+
+    @staticmethod
+    def _next_multipart_delimiter(body, marker, start):
+        search_at = start
+        while True:
+            position = body.find(marker, search_at)
+            if position < 0:
+                return -1, -1, False
+            suffix_at = position + len(marker)
+            suffix = body[suffix_at:suffix_at + 2]
+            if suffix == b"--":
+                return position, suffix_at + 2, True
+            if suffix == b"\r\n":
+                return position, suffix_at + 2, False
+            search_at = position + 1
+
+    def _parse_multipart_body(self, path, boundary, *, max_file_bytes, max_field_bytes):
+        parts = []
+        with Path(path).open("rb") as source:
+            with mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ) as body:
+                body_length = len(body)
+                if body[:len(boundary)] != boundary:
+                    raise RequestBodyError("multipart body does not start with its declared boundary.")
+                cursor = len(boundary)
+                if body[cursor:cursor + 2] == b"--":
+                    cursor += 2
+                    if body[cursor:cursor + 2] == b"\r\n":
+                        cursor += 2
+                    if cursor != body_length:
+                        raise RequestBodyError("multipart body contains data after its closing boundary.")
+                    return parts
+                if body[cursor:cursor + 2] != b"\r\n":
+                    raise RequestBodyError("multipart opening boundary is malformed.")
+                cursor += 2
+                marker = b"\r\n" + boundary
+                in_memory_remaining = MAX_MULTIPART_IN_MEMORY_BYTES
+                field_memory_remaining = int(max_field_bytes)
+
+                while True:
+                    if len(parts) >= MAX_MULTIPART_PARTS:
+                        raise RequestBodyError(
+                            f"multipart request contains too many parts (maximum {MAX_MULTIPART_PARTS}).",
+                            status=413,
+                        )
+                    header_end = body.find(b"\r\n\r\n", cursor)
+                    if header_end < 0 or header_end - cursor > MAX_MULTIPART_HEADER_BYTES:
+                        raise RequestBodyError("multipart part headers are missing or too large.")
+                    header_blob = bytes(body[cursor:header_end])
+                    header_values = {}
+                    for line in header_blob.split(b"\r\n"):
+                        name_blob, separator, value_blob = line.partition(b":")
+                        if not separator or not name_blob or name_blob[:1] in b" \t":
+                            raise RequestBodyError("multipart part contains an invalid header.")
+                        try:
+                            name = name_blob.decode("ascii").strip().casefold()
+                        except UnicodeDecodeError as error:
+                            raise RequestBodyError("multipart part header names must use ASCII.") from error
+                        if not re.fullmatch(r"[a-z0-9!#$%&'*+.^_`|~-]+", name) or name in header_values:
+                            raise RequestBodyError("multipart part headers are invalid or duplicated.")
+                        header_values[name] = value_blob.decode("utf-8", errors="replace").strip()
+
+                    disposition = header_values.get("content-disposition", "")
+                    if not re.match(r"^form-data(?:\s*;|$)", disposition, re.IGNORECASE):
+                        raise RequestBodyError("multipart part is missing a form-data disposition.")
+                    name_matches = re.findall(r'(?:^|;)\s*name="([^"]+)"', disposition, re.IGNORECASE)
+                    if len(name_matches) != 1 or not name_matches[0].strip():
+                        raise RequestBodyError("multipart form part is missing a unique name.")
+                    filename_matches = re.findall(r'(?:^|;)\s*filename="([^"]*)"', disposition, re.IGNORECASE)
+                    if len(filename_matches) > 1:
+                        raise RequestBodyError("multipart form filename is duplicated.")
+
+                    data_start = header_end + 4
+                    delimiter_at, next_cursor, is_final = self._next_multipart_delimiter(body, marker, data_start)
+                    if delimiter_at < 0:
+                        raise RequestBodyError("multipart body is missing its closing boundary.")
+                    data_length = delimiter_at - data_start
+                    name = name_matches[0].strip()
+                    filename = filename_matches[0].strip() if filename_matches else None
+                    if filename is not None:
+                        if not filename:
+                            raise RequestBodyError("multipart upload filename is empty.")
+                        if max_file_bytes is not None and data_length > int(max_file_bytes):
+                            raise RequestBodyError(
+                                f"multipart file is too large (maximum {int(max_file_bytes)} bytes).",
+                                status=413,
+                            )
+                        if data_length <= in_memory_remaining:
+                            data = bytes(body[data_start:delimiter_at])
+                            in_memory_remaining -= data_length
+                        else:
+                            data = MultipartFileData(path, data_start, data_length)
+                        parts.append({"field": name, "filename": filename, "data": data})
+                    else:
+                        if data_length > int(max_field_bytes):
+                            raise RequestBodyError(
+                                f"multipart form field is too large (maximum {int(max_field_bytes)} bytes).",
+                                status=413,
+                            )
+                        if data_length > field_memory_remaining:
+                            raise RequestBodyError(
+                                f"multipart form fields exceed the {int(max_field_bytes)} byte total limit.",
+                                status=413,
+                            )
+                        parts.append({"field": name, "data": bytes(body[data_start:delimiter_at])})
+                        field_memory_remaining -= data_length
+
+                    cursor = next_cursor
+                    if is_final:
+                        if body[cursor:cursor + 2] == b"\r\n":
+                            cursor += 2
+                        if cursor != body_length:
+                            raise RequestBodyError("multipart body contains data after its closing boundary.")
+                        return parts
+
+    def _read_multipart_parts(
+        self,
+        max_bytes,
+        *,
+        max_file_bytes,
+        max_field_bytes,
+        empty_message,
+        too_large_message,
+    ):
+        boundary, length = self._multipart_headers(max_bytes, empty_message, too_large_message)
+        path = self._spool_multipart_body(boundary, length)
+        try:
+            return self._parse_multipart_body(
+                path,
+                boundary,
+                max_file_bytes=max_file_bytes,
+                max_field_bytes=max_field_bytes,
+            )
+        except Exception:
+            self._discard_multipart_temp_file(path)
+            raise
 
     def read_multipart_files(self, max_bytes=MAX_WALLPAPER_UPLOAD_BYTES):
-        content_type = self.headers.get("Content-Type", "")
-        boundary_match = re.search(r'boundary="?([^";]+)"?', content_type)
-        if not boundary_match:
-            raise ValueError("missing multipart boundary")
-
-        length = int(self.headers.get("Content-Length", "0") or 0)
-        if length <= 0:
-            raise ValueError("no files were uploaded")
-        if length > max_bytes:
-            raise ValueError("uploaded files are too large")
-
-        body = self.rfile.read(length)
-        boundary = b"--" + boundary_match.group(1).encode("utf-8")
-        files = []
-
-        for raw_part in body.split(boundary):
-            part = raw_part
-            if part.startswith(b"\r\n"):
-                part = part[2:]
-            if part.endswith(b"--"):
-                part = part[:-2]
-            if part.endswith(b"\r\n"):
-                part = part[:-2]
-            if not part or part == b"--":
-                continue
-
-            header_blob, separator, data = part.partition(b"\r\n\r\n")
-            if not separator:
-                continue
-
-            headers_text = header_blob.decode("utf-8", errors="replace")
-            disposition = ""
-            for line in headers_text.splitlines():
-                if line.lower().startswith("content-disposition:"):
-                    disposition = line
-                    break
-
-            filename_match = re.search(r'filename="([^"]*)"', disposition)
-            if not filename_match:
-                continue
-
-            filename = filename_match.group(1).strip()
-            if filename and data:
-                files.append({"filename": filename, "data": data})
-
-        if not files:
-            raise ValueError("no files were uploaded")
-        return files
+        try:
+            parts = self._read_multipart_parts(
+                max_bytes,
+                max_file_bytes=max_bytes,
+                max_field_bytes=MAX_REFERENCE_VIEW_REQUEST_BYTES,
+                empty_message="no files were uploaded",
+                too_large_message="uploaded files are too large",
+            )
+            files = [
+                {"filename": part["filename"], "data": part["data"]}
+                for part in parts
+                if "filename" in part and part["data"]
+            ]
+            if len(files) > MAX_MULTIPART_FILES:
+                raise RequestBodyError(
+                    f"too many files were uploaded (maximum {MAX_MULTIPART_FILES}).",
+                    status=413,
+                )
+            if not files:
+                raise ValueError("no files were uploaded")
+            return files
+        except Exception:
+            self._cleanup_multipart_temp_files()
+            raise
 
     def read_multipart_form(self, max_bytes):
-        content_type = self.headers.get("Content-Type", "")
-        boundary_match = re.search(r'boundary="?([^";]+)"?', content_type)
-        if not boundary_match:
-            raise ValueError("missing multipart boundary")
-
-        length = int(self.headers.get("Content-Length", "0") or 0)
-        if length <= 0:
-            raise ValueError("empty multipart request")
-        if length > max_bytes:
-            raise ValueError("reference view transaction is too large")
-
-        body = self.rfile.read(length)
-        boundary = b"--" + boundary_match.group(1).encode("utf-8")
-        fields = {}
-        files = []
-        for raw_part in body.split(boundary):
-            part = raw_part
-            if part.startswith(b"\r\n"):
-                part = part[2:]
-            if part.endswith(b"--"):
-                part = part[:-2]
-            if part.endswith(b"\r\n"):
-                part = part[:-2]
-            if not part or part == b"--":
-                continue
-
-            header_blob, separator, data = part.partition(b"\r\n\r\n")
-            if not separator:
-                raise ValueError("invalid multipart form part")
-            headers_text = header_blob.decode("utf-8", errors="replace")
-            disposition = next(
-                (line for line in headers_text.splitlines() if line.lower().startswith("content-disposition:")),
-                "",
+        try:
+            parts = self._read_multipart_parts(
+                max_bytes,
+                max_file_bytes=MAX_REFERENCE_VIEW_UPLOAD_BYTES,
+                max_field_bytes=MAX_REFERENCE_VIEW_REQUEST_BYTES,
+                empty_message="empty multipart request",
+                too_large_message="reference view transaction is too large",
             )
-            name_match = re.search(r'(?:^|;)\s*name="([^"]+)"', disposition, re.IGNORECASE)
-            if not name_match:
-                raise ValueError("multipart form part is missing a name")
-            name = name_match.group(1).strip()
-            filename_match = re.search(r'(?:^|;)\s*filename="([^"]*)"', disposition, re.IGNORECASE)
-            if filename_match:
-                filename = filename_match.group(1).strip()
-                if not filename:
-                    raise ValueError("reference image filename is empty")
-                files.append({"field": name, "filename": filename, "data": data})
-                continue
-            if name in fields:
-                raise ValueError("multipart form field is duplicated")
-            try:
-                fields[name] = data.decode("utf-8")
-            except UnicodeDecodeError as error:
-                raise ValueError("multipart form text must use UTF-8") from error
-        return fields, files
+            fields = {}
+            files = []
+            for part in parts:
+                name = part["field"]
+                if "filename" in part:
+                    files.append(part)
+                    continue
+                if name in fields:
+                    raise ValueError("multipart form field is duplicated")
+                try:
+                    fields[name] = part["data"].decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise ValueError("multipart form text must use UTF-8") from error
+            if len(files) > MAX_MULTIPART_FILES:
+                raise RequestBodyError(
+                    f"too many files were uploaded (maximum {MAX_MULTIPART_FILES}).",
+                    status=413,
+                )
+            return fields, files
+        except Exception:
+            self._cleanup_multipart_temp_files()
+            raise
 
 
 def ensure_wallpaper_dir():
@@ -2185,7 +3013,7 @@ def upload_wallpapers(files):
         data = item.get("data", b"")
         if not data:
             continue
-        target.write_bytes(data)
+        write_uploaded_data(target, data)
         stat = target.stat()
         rel = target.relative_to(WALLPAPER_DIR).as_posix()
         saved.append({
@@ -2253,6 +3081,9 @@ def open_file_resource(path):
     if not target.exists() or not target.is_file():
         raise ValueError(f"file was not found: {target}")
     if sys.platform == "win32":
+        if target.suffix.casefold() == ".exe":
+            state = launch_or_focus_executable(target)
+            return {"ok": True, "path": str(target), **state}
         os.startfile(str(target))
     else:
         webbrowser.open(target.as_uri())
@@ -3080,9 +3911,56 @@ def texture_dimensions_from_bytes(data, suffix):
     return {"width": int(width), "height": int(height)}
 
 
+def validated_texture_archive_members(archive):
+    members = archive.infolist()
+    if len(members) > MAX_TEXTURE_ARCHIVE_MEMBERS:
+        raise ValueError(
+            f"texture archive contains too many members (maximum {MAX_TEXTURE_ARCHIVE_MEMBERS})"
+        )
+
+    selected = []
+    total_size = 0
+    for info in members:
+        if info.is_dir():
+            continue
+        member_name = Path(info.filename.replace("\\", "/")).name
+        if Path(member_name).suffix.lower() not in MATERIAL_TEXTURE_EXTENSIONS:
+            continue
+        file_size = int(info.file_size)
+        compressed_size = int(info.compress_size)
+        if file_size < 0 or compressed_size < 0:
+            raise ValueError("texture archive contains an invalid member size")
+        if file_size > MAX_TEXTURE_ARCHIVE_FILE_BYTES:
+            raise ValueError(
+                f"texture archive member is too large (maximum {MAX_TEXTURE_ARCHIVE_FILE_BYTES} bytes)"
+            )
+        total_size += file_size
+        if total_size > MAX_TEXTURE_ARCHIVE_TOTAL_BYTES:
+            raise ValueError(
+                f"texture archive expands beyond {MAX_TEXTURE_ARCHIVE_TOTAL_BYTES} bytes"
+            )
+        if file_size and (
+            compressed_size == 0
+            or file_size > compressed_size * MAX_TEXTURE_ARCHIVE_COMPRESSION_RATIO
+        ):
+            raise ValueError(
+                "texture archive member exceeds the allowed compression ratio"
+            )
+        selected.append((info, member_name))
+    return selected
+
+
 def save_blender_replacement_texture(filename, data, source_package=""):
     target = unique_file_path(BLENDER_REPLACEMENT_TEXTURE_DIR, filename)
-    target.write_bytes(data)
+    if callable(getattr(data, "read", None)):
+        with target.open("wb") as destination:
+            while True:
+                chunk = data.read(MULTIPART_READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                destination.write(chunk)
+    else:
+        write_uploaded_data(target, data)
     record = {
         "name": target.name,
         "path": str(target),
@@ -3090,7 +3968,7 @@ def save_blender_replacement_texture(filename, data, source_package=""):
     }
     if source_package:
         record["sourcePackage"] = source_package
-    dimensions = texture_dimensions_from_bytes(data, target.suffix)
+    dimensions = texture_file_dimensions(target)
     if dimensions:
         record.update(dimensions)
     return record
@@ -3110,15 +3988,10 @@ def upload_blender_replacement_texture(files):
             continue
         if suffix in MATERIAL_PACKAGE_EXTENSIONS:
             try:
-                with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                    for info in archive.infolist():
-                        if info.is_dir():
-                            continue
-                        member_name = Path(info.filename.replace("\\", "/")).name
-                        if Path(member_name).suffix.lower() not in MATERIAL_TEXTURE_EXTENSIONS:
-                            continue
+                with open_uploaded_data(data) as package, zipfile.ZipFile(package) as archive:
+                    for info, member_name in validated_texture_archive_members(archive):
                         with archive.open(info) as source:
-                            saved.append(save_blender_replacement_texture(member_name, source.read(), filename))
+                            saved.append(save_blender_replacement_texture(member_name, source, filename))
             except zipfile.BadZipFile as error:
                 raise ValueError(f"{filename} is not a valid zip file") from error
     if not saved:
@@ -3128,7 +4001,8 @@ def upload_blender_replacement_texture(files):
 
 def texture_file_dimensions(path):
     try:
-        return texture_dimensions_from_bytes(path.read_bytes(), path.suffix)
+        with path.open("rb") as source:
+            return texture_dimensions_from_bytes(source.read(4 * 1024 * 1024), path.suffix)
     except OSError:
         return None
 
@@ -5181,21 +6055,22 @@ def fetch_music_lyrics(relative_path, force=False, prefer_synced=False):
 
 
 def read_music_lyric_marks():
-    try:
-        payload = json.loads(MUSIC_LYRIC_MARKS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"tracks": {}}
-    if not isinstance(payload, dict):
-        return {"tracks": {}}
-    tracks = payload.get("tracks")
-    if not isinstance(tracks, dict):
-        payload["tracks"] = {}
-    return payload
+    with MUSIC_LYRIC_MARKS_LOCK:
+        try:
+            payload = json.loads(MUSIC_LYRIC_MARKS_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"tracks": {}}
+        if not isinstance(payload, dict):
+            return {"tracks": {}}
+        tracks = payload.get("tracks")
+        if not isinstance(tracks, dict):
+            payload["tracks"] = {}
+        return payload
 
 
 def write_music_lyric_marks(payload):
-    MUSIC_LYRIC_MARKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    MUSIC_LYRIC_MARKS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    with MUSIC_LYRIC_MARKS_LOCK:
+        atomic_write_json(MUSIC_LYRIC_MARKS_FILE, payload)
 
 
 def music_lyric_marks_for_path(path):
@@ -5296,17 +6171,18 @@ def save_music_lyric_mark(payload):
     path = music_path_from_relative(payload.get("path", ""))
     relative = path.relative_to(MUSIC_DIR).as_posix()
     mark = build_music_lyric_mark(payload)
-    marks_payload = read_music_lyric_marks()
-    tracks = marks_payload.setdefault("tracks", {})
-    marks = tracks.setdefault(relative, [])
-    if not isinstance(marks, list):
-        marks = []
+    with MUSIC_LYRIC_MARKS_LOCK:
+        marks_payload = read_music_lyric_marks()
+        tracks = marks_payload.setdefault("tracks", {})
+        marks = tracks.setdefault(relative, [])
+        if not isinstance(marks, list):
+            marks = []
+            tracks[relative] = marks
+        marks = [item for item in marks if not same_music_lyric_mark_slot(item, mark)]
+        marks.append(mark)
+        marks.sort(key=music_lyric_mark_sort_key)
         tracks[relative] = marks
-    marks = [item for item in marks if not same_music_lyric_mark_slot(item, mark)]
-    marks.append(mark)
-    marks.sort(key=music_lyric_mark_sort_key)
-    tracks[relative] = marks
-    write_music_lyric_marks(marks_payload)
+        write_music_lyric_marks(marks_payload)
     invalidate_music_analysis_cache(path)
     return {
         "ok": True,
@@ -5329,23 +6205,25 @@ def save_music_lyric_marks_batch(payload):
         relative = path.relative_to(MUSIC_DIR).as_posix()
         parsed.append((path, relative, build_music_lyric_mark(item)))
 
-    marks_payload = read_music_lyric_marks()
-    tracks = marks_payload.setdefault("tracks", {})
     changed_paths = {}
-    for path, relative, mark in parsed:
-        stored = tracks.setdefault(relative, [])
-        if not isinstance(stored, list):
-            stored = []
-        stored = [item for item in stored if not same_music_lyric_mark_slot(item, mark)]
-        stored.append(mark)
-        stored.sort(key=music_lyric_mark_sort_key)
-        tracks[relative] = stored
-        changed_paths[relative] = path
+    with MUSIC_LYRIC_MARKS_LOCK:
+        marks_payload = read_music_lyric_marks()
+        tracks = marks_payload.setdefault("tracks", {})
+        for path, relative, mark in parsed:
+            stored = tracks.setdefault(relative, [])
+            if not isinstance(stored, list):
+                stored = []
+            stored = [item for item in stored if not same_music_lyric_mark_slot(item, mark)]
+            stored.append(mark)
+            stored.sort(key=music_lyric_mark_sort_key)
+            tracks[relative] = stored
+            changed_paths[relative] = path
 
-    if parsed:
-        write_music_lyric_marks(marks_payload)
-        for path in changed_paths.values():
-            invalidate_music_analysis_cache(path)
+        if parsed:
+            write_music_lyric_marks(marks_payload)
+
+    for path in changed_paths.values():
+        invalidate_music_analysis_cache(path)
 
     for relative, path in changed_paths.items():
         marks_by_path[relative] = music_lyric_marks_for_path(path)
@@ -8207,7 +9085,7 @@ def upload_music(files):
         suffix = Path(str(filename or "")).suffix.lower()
         if suffix in LYRICS_EXTENSIONS:
             target = lyrics_upload_path(filename)
-            target.write_bytes(data)
+            write_uploaded_data(target, data)
             saved_lyrics.append({
                 "name": target.name,
                 "path": target.relative_to(MUSIC_DIR).as_posix(),
@@ -8216,7 +9094,7 @@ def upload_music(files):
             continue
 
         target = unique_music_path(filename)
-        target.write_bytes(data)
+        write_uploaded_data(target, data)
         saved_paths.append(target)
         saved.append(music_track_from_path(target))
 
@@ -8307,27 +9185,26 @@ def normalize_console_state(raw):
 
 
 def read_console_state():
-    try:
-        raw = json.loads(CONSOLE_STATE_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raw = {}
-    return normalize_console_state(raw)
+    with CONSOLE_STATE_LOCK:
+        try:
+            raw = json.loads(CONSOLE_STATE_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        return normalize_console_state(raw)
 
 
 def write_console_state(payload):
-    current = read_console_state()
-    merged = {key: value for key, value in current.items() if key != "href"}
-    if isinstance(payload, dict):
-        for key in ("order", "archive", "deepArchive", "deleted", "lastModule"):
-            if key in payload:
-                merged[key] = payload.get(key)
-    current = normalize_console_state(merged)
-    stored = {key: value for key, value in current.items() if key != "href"}
-    CONSOLE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    temporary = CONSOLE_STATE_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps(stored, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, CONSOLE_STATE_FILE)
-    return {"ok": True, "state": current}
+    with CONSOLE_STATE_LOCK:
+        current = read_console_state()
+        merged = {key: value for key, value in current.items() if key != "href"}
+        if isinstance(payload, dict):
+            for key in ("order", "archive", "deepArchive", "deleted", "lastModule"):
+                if key in payload:
+                    merged[key] = payload.get(key)
+        current = normalize_console_state(merged)
+        stored = {key: value for key, value in current.items() if key != "href"}
+        atomic_write_json(CONSOLE_STATE_FILE, stored)
+        return {"ok": True, "state": current}
 
 
 def console_start_url(port):
@@ -8439,41 +9316,37 @@ def music_state_matches_broken_release_layout(state, release_state):
 
 
 def store_music_state(state, previous=None):
-    MUSIC_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(previous, dict) and previous != state:
-        MUSIC_STATE_BACKUP_FILE.write_text(
-            json.dumps(previous, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    temporary = MUSIC_STATE_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporary, MUSIC_STATE_FILE)
+    with MUSIC_STATE_LOCK:
+        if isinstance(previous, dict) and previous != state:
+            atomic_write_json(MUSIC_STATE_BACKUP_FILE, previous)
+        atomic_write_json(MUSIC_STATE_FILE, state)
 
 
 def read_music_state():
-    try:
-        raw = json.loads(MUSIC_STATE_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raw = None
-    release_music = read_release_defaults().get("music")
-    release_state = localize_release_music_state(release_music if isinstance(release_music, dict) else {})
-    if not isinstance(raw, dict):
-        return release_state
+    with MUSIC_STATE_LOCK:
+        try:
+            raw = json.loads(MUSIC_STATE_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = None
+        release_music = read_release_defaults().get("music")
+        release_state = localize_release_music_state(release_music if isinstance(release_music, dict) else {})
+        if not isinstance(raw, dict):
+            return release_state
 
-    state = normalize_music_state(raw)
-    release_layout_version = sanitize_layout_version(release_state.get("layoutVersion"))
-    if music_state_matches_broken_release_layout(state, release_state):
-        migrated = dict(release_state)
-        migrated["promotedLibraryTracks"] = state.get("promotedLibraryTracks", {})
-        if state.get("selectedTrackPath"):
-            migrated["selectedTrackPath"] = state["selectedTrackPath"]
-        store_music_state(migrated, previous=state)
-        return migrated
+        state = normalize_music_state(raw)
+        release_layout_version = sanitize_layout_version(release_state.get("layoutVersion"))
+        if music_state_matches_broken_release_layout(state, release_state):
+            migrated = dict(release_state)
+            migrated["promotedLibraryTracks"] = state.get("promotedLibraryTracks", {})
+            if state.get("selectedTrackPath"):
+                migrated["selectedTrackPath"] = state["selectedTrackPath"]
+            store_music_state(migrated, previous=state)
+            return migrated
 
-    if release_layout_version and not state.get("layoutVersion"):
-        state["layoutVersion"] = release_layout_version
-        store_music_state(state, previous=normalize_music_state(raw))
-    return state
+        if release_layout_version and not state.get("layoutVersion"):
+            state["layoutVersion"] = release_layout_version
+            store_music_state(state, previous=normalize_music_state(raw))
+        return state
 
 
 def music_state_payload_version(payload):
@@ -8484,34 +9357,35 @@ def music_state_payload_version(payload):
 
 
 def write_music_state(payload):
-    previous = read_music_state()
-    current = dict(previous)
-    stale_client = False
-    if isinstance(payload, dict):
-        if "tiers" in payload:
-            next_tiers = sanitize_string_map(payload.get("tiers"))
-            if previous.get("tiers") and not next_tiers:
-                stale_client = True
-            else:
-                current["tiers"] = next_tiers
-        if "order" in payload:
-            next_order = sanitize_string_list(payload.get("order"))
-            if previous.get("order") and not next_order:
-                stale_client = True
-            else:
-                current["order"] = next_order
-        if "promotedLibraryTracks" in payload:
-            current["promotedLibraryTracks"] = sanitize_string_map(payload.get("promotedLibraryTracks"))
-        if "selectedTrackPath" in payload:
-            current["selectedTrackPath"] = sanitize_state_path(payload.get("selectedTrackPath"))
-        if "layoutVersion" in payload:
-            current["layoutVersion"] = max(
-                sanitize_layout_version(previous.get("layoutVersion")),
-                sanitize_layout_version(payload.get("layoutVersion")),
-            )
+    with MUSIC_STATE_LOCK:
+        previous = read_music_state()
+        current = dict(previous)
+        stale_client = False
+        if isinstance(payload, dict):
+            if "tiers" in payload:
+                next_tiers = sanitize_string_map(payload.get("tiers"))
+                if previous.get("tiers") and not next_tiers:
+                    stale_client = True
+                else:
+                    current["tiers"] = next_tiers
+            if "order" in payload:
+                next_order = sanitize_string_list(payload.get("order"))
+                if previous.get("order") and not next_order:
+                    stale_client = True
+                else:
+                    current["order"] = next_order
+            if "promotedLibraryTracks" in payload:
+                current["promotedLibraryTracks"] = sanitize_string_map(payload.get("promotedLibraryTracks"))
+            if "selectedTrackPath" in payload:
+                current["selectedTrackPath"] = sanitize_state_path(payload.get("selectedTrackPath"))
+            if "layoutVersion" in payload:
+                current["layoutVersion"] = max(
+                    sanitize_layout_version(previous.get("layoutVersion")),
+                    sanitize_layout_version(payload.get("layoutVersion")),
+                )
 
-    store_music_state(current, previous=previous)
-    return {"ok": not stale_client, "staleClient": stale_client, "state": current}
+        store_music_state(current, previous=previous)
+        return {"ok": not stale_client, "staleClient": stale_client, "state": current}
 
 
 def local_music_path_for_display_name(display_name):
@@ -8615,13 +9489,14 @@ def upload_youtube_cookies(files):
     if not filename.endswith(".txt"):
         raise ValueError("please upload a cookies.txt file")
 
-    text = data.decode("utf-8", errors="replace")
+    payload = uploaded_data_bytes(data, MAX_COOKIE_UPLOAD_BYTES)
+    text = payload.decode("utf-8", errors="replace")
     lowered = text.lower()
     if "youtube.com" not in lowered and ".youtube.com" not in lowered:
         raise ValueError("this cookies file does not appear to contain YouTube cookies")
 
     ensure_youtube_cookie_dir()
-    YOUTUBE_COOKIE_FILE.write_bytes(data)
+    YOUTUBE_COOKIE_FILE.write_bytes(payload)
     return {"ok": True, "cookies": youtube_cookie_state(), "tracks": list_music()}
 
 
@@ -9046,11 +9921,79 @@ def unique_music_library_id(name):
     return candidate
 
 
+class MusicLibraryImportScheduler:
+    """Small daemon worker queue that cannot grow with untrusted requests."""
+
+    def __init__(
+        self,
+        runner,
+        max_workers=MUSIC_LIBRARY_MAX_WORKERS,
+        max_pending=MUSIC_LIBRARY_MAX_PENDING,
+    ):
+        self.runner = runner
+        self.max_workers = max(1, int(max_workers))
+        self.max_pending = max(1, int(max_pending))
+        self.tasks = queue.Queue(maxsize=self.max_pending)
+        self.workers = []
+        self.start_lock = threading.Lock()
+
+    def _ensure_workers(self):
+        with self.start_lock:
+            self.workers = [worker for worker in self.workers if worker.is_alive()]
+            while len(self.workers) < self.max_workers:
+                worker = threading.Thread(
+                    target=self._work,
+                    name=f"music-library-import-{len(self.workers) + 1}",
+                    daemon=True,
+                )
+                self.workers.append(worker)
+                worker.start()
+
+    def _work(self):
+        while True:
+            task = self.tasks.get()
+            try:
+                self.runner(*task)
+            except Exception:
+                # run_music_library_import records failures itself. Keep a worker
+                # alive if a test runner or future implementation violates that
+                # contract.
+                pass
+            finally:
+                self.tasks.task_done()
+
+    def submit(self, *task):
+        self._ensure_workers()
+        try:
+            # Give newly created workers a brief chance to take their active
+            # slots before declaring the eight-item waiting queue full.
+            self.tasks.put(task, timeout=0.1)
+        except queue.Full:
+            return False
+        return True
+
+    @property
+    def pending_count(self):
+        return self.tasks.qsize()
+
+
+def get_music_library_import_scheduler():
+    global MUSIC_LIBRARY_IMPORT_SCHEDULER
+    with MUSIC_LIBRARY_IMPORT_SCHEDULER_LOCK:
+        if MUSIC_LIBRARY_IMPORT_SCHEDULER is None:
+            MUSIC_LIBRARY_IMPORT_SCHEDULER = MusicLibraryImportScheduler(
+                run_music_library_import,
+            )
+        return MUSIC_LIBRARY_IMPORT_SCHEDULER
+
+
 def fetch_music_library_metadata(downloader, clean_url):
     command = downloader + [
         "--dump-single-json",
         "--flat-playlist",
         "--no-warnings",
+        "--playlist-end",
+        str(MUSIC_LIBRARY_MAX_PLAYLIST_ENTRIES),
     ]
     cookie_path = youtube_cookie_file()
     if cookie_path:
@@ -9075,7 +10018,13 @@ def fetch_music_library_metadata(downloader, clean_url):
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    entries = payload.get("entries")
+    if isinstance(entries, list):
+        payload = dict(payload)
+        payload["entries"] = entries[:MUSIC_LIBRARY_MAX_PLAYLIST_ENTRIES]
+    return payload
 
 
 def music_library_entry_url(entry):
@@ -9135,11 +10084,10 @@ def download_music_library_entry(downloader, library_dir, archive_file, index, e
     )
 
 
-def run_music_library_import(library_id, clean_url, requested_name=""):
+def _run_music_library_import(library_id, clean_url, requested_name=""):
     downloader = yt_dlp_command()
     if not downloader:
-        update_music_library_record(library_id, status="failed", message="yt-dlp is not installed yet")
-        return
+        raise RuntimeError("yt-dlp is not installed yet")
 
     record = update_music_library_record(library_id, status="grabbing", message="", finishedAt="")
     if not record:
@@ -9151,6 +10099,7 @@ def run_music_library_import(library_id, clean_url, requested_name=""):
     metadata = fetch_music_library_metadata(downloader, clean_url)
     title = str(requested_name or metadata.get("title") or record.get("name") or "Library").strip()
     entries = metadata.get("entries") if isinstance(metadata.get("entries"), list) else []
+    entries = entries[:MUSIC_LIBRARY_MAX_PLAYLIST_ENTRIES]
     expected = len(entries)
     update_music_library_record(
         library_id,
@@ -9211,6 +10160,21 @@ def run_music_library_import(library_id, clean_url, requested_name=""):
     )
 
 
+def run_music_library_import(library_id, clean_url, requested_name=""):
+    try:
+        _run_music_library_import(library_id, clean_url, requested_name)
+    except Exception as error:
+        message = friendly_yt_dlp_error(str(error).strip())
+        if not message:
+            message = f"Music library import failed ({type(error).__name__})."
+        update_music_library_record(
+            library_id,
+            status="failed",
+            message=message[:1000],
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+        )
+
+
 def import_music_library(url, name=""):
     require_network_music_import()
     clean_url = normalize_youtube_playlist_url(validate_music_url(url))
@@ -9236,6 +10200,7 @@ def import_music_library(url, name=""):
                     "path": rel_path,
                     "status": "queued",
                     "message": "",
+                    "finishedAt": "",
                     "updatedAt": now,
                 }
             else:
@@ -9252,6 +10217,7 @@ def import_music_library(url, name=""):
                     "count": 0,
                     "createdAt": now,
                     "updatedAt": now,
+                    "finishedAt": "",
                 }
             records = [item for item in read_music_library_records() if item.get("id") != library_id]
             records.append(record)
@@ -9265,12 +10231,29 @@ def import_music_library(url, name=""):
             "tracks": list_music(),
         }
 
-    thread = threading.Thread(
-        target=run_music_library_import,
-        args=(library_id, clean_url, requested_name),
-        daemon=True,
-    )
-    thread.start()
+    try:
+        scheduler = get_music_library_import_scheduler()
+        accepted = scheduler.submit(library_id, clean_url, requested_name)
+    except Exception as error:
+        finished_at = datetime.now(timezone.utc).isoformat()
+        message = "Music import could not start its background worker. Please retry."
+        update_music_library_record(
+            library_id,
+            status="failed",
+            message=message,
+            finishedAt=finished_at,
+        )
+        raise ValueError(message) from error
+    if not accepted:
+        finished_at = datetime.now(timezone.utc).isoformat()
+        message = "Music import queue is full. Please wait for an active import to finish and retry."
+        update_music_library_record(
+            library_id,
+            status="failed",
+            message=message,
+            finishedAt=finished_at,
+        )
+        raise ValueError(message)
 
     return {
         "ok": True,
@@ -9377,24 +10360,22 @@ def import_material_candidate(relative_path):
     destination.mkdir(parents=True, exist_ok=False)
     copied = []
 
-    if source.suffix.lower() in MATERIAL_PACKAGE_EXTENSIONS:
-        with zipfile.ZipFile(source) as archive:
-            for info in archive.infolist():
-                if info.is_dir():
-                    continue
-                member_name = Path(info.filename.replace("\\", "/")).name
-                if Path(member_name).suffix.lower() not in MATERIAL_TEXTURE_EXTENSIONS:
-                    continue
-                target = unique_file_path(destination, member_name)
-                with archive.open(info) as src, target.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                copied.append(target)
-    else:
-        copied.append(copy_texture_file(source, destination))
+    try:
+        if source.suffix.lower() in MATERIAL_PACKAGE_EXTENSIONS:
+            with zipfile.ZipFile(source) as archive:
+                for info, member_name in validated_texture_archive_members(archive):
+                    target = unique_file_path(destination, member_name)
+                    with archive.open(info) as src, target.open("wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    copied.append(target)
+        else:
+            copied.append(copy_texture_file(source, destination))
 
-    if not copied:
+        if not copied:
+            raise ValueError("no texture files were found in the selected material")
+    except Exception:
         shutil.rmtree(destination, ignore_errors=True)
-        raise ValueError("no texture files were found in the selected material")
+        raise
 
     return {
         "ok": True,
@@ -9447,19 +10428,14 @@ def import_render_textures_upload(files):
 
             if suffix in MATERIAL_TEXTURE_EXTENSIONS:
                 target = unique_file_path(destination, filename)
-                target.write_bytes(data)
+                write_uploaded_data(target, data)
                 copied.append(target)
                 continue
 
             if suffix in MATERIAL_PACKAGE_EXTENSIONS:
                 try:
-                    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                        for info in archive.infolist():
-                            if info.is_dir():
-                                continue
-                            member_name = Path(info.filename.replace("\\", "/")).name
-                            if Path(member_name).suffix.lower() not in MATERIAL_TEXTURE_EXTENSIONS:
-                                continue
+                    with open_uploaded_data(data) as package, zipfile.ZipFile(package) as archive:
+                        for info, member_name in validated_texture_archive_members(archive):
                             target = unique_file_path(destination, member_name)
                             with archive.open(info) as src, target.open("wb") as dst:
                                 shutil.copyfileobj(src, dst)
@@ -9531,7 +10507,7 @@ def import_steamwork_files(target_key, files):
         if not filename or not data:
             continue
         target = unique_steamwork_file_path(root, filename)
-        target.write_bytes(data)
+        write_uploaded_data(target, data)
         copied.append(target)
 
     if not copied:
@@ -9900,7 +10876,7 @@ def stage_steamwork_asset_files(requirement_id, files):
             continue
         safe_name = safe_steamwork_stage_filename(requirement, filename)
         target = unique_steamwork_stage_path(root, safe_name)
-        target.write_bytes(data)
+        write_uploaded_data(target, data)
         record = steamwork_asset_file_record(target, "staged")
         if record:
             saved.append(record)
@@ -10611,7 +11587,7 @@ def pick_port(start):
 def running_console_port(start):
     for port in range(start, start + 30):
         if port_is_available(port):
-            return None
+            continue
         url = f"http://127.0.0.1:{port}/index.html"
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "CodexWorldConsole/1.0"})
@@ -10683,8 +11659,7 @@ def main():
 
     port = pick_port(args.port)
     url = console_start_url(port).replace("127.0.0.1", local_host, 1)
-    server = ThreadingHTTPServer((args.host, port), ConsoleHandler)
-    server.daemon_threads = True
+    server = ConsoleHTTPServer((args.host, port), ConsoleHandler)
     ACTIVE_SERVER = server
 
     if sys.stdout:
