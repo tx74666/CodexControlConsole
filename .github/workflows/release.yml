@@ -77,11 +77,15 @@ jobs:
             "AZURE_CLIENT_SECRET"
           )
           $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
-          if ($missing.Count -gt 0) {
-            throw "Public release blocked. Missing trusted signing configuration: $($missing -join ', ')."
+          if ($missing.Count -eq 0) {
+            "SIGNING_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "SIGNING_STATUS=Authenticode signed and Microsoft Defender scanned." | Out-File -FilePath $env:GITHUB_ENV -Append
+          } elseif ($missing.Count -eq $required.Count) {
+            "SIGNING_ENABLED=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+            "SIGNING_STATUS=Microsoft Defender scanned, but not Authenticode signed. Windows SmartScreen may show an unknown-publisher warning." | Out-File -FilePath $env:GITHUB_ENV -Append
+          } else {
+            throw "Public release blocked because trusted signing is only partially configured. Missing: $($missing -join ', ')."
           }
-          "SIGNING_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "SIGNING_STATUS=Authenticode signed and Microsoft Defender scanned." | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Set up Python x64
         uses: actions/setup-python@v5
@@ -187,13 +191,13 @@ jobs:
             -Extensions @("exe") `
             -RequiredRelativePaths @("CodexControlConsole-Setup-x64.exe")
 
-      - name: Build signed Windows x64 ZIP
+      - name: Build Windows x64 ZIP
         shell: pwsh
         run: |
           $source = "build\console-installer\dist\Codex Console"
           $archive = "dist\CodexControlConsole-Windows-x64.zip"
           if (-not (Test-Path -LiteralPath "$source\Codex Console.exe" -PathType Leaf)) {
-            throw "Signed application folder is incomplete."
+            throw "Application folder is incomplete."
           }
           Compress-Archive -LiteralPath $source -DestinationPath $archive -CompressionLevel Optimal -Force
           if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
@@ -235,7 +239,7 @@ jobs:
           body: |
             ## Windows x64
 
-            Recommended: **CodexControlConsole-Setup-x64.exe** (signed installer, easiest updates).
+            Recommended: **CodexControlConsole-Setup-x64.exe** (installer, easiest updates).
 
             Alternative: **CodexControlConsole-Windows-x64.zip** (extract the `Codex Console` folder, then run `Codex Console.exe`; no installer).
 
@@ -250,7 +254,7 @@ jobs:
 
             ## Windows 64 位
 
-            推荐下载：**CodexControlConsole-Setup-x64.exe**（已签名安装包，后续更新最方便）。
+            推荐下载：**CodexControlConsole-Setup-x64.exe**（安装包，后续更新最方便）。
 
             免安装备用：**CodexControlConsole-Windows-x64.zip**（解压 `Codex Console` 文件夹后运行 `Codex Console.exe`）。
 

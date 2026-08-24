@@ -82,9 +82,9 @@ The release helper retries intermittent GitHub connections, pushes `main`, creat
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.
 
-Unsigned builds can never be published by the release workflow or release helper. The emergency direct-publisher helper accepts only an installer that already has a valid, timestamped, RSA Authenticode signature from a trusted issuer.
+The release workflow prefers trusted Authenticode signing whenever all Artifact Signing settings are available. When none are configured, it can still publish an explicitly labeled unsigned build after all quality, package, and Microsoft Defender checks pass. A partially configured signing identity blocks publishing. The emergency direct-publisher helper remains signed-only.
 
-Public releases are fail-closed. GitHub Actions requires every Artifact Signing setting and requires the requested tag version to match `app-manifest.json`. It first runs the shared quality checks, builds the application, signs every packaged `exe`, `dll`, and `pyd`, verifies those signatures, builds and signs Setup, creates the ZIP from that signed application folder, and finally scans the main executable, native drag helper, Setup, and ZIP with Microsoft Defender. The workflow stops before publishing if any signature is missing, Defender reports a threat, or any Artifact Signing setting is absent. There is no committed unsigned-release exception.
+Public releases are fail-closed for quality, packaging, and malware scanning. GitHub Actions requires the requested tag version to match `app-manifest.json`, runs the shared quality checks, builds the application and Setup, creates the ZIP, and scans the main executable, native drag helper, Setup, and ZIP with Microsoft Defender. With a complete Artifact Signing configuration it also signs and verifies every packaged `exe`, `dll`, and `pyd` plus Setup. With no signing configuration it publishes an unsigned release with a clear SmartScreen warning; a partial configuration fails instead of silently downgrading.
 
 The manual `Audit Windows x64 Setup` workflow reproduces the build and Defender scan without signing, uploading, or publishing its temporary installer. Use it to compare a candidate with an earlier release while trusted signing is being configured.
 

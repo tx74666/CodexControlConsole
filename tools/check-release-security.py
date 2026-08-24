@@ -32,10 +32,12 @@ def main():
     require("azure/artifact-signing-action@v2" in workflow, "current Artifact Signing action is not used")
     require("if: ${{ vars.ARTIFACT_SIGNING_ENDPOINT" not in workflow, "signing can still be skipped")
     require(workflow.count("if: env.SIGNING_ENABLED == 'true'") == 4, "signing steps do not share one explicit policy")
-    require("SIGNING_ENABLED=false" not in workflow, "the release workflow still has an unsigned publishing path")
+    require(workflow.count("SIGNING_ENABLED=false") == 1, "the unsigned fallback is not explicit and singular")
     require("unsigned-release-approval" not in workflow, "the release workflow still reads a persistent unsigned approval")
-    require("if ($missing.Count -gt 0)" in workflow, "missing signing configuration does not fail closed")
-    require("Public release blocked. Missing trusted signing configuration" in workflow, "missing signing configuration has no blocking error")
+    require("if ($missing.Count -eq 0)" in workflow, "complete signing configuration is not detected")
+    require("elseif ($missing.Count -eq $required.Count)" in workflow, "the unsigned fallback does not require every signing setting to be absent")
+    require("trusted signing is only partially configured" in workflow, "partial signing configuration does not fail closed")
+    require("Windows SmartScreen may show an unknown-publisher warning" in workflow, "unsigned release notes do not disclose the warning")
     require("INPUT_VERSION: ${{ github.event.inputs.version }}" in workflow, "the release input is not passed through the environment")
     require('$tag = "${{ github.event.inputs.version }}"' not in workflow, "the release input is interpolated into PowerShell source")
     require('REF: ${{ github.ref }}' in workflow, "the release ref is not passed through the environment")
@@ -54,7 +56,7 @@ def main():
     installer = position(workflow, "-Stage Installer")
     sign_installer = position(workflow, "Sign Windows Setup")
     verify_installer = position(workflow, "Verify signed Windows Setup")
-    zip_archive = position(workflow, "Build signed Windows x64 ZIP")
+    zip_archive = position(workflow, "Build Windows x64 ZIP")
     defender = position(workflow, "Defender scan release artifacts")
     publish = position(workflow, "Publish GitHub Release")
     require(
@@ -66,7 +68,7 @@ def main():
     require("files-folder-recurse: true" in workflow, "application signing is not recursive")
     require("check-authenticode-signatures.ps1" in workflow, "recursive signature verification is missing")
     require("check-defender-artifacts.ps1" in workflow, "Defender release scan is missing")
-    require("Compress-Archive" in workflow, "signed application ZIP is not created")
+    require("Compress-Archive" in workflow, "application ZIP is not created")
     require(
         workflow.count("CodexControlConsole-Windows-x64.zip") >= 4,
         "Windows ZIP is not verified, scanned, documented, and published",
@@ -149,7 +151,7 @@ def main():
     ):
         require(required_check in quality_script, f"shared quality entry point is missing: {required_check}")
 
-    print("PASS release signing, version, quality, and Defender gates are fail-closed")
+    print("PASS release signing policy, version, quality, and Defender gates")
 
 
 if __name__ == "__main__":
