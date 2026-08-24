@@ -225,7 +225,7 @@ function staticChecks() {
       && appSource.includes("const randomRealmLiveSelectionFailureDelaysMs = [5000, 10000, 30000];")
       && appSource.includes("function randomRealmLiveSelectionPollDelay(succeeded)")
       && appSource.includes("randomRealmLiveSelectionPollDelay(succeeded)")
-      && appSource.includes("if (options.immediate) {\n    stopRandomRealmLiveSelectionPolling();"),
+      && /if \(options\.immediate\) \{\r?\n\s+stopRandomRealmLiveSelectionPolling\(\);/.test(appSource),
     "Blender live selection polling does not back off or reset on foreground entry"
   );
   assert(
@@ -317,7 +317,7 @@ function staticChecks() {
   );
   assert(
     appSource.includes('const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store"')
-      && appSource.includes("if (storeManagedInstall) {\n    openAddMusicPicker();"),
+      && /if \(storeManagedInstall\) \{\r?\n\s+openAddMusicPicker\(\);/.test(appSource),
     "Store music add control does not open the local file picker directly"
   );
   assert(
