@@ -300,8 +300,13 @@ def main():
                 opened = service.open_desktop({"project": str(blend)})
                 require(opened["fallback"] is False, "GitHub Desktop launcher used the web fallback")
                 require(launch.called, "GitHub Desktop was not launched")
-                require("open" in launch.call_args.args[0], "local repository did not use GitHub Desktop open")
-                require(str(project) in launch.call_args.args[0], "GitHub Desktop did not receive the project directory")
+                desktop_command = launch.call_args.args[0]
+                require("open" in desktop_command, "local repository did not use GitHub Desktop open")
+                open_index = desktop_command.index("open")
+                require(
+                    Path(desktop_command[open_index + 1]).resolve() == project.resolve(),
+                    "GitHub Desktop did not receive the project directory",
+                )
 
         if sys.platform == "win32":
             with patch("blender_github_share.os.startfile") as open_folder:
