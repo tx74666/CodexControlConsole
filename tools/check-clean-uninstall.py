@@ -39,7 +39,11 @@ def main():
             require(service.status("world")["canUninstall"], "installed World uninstaller was not found")
             result = service.launch("world")
             require(result["cleanLocalData"], "World uninstall did not declare local-data cleanup")
-            require(launch.call_args.args[0][0] == str(world_dir / "unins000.exe"), "wrong World uninstaller launched")
+            launched_world = Path(launch.call_args.args[0][0]).resolve()
+            require(
+                launched_world == (world_dir / "unins000.exe").resolve(),
+                f"wrong World uninstaller launched: {launched_world}",
+            )
 
         installed_dir = root / "Installed Console"
         installed_dir.mkdir()
@@ -53,7 +57,11 @@ def main():
         with patch.object(app_uninstall.sys, "platform", "win32"), \
              patch.object(app_uninstall.subprocess, "Popen") as launch:
             installed.launch("console")
-            require(launch.call_args.args[0][0] == str(installed_dir / "unins000.exe"), "wrong Console uninstaller launched")
+            launched_console = Path(launch.call_args.args[0][0]).resolve()
+            require(
+                launched_console == (installed_dir / "unins000.exe").resolve(),
+                f"wrong Console uninstaller launched: {launched_console}",
+            )
             require(stopped.wait(1.5), "Console did not schedule shutdown before self-uninstall")
 
         internal_dir = installed_dir / "_internal"
@@ -62,7 +70,8 @@ def main():
         with patch.object(app_uninstall.sys, "platform", "win32"):
             require(frozen.status("console")["canUninstall"], "frozen Console did not find its parent uninstaller")
             require(
-                frozen.status("console")["uninstallPath"] == str(installed_dir / "unins000.exe"),
+                Path(frozen.status("console")["uninstallPath"]).resolve()
+                == (installed_dir / "unins000.exe").resolve(),
                 "frozen Console selected the wrong parent uninstaller",
             )
 
