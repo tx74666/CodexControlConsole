@@ -77,7 +77,7 @@ The result is `dist\CodexControlConsole-Setup-x64.exe`. A local build is unsigne
 The release helper retries intermittent GitHub connections, pushes `main`, creates the version tag, and waits until both Windows x64 downloads are available:
 
 ```powershell
-.\tools\publish-release.ps1 -Version 1.0.4
+.\tools\publish-release.ps1 -Version 1.0.5
 ```
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.

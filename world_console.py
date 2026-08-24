@@ -1443,7 +1443,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 path = music_path_from_relative(query.get("path", [""])[0])
                 self.send_json({
                     "ok": True,
-                    "path": path.relative_to(MUSIC_DIR).as_posix(),
+                    "path": music_relative_path(path),
                     "marks": music_lyric_marks_for_path(path),
                 })
             except ValueError as error:
@@ -5618,6 +5618,10 @@ def music_path_from_relative(relative_path):
     return candidate
 
 
+def music_relative_path(path):
+    return Path(path).resolve().relative_to(MUSIC_DIR.resolve()).as_posix()
+
+
 def normalize_lyrics_language(value):
     language = str(value or "").strip().lower().replace("_", "-")
     aliases = {
@@ -5773,8 +5777,8 @@ def lyrics_file_record(music_path, lyrics_path, source="", downloaded=False):
     lyrics_path = Path(lyrics_path).resolve()
     return {
         "name": lyrics_path.name,
-        "path": lyrics_path.relative_to(MUSIC_DIR).as_posix(),
-        "musicPath": music_path.relative_to(MUSIC_DIR).as_posix(),
+        "path": music_relative_path(lyrics_path),
+        "musicPath": music_relative_path(music_path),
         "type": lyrics_path.suffix.lower().lstrip("."),
         "source": source,
         "downloaded": bool(downloaded),
@@ -6035,7 +6039,7 @@ def refresh_track_records_for_paths(paths, tracks):
     by_path = {item.get("path"): item for item in tracks if isinstance(item, dict)}
     refreshed = []
     for path in paths:
-        rel = Path(path).resolve().relative_to(MUSIC_DIR).as_posix()
+        rel = music_relative_path(path)
         item = by_path.get(rel)
         if item:
             refreshed.append(item)
@@ -6075,7 +6079,7 @@ def write_music_lyric_marks(payload):
 
 def music_lyric_marks_for_path(path):
     try:
-        relative = Path(path).resolve().relative_to(MUSIC_DIR).as_posix()
+        relative = music_relative_path(path)
     except ValueError:
         return []
     payload = read_music_lyric_marks()
@@ -6169,7 +6173,7 @@ def invalidate_music_analysis_cache(path):
 
 def save_music_lyric_mark(payload):
     path = music_path_from_relative(payload.get("path", ""))
-    relative = path.relative_to(MUSIC_DIR).as_posix()
+    relative = music_relative_path(path)
     mark = build_music_lyric_mark(payload)
     with MUSIC_LYRIC_MARKS_LOCK:
         marks_payload = read_music_lyric_marks()
@@ -6202,7 +6206,7 @@ def save_music_lyric_marks_batch(payload):
         if not isinstance(item, dict):
             continue
         path = music_path_from_relative(item.get("path", ""))
-        relative = path.relative_to(MUSIC_DIR).as_posix()
+        relative = music_relative_path(path)
         parsed.append((path, relative, build_music_lyric_mark(item)))
 
     changed_paths = {}
@@ -8744,8 +8748,8 @@ def music_lyrics_analysis(relative_path, language=""):
 
     analysis = {
         "ok": True,
-        "path": Path(path).relative_to(MUSIC_DIR).as_posix(),
-        "lyricsPath": Path(lyrics_path).relative_to(MUSIC_DIR).as_posix(),
+        "path": music_relative_path(path),
+        "lyricsPath": music_relative_path(lyrics_path),
         "lyricsLanguage": lyrics_language,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "method": "rms-edge-speechflow-first-word-pulse-fill-v88",
@@ -9088,7 +9092,7 @@ def upload_music(files):
             write_uploaded_data(target, data)
             saved_lyrics.append({
                 "name": target.name,
-                "path": target.relative_to(MUSIC_DIR).as_posix(),
+                "path": music_relative_path(target),
                 "type": target.suffix.lower().lstrip("."),
             })
             continue
@@ -9609,7 +9613,7 @@ def imported_music_files(before):
     tracks = list_music()
     files = []
     for path in after:
-        rel = path.relative_to(MUSIC_DIR).as_posix()
+        rel = music_relative_path(path)
         match = next((track for track in tracks if track["path"] == rel), None)
         if match:
             files.append(match)
@@ -9770,7 +9774,7 @@ def write_music_library_records(records):
 
 def music_track_from_path(path):
     stat = path.stat()
-    rel = path.relative_to(MUSIC_DIR).as_posix()
+    rel = music_relative_path(path)
     lyrics_path = lyrics_path_from_music_path(path)
     lyrics_languages = lyrics_language_options_from_music_path(path)
     record = {

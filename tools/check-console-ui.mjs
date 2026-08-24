@@ -100,7 +100,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "1.0.4", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "1.0.5", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -616,7 +616,7 @@ async function checkWorkspaceLoadingPolicies(client) {
       window.cancelIdleCallback = id => {
         if (id === 41) calls.cancelledIdle += 1;
       };
-      productUpdateStates = { console: { currentVersion: '1.0.4' }, world: null };
+      productUpdateStates = { console: { currentVersion: '1.0.5' }, world: null };
       productUpdateBusy = false;
       productUpdateStatusesLoaded = false;
       loadProductUpdateStatuses = async () => { calls.updates += 1; };
