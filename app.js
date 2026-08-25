@@ -11822,7 +11822,10 @@ function renderUpdateProductButton(product, button, badge) {
 }
 
 function availableProductUpdates() {
-  return updateProductIds.filter(product => productUpdateStates[product]?.available);
+  return updateProductIds.filter(product => {
+    const state = productUpdateStates[product];
+    return Boolean(state?.available && state?.notifyAvailable !== false);
+  });
 }
 
 function renderConsoleUpdate() {

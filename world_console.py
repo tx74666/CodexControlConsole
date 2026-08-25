@@ -120,6 +120,13 @@ USER_DATA_DIR = default_user_data_dir().resolve()
 CACHE_DIR = USER_DATA_DIR / "cache" if USER_DATA_DIR != APP_DIR else APP_DIR / "cache"
 INSTALLATION_STATE_FILE = CACHE_DIR / "installation.json"
 MEDIA_CONFIG_FILE = USER_DATA_DIR / "media.json"
+_local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+PUBLISHER_STATE_FILE = Path(
+    os.environ.get("CODEX_CONTROL_PUBLISHER_STATE_FILE", "").strip()
+    or (Path(_local_app_data) if _local_app_data else Path.home() / "AppData" / "Local")
+    / "CodexControlConsole"
+    / "publisher-state.json"
+).resolve()
 
 
 def read_media_config():
@@ -541,6 +548,8 @@ CONSOLE_UPDATE = ConsoleUpdateService(
     APP_MANIFEST,
     current_console_edition,
     shutdown_callback=shutdown_active_server,
+    publisher_state_file=PUBLISHER_STATE_FILE,
+    installation_id=INSTALLATION_STATE.get("installationId", ""),
 )
 WORLD_UPDATE = WorldUpdateService(
     APP_DIR,

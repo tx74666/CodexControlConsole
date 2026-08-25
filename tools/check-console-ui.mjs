@@ -100,7 +100,7 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "1.0.5", `unexpected app version: ${manifest.version}`);
+  assert(manifest.version === "1.0.6", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -616,7 +616,7 @@ async function checkWorkspaceLoadingPolicies(client) {
       window.cancelIdleCallback = id => {
         if (id === 41) calls.cancelledIdle += 1;
       };
-      productUpdateStates = { console: { currentVersion: '1.0.5' }, world: null };
+      productUpdateStates = { console: { currentVersion: '1.0.6' }, world: null };
       productUpdateBusy = false;
       productUpdateStatusesLoaded = false;
       loadProductUpdateStatuses = async () => { calls.updates += 1; };
@@ -948,13 +948,20 @@ async function runBrowserChecks(client) {
     productUpdateStates.world = { ...productUpdateStates.world, latestVersion: '0.1.6', available: false };
     renderConsoleUpdate();
     const oneAvailable = { text: button?.textContent?.trim() || '', product: button?.dataset.product || '' };
+    productUpdateStates.console = {
+      ...productUpdateStates.console,
+      selfPublished: true,
+      notifyAvailable: false
+    };
+    renderConsoleUpdate();
+    const hiddenWhenSelfPublished = Boolean(button?.hidden);
     productUpdateStates.console = { ...productUpdateStates.console, latestVersion: '0.3.4', available: false };
     renderConsoleUpdate();
     const hiddenWhenCurrent = Boolean(button?.hidden);
     productUpdateStates = originalStates;
     selectedUpdateProduct = originalProduct;
     renderConsoleUpdate();
-    return { bothAvailable, oneAvailable, hiddenWhenCurrent };
+    return { bothAvailable, oneAvailable, hiddenWhenSelfPublished, hiddenWhenCurrent };
   })()`);
   assert(
     updateBannerState.bothAvailable.visible
@@ -963,6 +970,7 @@ async function runBrowserChecks(client) {
       && updateBannerState.bothAvailable.availableBadges === 2
       && updateBannerState.oneAvailable.text.endsWith('Codex Console v0.3.5')
       && updateBannerState.oneAvailable.product === 'console'
+      && updateBannerState.hiddenWhenSelfPublished
       && updateBannerState.hiddenWhenCurrent,
     `top update area does not reflect version availability: ${JSON.stringify(updateBannerState)}`
   );

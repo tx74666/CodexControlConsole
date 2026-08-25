@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -45,7 +46,16 @@ def main():
             "installMode": "installed",
             "edition": "developer",
         }
-        service = ConsoleUpdateService(app_dir, data_dir, manifest, lambda: "developer")
+        publisher_state_file = root / "publisher-state.json"
+        installation_id = "publisher-installation"
+        service = ConsoleUpdateService(
+            app_dir,
+            data_dir,
+            manifest,
+            lambda: "developer",
+            publisher_state_file=publisher_state_file,
+            installation_id=installation_id,
+        )
         setup_bytes = b"MZ" + b"setup" * 40
         setup_hash = hashlib.sha256(setup_bytes).hexdigest()
         setup_name = "CodexControlConsole-Setup-x64.exe"
@@ -69,6 +79,47 @@ def main():
         require(status["assetName"] == setup_name and status["assetAvailable"], "x64 Setup was not selected")
         require(status["canInstall"], "installed Windows build should open Setup updates")
         require(status["installationMode"] == "installed", "installation mode was not exposed")
+        require(status["notifyAvailable"], "ordinary newer release did not request a notification")
+        require(not status["selfPublished"], "ordinary newer release was marked as self-published")
+
+        publisher_state_file.write_text(json.dumps({
+            "schema": 1,
+            "installationId": installation_id,
+            "releases": [{
+                "repository": manifest["repository"],
+                "version": "0.4.1",
+                "tag": "v0.4.1",
+                "commit": "a" * 40,
+                "localInstallSynchronized": True,
+            }],
+        }), encoding="utf-8")
+        self_published = service.status()
+        require(self_published["available"], "self-published status hid the true version difference")
+        require(self_published["selfPublished"], "exact publisher release was not recognized")
+        require(not self_published["notifyAvailable"], "exact publisher release still requested a notification")
+
+        marker_payload = json.loads(publisher_state_file.read_text(encoding="utf-8"))
+        marker_payload["releases"][0]["localInstallSynchronized"] = False
+        publisher_state_file.write_text(json.dumps(marker_payload), encoding="utf-8")
+        unsynchronized_release = service.status()
+        require(unsynchronized_release["notifyAvailable"], "an unsynchronized publisher release was suppressed")
+
+        marker_payload["releases"][0]["localInstallSynchronized"] = True
+        marker_payload["releases"][0]["version"] = "0.4.0"
+        marker_payload["releases"][0]["tag"] = "v0.4.0"
+        publisher_state_file.write_text(json.dumps(marker_payload), encoding="utf-8")
+        other_release = service.status()
+        require(other_release["notifyAvailable"], "a release not published by this device was suppressed")
+        publisher_state_file.unlink()
+
+        current_service = ConsoleUpdateService(
+            app_dir,
+            root / "current-data",
+            {**manifest, "version": "0.4.1"},
+            lambda: "developer",
+        )
+        current_service._write_state(state)
+        require(not current_service.status()["available"], "current release was incorrectly marked as newer")
 
         configured = service.configure({"autoCheck": False})
         require(configured["autoCheck"] is False, "per-user update preference was not saved")

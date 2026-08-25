@@ -74,13 +74,15 @@ The result is `dist\CodexControlConsole-Setup-x64.exe`. A local build is unsigne
 
 ## Publish A Release
 
-The release helper retries intermittent GitHub connections, pushes `main`, creates the version tag, and waits until both Windows x64 downloads are available:
+The release helper retries intermittent GitHub connections, pushes `main`, creates the version tag, waits until both Windows x64 downloads are available, verifies the Setup digest, and synchronizes the publisher's local installation to the released version:
 
 ```powershell
-.\tools\publish-release.ps1 -Version 1.0.5
+.\tools\publish-release.ps1 -Version 1.0.6
 ```
 
 Use `-CheckConnection` to verify GitHub access without uploading anything.
+
+Publisher synchronization is what prevents the computer that performed the release from immediately advertising its own release as an update. The helper also records the exact repository, tag, commit, and local installation ID in `%LOCALAPPDATA%\CodexControlConsole\publisher-state.json`; this suppresses only that release's top-bar notification on that Windows user profile. A newer tag published elsewhere is still announced normally. Use `-SkipPublisherSync` only when intentionally publishing from a machine that must not install Codex Console.
 
 The release workflow prefers trusted Authenticode signing whenever all Artifact Signing settings are available. When none are configured, it can still publish an explicitly labeled unsigned build after all quality, package, and Microsoft Defender checks pass. A partially configured signing identity blocks publishing. The emergency direct-publisher helper remains signed-only.
 

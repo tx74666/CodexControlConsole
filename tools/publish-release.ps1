@@ -2,6 +2,7 @@ param(
   [string]$Version = "",
   [switch]$CheckConnection,
   [switch]$SkipChecks,
+  [switch]$SkipPublisherSync,
   [ValidateRange(1, 12)]
   [int]$RetryCount = 6,
   [ValidateRange(1, 60)]
@@ -159,6 +160,7 @@ $Headers = @{
 }
 
 while ((Get-Date) -lt $Deadline) {
+  $Release = $null
   try {
     $Release = Invoke-RestMethod -Uri $ReleaseApi -Headers $Headers -TimeoutSec 20
     $Assets = @($Release.assets)
@@ -170,15 +172,26 @@ while ((Get-Date) -lt $Deadline) {
     if (($ActualAssets -join "`n") -ne (($ExpectedAssets | Sort-Object) -join "`n")) {
       throw "Release exists but its Windows downloads are incomplete: $($ActualAssets -join ', ')."
     }
-    Write-Host "Release ready: $($Release.html_url)"
-    foreach ($Asset in ($Assets | Sort-Object name)) {
-      Write-Host "Download: $($Asset.browser_download_url)"
-    }
-    exit 0
   } catch {
     Write-Host "Waiting for GitHub Actions to publish $Tag..."
     Start-Sleep -Seconds 15
+    continue
   }
+
+  Write-Host "Release ready: $($Release.html_url)"
+  foreach ($Asset in ($Assets | Sort-Object name)) {
+    Write-Host "Download: $($Asset.browser_download_url)"
+  }
+  if (-not $SkipPublisherSync) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\sync-publisher-installation.ps1 `
+      -Version $Version `
+      -Repository ([string]$Manifest.repository) `
+      -TargetCommit $Head
+    if ($LASTEXITCODE -ne 0) {
+      throw "Release was published, but the publisher installation could not be synchronized."
+    }
+  }
+  exit 0
 }
 
 throw "Timed out waiting for $Tag. Check https://github.com/tx74666/CodexControlConsole/actions"

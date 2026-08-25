@@ -25,7 +25,7 @@ function Resolve-BuildVersion {
 
   $ManifestVersion = ([string]$Manifest.version).Trim()
   if ($ManifestVersion -notmatch '^\d+\.\d+\.\d+$') {
-    throw "app-manifest.json version must use semantic versioning, for example 1.0.5."
+    throw "app-manifest.json version must use semantic versioning, for example 1.0.6."
   }
 
   $RequestedVersion = ([string]$RequestedVersion).Trim()
@@ -36,7 +36,7 @@ function Resolve-BuildVersion {
     $RequestedVersion = $RequestedVersion.Substring(1)
   }
   if ($RequestedVersion -notmatch '^\d+\.\d+\.\d+$') {
-    throw "Version must use semantic versioning, for example 1.0.5."
+    throw "Version must use semantic versioning, for example 1.0.6."
   }
   if ($RequestedVersion -ne $ManifestVersion) {
     throw "Requested version $RequestedVersion does not match app-manifest.json version $ManifestVersion."

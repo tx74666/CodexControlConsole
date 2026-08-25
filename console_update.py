@@ -68,7 +68,16 @@ def _sha256_file(path):
 
 
 class ConsoleUpdateService:
-    def __init__(self, app_dir, data_dir, manifest, edition_provider, shutdown_callback=None):
+    def __init__(
+        self,
+        app_dir,
+        data_dir,
+        manifest,
+        edition_provider,
+        shutdown_callback=None,
+        publisher_state_file=None,
+        installation_id="",
+    ):
         self.app_dir = Path(app_dir).resolve()
         self.data_dir = Path(data_dir).resolve()
         self.manifest = dict(manifest or {})
@@ -77,6 +86,12 @@ class ConsoleUpdateService:
         self.state_file = self.data_dir / "cache" / "update_state.json"
         self.result_file = self.data_dir / "cache" / "update_result.json"
         self.update_dir = self.data_dir / "updates"
+        self.publisher_state_file = (
+            Path(publisher_state_file).resolve()
+            if publisher_state_file
+            else self.data_dir / "publisher-state.json"
+        )
+        self.installation_id = str(installation_id or "").strip()
         self._lock = threading.RLock()
 
     @property
@@ -134,6 +149,32 @@ class ConsoleUpdateService:
             temporary = self.state_file.with_suffix(".tmp")
             temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(temporary, self.state_file)
+
+    def _self_published_release(self, latest):
+        version = str((latest or {}).get("version") or "").strip().lstrip("v")
+        tag = str((latest or {}).get("tag") or f"v{version}").strip()
+        if not version or not _version_tuple(version) or not self.installation_id:
+            return False
+        try:
+            payload = json.loads(self.publisher_state_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        if str(payload.get("installationId") or "").strip() != self.installation_id:
+            return False
+        releases = payload.get("releases")
+        if not isinstance(releases, list):
+            return False
+        repository = self.repository.casefold()
+        return any(
+            isinstance(item, dict)
+            and str(item.get("repository") or "").strip().casefold() == repository
+            and str(item.get("version") or "").strip().lstrip("v") == version
+            and str(item.get("tag") or f"v{version}").strip().casefold() == tag.casefold()
+            and item.get("localInstallSynchronized") is True
+            for item in releases
+        )
 
     def _request(self, url, accept="application/vnd.github+json", timeout=20):
         request = urllib.request.Request(
@@ -255,6 +296,8 @@ class ConsoleUpdateService:
                 "currentVersion": self.current_version,
                 "latestVersion": self.current_version,
                 "available": False,
+                "notifyAvailable": False,
+                "selfPublished": False,
                 "autoCheck": True,
                 "checkedAt": state.get("checkedAt") or "",
                 "releaseUrl": self._store_release_url(),
@@ -275,6 +318,8 @@ class ConsoleUpdateService:
             return self.check()
         latest = state.get("latest") or {}
         latest_version = str(latest.get("version") or "")
+        available = _is_newer(latest_version, self.current_version)
+        self_published = bool(available and self._self_published_release(latest))
         asset_name = self._asset_name()
         asset = next((item for item in latest.get("assets") or [] if item.get("name") == asset_name), {})
         pending = state.get("pending") or {}
@@ -283,7 +328,9 @@ class ConsoleUpdateService:
             "ok": True,
             "currentVersion": self.current_version,
             "latestVersion": latest_version,
-            "available": _is_newer(latest_version, self.current_version),
+            "available": available,
+            "notifyAvailable": bool(available and not self_published),
+            "selfPublished": self_published,
             "autoCheck": state["autoCheck"],
             "checkedAt": state.get("checkedAt") or "",
             "releaseUrl": latest.get("url") or f"https://github.com/{self.repository}/releases/latest",
