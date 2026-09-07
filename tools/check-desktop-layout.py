@@ -99,6 +99,45 @@ def main():
         except ValueError as error:
             require("Windows-supported range" in str(error), "an invalid coordinate failed for the wrong reason")
 
+        infinite_position = layout_payload(0)
+        infinite_position["Icons"][0]["X"] = float("inf")
+        infinite_position_json = json.dumps(infinite_position).replace("Infinity", "1e1000")
+        try:
+            service.import_layouts([{
+                "filename": "infinite-position.json",
+                "data": infinite_position_json.encode("utf-8"),
+            }])
+            raise AssertionError("an infinite desktop coordinate was imported")
+        except ValueError as error:
+            require("valid position" in str(error), "an infinite coordinate failed for the wrong reason")
+
+        malformed_position = layout_payload(0)
+        malformed_position["Icons"][1].pop("Y")
+        before_failed_import = set((data_dir / "plans").glob("*.json"))
+        try:
+            service.import_layouts([
+                {"filename": "valid-before-invalid.json", "data": imported_payload},
+                {"filename": "missing-position.json", "data": json.dumps(malformed_position).encode("utf-8")},
+            ])
+            raise AssertionError("a partially invalid desktop layout import succeeded")
+        except ValueError as error:
+            require("valid position" in str(error), "a malformed icon failed for the wrong reason")
+        require(
+            set((data_dir / "plans").glob("*.json")) == before_failed_import,
+            "a failed multi-file import left a partially imported plan behind",
+        )
+
+        duplicate_names = layout_payload(0)
+        duplicate_names["Icons"][1]["Name"] = duplicate_names["Icons"][0]["Name"].swapcase()
+        try:
+            service.import_layouts([{
+                "filename": "duplicate-names.json",
+                "data": json.dumps(duplicate_names).encode("utf-8"),
+            }])
+            raise AssertionError("duplicate desktop icon names were imported")
+        except ValueError as error:
+            require("duplicate icon name" in str(error), "duplicate icon names failed for the wrong reason")
+
         service.select({"planId": "remembered-current"})
         original = default_layout.read_bytes()
         save_temporary_pattern = f".{default_layout.stem}.save-*.tmp.json"
@@ -168,6 +207,7 @@ def main():
 
         service._run_script = fake_run
         first_save = service.save({"planId": "remembered-current"})
+        require(first_save["historyUpdated"], "a successful save did not report its history update")
         first_backup = Path(first_save["backup"])
         require(first_backup.is_file(), "save did not create a backup first")
         require(first_backup.read_bytes() == original, "backup does not contain the pre-save JSON")
@@ -195,6 +235,7 @@ def main():
         finally:
             service._write_history = original_write_history
         degraded_backup = Path(degraded_save["backup"])
+        require(not degraded_save["historyUpdated"], "history failure was reported as updated")
         require(degraded_save["historyWarning"], "history failure was not returned as a save warning")
         require(default_layout.read_bytes() != before_history_failure, "history failure rolled back a successful save")
         require(degraded_backup.read_bytes() == before_history_failure, "degraded save backup is not the prior layout")
@@ -231,12 +272,47 @@ def main():
         service._run_script = failing_restore_run
         service._verify_restore = verify_failed_then_rollback
         rolled_back = service.restore({"planId": "remembered-current"})
+        require(not rolled_back["ok"], "a rolled-back target restore was reported as successful")
+        require(rolled_back["finalState"] == "rolled-back", "a healthy rollback has the wrong final state")
         require(rolled_back["rolledBack"], "an unhealthy desktop restore was not rolled back")
         require(rolled_back["rollback"]["healthy"], "the pre-restore desktop layout was not recovered")
         require(
             restore_actions == [default_layout.name, "before-last-restore.json"],
             "desktop rollback did not restore the pre-operation snapshot",
         )
+
+        def interrupted_restore_run(action, path):
+            target = Path(path)
+            if action == "save":
+                write_layout(target, layout_payload(220))
+                return "captured"
+            if action == "restore" and target == default_layout:
+                raise RuntimeError("simulated interrupted target restore")
+            if action == "restore" and target.name == "before-last-restore.json":
+                return "restored rollback"
+            raise AssertionError(f"unexpected interrupted-restore action: {action} {target}")
+
+        service._run_script = interrupted_restore_run
+        service._verify_restore = verify_failed_then_rollback
+        interrupted = service.restore({"planId": "remembered-current"})
+        require(not interrupted["ok"], "an interrupted target restore was reported as successful")
+        require(interrupted["finalState"] == "rolled-back", "an interrupted restore lost its healthy rollback state")
+        require("simulated interrupted" in interrupted["restoreError"], "an interrupted restore lost its root error")
+
+        def unhealthy_verification(target, snapshot_name="last-restored.json"):
+            return {
+                "healthy": False,
+                "checkedIcons": 2,
+                "missing": ["First"],
+                "mismatches": [],
+                "overlaps": [],
+                "snapshot": str(data_dir / "verification" / snapshot_name),
+            }
+
+        service._verify_restore = unhealthy_verification
+        rollback_failed = service.restore({"planId": "remembered-current"})
+        require(not rollback_failed["ok"], "a failed rollback was reported as successful")
+        require(rollback_failed["finalState"] == "rollback-failed", "a failed rollback has the wrong final state")
 
         fresh_service = DesktopLayoutService(
             app_dir,
@@ -279,6 +355,11 @@ def main():
         require(actions == ["save"], "initial history capture used an unexpected action")
         require(not history_service.refresh_history({})["captured"], "history recaptured before the interval elapsed")
         require(actions == ["save"], "an early refresh still invoked the desktop helper")
+        try:
+            history_service.refresh_history({"force": "false"})
+            raise AssertionError("a string history force flag was accepted as true")
+        except ValueError as error:
+            require("JSON boolean" in str(error), "an invalid history force flag failed for the wrong reason")
 
         history_clock["now"] += timedelta(days=2)
         require(not history_service.refresh_history({})["captured"], "history recaptured after only two days")
@@ -346,7 +427,9 @@ def main():
 
         def unchanged_run(action, path):
             require(action == "save", "unchanged history attempted to restore the desktop")
-            write_layout(path, unchanged_payload)
+            payload = dict(unchanged_payload)
+            payload["SavedAt"] = unchanged_clock["now"].isoformat()
+            write_layout(path, payload)
             return "captured unchanged layout"
 
         unchanged_service._run_script = unchanged_run
@@ -362,6 +445,10 @@ def main():
         require(
             unchanged_status["history"]["snapshotCount"] >= 7,
             "unchanged automatic captures did not retain their logical timeline",
+        )
+        require(
+            len({snapshot["path"] for snapshot in unchanged_service._read_history()["snapshots"]}) == 1,
+            "timestamp-only changes created duplicate physical desktop snapshots",
         )
         unchanged_history = next(plan for plan in unchanged_status["plans"] if plan["source"] == "history")
         require(

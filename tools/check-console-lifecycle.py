@@ -103,8 +103,24 @@ def check_live_server():
     environment = os.environ.copy()
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     with tempfile.TemporaryDirectory(prefix="codex-console-lifecycle-") as temporary:
-        Path(temporary, ".cache-migrated-v0.3").write_text("test\n", encoding="utf-8")
+        temporary_path = Path(temporary)
+        Path(temporary_path, ".cache-migrated-v0.3").write_text("test\n", encoding="utf-8")
+        desktop_layout_data = temporary_path / "CodexControlConsole" / "desktop-layout"
+        desktop_layout_helper = temporary_path / "DesktopLayout-Test.ps1"
+        desktop_layout_helper.write_text(
+            'param([string]$Action = "list", [string]$Path = "")\n'
+            'throw "Desktop operations are disabled in the lifecycle check."\n',
+            encoding="utf-8",
+        )
         environment["CODEX_CONTROL_DATA_DIR"] = temporary
+        environment["CODEX_CONTROL_DESKTOP_LAYOUT_DATA_DIR"] = str(desktop_layout_data)
+        environment["CODEX_CONTROL_DESKTOP_LAYOUT_CURRENT"] = str(
+            desktop_layout_data / "plans" / "desktop-layout-current.json"
+        )
+        environment["CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT"] = str(desktop_layout_helper)
+        environment["CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE"] = str(
+            temporary_path / "Startup" / "RestoreDesktopLayout.vbs"
+        )
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -135,6 +151,17 @@ def check_live_server():
                     time.sleep(0.1)
             else:
                 raise AssertionError("test server did not become ready")
+
+            with urllib.request.urlopen(endpoint + "/api/console/desktop-layout", timeout=4) as response:
+                desktop_layout_status = json.loads(response.read().decode("utf-8"))
+            require(
+                Path(desktop_layout_status["dataDirectory"]).resolve() == desktop_layout_data.resolve(),
+                "lifecycle server reached the real desktop-layout data directory",
+            )
+            require(
+                Path(desktop_layout_status["tool"]["path"]).resolve() == desktop_layout_helper.resolve(),
+                "lifecycle server reached the real desktop-layout helper",
+            )
 
             opened = post_json(
                 endpoint + "/api/console/window-session",

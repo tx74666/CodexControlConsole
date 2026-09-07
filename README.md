@@ -100,7 +100,7 @@ The same lightweight, non-building check entry point is used by pull requests, p
 .\tools\check-quality.ps1
 ```
 
-It covers Python syntax and core services, desktop layouts, external application launching, Blender collaboration, feedback Worker tests, and static Node syntax checks for the UI. For the full local browser regression, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\check-console-ui-local.ps1` separately.
+It covers Python syntax and core services, desktop layouts, external application launching, Blender collaboration, feedback Worker tests, and static Node syntax checks for the UI. For the full local browser regression, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\check-console-ui-local.ps1` separately. That runner isolates all desktop-layout paths under a temporary directory and uses a non-destructive capture helper, so it never reads, restores, or overwrites the user's real desktop layout.
 
 Blender > Helper > GitHub Coop lists repositories from `github-coop.json`. GitHub Desktop handles authentication, clone, commits, pull, and push.
 

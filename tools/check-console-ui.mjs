@@ -99,6 +99,15 @@ function staticChecks() {
   assert(existsSync(join(projectRoot, "console_window_session.py")), "window lifecycle backend is missing");
   assert(existsSync(join(projectRoot, "services", "feedback-relay", "src", "index.js")), "feedback relay is missing");
   assert(existsSync(join(projectRoot, "tools", "DesktopLayout.ps1")), "generic desktop layout helper is missing");
+  const localUiRunner = readFileSync(join(projectRoot, "tools", "check-console-ui-local.ps1"), "utf8");
+  assert(
+    /\$env:CODEX_CONTROL_DESKTOP_LAYOUT_DATA_DIR\s*=\s*\$desktopLayoutData/.test(localUiRunner)
+      && /\$env:CODEX_CONTROL_DESKTOP_LAYOUT_CURRENT\s*=\s*\$desktopLayoutCurrent/.test(localUiRunner)
+      && /\$env:CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT\s*=\s*\$desktopLayoutHelper/.test(localUiRunner)
+      && /\$env:CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE\s*=\s*\$desktopLayoutStartup/.test(localUiRunner)
+      && localUiRunner.includes("The isolated UI test helper only supports read-only desktop capture."),
+    "Local browser checks can reach the real desktop-layout data or restore helper"
+  );
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
   assert(manifest.version === "1.0.6", `unexpected app version: ${manifest.version}`);
   expectedAppVersion = manifest.version;
@@ -144,7 +153,8 @@ function staticChecks() {
     "randomRealmTextureFileInput",
     "steamworkGameContentFileInput",
     "steamworkPublishToolFileInput",
-    "steamworkAssetFileInput"
+    "steamworkAssetFileInput",
+    "desktopLayoutFileInput"
   ];
   assert(
     programmaticFileInputs.every(id => new RegExp(`id="${id}"[^>]+hidden`).test(consoleHtml)),
@@ -176,6 +186,18 @@ function staticChecks() {
       && appSource.includes('rollback.healthy ? "desktopLayoutRolledBack" : "desktopLayoutRollbackUnhealthy"')
       && appSource.includes('desktopLayoutNoticeTone = rollback.healthy ? "warning" : "danger"'),
     "Desktop restore rollback status is not surfaced"
+  );
+  assert(
+    appSource.includes("const requestedPlanId = els.desktopLayoutPlan.value;")
+      && appSource.includes("planId: requestedPlanId"),
+    "Desktop layout selection can be reset to the previous plan before it is submitted"
+  );
+  assert(
+    appSource.includes("const desktopLayoutRestoreTimeoutMs = 11 * 60_000;")
+      && appSource.includes("{ timeoutMs: desktopLayoutRestoreTimeoutMs }")
+      && appSource.includes("desktopLayoutSavedHistoryWarning")
+      && appSource.includes("desktopLayoutState.historyWarning"),
+    "Desktop layout long-running restore or degraded-save feedback is not protected"
   );
   const ensureModuleDataStart = appSource.indexOf("function ensureModuleDataLoaded(");
   const ensureModuleDataEnd = appSource.indexOf("\nfunction ", ensureModuleDataStart + 1);
@@ -332,6 +354,13 @@ function staticChecks() {
   );
   const styleSource = readFileSync(join(projectRoot, "styles.css"), "utf8");
   assert(/\[hidden\]\s*\{\s*display:\s*none\s*!important;/.test(styleSource), "hidden Store controls can remain visible");
+  assert(
+    styleSource.includes("--status-success: #08724c;")
+      && styleSource.includes("--status-warning: #7a4b00;")
+      && styleSource.includes("--status-danger: #b42318;")
+      && /\.desktop-layout-summary span\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*white-space:\s*normal;/s.test(styleSource),
+    "Desktop layout status text can be truncated or use low-contrast light-theme colors"
+  );
   assert(
     appSource.includes('window.addEventListener("pagehide", closeConsoleWindowSession)'),
     "window close notification is missing"
@@ -1673,6 +1702,128 @@ async function runBrowserChecks(client) {
       && /CodexControlConsole[\\/]desktop-layout/i.test(desktopLayoutUi.dataDirectory),
     `desktop layout UI is incomplete or not device-local: ${JSON.stringify(desktopLayoutUi)}`
   );
+  const requestBodyTimeout = await evaluate(client, `(async () => {
+    const originalFetch = window.fetch;
+    try {
+      window.fetch = async (_path, options = {}) => ({
+        ok: true,
+        status: 200,
+        json: () => new Promise((_resolve, reject) => {
+          options.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+        })
+      });
+      try {
+        await requestJson('/api/test-stalled-body', {}, { timeoutMs: 20 });
+        return 'completed unexpectedly';
+      } catch (error) {
+        return error?.message || String(error);
+      }
+    } finally {
+      window.fetch = originalFetch;
+    }
+  })()`, true);
+  assert(requestBodyTimeout === 'request timed out', `JSON response body bypassed request timeout: ${requestBodyTimeout}`);
+  const desktopLayoutSelection = await evaluate(client, `(async () => {
+    const originalPostJson = postJson;
+    const originalState = desktopLayoutState;
+    const originalNotice = desktopLayoutNotice;
+    const originalTone = desktopLayoutNoticeTone;
+    const select = document.querySelector('#desktopLayoutPlan');
+    const plans = Array.isArray(originalState?.plans) ? originalState.plans : [];
+    const originalId = originalState?.selectedPlan || plans[0]?.id || '';
+    const target = plans.find(plan => plan.id !== originalId);
+    let requested = '';
+    try {
+      if (!select || !target) return { originalId, target: '', requested: '', selected: '' };
+      desktopLayoutState = { ...originalState, selectedPlan: originalId };
+      renderDesktopLayout();
+      select.value = target.id;
+      postJson = async (path, payload) => {
+        if (path !== '/api/console/desktop-layout/select') throw new Error('unexpected endpoint');
+        requested = payload?.planId || '';
+        return {
+          ...desktopLayoutState,
+          selectedPlan: requested,
+          plans: plans.map(plan => ({ ...plan, selected: plan.id === requested }))
+        };
+      };
+      await selectDesktopLayoutPlan();
+      return {
+        originalId,
+        target: target.id,
+        requested,
+        selected: desktopLayoutState?.selectedPlan || '',
+        rendered: select.value
+      };
+    } finally {
+      postJson = originalPostJson;
+      desktopLayoutState = originalState;
+      desktopLayoutNotice = originalNotice;
+      desktopLayoutNoticeTone = originalTone;
+      desktopLayoutBusy = false;
+      renderDesktopLayout();
+    }
+  })()`, true);
+  assert(
+    desktopLayoutSelection.target
+      && desktopLayoutSelection.target !== desktopLayoutSelection.originalId
+      && desktopLayoutSelection.requested === desktopLayoutSelection.target
+      && desktopLayoutSelection.selected === desktopLayoutSelection.target
+      && desktopLayoutSelection.rendered === desktopLayoutSelection.target,
+    `Desktop layout selection submitted the stale plan: ${JSON.stringify(desktopLayoutSelection)}`
+  );
+  const desktopLayoutSaveWarning = await evaluate(client, `(async () => {
+    const originalPostJson = postJson;
+    const originalConfirm = window.confirm;
+    const originalState = desktopLayoutState;
+    const originalNotice = desktopLayoutNotice;
+    const originalTone = desktopLayoutNoticeTone;
+    const originalDetail = desktopLayoutDetail;
+    const plan = originalState?.plans?.find(item => item.source !== 'history');
+    try {
+      if (!plan) return { available: false };
+      window.confirm = () => true;
+      desktopLayoutState = { ...originalState, selectedPlan: plan.id };
+      renderDesktopLayout();
+      postJson = async path => {
+        if (path !== '/api/console/desktop-layout/save') throw new Error('unexpected endpoint');
+        return {
+          ...desktopLayoutState,
+          historyWarning: 'simulated history storage failure',
+          saved: 'saved-layout.json',
+          backup: 'backup-layout.json'
+        };
+      };
+      await saveDesktopLayout();
+      const status = document.querySelector('#desktopLayoutStatus');
+      return {
+        available: true,
+        notice: desktopLayoutNotice,
+        tone: desktopLayoutNoticeTone,
+        warning: status?.classList.contains('warning'),
+        role: status?.getAttribute('role') || '',
+        title: status?.title || ''
+      };
+    } finally {
+      postJson = originalPostJson;
+      window.confirm = originalConfirm;
+      desktopLayoutState = originalState;
+      desktopLayoutNotice = originalNotice;
+      desktopLayoutNoticeTone = originalTone;
+      desktopLayoutDetail = originalDetail;
+      desktopLayoutBusy = false;
+      renderDesktopLayout();
+    }
+  })()`, true);
+  assert(
+    desktopLayoutSaveWarning.available
+      && desktopLayoutSaveWarning.notice.includes('simulated history storage failure')
+      && desktopLayoutSaveWarning.tone === 'warning'
+      && desktopLayoutSaveWarning.warning
+      && desktopLayoutSaveWarning.role === 'status'
+      && desktopLayoutSaveWarning.title === desktopLayoutSaveWarning.notice,
+    `Desktop layout degraded save was reported as fully successful: ${JSON.stringify(desktopLayoutSaveWarning)}`
+  );
   const desktopRollbackUi = await evaluate(client, `(async () => {
     const originalPostJson = postJson;
     const originalConfirm = window.confirm;
@@ -1708,7 +1859,9 @@ async function runBrowserChecks(client) {
           tone: desktopLayoutNoticeTone,
           detail: desktopLayoutDetail,
           warning: document.querySelector('#desktopLayoutStatus')?.classList.contains('warning'),
-          danger: document.querySelector('#desktopLayoutStatus')?.classList.contains('danger')
+          danger: document.querySelector('#desktopLayoutStatus')?.classList.contains('danger'),
+          role: document.querySelector('#desktopLayoutStatus')?.getAttribute('role') || '',
+          title: document.querySelector('#desktopLayoutStatus')?.title || ''
         };
       };
       return {
@@ -1733,10 +1886,14 @@ async function runBrowserChecks(client) {
       && desktopRollbackUi.healthy.tone === 'warning'
       && desktopRollbackUi.healthy.warning
       && !desktopRollbackUi.healthy.danger
+      && desktopRollbackUi.healthy.role === 'status'
+      && desktopRollbackUi.healthy.title === desktopRollbackUi.healthy.notice
       && /rollback-ok\.json$/.test(desktopRollbackUi.healthy.detail)
       && desktopRollbackUi.unhealthy.notice === desktopRollbackUi.unhealthyText
       && desktopRollbackUi.unhealthy.tone === 'danger'
       && desktopRollbackUi.unhealthy.danger
+      && desktopRollbackUi.unhealthy.role === 'alert'
+      && desktopRollbackUi.unhealthy.title === desktopRollbackUi.unhealthy.notice
       && /rollback-failed\.json$/.test(desktopRollbackUi.unhealthy.detail),
     `Desktop restore rollback status is not clear: ${JSON.stringify(desktopRollbackUi)}`
   );

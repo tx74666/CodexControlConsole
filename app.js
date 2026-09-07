@@ -352,6 +352,7 @@ const i18n = {
     desktopLayoutRestoreIssues: (missing, mismatches, overlaps) => `\u5df2\u6062\u590d \u00b7 \u7f3a\u5931 ${missing} \u00b7 \u504f\u5dee ${mismatches} \u00b7 \u91cd\u53e0 ${overlaps}`,
     desktopLayoutSaving: "\u6b63\u5728\u5907\u4efd\u5e76\u4fdd\u5b58",
     desktopLayoutSaved: "\u5df2\u5907\u4efd\u5e76\u4fdd\u5b58",
+    desktopLayoutSavedHistoryWarning: message => `\u5f53\u524d\u5e03\u5c40\u5df2\u4fdd\u5b58\uff0c\u4f46\u5386\u53f2\u8bb0\u5f55\u66f4\u65b0\u5931\u8d25\uff1a${message}`,
     desktopLayoutFailed: message => `\u684c\u9762\u5e03\u5c40\u5931\u8d25\uff1a${message}`,
     desktopLayoutConfirmRestore: name => `\u4f7f\u7528\u201c${name}\u201d\u6062\u590d\u684c\u9762\u56fe\u6807\u4f4d\u7f6e\uff1f`,
     desktopLayoutConfirmSave: name => `\u5148\u5907\u4efd\u539f JSON\uff0c\u518d\u7528\u5f53\u524d\u684c\u9762\u8986\u76d6\u201c${name}\u201d\uff1f`,
@@ -1151,6 +1152,7 @@ const i18n = {
     desktopLayoutRestoreIssues: (missing, mismatches, overlaps) => `Restored \u00b7 ${missing} missing \u00b7 ${mismatches} shifted \u00b7 ${overlaps} overlaps`,
     desktopLayoutSaving: "Backing up and saving",
     desktopLayoutSaved: "Backed up and saved",
+    desktopLayoutSavedHistoryWarning: message => `Current layout saved, but history could not be updated: ${message}`,
     desktopLayoutFailed: message => `Desktop layout failed: ${message}`,
     desktopLayoutConfirmRestore: name => `Restore desktop icon positions from "${name}"?`,
     desktopLayoutConfirmSave: name => `Back up the JSON, then replace "${name}" with the current desktop?`,
@@ -2270,6 +2272,9 @@ let desktopLayoutHistoryTimer = 0;
 let desktopLayoutHistoryRetryCount = 0;
 const desktopLayoutHistoryRetryBaseMs = 30_000;
 const desktopLayoutHistoryRetryMaxMs = 15 * 60_000;
+const desktopLayoutReadTimeoutMs = 30_000;
+const desktopLayoutImportTimeoutMs = 60_000;
+const desktopLayoutRestoreTimeoutMs = 11 * 60_000;
 let desktopLayoutNotice = "";
 let desktopLayoutNoticeTone = "";
 let desktopLayoutDetail = "";
@@ -12319,6 +12324,9 @@ function renderDesktopLayout() {
       }
     }
     els.desktopLayoutStatus.textContent = status;
+    els.desktopLayoutStatus.title = status;
+    els.desktopLayoutStatus.setAttribute("role", tone === "danger" ? "alert" : "status");
+    els.desktopLayoutStatus.setAttribute("aria-live", tone === "danger" ? "assertive" : "polite");
     els.desktopLayoutStatus.classList.toggle("success", tone === "success");
     els.desktopLayoutStatus.classList.toggle("warning", tone === "warning");
     els.desktopLayoutStatus.classList.toggle("danger", tone === "danger");
@@ -12336,10 +12344,11 @@ async function loadDesktopLayout(options = {}) {
   }
   renderDesktopLayout();
   try {
-    const response = await fetch("/api/console/desktop-layout", { cache: "no-store" });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    desktopLayoutState = payload;
+    desktopLayoutState = await requestJson(
+      "/api/console/desktop-layout",
+      { cache: "no-store" },
+      { timeoutMs: desktopLayoutReadTimeoutMs }
+    );
     desktopLayoutNotice = "";
     desktopLayoutNoticeTone = "";
   } catch (error) {
@@ -12429,13 +12438,14 @@ async function refreshDesktopLayoutHistory() {
 
 async function selectDesktopLayoutPlan() {
   if (!els.desktopLayoutPlan || desktopLayoutBusy) return;
+  const requestedPlanId = els.desktopLayoutPlan.value;
   desktopLayoutBusy = true;
   desktopLayoutNotice = "";
   renderDesktopLayout();
   try {
     desktopLayoutState = await postJson("/api/console/desktop-layout/select", {
-      planId: els.desktopLayoutPlan.value
-    });
+      planId: requestedPlanId
+    }, { timeoutMs: desktopLayoutReadTimeoutMs });
     desktopLayoutDetail = "";
   } catch (error) {
     desktopLayoutNotice = text("desktopLayoutFailed", error.message);
@@ -12458,7 +12468,7 @@ async function restoreDesktopLayout() {
   try {
     desktopLayoutState = await postJson("/api/console/desktop-layout/restore", {
       planId: plan.id
-    }, { timeoutMs: 180000 });
+    }, { timeoutMs: desktopLayoutRestoreTimeoutMs });
     const verification = desktopLayoutState.verification || {};
     const rollback = desktopLayoutState.rollback || {};
     if (desktopLayoutState.rolledBack) {
@@ -12479,7 +12489,7 @@ async function restoreDesktopLayout() {
     desktopLayoutDetail = rollback.verification?.snapshot || verification.snapshot || plan.path;
   } catch (error) {
     desktopLayoutNotice = text("desktopLayoutFailed", error.message);
-    desktopLayoutNoticeTone = "warning";
+    desktopLayoutNoticeTone = "danger";
   } finally {
     desktopLayoutBusy = false;
     renderDesktopLayout();
@@ -12499,8 +12509,11 @@ async function saveDesktopLayout() {
     desktopLayoutState = await postJson("/api/console/desktop-layout/save", {
       planId: plan.id
     }, { timeoutMs: 180000 });
-    desktopLayoutNotice = text("desktopLayoutSaved");
-    desktopLayoutNoticeTone = "success";
+    const historyWarning = String(desktopLayoutState.historyWarning || "").trim();
+    desktopLayoutNotice = historyWarning
+      ? text("desktopLayoutSavedHistoryWarning", historyWarning)
+      : text("desktopLayoutSaved");
+    desktopLayoutNoticeTone = historyWarning ? "warning" : "success";
     desktopLayoutDetail = desktopLayoutState.backup || desktopLayoutState.saved || plan.path;
   } catch (error) {
     desktopLayoutNotice = text("desktopLayoutFailed", error.message);
@@ -12521,12 +12534,11 @@ async function importDesktopLayouts(files) {
   try {
     const formData = new FormData();
     selectedFiles.forEach(file => formData.append("files", file, file.name));
-    const response = await fetch("/api/console/desktop-layout/import", {
-      method: "POST",
-      body: formData
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const payload = await requestJson(
+      "/api/console/desktop-layout/import",
+      { method: "POST", body: formData },
+      { timeoutMs: desktopLayoutImportTimeoutMs }
+    );
     desktopLayoutState = payload;
     desktopLayoutNotice = text("desktopLayoutImported", payload.imported?.length || 0);
     desktopLayoutNoticeTone = "success";
@@ -16504,17 +16516,22 @@ function deleteWorkspaceTodo(groupId, itemId) {
   renderWorkspaceTodos();
 }
 
-async function postJson(path, payload = {}, options = {}) {
+async function requestJson(path, fetchOptions = {}, options = {}) {
   const controller = options.timeoutMs ? new AbortController() : null;
   const timer = controller ? window.setTimeout(() => controller.abort(), options.timeoutMs) : null;
   let response;
+  let result;
   try {
     response = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: controller?.signal
+      ...fetchOptions,
+      signal: controller?.signal || fetchOptions.signal
     });
+    try {
+      result = await response.json();
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+      result = {};
+    }
   } catch (error) {
     if (error?.name === "AbortError") {
       throw new Error("request timed out");
@@ -16523,11 +16540,21 @@ async function postJson(path, payload = {}, options = {}) {
   } finally {
     if (timer) window.clearTimeout(timer);
   }
-  const result = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(result.error || `HTTP ${response.status}`);
+    const error = new Error(result.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.payload = result;
+    throw error;
   }
   return result;
+}
+
+async function postJson(path, payload = {}, options = {}) {
+  return requestJson(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }, options);
 }
 
 async function uploadWallpaperFiles(files) {

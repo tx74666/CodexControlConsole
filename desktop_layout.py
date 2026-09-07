@@ -56,6 +56,27 @@ def _path_key(value):
         return os.path.normcase(str(value or "")).casefold()
 
 
+def _atomic_write_bytes(path, data):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(bytes(data))
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
+def _atomic_write_json(path, payload):
+    _atomic_write_bytes(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+    )
+
+
 class DesktopLayoutService:
     def __init__(
         self,
@@ -92,7 +113,8 @@ class DesktopLayoutService:
         configured_external_script = external_script or os.environ.get("CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT")
         self.external_script = Path(configured_external_script) if configured_external_script else None
         self.bundled_script = Path(bundled_script or self.app_dir / "tools" / "DesktopLayout.ps1")
-        self.startup_file = Path(startup_file or _default_startup_file())
+        configured_startup_file = startup_file or os.environ.get("CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE")
+        self.startup_file = Path(configured_startup_file or _default_startup_file())
         self.snapshot_interval_days = max(1, int(snapshot_interval_days))
         self.history_target_days = max(1, int(history_target_days))
         self._clock = clock or (lambda: datetime.now(timezone.utc))
@@ -198,10 +220,7 @@ class DesktopLayoutService:
 
     def _write_config(self, config):
         with self._lock:
-            self.data_dir.mkdir(parents=True, exist_ok=True)
-            temporary = self.config_file.with_suffix(".tmp")
-            temporary.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(temporary, self.config_file)
+            _atomic_write_json(self.config_file, config)
 
     def _script_path(self):
         if self.external_script and self.external_script.is_file():
@@ -224,26 +243,39 @@ class DesktopLayoutService:
         if len(raw_icons) > 5000:
             raise ValueError("Desktop layout JSON contains too many icons.")
         icons = []
-        for raw in raw_icons:
+        seen_names = set()
+        for index, raw in enumerate(raw_icons, start=1):
             if not isinstance(raw, dict):
-                continue
+                raise ValueError(f"Desktop icon entry {index} must contain an object.")
             name = str(raw.get("Name") or "").strip()
+            if not name:
+                raise ValueError(f"Desktop icon entry {index} does not contain a name.")
+            raw_x = raw.get("X")
+            raw_y = raw.get("Y")
+            if isinstance(raw_x, bool) or isinstance(raw_y, bool):
+                raise ValueError(f'Desktop icon "{name}" does not contain a valid position.')
             try:
-                x = int(raw.get("X"))
-                y = int(raw.get("Y"))
-            except (TypeError, ValueError):
-                continue
-            if name:
-                if not (
-                    ICON_COORDINATE_MIN <= x <= ICON_COORDINATE_MAX
-                    and ICON_COORDINATE_MIN <= y <= ICON_COORDINATE_MAX
-                ):
-                    raise ValueError(
-                        f'Desktop icon "{name}" has a position outside the Windows-supported range.'
-                    )
-                icons.append({"name": name, "x": x, "y": y})
-        if not icons:
-            raise ValueError("Desktop layout JSON has no usable icon positions.")
+                x = int(raw_x)
+                y = int(raw_y)
+            except (TypeError, ValueError, OverflowError):
+                raise ValueError(f'Desktop icon "{name}" does not contain a valid position.') from None
+            if (
+                isinstance(raw_x, float) and not raw_x.is_integer()
+                or isinstance(raw_y, float) and not raw_y.is_integer()
+            ):
+                raise ValueError(f'Desktop icon "{name}" does not contain a valid position.')
+            if not (
+                ICON_COORDINATE_MIN <= x <= ICON_COORDINATE_MAX
+                and ICON_COORDINATE_MIN <= y <= ICON_COORDINATE_MAX
+            ):
+                raise ValueError(
+                    f'Desktop icon "{name}" has a position outside the Windows-supported range.'
+                )
+            name_key = name.casefold()
+            if name_key in seen_names:
+                raise ValueError(f'Desktop layout JSON contains the duplicate icon name "{name}".')
+            seen_names.add(name_key)
+            icons.append({"name": name, "x": x, "y": y})
         return {
             "savedAt": str(payload.get("SavedAt") or ""),
             "computerName": str(payload.get("ComputerName") or ""),
@@ -337,10 +369,7 @@ class DesktopLayoutService:
         }
 
     def _write_history(self, state):
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        temporary = self.history_file.with_suffix(".tmp")
-        temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temporary, self.history_file)
+        _atomic_write_json(self.history_file, state)
 
     def _history_status(self, state=None):
         state = state or self._read_history()
@@ -370,12 +399,20 @@ class DesktopLayoutService:
             "snapshotCount": len(state.get("snapshots", [])),
         }
 
-    def _file_digest(self, path):
-        digest = hashlib.sha256()
-        with Path(path).open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+    def _layout_digest(self, path):
+        layout = self._layout_payload(path)
+        semantic_layout = {
+            "iconSize": layout["iconSize"],
+            "screens": layout["screens"],
+            "icons": layout["icons"],
+        }
+        encoded = json.dumps(
+            semantic_layout,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def _layout_capture_time(self, path, fallback=None):
         layout = self._layout_payload(path)
@@ -389,8 +426,7 @@ class DesktopLayoutService:
 
     def _archive_snapshot(self, state, source_path, captured_at, kind):
         source_path = Path(source_path)
-        self._layout_payload(source_path)
-        digest = self._file_digest(source_path)
+        digest = self._layout_digest(source_path)
         for snapshot in state["snapshots"]:
             if snapshot.get("digest") == digest and Path(snapshot.get("path", "")).is_file():
                 if kind in {"automatic", "manual"}:
@@ -493,7 +529,7 @@ class DesktopLayoutService:
     def import_layouts(self, files):
         with self._lock:
             config = self._read_config()
-            self.plan_dir.mkdir(parents=True, exist_ok=True)
+            prepared = []
             imported = []
             for item in files:
                 filename = str(item.get("filename") or "")
@@ -504,7 +540,6 @@ class DesktopLayoutService:
                 plan_id = uuid.uuid4().hex
                 safe_name = _safe_filename(filename)
                 target = self.plan_dir / f"{safe_name}-{plan_id[:8]}.json"
-                target.write_bytes(data)
                 plan = {
                     "id": plan_id,
                     "name": _safe_label(Path(filename).stem.replace("desktop-layout-", ""), "Imported layout"),
@@ -512,12 +547,26 @@ class DesktopLayoutService:
                     "source": "imported",
                     "createdAt": _now_iso(),
                 }
-                config["plans"].append(plan)
-                config["selectedPlan"] = plan_id
-                imported.append({"id": plan_id, "name": plan["name"], "iconCount": len(layout["icons"])})
-            if not imported:
+                prepared.append((target, bytes(data), plan, len(layout["icons"])))
+            if not prepared:
                 raise ValueError("Choose at least one valid desktop layout JSON file.")
-            self._write_config(config)
+
+            written = []
+            try:
+                for target, data, plan, icon_count in prepared:
+                    _atomic_write_bytes(target, data)
+                    written.append(target)
+                    config["plans"].append(plan)
+                    config["selectedPlan"] = plan["id"]
+                    imported.append({"id": plan["id"], "name": plan["name"], "iconCount": icon_count})
+                self._write_config(config)
+            except Exception:
+                for target in written:
+                    try:
+                        target.unlink()
+                    except OSError:
+                        pass
+                raise
             result = self.status()
             result["imported"] = imported
             return result
@@ -604,18 +653,22 @@ class DesktopLayoutService:
                 self._update_seven_day_snapshot(state, now)
                 self._write_history(state)
             except (OSError, ValueError) as error:
-                history_warning = f"Desktop layout was saved, but history could not be updated: {error}"
+                history_warning = str(error)
         result = self.status()
         result.update({
             "saved": str(path),
             "backup": str(backup) if backup else "",
             "output": output,
+            "historyUpdated": not bool(history_warning),
             "historyWarning": history_warning,
         })
         return result
 
     def refresh_history(self, payload=None):
-        force = bool(payload.get("force")) if isinstance(payload, dict) else False
+        raw_force = payload.get("force", False) if isinstance(payload, dict) else False
+        if not isinstance(raw_force, bool):
+            raise ValueError("Desktop layout history force must be a JSON boolean.")
+        force = raw_force
         with self._lock:
             state = self._read_history()
             if not force and not self._history_status(state)["due"]:
@@ -732,13 +785,33 @@ class DesktopLayoutService:
             verification = self._verify_restore(path)
         except Exception as error:
             rollback = self._rollback_restore(rollback_path)
-            state = "was restored" if rollback["healthy"] else "could not be fully restored"
-            raise RuntimeError(f"Desktop layout restore failed; the previous layout {state}.") from error
+            result = self.status()
+            result.update({
+                "ok": False,
+                "finalState": "rolled-back" if rollback["healthy"] else "rollback-failed",
+                "restoreError": str(error),
+                "restored": str(path),
+                "output": "",
+                "verification": None,
+                "rolledBack": True,
+                "rollback": rollback,
+            })
+            return result
         rollback = None
         if not verification["healthy"]:
             rollback = self._rollback_restore(rollback_path)
+        final_state = (
+            "restored"
+            if rollback is None
+            else "rolled-back"
+            if rollback["healthy"]
+            else "rollback-failed"
+        )
         result = self.status()
         result.update({
+            "ok": final_state == "restored",
+            "finalState": final_state,
+            "restoreError": "",
             "restored": str(path),
             "output": output,
             "verification": verification,

@@ -30,19 +30,59 @@ $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
 $listener.Stop()
 
 $temporary = Join-Path $env:TEMP ("codex-console-ui-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $temporary | Out-Null
-[System.IO.File]::WriteAllText(
-  (Join-Path $temporary ".cache-migrated-v0.3"),
-  "test`n",
-  (New-Object System.Text.UTF8Encoding($false))
+$desktopLayoutData = Join-Path $temporary "CodexControlConsole\desktop-layout"
+$desktopLayoutCurrent = Join-Path $desktopLayoutData "plans\desktop-layout-current.json"
+$desktopLayoutStartup = Join-Path $temporary "Startup\RestoreDesktopLayout.vbs"
+$desktopLayoutHelper = Join-Path $temporary "DesktopLayout-Test.ps1"
+$desktopLayoutHelperSource = @'
+param(
+  [ValidateSet("save", "restore", "list")]
+  [string]$Action = "list",
+  [string]$Path = ""
 )
+
+$ErrorActionPreference = "Stop"
+if ($Action -ne "save") {
+  throw "The isolated UI test helper only supports read-only desktop capture."
+}
+$parent = Split-Path -Parent $Path
+if ($parent) {
+  New-Item -ItemType Directory -Path $parent -Force | Out-Null
+}
+$layout = [ordered]@{
+  SavedAt = (Get-Date).ToUniversalTime().ToString("o")
+  ComputerName = "UI-TEST-PC"
+  UserName = "ui-test"
+  IconSize = 48
+  Screens = @()
+  Icons = @([ordered]@{ Name = "UI Test Icon"; X = 20; Y = 30 })
+}
+$layout | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding UTF8
+Write-Output $Path
+'@
 $stdout = Join-Path $temporary "server.out.log"
 $stderr = Join-Path $temporary "server.err.log"
 $previousData = $env:CODEX_CONTROL_DATA_DIR
 $previousCloudProjects = $env:CONSOLE_UI_ALLOW_CLOUD_PROJECTS
+$previousDesktopLayoutData = $env:CODEX_CONTROL_DESKTOP_LAYOUT_DATA_DIR
+$previousDesktopLayoutCurrent = $env:CODEX_CONTROL_DESKTOP_LAYOUT_CURRENT
+$previousDesktopLayoutScript = $env:CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT
+$previousDesktopLayoutStartup = $env:CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE
 $process = $null
 
 try {
+  New-Item -ItemType Directory -Path $temporary | Out-Null
+  [System.IO.File]::WriteAllText(
+    (Join-Path $temporary ".cache-migrated-v0.3"),
+    "test`n",
+    (New-Object System.Text.UTF8Encoding($false))
+  )
+  [System.IO.File]::WriteAllText(
+    $desktopLayoutHelper,
+    $desktopLayoutHelperSource,
+    (New-Object System.Text.UTF8Encoding($false))
+  )
+
   & $Python (Join-Path $PSScriptRoot "check-download-map.py")
   if ($LASTEXITCODE -ne 0) {
     throw "Download Map checks failed with exit code $LASTEXITCODE."
@@ -55,6 +95,10 @@ try {
 
   $env:CODEX_CONTROL_DATA_DIR = $temporary
   $env:CONSOLE_UI_ALLOW_CLOUD_PROJECTS = "true"
+  $env:CODEX_CONTROL_DESKTOP_LAYOUT_DATA_DIR = $desktopLayoutData
+  $env:CODEX_CONTROL_DESKTOP_LAYOUT_CURRENT = $desktopLayoutCurrent
+  $env:CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT = $desktopLayoutHelper
+  $env:CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE = $desktopLayoutStartup
   $process = Start-Process `
     -FilePath $Python `
     -ArgumentList @("world_console.py", "--host", "127.0.0.1", "--port", [string]$port, "--no-browser") `
@@ -80,6 +124,17 @@ try {
     throw "The isolated Console UI service did not start. $details"
   }
 
+  $desktopLayoutStatus = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/console/desktop-layout" -TimeoutSec 5
+  if ([System.IO.Path]::GetFullPath([string]$desktopLayoutStatus.dataDirectory) -ne [System.IO.Path]::GetFullPath($desktopLayoutData)) {
+    throw "The Console UI check is not using its isolated desktop-layout data directory."
+  }
+  if ([System.IO.Path]::GetFullPath([string]$desktopLayoutStatus.tool.path) -ne [System.IO.Path]::GetFullPath($desktopLayoutHelper)) {
+    throw "The Console UI check is not using its non-destructive desktop-layout helper."
+  }
+  if ([System.IO.Path]::GetFullPath([string]$desktopLayoutStatus.startup.path) -ne [System.IO.Path]::GetFullPath($desktopLayoutStartup)) {
+    throw "The Console UI check is not using its isolated desktop-layout startup path."
+  }
+
   & $NodePath (Join-Path $PSScriptRoot "check-console-ui.mjs") "http://127.0.0.1:$port/"
   if ($LASTEXITCODE -ne 0) {
     throw "Console UI checks failed with exit code $LASTEXITCODE."
@@ -93,5 +148,13 @@ try {
   else { $env:CODEX_CONTROL_DATA_DIR = $previousData }
   if ($null -eq $previousCloudProjects) { Remove-Item Env:CONSOLE_UI_ALLOW_CLOUD_PROJECTS -ErrorAction SilentlyContinue }
   else { $env:CONSOLE_UI_ALLOW_CLOUD_PROJECTS = $previousCloudProjects }
+  if ($null -eq $previousDesktopLayoutData) { Remove-Item Env:CODEX_CONTROL_DESKTOP_LAYOUT_DATA_DIR -ErrorAction SilentlyContinue }
+  else { $env:CODEX_CONTROL_DESKTOP_LAYOUT_DATA_DIR = $previousDesktopLayoutData }
+  if ($null -eq $previousDesktopLayoutCurrent) { Remove-Item Env:CODEX_CONTROL_DESKTOP_LAYOUT_CURRENT -ErrorAction SilentlyContinue }
+  else { $env:CODEX_CONTROL_DESKTOP_LAYOUT_CURRENT = $previousDesktopLayoutCurrent }
+  if ($null -eq $previousDesktopLayoutScript) { Remove-Item Env:CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT -ErrorAction SilentlyContinue }
+  else { $env:CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT = $previousDesktopLayoutScript }
+  if ($null -eq $previousDesktopLayoutStartup) { Remove-Item Env:CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE -ErrorAction SilentlyContinue }
+  else { $env:CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE = $previousDesktopLayoutStartup }
   Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
 }
