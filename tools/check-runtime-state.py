@@ -300,25 +300,20 @@ def check_music_import_limits_and_failures(root):
 
 
 def check_running_console_port_scan():
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            return False
-
-        def read(self, _size):
-            return b"<title>Codex Console</title>"
-
     start = 18898
-    with (
-        mock.patch.object(world_console, "port_is_available", side_effect=lambda port: port == start),
-        mock.patch.object(world_console.urllib.request, "urlopen", return_value=Response()),
-    ):
+    with mock.patch.object(world_console, "find_running_console",
+                           return_value={"port": start + 1}) as handshake:
         require(
             world_console.running_console_port(start) == start + 1,
-            "running console scan stopped at the first free port",
+            "running console did not use the verified handshake's port",
         )
+        handshake.assert_called_once_with(
+            start, world_console.USER_DATA_DIR,
+            world_console.INSTALLATION_STATE.get("installationId", ""),
+        )
+    with mock.patch.object(world_console, "find_running_console", return_value=None):
+        require(world_console.running_console_port(start) is None,
+                "a missing matching Console handshake was treated as a running instance")
 
 
 def main():

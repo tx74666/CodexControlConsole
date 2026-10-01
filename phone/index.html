@@ -25,9 +25,15 @@
       <div class="toolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
       <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
       <section id="tasksPanel" class="tab-panel" aria-labelledby="tasksTitle">
-        <div class="section-title"><div><p class="eyebrow">四件重要的事</p><h2 id="tasksTitle">计划清单</h2></div><span class="pill">本机保存</span></div>
+        <div class="section-title"><div><p class="eyebrow">当前重要计划</p><h2 id="tasksTitle">计划清单</h2></div><span id="planMode" class="pill">本机保存</span></div>
         <p id="planNotice" class="muted small">导入计划后可以勾选；进度保存在这台手机。</p>
         <div id="taskGroups" class="card-stack"></div>
+        <details class="task-sync"><summary>任务同步 <span id="syncSummary" class="muted small">电脑 → 手机</span></summary>
+          <p class="muted small">同一 Wi-Fi 下，在电脑「常用 → 内置资源 → 手机任务同步」开启连接。手机只查看，修改请在电脑完成。</p>
+          <form id="syncForm"><label for="syncAddress">电脑显示的手机地址</label><input id="syncAddress" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.10:8899/" required><label for="syncCode">配对码</label><input id="syncCode" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6 位数字" required><div class="settings-actions"><button id="syncConnect" type="submit" class="secondary">连接并自动更新</button><button id="syncDisconnect" type="button" class="text-button" hidden>断开同步</button></div></form>
+          <p id="syncNotice" class="notice small" role="status" aria-live="polite"></p><a id="syncFallback" class="task-sync-link" hidden rel="noopener noreferrer">打开实时计划</a><p id="syncFallbackHelp" class="muted small" hidden>如果浏览器不支持直接同步，打开电脑的实时计划页面；该页面需要电脑保持开机。保存计划快照后，可在这里导入离线查看。</p>
+          <p class="muted small">连接中每 5 秒检查计划；离线时保留最后一次同步。首次连接仅在你信任的 Wi-Fi 使用，局域网连接未加密。</p>
+        </details>
       </section>
       <section id="musicPanel" class="tab-panel" hidden aria-labelledby="musicTitle">
         <div class="section-title"><div><p class="eyebrow">原来的 16 首曲库，下载后离线听</p><h2 id="musicTitle">音乐</h2></div><button id="musicRefresh" type="button" class="text-button">刷新列表</button></div>
@@ -70,7 +76,7 @@
         <p class="muted small">首次用 Safari 打开后，分享 → 添加到主屏幕。请从主屏幕图标导入资料；以后离线使用。</p>
         <div class="settings-actions"><button id="importButton" type="button" class="secondary">导入电脑资料</button><button id="backupButton" type="button" class="secondary">备份资料</button><button id="restoreButton" type="button" class="text-button" hidden>恢复上次导入</button></div>
         <input id="dataFile" type="file" accept=".json,application/json" hidden>
-        <div id="importReview" class="card" hidden><h3>确认导入内容</h3><p id="importCounts" class="small"></p><p class="muted small">更新资料并保留这台手机的任务勾选与阅读状态。不会上传到 GitHub。</p><button id="importConfirm" type="button" class="primary">导入到手机</button><button id="importCancel" type="button">取消</button></div>
+        <div id="importReview" class="card" hidden><h3>确认导入内容</h3><p id="importCounts" class="small"></p><p id="importReviewHelp" class="muted small">更新资料并保留这台手机的任务勾选与阅读状态。不会上传到 GitHub。</p><button id="importConfirm" type="button" class="primary">导入到手机</button><button id="importCancel" type="button">取消</button></div>
         <p id="settingsNotice" class="notice" role="status" aria-live="polite"></p><p id="storageNotice" class="muted small"></p><p class="muted small">资料备份不含音频。请保留音乐原文件；清除网站数据会移除手机里的资料。</p>
         <button id="checkUpdate" type="button" class="secondary">检查程序更新</button><button id="applyUpdate" type="button" class="primary" hidden>更新并重开</button><p id="updateNotice" class="notice" role="status"></p>
       </details>

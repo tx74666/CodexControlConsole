@@ -7,6 +7,7 @@
   const el = id => document.getElementById(id);
   const state = { ready: true, generation: 0, busy: false, tab: "tasks", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), library: null, catalog: [], saved: new Set(), pendingImport: null, registration: null, applyingUpdate: false, downloadController: null, music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, search: "", folder: "", tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
   const MUSIC_TIERS = [{ value: "first", label: "1ST" }, { value: "second", label: "2ND" }, { value: "third", label: "3RD" }];
+  const taskSync = { generation: 0, controller: null, timer: null, config: null, busy: false, connected: false };
   const node = (tag, text = "", className = "") => {
     const result = document.createElement(tag);
     if (text) result.textContent = String(text);
@@ -89,6 +90,7 @@
       try { const response = await fetch("./music-catalog.json"); if (response.ok) { const payload = await response.json(); state.catalog = Array.isArray(payload.tracks) ? payload.tracks : []; } } catch { /* Imported data works even if the first public catalog download is incomplete. */ }
       await refreshDashboard(); await updateStorageNotice();
       el("restoreButton").hidden = !await PhoneStore.get("records", "previousImport");
+      await restoreTaskSync();
     } catch (error) { failure(error); }
     finally { setBusy(false); }
     void setupWorker();
@@ -102,7 +104,7 @@
   }
   async function refresh() {
     if (state.busy || state.mutationBusy) return; setBusy(true);
-    try { await libraryMutationQueue; state.library = await PhoneStore.get("records", "library") || null; await refreshDashboard(); if (state.tab === "music") await loadMusic(true); }
+    try { await libraryMutationQueue; state.library = await PhoneStore.get("records", "library") || null; await refreshDashboard(); if (taskSync.config?.token) await pollTaskSync(); if (state.tab === "music") await loadMusic(true); }
     catch (error) { failure(error); } finally { setBusy(false); }
   }
   function selectTab(value) {
@@ -116,11 +118,14 @@
     const text = (value, limit, label) => { if (typeof value !== "string" || value.length > limit) throw new Error(`${label}格式或大小不正确。`); return value; };
     const path = value => { const result = pathValue(value); if (!result || result !== value) throw new Error("资料包含有无效的文档路径。"); return result; };
     const id = value => { if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value)) throw new Error("资料编号无效。"); return value; };
-    if (!data || data.format !== "codex-console-phone-data" || data.schemaVersion !== 1 || !data.dashboard || !Array.isArray(data.files) || data.files.length > 200) throw new Error("请选择 Console 导出的资料 JSON，或手机资料备份。");
+    const phoneBackup = data?.format === "codex-console-phone-backup";
+    if (!data || !["codex-console-phone-data", "codex-console-phone-backup"].includes(data.format) || data.schemaVersion !== 1 || !data.dashboard || !Array.isArray(data.files) || data.files.length > 200) throw new Error("请选择 Console 导出的资料 JSON，或手机资料备份。");
     text(data.exportedAt, 60, "导出时间"); if (Number.isNaN(new Date(data.exportedAt).getTime())) throw new Error("导出时间无效。");
     const dashboard = structuredClone(data.dashboard), plan = dashboard.plan?.plan, taskIds = new Set();
+    const synced = phoneBackup && data.phoneState?.planSnapshot ? validatePlanSnapshot(data.phoneState.planSnapshot) : null;
+    if (synced && JSON.stringify(validatePlanSnapshot({ ...synced, plan }).plan) !== JSON.stringify(synced.plan)) throw new Error("备份的电脑任务与来源快照不一致。");
     if (plan) {
-      if (!Array.isArray(plan.groups) || plan.groups.length !== 4) throw new Error("资料包应包含四项主要计划。");
+      if (!Array.isArray(plan.groups) || (synced ? plan.groups.length < 1 || plan.groups.length > 12 : plan.groups.length !== 4)) throw new Error("资料包应包含四项主要计划。");
       let total = 0; const groupIds = new Set();
       for (const group of plan.groups) {
         if (!group || groupIds.has(id(group.id)) || !Array.isArray(group.items) || group.items.length > 100) throw new Error("计划分组无效。"); groupIds.add(group.id); text(group.title, 120, "计划标题"); text(group.summary || "", 240, "计划摘要");
@@ -146,8 +151,11 @@
     for (const path of requiredFiles) if (!filePaths.has(path)) throw new Error("资料包缺少已登记的文档正文，请重新从电脑导出。");
     const device = dashboard.device || {}, memory = device.currentMemory || {};
     dashboard.device = { model: String(device.model || "").slice(0, 200), cpuModel: String(device.cpuModel || "").slice(0, 500), gpuModels: (Array.isArray(device.gpuModels) ? device.gpuModels : []).slice(0, 8).map(value => String(value).slice(0, 200)), installedMemoryBytes: Number.isFinite(device.installedMemoryBytes) ? device.installedMemoryBytes : null, sampledAt: String(device.sampledAt || "").slice(0, 60), currentMemory: { status: memory.status === "available" ? "available" : "unavailable", readAt: String(memory.readAt || "").slice(0, 60), usedPercent: memory.usedPercent, totalBytes: memory.totalBytes, availableBytes: memory.availableBytes } };
-    dashboard.plan = { plan: plan || null }; delete documents.records;
-    return { id: "library", exportedAt: data.exportedAt, importedAt: new Date().toISOString(), dashboard, files, reading: data.phoneState?.reading || {}, taskDone: data.phoneState?.taskDone || {} };
+    dashboard.plan = { plan: synced?.plan || plan || null }; delete documents.records;
+    const library = { id: "library", exportedAt: data.exportedAt, importedAt: new Date().toISOString(), dashboard, files, reading: data.phoneState?.reading || {}, taskDone: data.phoneState?.taskDone || {} };
+    if (synced) library.planSync = { computerId: synced.computerId, hash: synced.hash, updatedAt: synced.updatedAt, syncedAt: new Date().toISOString(), readonly: true };
+    if (phoneBackup && data.phoneState?.localTaskBackup) library.localTaskBackup = validateLocalTaskBackup(data.phoneState.localTaskBackup);
+    return library;
   }
   function mergeLibrary(next, previous) {
     const reading = {}, taskDone = {};
@@ -155,22 +163,149 @@
     for (const group of next.dashboard.plan?.plan?.groups || []) for (const item of group.items) { const old = previous?.taskDone?.[item.id], restored = next.taskDone?.[item.id]; if (typeof old === "boolean") taskDone[item.id] = old; else if (typeof restored === "boolean") taskDone[item.id] = restored; }
     return { ...next, reading, taskDone };
   }
+  function validatePlanSnapshot(value) {
+    const bounded = (value, limit) => typeof value === "string" && value.length <= limit;
+    const identifier = value => bounded(value, 160) && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value);
+    if (!value || value.format !== "codex-console-plan-snapshot" || value.schemaVersion !== 1 || !/^[a-f0-9]{64}$/.test(value.hash || "") || !identifier(value.computerId) || !bounded(value.updatedAt, 60) || Number.isNaN(Date.parse(value.updatedAt))) throw new Error("电脑计划快照无效。");
+    const plan = value.plan, groups = new Set(), tasks = new Set(); let count = 0;
+    if (!plan || plan.version !== 1 || !identifier(plan.revision) || !Array.isArray(plan.groups) || plan.groups.length < 1 || plan.groups.length > 12) throw new Error("电脑计划分组无效。");
+    for (const group of plan.groups) {
+      if (!group || !identifier(group.id) || groups.has(group.id) || !bounded(group.title, 120) || !group.title.trim() || !bounded(group.summary || "", 240) || !Array.isArray(group.items) || group.items.length > 100) throw new Error("电脑计划分组无效。"); groups.add(group.id);
+      count += group.items.length; if (count > 300) throw new Error("电脑计划清单过长。");
+      for (const item of group.items) { if (!item || !identifier(item.id) || tasks.has(item.id) || !bounded(item.text, 500) || !item.text.trim() || typeof item.done !== "boolean") throw new Error("电脑计划项无效。"); tasks.add(item.id); }
+    }
+    return { format: value.format, schemaVersion: 1, hash: value.hash, updatedAt: value.updatedAt, computerId: value.computerId, plan: { version: 1, revision: plan.revision, groups: plan.groups.map(group => ({ id: group.id, title: group.title, summary: group.summary || "", items: group.items.map(item => ({ id: item.id, text: item.text, done: item.done })) })) } };
+  }
+  function validateLocalTaskBackup(value) {
+    if (!value || typeof value.backedUpAt !== "string" || value.backedUpAt.length > 60 || Number.isNaN(Date.parse(value.backedUpAt)) || !value.taskDone || typeof value.taskDone !== "object" || Array.isArray(value.taskDone) || Object.keys(value.taskDone).length > 300) throw new Error("原手机勾选备份无效。");
+    const taskDone = {};
+    for (const [id, done] of Object.entries(value.taskDone)) { if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(id) || typeof done !== "boolean") throw new Error("原手机勾选备份无效。"); taskDone[id] = done; }
+    const plan = value.plan?.plan ? validatePlanSnapshot({ format: "codex-console-plan-snapshot", schemaVersion: 1, hash: "0".repeat(64), updatedAt: value.backedUpAt, computerId: "local-backup", plan: value.plan.plan }).plan : null;
+    return { plan: { plan }, taskDone, backedUpAt: value.backedUpAt };
+  }
+  function emptyLibrary() {
+    return { id: "library", exportedAt: new Date().toISOString(), importedAt: new Date().toISOString(), dashboard: { version: VERSION, plan: { plan: null }, device: {}, documents: { guide: { items: [] }, inbox: { entries: [] }, references: { items: [] } } }, files: [], reading: {}, taskDone: {} };
+  }
+  function applyPlanSnapshot(value, generation = null) {
+    const snapshot = validatePlanSnapshot(value);
+    const pending = libraryMutationQueue.then(async () => {
+      if (generation !== null && generation !== taskSync.generation) return false;
+      if (state.library?.planSync?.hash === snapshot.hash && state.library.planSync.computerId === snapshot.computerId) return false;
+      const previous = state.library ? structuredClone(state.library) : null, next = structuredClone(previous || emptyLibrary());
+      if (!next.localTaskBackup) next.localTaskBackup = { plan: structuredClone(next.dashboard.plan), taskDone: structuredClone(next.taskDone || {}), backedUpAt: new Date().toISOString() };
+      next.dashboard.plan = { plan: snapshot.plan };
+      next.planSync = { hash: snapshot.hash, updatedAt: snapshot.updatedAt, computerId: snapshot.computerId, syncedAt: new Date().toISOString(), readonly: true };
+      await PhoneStore.put("records", next);
+      if (generation !== null && generation !== taskSync.generation) { if (previous) await PhoneStore.put("records", previous); else await PhoneStore.remove("records", "library"); return false; }
+      state.library = next; state.dashboard = next.dashboard; renderPlan(next.dashboard.plan); return true;
+    });
+    libraryMutationQueue = pending.catch(() => {}); return pending;
+  }
+  function syncAddress(value) {
+    let url; try { url = new URL(String(value).trim()); } catch { throw new Error("请输入电脑显示的完整手机地址。"); }
+    const parts = url.hostname.split(".").map(Number), privateAddress = parts.length === 4 && parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255) && (parts[0] === 10 || parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31 || parts[0] === 192 && parts[1] === 168);
+    if (url.protocol !== "http:" || !privateAddress || url.username || url.password || url.search || url.hash || !["/", "/mobile.html"].includes(url.pathname)) throw new Error("请使用电脑显示的同 Wi-Fi 手机地址，不要使用公网、localhost 或其他网页地址。");
+    return url.origin;
+  }
+  function supportsTaskSync(address) {
+    try { return typeof Request === "function" && new Request(address + "/api/phone/plan-sync/plan", { targetAddressSpace: "local" }).targetAddressSpace === "local"; } catch { return false; }
+  }
+  function updateSyncFallback() {
+    try { el("syncFallback").href = syncAddress(el("syncAddress").value) + "/mobile.html"; el("syncFallback").hidden = false; }
+    catch { el("syncFallback").hidden = true; el("syncFallback").removeAttribute("href"); }
+  }
+  function renderSyncState(message = "", error = false) {
+    const active = Boolean(taskSync.config?.token);
+    el("syncDisconnect").hidden = !active; el("syncConnect").disabled = taskSync.busy;
+    el("syncSummary").textContent = taskSync.connected ? "已连接 · 自动更新" : active ? "保留上次同步" : "电脑 → 手机";
+    el("syncFallbackHelp").hidden = taskSync.connected;
+    if (message) notice("syncNotice", message, error);
+  }
+  function stopSyncRequests() {
+    taskSync.generation += 1; taskSync.controller?.abort(); taskSync.controller = null; window.clearTimeout(taskSync.timer); taskSync.timer = null; taskSync.busy = false; taskSync.connected = false;
+  }
+  async function syncRequest(config, endpoint, payload, generation) {
+    const controller = new AbortController(); taskSync.controller = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(config.address + "/api/phone/plan-sync/" + endpoint, { method: payload === undefined ? "GET" : "POST", mode: "cors", credentials: "omit", redirect: "error", cache: "no-store", targetAddressSpace: "local", signal: controller.signal, headers: { Accept: "application/json", "X-Codex-Phone": "1", ...(config.token ? { Authorization: "Bearer " + config.token } : {}), ...(payload === undefined ? {} : { "Content-Type": "application/json" }) }, ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) });
+      if (generation !== taskSync.generation) throw Object.assign(new Error("已取消旧电脑的请求。"), { cancelled: true });
+      if (response.status === 401) throw Object.assign(new Error("配对已过期，请输入电脑的新配对码。"), { auth: true });
+      const body = await response.json(); if (!response.ok) throw new Error(body.error || "电脑暂时没有可读取的任务。"); return body;
+    } finally { window.clearTimeout(timeout); if (taskSync.controller === controller) taskSync.controller = null; }
+  }
+  function scheduleTaskSync(generation) {
+    window.clearTimeout(taskSync.timer); taskSync.timer = null;
+    if (generation === taskSync.generation && taskSync.config?.token && !document.hidden) taskSync.timer = window.setTimeout(() => { taskSync.timer = null; void pollTaskSync(); }, 5000);
+  }
+  async function pollTaskSync() {
+    if (taskSync.busy || document.hidden || !taskSync.config?.token) return;
+    const generation = taskSync.generation, config = { ...taskSync.config }; taskSync.busy = true;
+    try {
+      if (config.expiresAt <= Date.now()) throw Object.assign(new Error("配对已过期，请输入电脑的新配对码。"), { auth: true });
+      const snapshot = validatePlanSnapshot(await syncRequest(config, "plan", undefined, generation));
+      if (generation !== taskSync.generation) return;
+      if (snapshot.computerId !== config.computerId) throw Object.assign(new Error("电脑来源已改变，请重新配对。"), { auth: true });
+      await applyPlanSnapshot(snapshot, generation); if (generation !== taskSync.generation) return;
+      taskSync.connected = true; renderSyncState(`已同步 · ${date(snapshot.updatedAt)}。电脑修改后，会在这里自动更新。`); renderPlan(state.library?.dashboard.plan);
+    } catch (error) {
+      if (generation !== taskSync.generation || error.cancelled) return;
+      taskSync.connected = false;
+      if (error.auth) { taskSync.config = { address: config.address }; await PhoneStore.put("settings", { id: "taskSync", ...taskSync.config }); }
+      renderSyncState(error.auth ? error.message : error.name === "QuotaExceededError" ? "手机储存空间不足，原来的计划和音乐保留。请先腾出空间。" : "暂时连不上电脑，最后一次计划已保留。可重试或打开实时计划。", true); renderPlan(state.library?.dashboard.plan);
+    } finally { if (generation === taskSync.generation) { taskSync.busy = false; renderSyncState(); scheduleTaskSync(generation); } }
+  }
+  async function connectTaskSync() {
+    let address; try { address = syncAddress(el("syncAddress").value); } catch (error) { failure(error, "syncNotice"); return; }
+    updateSyncFallback(); const code = el("syncCode").value.trim();
+    if (!/^\d{6}$/.test(code)) { notice("syncNotice", "请输入电脑显示的 6 位配对码。", true); return; }
+    stopSyncRequests(); const generation = taskSync.generation; taskSync.config = { address }; taskSync.busy = true; renderSyncState("正在连接电脑…");
+    try {
+      await PhoneStore.put("settings", { id: "taskSync", address });
+      if (!supportsTaskSync(address)) { renderSyncState("这个浏览器暂不支持 App 内直接同步，请点「打开实时计划」。原 App 的离线计划和音乐仍保留。", true); return; }
+      const paired = await syncRequest({ address }, "pair", { code }, generation);
+      if (generation !== taskSync.generation) return;
+      if (typeof paired.token !== "string" || !/^[A-Za-z0-9_-]{32,160}$/.test(paired.token) || !Number.isFinite(paired.expiresIn) || paired.expiresIn <= 0 || paired.expiresIn > 28800 || typeof paired.computerId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(paired.computerId)) throw new Error("电脑的配对响应无效。");
+      taskSync.config = { address, token: paired.token, expiresAt: Date.now() + paired.expiresIn * 1000, computerId: paired.computerId };
+      await PhoneStore.put("settings", { id: "taskSync", ...taskSync.config });
+    } catch (error) { if (generation === taskSync.generation) renderSyncState(error.auth ? error.message : "连接未完成；原来的资料仍保留。可点「打开实时计划」使用。", true); }
+    finally { el("syncCode").value = ""; if (generation === taskSync.generation) { taskSync.busy = false; renderSyncState(); } }
+    if (generation === taskSync.generation && taskSync.config?.token) await pollTaskSync();
+  }
+  async function disconnectTaskSync(logout = true) {
+    const config = taskSync.config; stopSyncRequests(); taskSync.config = config?.address ? { address: config.address } : null;
+    await PhoneStore.remove("settings", "taskSync"); renderSyncState("自动同步已断开，最后一次计划仍保留。"); renderPlan(state.library?.dashboard.plan);
+    if (logout && config?.token) { try { await syncRequest(config, "logout", {}, taskSync.generation); } catch { /* Local revocation succeeds even if the PC cannot be reached. */ } }
+  }
+  async function restoreTaskSync() {
+    const saved = await PhoneStore.get("settings", "taskSync"); if (!saved?.address) return;
+    try { saved.address = syncAddress(saved.address); } catch { return; }
+    el("syncAddress").value = saved.address; updateSyncFallback(); taskSync.config = saved;
+    if (typeof saved.token !== "string" || !/^[A-Za-z0-9_-]{32,160}$/.test(saved.token) || !Number.isFinite(saved.expiresAt) || typeof saved.computerId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(saved.computerId) || !supportsTaskSync(saved.address)) { taskSync.config = { address: saved.address }; renderSyncState("可点「打开实时计划」连接电脑。离线 App 保留已有计划。", true); return; }
+    void pollTaskSync();
+  }
   async function reviewImport(file) {
-    state.pendingImport = null; el("importReview").hidden = true;
+    state.pendingImport = null; state.pendingSnapshot = null; el("importReview").hidden = true;
     if (!file || file.size > 24 * 1024 * 1024) throw new Error("资料包超过 24 MiB，请在电脑减少要导出的文档。");
-    const library = validateImport(JSON.parse(await file.text())); state.pendingImport = library;
+    const data = JSON.parse(await file.text());
+    if (data?.format === "codex-console-plan-snapshot") { const snapshot = validatePlanSnapshot(data); state.pendingSnapshot = snapshot; el("importCounts").textContent = `${snapshot.plan.groups.length} 项主要计划 · ${snapshot.plan.groups.reduce((total, group) => total + group.items.length, 0)} 个细项。电脑保存于 ${date(snapshot.updatedAt)}。`; el("importReviewHelp").textContent = "只更新任务，以电脑记录为准。文档、阅读状态和音乐保留；原手机勾选保存为备份。"; el("importReview").hidden = false; return; }
+    const library = validateImport(data); state.pendingImport = library; el("importReviewHelp").textContent = "更新资料并保留这台手机的任务勾选与阅读状态。不会上传到 GitHub。";
     const groups = library.dashboard.plan?.plan?.groups || []; el("importCounts").textContent = `${groups.length} 项主要计划 · ${groups.reduce((total, group) => total + group.items.length, 0)} 个细项 · ${library.files.length} 份文档。导出于 ${date(library.exportedAt)}。`;
     el("importReview").hidden = false; notice("settingsNotice");
   }
   async function commitImport() {
-    if (state.busy || !state.pendingImport) return; el("importConfirm").disabled = true; setBusy(true);
-    try { await libraryMutationQueue; const next = mergeLibrary(state.pendingImport, state.library); await PhoneStore.replaceLibrary(next); state.library = next; state.pendingImport = null; closeReader(false); await refreshDashboard(); el("importReview").hidden = true; el("restoreButton").hidden = false; notice("settingsNotice", "资料已保存到手机；本机勾选和阅读状态已保留。"); await updateStorageNotice(); }
+    if (state.busy || !state.pendingImport && !state.pendingSnapshot) return; el("importConfirm").disabled = true; setBusy(true);
+    if (state.pendingSnapshot) { try { await disconnectTaskSync(false); await applyPlanSnapshot(state.pendingSnapshot); state.pendingSnapshot = null; el("importReview").hidden = true; notice("settingsNotice", "电脑任务快照已保存；文档、阅读状态和音乐保留。"); } catch (error) { failure(error, "settingsNotice"); } finally { el("importConfirm").disabled = false; setBusy(false); } return; }
+    try { await disconnectTaskSync(false); await libraryMutationQueue; const next = mergeLibrary(state.pendingImport, state.library); await PhoneStore.replaceLibrary(next); state.library = next; state.pendingImport = null; closeReader(false); await refreshDashboard(); el("importReview").hidden = true; el("restoreButton").hidden = false; notice("settingsNotice", "资料已保存到手机；本机勾选和阅读状态已保留。"); await updateStorageNotice(); }
     catch (error) { failure(error, "settingsNotice"); } finally { el("importConfirm").disabled = false; setBusy(false); }
   }
   async function backupLibrary() {
     await libraryMutationQueue;
     if (!state.library) { notice("settingsNotice", "还没有导入资料。", true); return; }
-    const payload = { format: "codex-console-phone-data", schemaVersion: 1, exportedAt: new Date().toISOString(), dashboard: state.library.dashboard, files: state.library.files, phoneState: { reading: state.library.reading, taskDone: state.library.taskDone } };
+    const phoneState = { reading: state.library.reading, taskDone: state.library.planSync ? {} : state.library.taskDone };
+    if (state.library.planSync) phoneState.planSnapshot = validatePlanSnapshot({ format: "codex-console-plan-snapshot", schemaVersion: 1, ...state.library.planSync, plan: state.library.dashboard.plan.plan });
+    if (state.library.localTaskBackup) phoneState.localTaskBackup = validateLocalTaskBackup(state.library.localTaskBackup);
+    const payload = { format: "codex-console-phone-backup", schemaVersion: 1, exportedAt: new Date().toISOString(), dashboard: state.library.dashboard, files: state.library.files, phoneState };
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })), anchor = node("a"); anchor.href = url; anchor.download = `Codex-Console-手机资料-${new Date().toISOString().slice(0, 10)}.json`; document.body.append(anchor); anchor.click(); anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 60000); notice("settingsNotice", "资料备份已准备，音频仍保留在手机和原文件中。");
   }
   async function updateStorageNotice() {
@@ -440,15 +575,17 @@
     for (const [action, handler] of Object.entries(handlers)) { try { navigator.mediaSession.setActionHandler(action, handler); } catch { /* Safari support differs by version and context. */ } }
   }
   function renderPlan(payload) {
-    const plan = payload?.plan, container = el("taskGroups"); container.replaceChildren();
-    el("planNotice").textContent = "任务进度保存在这台手机；更新资料会保留已有勾选。";
-    if (!plan?.groups?.length) { container.append(node("p", "展开下方「资料与更新」，导入电脑导出的四项计划。", "empty-state")); return; }
+    const plan = payload?.plan, container = el("taskGroups"), opened = new Map(Array.from(container.children).map(card => [card.dataset.group, card.open])); container.replaceChildren();
+    const sync = state.library?.planSync;
+    el("planMode").textContent = sync ? "电脑记录 · 只读" : "本机保存";
+    el("planNotice").textContent = sync ? `${taskSync.connected ? "已同步电脑计划" : "上次同步的电脑计划"} · ${date(sync.updatedAt)}。修改请在电脑完成。` : "任务进度保存在这台手机；更新资料会保留已有勾选。";
+    if (!plan?.groups?.length) { container.append(node("p", "展开「任务同步」连接电脑，或在「资料与更新」导入计划。", "empty-state")); return; }
     plan.groups.forEach((group, index) => {
-      const card = node("details", "", "card task-card"), heading = node("summary"); heading.append(node("span", `0${index + 1}`, "task-number"), node("span", group.title)); card.append(heading);
+      const card = node("details", "", "card task-card"), heading = node("summary"); card.dataset.group = group.id; card.open = Boolean(opened.get(group.id)); heading.append(node("span", `0${index + 1}`, "task-number"), node("span", group.title)); card.append(heading);
       if (group.summary) card.append(node("p", group.summary, "muted")); const list = node("ul", "", "task-items");
       for (const item of group.items) {
-        const li = node("li"), label = node("label"), checkbox = node("input", "", "task-checkbox"); checkbox.type = "checkbox"; checkbox.checked = typeof state.library?.taskDone?.[item.id] === "boolean" ? state.library.taskDone[item.id] : item.done;
-        checkbox.addEventListener("change", async () => { const done = checkbox.checked; if (state.busy) { checkbox.checked = !done; return; } checkbox.disabled = true; try { await mutateLibrary(next => { next.taskDone = { ...(next.taskDone || {}), [item.id]: done }; }); } catch (error) { checkbox.checked = typeof state.library?.taskDone?.[item.id] === "boolean" ? state.library.taskDone[item.id] : item.done; failure(error); } finally { checkbox.disabled = false; } });
+        const li = node("li"), label = node("label"), checkbox = node("input", "", "task-checkbox"); checkbox.type = "checkbox"; checkbox.disabled = Boolean(sync); checkbox.checked = !sync && typeof state.library?.taskDone?.[item.id] === "boolean" ? state.library.taskDone[item.id] : item.done;
+        checkbox.addEventListener("change", async () => { if (sync) { checkbox.checked = item.done; return; } const done = checkbox.checked; if (state.busy) { checkbox.checked = !done; return; } checkbox.disabled = true; try { await mutateLibrary(next => { next.taskDone = { ...(next.taskDone || {}), [item.id]: done }; }); } catch (error) { checkbox.checked = typeof state.library?.taskDone?.[item.id] === "boolean" ? state.library.taskDone[item.id] : item.done; failure(error); } finally { checkbox.disabled = false; } });
         label.append(checkbox, node("span", item.text, "task-item-text")); li.append(label); list.append(li);
       }
       card.append(list); container.append(card);
@@ -704,9 +841,12 @@
   el("importButton").addEventListener("click", () => el("dataFile").click());
   el("dataFile").addEventListener("change", async () => { try { await reviewImport(el("dataFile").files[0]); } catch (error) { failure(error, "settingsNotice"); } finally { el("dataFile").value = ""; } });
   el("importConfirm").addEventListener("click", () => void commitImport());
-  el("importCancel").addEventListener("click", () => { state.pendingImport = null; el("importReview").hidden = true; });
+  el("importCancel").addEventListener("click", () => { state.pendingImport = null; state.pendingSnapshot = null; el("importReview").hidden = true; });
+  el("syncForm").addEventListener("submit", event => { event.preventDefault(); void connectTaskSync(); });
+  el("syncAddress").addEventListener("input", updateSyncFallback);
+  el("syncDisconnect").addEventListener("click", () => { void disconnectTaskSync().catch(error => failure(error, "syncNotice")); });
   el("backupButton").addEventListener("click", () => void backupLibrary());
-  el("restoreButton").addEventListener("click", async () => { if (state.busy) return; setBusy(true); try { await libraryMutationQueue; const previous = await PhoneStore.get("records", "previousImport"); if (!previous) return; const next = mergeLibrary({ ...previous, id: "library", importedAt: new Date().toISOString() }, state.library); await PhoneStore.replaceLibrary(next); state.library = next; closeReader(false); await refreshDashboard(); notice("settingsNotice", "已恢复上次导入的资料，本机进度仍然保留。"); } catch (error) { failure(error, "settingsNotice"); } finally { setBusy(false); } });
+  el("restoreButton").addEventListener("click", async () => { if (state.busy) return; setBusy(true); try { await disconnectTaskSync(false); await libraryMutationQueue; const previous = await PhoneStore.get("records", "previousImport"); if (!previous) return; const next = mergeLibrary({ ...previous, id: "library", importedAt: new Date().toISOString() }, state.library); await PhoneStore.replaceLibrary(next); state.library = next; closeReader(false); await refreshDashboard(); notice("settingsNotice", "已恢复上次导入的资料，本机进度仍然保留。"); } catch (error) { failure(error, "settingsNotice"); } finally { setBusy(false); } });
   el("checkUpdate").addEventListener("click", () => void checkUpdate());
   el("applyUpdate").addEventListener("click", () => { if (!state.registration?.waiting) return; state.applyingUpdate = true; el("musicAudio").pause(); state.registration.waiting.postMessage({ type: "APPLY_UPDATE" }); });
   el("musicImportButton").addEventListener("click", () => el("musicFiles").click());
@@ -737,6 +877,8 @@
   el("fontSmaller").addEventListener("click", () => setFont(state.font - 2));
   el("fontLarger").addEventListener("click", () => setFont(state.font + 2));
   window.addEventListener("popstate", () => closeReader(false));
+  document.addEventListener("visibilitychange", () => { if (document.hidden) { stopSyncRequests(); renderSyncState(); } else void pollTaskSync(); });
+  window.addEventListener("online", () => void pollTaskSync());
   try { const font = Number(localStorage.getItem("codexPhone.offlineReaderFont.v1")); if (font >= 14 && font <= 26) state.font = font; } catch { /* Presentation defaults work without storage. */ }
   document.documentElement.style.setProperty("--reader-size", `${state.font}px`);
   bindMusicMediaSession();

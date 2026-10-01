@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -50,7 +50,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-1061">
+  <link rel="stylesheet" href="styles.css?v=console-plan-sync-1.0.17">
 </head>
 <body>
   <main class="app-shell">
@@ -143,19 +143,40 @@
       <div class="console-subnav" role="tablist" aria-label="Console workspace">
         <span class="console-subtab-drop" aria-hidden="true"></span>
         <button id="consoleCommonTab" class="console-subtab active" type="button" role="tab" aria-selected="true" aria-controls="consoleCommonView" data-console-view-target="common" data-i18n="consoleCommonTab">常用</button>
+        <button id="consoleDocumentTab" class="console-subtab" type="button" role="tab" aria-selected="false" aria-controls="consoleDocumentView" data-console-view-target="document"><span>Document</span><span id="documentUnreadBadge" class="document-unread-badge" hidden></span></button>
         <button id="consoleCollaborationTab" class="console-subtab" type="button" role="tab" aria-selected="false" aria-controls="consoleCollaborationView" data-console-view-target="collaboration" data-i18n="consoleCollaborationTab">协作</button>
       </div>
 
       <div class="console-view-stage">
         <section id="consoleCommonView" class="workspace-grid console-minimal-grid console-subview active" data-console-view="common" role="tabpanel" aria-labelledby="consoleCommonTab">
-      <article class="panel desktop-layout-panel" aria-labelledby="desktopLayoutTitle">
-        <div class="panel-head">
+      <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
+        <div class="strip-head">
+          <div>
+            <div class="section-label" data-i18n="workspaceTodoLabel">Todo</div>
+            <h2 id="workspaceTodoTitle" data-i18n="workspaceTodoTitle">当前计划</h2>
+          </div>
+          <span id="workspaceTodoCount">0/0</span>
+        </div>
+        <div class="todo-composer">
+          <select id="workspaceTodoCategory" aria-label="Todo category" data-i18n-aria="workspaceTodoCategoryLabel"></select>
+          <input id="workspaceTodoInput" type="text" aria-label="写一个新的待办" data-i18n-aria="workspaceTodoPlaceholder" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
+          <button id="addWorkspaceTodo" class="ghost-button primary-action" type="button" data-i18n="addWorkspaceTodo">加入</button>
+        </div>
+        <div class="todo-composer-actions">
+          <button id="resetWorkspaceTodo" class="ghost-button" type="button" data-i18n="resetWorkspaceTodo">恢复本地计划</button>
+        </div>
+        <p id="workspaceTodoStatus" class="todo-status" role="status" aria-live="polite" hidden></p>
+        <div id="workspaceTodoList" class="workspace-todo-list"></div>
+      </section>
+
+      <details class="panel desktop-layout-panel common-collapsible" aria-labelledby="desktopLayoutTitle">
+        <summary class="panel-head">
           <div>
             <div class="section-label">Windows</div>
             <h2 id="desktopLayoutTitle" data-i18n="desktopLayoutTitle">桌面布局</h2>
           </div>
           <span id="desktopLayoutLocalOnly" class="workspace-pill" data-i18n="desktopLayoutLocalOnly">仅本机</span>
-        </div>
+        </summary>
 
         <div class="desktop-layout-controls">
           <select id="desktopLayoutPlan" aria-label="桌面布局方案" data-i18n-aria="desktopLayoutPlanLabel" disabled></select>
@@ -171,16 +192,16 @@
         </div>
         <p id="desktopLayoutPath" class="desktop-layout-path tutorial-only"></p>
         <p class="desktop-layout-guide tutorial-only" data-i18n="desktopLayoutGuide">Windows 当前排列始终是基准；每 3 天只读取并记录一次。开机不会自动重排，恢复只能手动执行；方案与备份不会上传。</p>
-      </article>
+      </details>
 
-      <article class="panel builtin-media-panel" aria-labelledby="builtinMediaTitle">
-        <div class="panel-head">
+      <details class="panel builtin-media-panel common-collapsible" aria-labelledby="builtinMediaTitle">
+        <summary class="panel-head">
           <div>
             <div class="section-label">Resources</div>
             <h2 id="builtinMediaTitle" data-i18n="builtinMediaTitle">内置资源</h2>
           </div>
           <span id="builtinMediaStatus" class="builtin-media-notice" role="status" aria-live="polite"></span>
-        </div>
+        </summary>
 
         <div class="builtin-media-list">
           <div class="builtin-media-row">
@@ -193,27 +214,110 @@
             <span id="builtinMediaWallpapersCount" class="workspace-pill">--/--</span>
             <button id="builtinMediaWallpapersSync" class="ghost-button" type="button" data-i18n="builtinMediaSync">同步</button>
           </div>
-        </div>
-      </article>
-
-      <section class="candidate-strip workspace-todos" aria-labelledby="workspaceTodoTitle">
-        <div class="strip-head">
-          <div>
-            <div class="section-label" data-i18n="workspaceTodoLabel">Todo</div>
-            <h2 id="workspaceTodoTitle" data-i18n="workspaceTodoTitle">待办清单</h2>
+          <div class="builtin-media-row">
+            <strong>手机离线资料</strong>
+            <span class="workspace-pill">只在你的设备保存</span>
+            <button id="phoneOfflineExport" class="ghost-button" type="button">导出资料</button>
           </div>
-          <span id="workspaceTodoCount">0/0</span>
+          <p id="phoneOfflineExportStatus" class="muted" role="status" aria-live="polite"></p>
+          <div class="builtin-media-row">
+            <strong>手机任务同步</strong>
+            <span class="workspace-pill">同一 Wi-Fi</span>
+            <button id="phoneCompanionOpen" class="ghost-button" type="button">连接设置</button>
+          </div>
         </div>
-        <div class="todo-composer">
-          <select id="workspaceTodoCategory" aria-label="Todo category" data-i18n-aria="workspaceTodoCategoryLabel"></select>
-          <input id="workspaceTodoInput" type="text" aria-label="写一个新的待办" data-i18n-aria="workspaceTodoPlaceholder" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
-          <button id="addWorkspaceTodo" class="ghost-button primary-action" type="button" data-i18n="addWorkspaceTodo">加入</button>
-        </div>
-        <div class="todo-composer-actions">
-          <button id="resetWorkspaceTodo" class="ghost-button" type="button" data-i18n="resetWorkspaceTodo">重置为新任务清单</button>
-        </div>
-        <div id="workspaceTodoList" class="workspace-todo-list"></div>
-      </section>
+      </details>
+
+        </section>
+
+        <section id="consoleDocumentView" class="console-subview document-shell" data-console-view="document" role="tabpanel" aria-labelledby="consoleDocumentTab" hidden>
+          <article class="panel document-controls" aria-labelledby="documentTitle">
+            <div class="panel-head">
+              <div><div class="section-label">Device</div><h2 id="documentTitle" data-i18n="documentDeviceTitle">设备概况</h2></div>
+              <button id="documentRefresh" class="ghost-button" type="button" data-i18n="documentRefresh">刷新</button>
+            </div>
+            <div id="documentOverview" class="document-overview" aria-live="polite"></div>
+            <p id="documentStatus" class="document-status" role="status" aria-live="polite"></p>
+          </article>
+          <section id="documentInbox" class="panel document-inbox" aria-labelledby="documentInboxTitle">
+            <h2 id="documentInboxTitle" class="visually-hidden" data-i18n="documentInboxSectionTitle">阅读清单</h2>
+            <div class="document-inbox-toolbar">
+              <div id="documentInboxTabs" class="document-inbox-tabs" role="tablist" aria-label="阅读清单" data-i18n-aria="documentInboxSectionTitle">
+                <span id="documentInboxTabPill" class="document-inbox-tab-pill" aria-hidden="true"></span>
+                <button id="documentInboxTabInbox" class="document-inbox-tab" type="button" role="tab" aria-selected="true" aria-controls="documentInboxEntries" data-inbox-status="inbox"><span data-i18n="documentInboxTitle">待阅读</span><span id="documentInboxCountInbox" class="document-inbox-tab-count">0</span></button>
+                <button id="documentInboxTabLater" class="document-inbox-tab" type="button" role="tab" aria-selected="false" aria-controls="documentInboxEntries" tabindex="-1" data-inbox-status="later"><span data-i18n="documentInboxLater">稍后</span><span id="documentInboxCountLater" class="document-inbox-tab-count">0</span></button>
+                <button id="documentInboxTabArchive" class="document-inbox-tab" type="button" role="tab" aria-selected="false" aria-controls="documentInboxEntries" tabindex="-1" data-inbox-status="archive"><span data-i18n="documentInboxArchive">归档</span><span id="documentInboxCountArchive" class="document-inbox-tab-count">0</span></button>
+              </div>
+              <button id="documentInboxClearAll" class="document-inbox-clear" type="button" data-i18n="documentInboxClearAll" hidden>全部清空</button>
+            </div>
+            <div id="documentInboxUndoBar" class="document-inbox-undo" role="status" hidden>
+              <span id="documentInboxUndoMessage"></span>
+              <button id="documentInboxUndo" class="document-inline-link" type="button" data-i18n="documentInboxUndo">撤销</button>
+            </div>
+            <div id="documentInboxEntries" class="document-inbox-entries" role="tabpanel" aria-labelledby="documentInboxTabInbox"></div>
+          </section>
+          <button id="documentResourcesOpen" class="document-resources-entry" type="button" aria-haspopup="dialog"><strong data-i18n="documentResourcesTitle">资料</strong><span data-i18n="documentResourcesEntry">阅读重点 / AI 记录</span><span aria-hidden="true">↗</span></button>
+          <dialog id="documentResourcesDialog" class="document-resources-dialog" aria-labelledby="documentResourcesTitle">
+            <div class="document-resources-head"><h2 id="documentResourcesTitle" data-i18n="documentResourcesTitle">资料</h2><button id="documentResourcesClose" class="ghost-button" type="button" data-i18n="documentResourcesClose" autofocus>关闭</button></div>
+            <div id="documentResourcesTabs" class="document-resources-tabs" role="tablist" aria-label="资料分类" data-i18n-aria="documentResourcesCategories">
+              <button id="documentGuideTab" type="button" role="tab" aria-selected="true" aria-controls="documentGuidePanel" data-resources-view="guide" data-i18n="documentGuideTitle">阅读重点</button>
+              <button id="documentAITab" type="button" role="tab" aria-selected="false" aria-controls="documentAIPanel" tabindex="-1" data-resources-view="ai" data-i18n="documentAITitle">AI 记录</button>
+            </div>
+            <p id="documentResourcesStatus" class="document-status" role="status" aria-live="polite"></p>
+            <section id="documentGuidePanel" class="document-resources-panel" role="tabpanel" aria-labelledby="documentGuideTab">
+              <p class="document-hint" data-i18n="documentGuideHint">结论、重点和需要你处理的事。</p>
+              <div id="documentGuideEntries" class="document-guide-entries"></div>
+            </section>
+            <section id="documentAIPanel" class="document-resources-panel" role="tabpanel" aria-labelledby="documentAITab" hidden>
+              <p class="document-hint" data-i18n="documentAIHint">完整技术记录与原始文件，供 AI 追溯，也可按需查阅。</p>
+          <div class="document-layout">
+            <aside class="panel document-browser" aria-label="文件夹浏览" data-i18n-aria="documentBrowse">
+              <div class="document-browser-actions">
+                <button id="documentHome" class="ghost-button" type="button" data-i18n="documentHome">总览</button>
+                <button id="documentUp" class="ghost-button" type="button" data-i18n="documentUp">上一级</button>
+              </div>
+              <p id="documentBreadcrumb" class="document-breadcrumb">/</p>
+              <div id="documentEntries" class="document-entries"></div>
+            </aside>
+            <article class="panel document-reader" aria-labelledby="documentFileTitle">
+              <div class="document-reader-actions"><button id="documentOpenReader" class="ghost-button" type="button" data-i18n="documentOpenReader" disabled>独立窗口阅读</button></div>
+              <h3 id="documentFileTitle" data-i18n="documentSelectFile">选择资料文件</h3>
+              <p id="documentFileMeta" class="document-file-meta"></p>
+              <div id="documentContent" class="document-content"></div>
+            </article>
+          </div>
+            </section>
+            <details id="documentFolderSettings" class="document-folder-settings">
+              <summary data-i18n="documentToolsTitle">设置与工具</summary>
+            <form id="documentFolderForm" class="document-folder-form">
+              <label class="visually-hidden" for="documentRootInput" data-i18n="documentPath">资料文件夹路径</label>
+              <input id="documentRootInput" type="text" placeholder="选择文件夹，或粘贴完整路径" data-i18n-placeholder="documentPathHint" autocomplete="off" spellcheck="false">
+              <button id="documentOpenPath" class="ghost-button" type="submit" data-i18n="documentOpenPath">打开路径</button>
+              <button id="documentChoose" class="ghost-button primary-action" type="button" data-i18n="documentChoose">打开文件夹</button>
+            </form>
+            <section class="document-sampling">
+              <h3 data-i18n="documentSampleTitle">电脑与工作环境检查</h3>
+              <div class="document-sample-actions">
+                <label><span data-i18n="documentScenario">工作场景与条件</span>
+                  <input id="documentScenario" list="documentScenarios" value="日常开发（按当前已打开应用采样）" maxlength="160">
+                </label>
+                <datalist id="documentScenarios">
+                  <option value="开机后待机"></option><option value="Unity＋Visual Studio＋Codex 日常开发"></option>
+                  <option value="编译／导入期间"></option><option value="游戏运行期间"></option>
+                </datalist>
+                <button id="documentCollect" class="ghost-button primary-action" type="button" data-i18n="documentCollect">新增轻量采样</button>
+                <button id="documentCancel" class="ghost-button" type="button" data-i18n="documentCancel" hidden>取消采样</button>
+              </div>
+              <p id="documentSampleStatus" class="document-status" role="status" aria-live="polite"></p>
+              <div class="document-compare-actions">
+                <label><span data-i18n="documentBefore">较早记录</span><select id="documentBefore"></select></label>
+                <label><span data-i18n="documentAfter">较新记录</span><select id="documentAfter"></select></label>
+                <button id="documentCompare" class="ghost-button" type="button" data-i18n="documentCompare">生成对比报告</button>
+              </div>
+            </section>
+            <div id="documentOverviewDetails" class="document-overview-details"></div>
+            </details>
+          </dialog>
         </section>
 
         <section id="consoleCollaborationView" class="console-subview collaboration-shell" data-console-view="collaboration" role="tabpanel" aria-labelledby="consoleCollaborationTab" hidden>
@@ -235,7 +339,7 @@
         <div class="github-download-actions" aria-label="Product downloads">
           <a id="updateProductConsole" class="ghost-button primary-action github-download-link" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="true" data-update-product="console">
             <span>Codex Console</span>
-            <small id="updateProductConsoleBadge" class="update-product-badge">v1.0.6</small>
+            <small id="updateProductConsoleBadge" class="update-product-badge">v1.0.12</small>
           </a>
           <a id="updateProductWorld" class="ghost-button github-download-link" href="https://github.com/tx74666/CodexWorldConsole/releases/latest" target="_blank" rel="noreferrer" aria-current="false" data-update-product="world">
             <span>Codex World</span>
@@ -245,7 +349,7 @@
 
         <div class="console-update-bar">
           <div class="console-update-copy">
-            <span id="consoleUpdateCurrent" class="workspace-pill">v1.0.6</span>
+            <span id="consoleUpdateCurrent" class="workspace-pill">v1.0.12</span>
             <strong id="consoleUpdateStatus" data-i18n="consoleUpdateChecking">正在检查</strong>
             <a id="consoleUpdateRelease" href="https://github.com/tx74666/CodexControlConsole/releases/latest" target="_blank" rel="noreferrer" hidden data-i18n="consoleUpdateRelease">Release</a>
           </div>
@@ -551,9 +655,24 @@
           <span class="blender-subtab-drop" aria-hidden="true"></span>
           <button id="blenderCharacterTab" class="blender-subtab active" type="button" role="tab" aria-selected="true" aria-controls="blenderCharacterDesignerView" data-blender-view-target="character" data-i18n="blenderCharacterTab">Common</button>
           <button id="blenderBuilderTab" class="blender-subtab" type="button" role="tab" aria-selected="false" aria-controls="blenderBuilderView" data-blender-view-target="builder" data-i18n="blenderBuilderTab">Builder</button>
+          <button id="blenderDocumentTab" class="blender-subtab" type="button" role="tab" aria-selected="false" aria-controls="blenderDocumentView" data-blender-view-target="document" data-i18n="blenderDocumentTab">Document</button>
         </div>
 
         <div class="blender-view-stage">
+        <section id="blenderDocumentView" class="blender-subview" data-blender-view="document" role="tabpanel" aria-labelledby="blenderDocumentTab" hidden>
+          <article class="panel blender-documents-panel">
+            <div class="panel-head">
+              <div>
+                <h2 data-i18n="blenderDocumentsTitle">参考文档</h2>
+                <p class="blender-documents-intro" data-i18n="blenderDocumentsBody">选择语言，在独立阅读窗口中打开。</p>
+              </div>
+              <button id="blenderDocumentsRefresh" class="ghost-button" type="button" data-i18n="blenderDocumentsRefresh">刷新</button>
+            </div>
+            <p id="blenderDocumentsStatus" class="blender-documents-status" role="status" aria-live="polite" hidden></p>
+            <div id="blenderDocumentsEntries" class="blender-documents-entries"></div>
+            <a id="blenderDocumentsFallback" class="blender-documents-fallback" target="_blank" rel="noopener" hidden></a>
+          </article>
+        </section>
         <section id="blenderBuilderView" class="blender-subview" data-blender-view="builder" role="tabpanel" aria-labelledby="blenderBuilderTab" hidden>
           <article class="panel randomrealm-art-panel">
         <div class="panel-head">
@@ -1184,6 +1303,28 @@
 
   </main>
 
+  <dialog id="phoneCompanionDialog" class="phone-pair-dialog" aria-labelledby="phoneCompanionTitle">
+    <div class="phone-pair-head"><h2 id="phoneCompanionTitle">手机任务同步</h2><button id="phoneCompanionClose" class="status-button" type="button" aria-label="关闭">关闭</button></div>
+    <p>手机和电脑连接同一 Wi‑Fi。开启后，已配对手机在前台每5秒更新电脑保存的计划；内容和完成状态以电脑为准。</p>
+    <label for="phoneCompanionInterface">电脑的 Wi‑Fi / 网线地址</label>
+    <select id="phoneCompanionInterface"></select>
+    <p id="phoneCompanionStatus" role="status" aria-live="polite">正在读取连接信息…</p>
+    <div id="phoneCompanionDetails" hidden>
+      <p>1. 在手机版的「任务同步」中输入这个电脑地址；也可以在 Safari 打开：</p>
+      <a id="phoneCompanionUrl" target="_blank" rel="noopener noreferrer"></a>
+      <p>2. 输入配对码：</p><strong id="phoneCompanionCode" class="phone-pair-code"></strong>
+      <p id="phoneCompanionExpiry"></p>
+      <p>3. 若手机版提示打开实时入口，在 Safari 使用上面的地址。离线资料和已下载音乐仍保存在原主屏幕 App。</p>
+      <p id="phoneCompanionPeers"></p>
+    </div>
+    <div class="phone-pair-actions">
+      <button id="phoneCompanionStart" class="status-button" type="button" disabled>开启手机入口</button>
+      <button id="phoneCompanionRenew" class="status-button" type="button" hidden>新配对码</button>
+      <button id="phoneCompanionStop" class="status-button" type="button" hidden>关闭手机入口</button>
+    </div>
+    <details><summary>连接不上？</summary><p>确认手机没有使用移动数据或访客 Wi‑Fi。Windows 若弹出防火墙提示，只允许你信任的家庭网络。这里使用局域网 HTTP，请只在可信 Wi‑Fi 使用，不要做路由器端口转发。电脑休眠、Console 退出或入口关闭后，手机会断开。重启 Console 后需要重新开启并配对。</p><p>手机查看电脑保存的计划，单向同步；手机页面在后台时暂停更新，回到前台会重新读取。断线时明确显示上次保存的计划。Read / Later 与电脑共用同一文档归档状态。</p></details>
+  </dialog>
+
   <input id="wallpaperFileInput" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp" multiple hidden>
   <input id="musicFileInput" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.lrc,.txt,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus,text/plain" multiple hidden>
   <input id="musicCookieFileInput" type="file" accept=".txt,text/plain" hidden>
@@ -1195,6 +1336,9 @@
   <audio id="audioPlayer" preload="metadata"></audio>
 
 <script src="/api/release-defaults.js"></script>
-<script src="app.js?v=control-console-1061"></script>
+<script src="/api/workspace-plan.js"></script>
+<script src="app.js?v=console-plan-sync-1.0.17"></script>
+<script src="phone-pairing.js?v=plan-sync-1.0.17"></script>
+<script src="phone-offline-export.js?v=offline-1.0.16"></script>
 </body>
 </html>

@@ -37,7 +37,7 @@ function harness() {
     click() { this.clicked = true; }
     remove() { this.removed = true; }
   }
-  const nodes = new Map(), calls = [], answers = [], saved = new Map();
+  const nodes = new Map(), calls = [], answers = [], saved = new Map(), timers = new Map(); let nextTimer = 1;
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const audio = get("musicAudio"); audio.paused = true; audio.currentTime = 0; audio.duration = NaN; audio.src = ""; audio.playCalls = 0; audio.pauseCalls = 0; audio.loadCalls = 0; const mediaEvents = [];
   audio.pause = () => { audio.paused = true; audio.pauseCalls++; mediaEvents.push("pause"); };
@@ -46,7 +46,8 @@ function harness() {
   const tabs = ["tasks", "music", "device", "documents"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const musicTabs = ["", "first", "second", "third"].map(tier => { const button = new Element("button"); button.dataset.musicTier = tier; return button; });
-  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : selector === "[data-music-tier]" ? musicTabs : [], addEventListener() {} };
+  const documentEvents = new Map(), windowEvents = new Map();
+  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : selector === "[data-music-tier]" ? musicTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
   const history = { state: null, pushState(value) { this.state = value; }, back() { this.state = null; } };
   const stores = new Map(["records", "music", "media", "settings"].map(name => [name, new Map()]));
   const PhoneStore = {
@@ -54,16 +55,17 @@ function harness() {
     async get(name, id) { return structuredClone(stores.get(name).get(id)); },
     async all(name) { return [...stores.get(name).values()].map(value => structuredClone(value)); },
     async keys(name) { return [...stores.get(name).keys()]; },
+    async remove(name, id) { if (this.failWrites) throw new Error("quota"); stores.get(name).delete(id); },
     async put(name, value) { if (this.failWrites) throw Object.assign(new Error("quota"), { name: "QuotaExceededError" }); stores.get(name).set(value.id, structuredClone(value)); },
     async putTrack(metadata, media) { if (this.failWrites) throw Object.assign(new Error("quota"), { name: "QuotaExceededError" }); stores.get("music").set(metadata.id, structuredClone(metadata)); stores.get("media").set(media.id, structuredClone(media)); },
     async replaceLibrary(value) { if (this.failWrites) throw new Error("quota"); const old = stores.get("records").get("library"); if (old) stores.get("records").set("previousImport", structuredClone({ ...old, id: "previousImport" })); stores.get("records").set("library", structuredClone(value)); }
   };
-  const runtime = { URL, URLSearchParams, AbortController, TypeError, document, history, navigator: { serviceWorker: { controller: {}, ready: Promise.resolve({}), register: async () => ({ waiting: null, addEventListener() {}, async update() {} }), addEventListener() {} } }, PhoneStore, Blob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout, clearTimeout, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html" }, addEventListener() {} }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
-  const names = "state,validateImport,mergeLibrary,reviewImport,commitImport,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,api,bootstrap,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
+  const runtime = { URL, URLSearchParams, AbortController, TypeError, Request, document, history, navigator: { serviceWorker: { controller: {}, ready: Promise.resolve({}), register: async () => ({ waiting: null, addEventListener() {}, async update() {} }), addEventListener() {} } }, PhoneStore, Blob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html" }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
+  const names = "state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,api,bootstrap,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
   assert.ok(source.includes("  void bootstrap();\n})();"), "test export insertion must match only bootstrap footer");
   runInNewContext(source.replace("  void bootstrap();\n})();", `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
-  return { api, stores, PhoneStore, runtime, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
+  return { api, stores, PhoneStore, runtime, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
 }
 
 function importFixture() {
@@ -81,7 +83,8 @@ async function test(name, run) { await run(); console.log(`PASS ${name}`); count
 await test("relative project installation has four tabs and no PC connection requirement", () => {
   assert.equal(manifest.start_url, "./index.html"); assert.equal(manifest.scope, "./");
   assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["tasks", "music", "device", "documents"]);
-  assert.doesNotMatch(html, /pairCode|pairForm|offlineScreen|logoutButton/); assert.doesNotMatch(source, /\/api\/phone|clearPrivate|showOffline|showPair/);
+  assert.doesNotMatch(html, /pairCode|pairForm|offlineScreen|logoutButton/); assert.doesNotMatch(source, /clearPrivate|showOffline|showPair/);
+  for (const match of source.matchAll(/\/api\/phone\/([^"']+)/g)) assert.ok(match[1].startsWith("plan-sync/"), "optional PC access must be limited to plan sync");
   for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.ok(!match[1].startsWith("/"), "project assets must remain relative");
   const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1])); for (const match of source.matchAll(/\bel\("([^"]+)"\)/g)) assert.ok(ids.has(match[1]), `Missing element ${match[1]}`);
   assert.match(html, /id="musicDownloadAll"[^>]*class="primary">全部下载（83 MiB）/); assert.match(html, /音乐和歌词一起保存/);
@@ -198,5 +201,63 @@ await test("local SW audio returns full HEAD and all Safari single byte ranges",
   for (const [range, expected, status] of [[null, "0123456789", 200], ["bytes=0-1", "01", 206], ["bytes=7-", "789", 206], ["bytes=-2", "89", 206], ["bytes=9-99", "9", 206]]) { const response = await api.localAudio(new Request("https://example.test/project/phone/audio/test", { headers: range ? { Range: range } : {} }), "test"); assert.equal(response.status, status); assert.equal(await response.text(), expected); }
   const head = await api.localAudio(new Request("https://example.test/project/phone/audio/test", { method: "HEAD" }), "test"); assert.equal(head.headers.get("Content-Length"), "10"); assert.equal(await head.text(), "");
   const bad = await api.localAudio(new Request("https://example.test/project/phone/audio/test", { headers: { Range: "bytes=99-" } }), "test"); assert.equal(bad.status, 416); assert.equal(bad.headers.get("Content-Range"), "bytes */10"); assert.equal((await api.localAudio(new Request("https://example.test/project/phone/audio/missing"), "missing")).status, 404);
+});
+const snapshot = (hash = "a", computerId = "fixture-pc") => ({ format: "codex-console-plan-snapshot", schemaVersion: 1, hash: hash.repeat(64), updatedAt: "2026-10-01T12:00:00Z", computerId, plan: plan().plan });
+const enableSync = h => { h.runtime.Request = class { constructor(_, options) { this.targetAddressSpace = options.targetAddressSpace; } }; h.get("syncAddress").value = "http://192.168.1.10:8899/"; h.get("syncCode").value = "123456"; };
+const savedSync = () => ({ address: "http://192.168.1.10:8899", token: "x".repeat(43), computerId: "fixture-pc", expiresAt: Date.now() + 3600000 });
+await test("task snapshots validate bounded groups and never accept malformed private records", () => {
+  const h = harness(); assert.equal(h.api.validatePlanSnapshot(snapshot()).plan.groups.length, 4);
+  const six = snapshot(); six.plan.groups.push({ id: "extra-1", title: "示例五", items: [] }, { id: "extra-2", title: "示例六", items: [] }); assert.equal(h.api.validatePlanSnapshot(six).plan.groups.length, 6);
+  for (const mutate of [s => { s.schemaVersion = 2; }, s => { s.hash = "invalid"; }, s => { s.computerId = "../../secret"; }, s => { s.updatedAt = "invalid"; }, s => { s.plan.groups[1].id = s.plan.groups[0].id; }, s => { s.plan.groups[1].items[0].id = s.plan.groups[0].items[0].id; }, s => { s.plan.groups[0].items[0].done = "yes"; }, s => { s.plan.groups[0].items[0].text = "x".repeat(501); }]) { const s = snapshot(); mutate(s); assert.throws(() => h.api.validatePlanSnapshot(s)); }
+});
+await test("computer snapshots override checks while preserving phone documents music reading and a local check backup", async () => {
+  const h = harness(); h.ready(); h.api.state.library.taskDone = { "task-0": true }; h.api.state.library.reading = { "to-read": "later" }; h.stores.get("media").set("music", { id: "music", blob: new Blob(["saved"]) }); h.stores.get("music").set("music", { id: "music", name: "Saved" });
+  h.api.renderPlan(h.api.state.library.dashboard.plan); h.get("taskGroups").children[0].open = true; const files = JSON.stringify(h.api.state.library.files), device = JSON.stringify(h.api.state.library.dashboard.device);
+  await h.api.applyPlanSnapshot(snapshot()); const checks = h.all(h.get("taskGroups"), "input"); assert.equal(checks[0].checked, false); assert.ok(checks.every(input => input.disabled)); assert.equal(h.get("taskGroups").children[0].open, true);
+  assert.equal(JSON.stringify(h.api.state.library.files), files); assert.equal(JSON.stringify(h.api.state.library.dashboard.device), device); assert.equal(h.api.state.library.reading["to-read"], "later"); assert.equal(h.api.state.library.localTaskBackup.taskDone["task-0"], true); assert.equal(h.stores.get("media").size, 1); assert.equal(h.stores.get("music").size, 1);
+  const updated = snapshot("b"); updated.plan.groups[0].items[0].done = true; updated.plan.groups[0].items.push({ id: "new-task", text: "新细项", done: false }); await h.api.applyPlanSnapshot(updated); assert.equal(h.all(h.get("taskGroups"), "input")[0].checked, true); assert.match(h.get("taskGroups").textContent, /新细项/); assert.equal(h.api.state.library.localTaskBackup.taskDone["task-0"], true);
+  assert.equal(await h.api.applyPlanSnapshot(updated), false); assert.equal(h.calls.length, 0);
+});
+await test("snapshot import review writes nothing and confirmation changes only tasks", async () => {
+  const h = harness(); h.ready(); const before = JSON.stringify(h.api.state.library), docs = JSON.stringify(h.api.state.library.dashboard.documents);
+  await h.api.reviewImport({ size: 100, text: async () => JSON.stringify(snapshot()) }); assert.equal(JSON.stringify(h.api.state.library), before); assert.equal(h.api.state.pendingImport, null); assert.match(h.get("importReviewHelp").textContent, /只更新任务/);
+  await h.api.commitImport(); assert.equal(JSON.stringify(h.api.state.library.dashboard.documents), docs); assert.equal(h.api.state.library.planSync.hash, "a".repeat(64)); assert.equal(h.get("importReview").hidden, true);
+});
+await test("phone backups restore synced public groups as readonly without exporting connection credentials", async () => {
+  const h = harness(); h.ready(); h.api.state.library.taskDone = { "task-0": true }; const six = snapshot(); six.plan.groups.push({ id: "extra-1", title: "五", items: [] }, { id: "extra-2", title: "六", items: [] }); await h.api.applyPlanSnapshot(six); h.stores.get("settings").set("taskSync", { id: "taskSync", ...savedSync() });
+  let blob; h.runtime.URL = class extends URL { static createObjectURL(value) { blob = value; return "blob:fixture"; } static revokeObjectURL() {} }; await h.api.backupLibrary(); const raw = await blob.text(), backup = JSON.parse(raw); assert.equal(backup.format, "codex-console-phone-backup"); assert.equal(backup.phoneState.planSnapshot.computerId, "fixture-pc"); assert.equal(backup.phoneState.localTaskBackup.taskDone["task-0"], true); assert.doesNotMatch(raw, /192\.168\.1\.10|xxxxxxxxxxxxxxxx|"token"|"expiresAt"/);
+  const restored = h.api.validateImport(backup); assert.equal(restored.dashboard.plan.plan.groups.length, 6); assert.equal(restored.planSync.readonly, true); h.api.state.library = restored; h.api.renderPlan(restored.dashboard.plan); assert.ok(h.all(h.get("taskGroups"), "input").every(input => input.disabled));
+  const ordinary = structuredClone(backup); ordinary.format = "codex-console-phone-data"; assert.throws(() => h.api.validateImport(ordinary), /四项/);
+  const mismatched = structuredClone(backup); mismatched.dashboard.plan.plan.groups[0].items[0].done = true; assert.throws(() => h.api.validateImport(mismatched), /不一致/);
+  const malformed = structuredClone(backup); malformed.phoneState.planSnapshot.hash = "bad"; assert.throws(() => h.api.validateImport(malformed));
+});
+await test("Safari without LNA gets a safe top-level real-time link without any PC fetch", async () => {
+  const h = harness(); h.ready(); h.get("syncAddress").value = "http://192.168.1.10:8899/"; h.get("syncCode").value = "123456"; const before = JSON.stringify(h.api.state.library); await h.api.connectTaskSync();
+  assert.equal(h.calls.length, 0); assert.equal(h.get("syncFallback").href, "http://192.168.1.10:8899/mobile.html"); assert.match(h.get("syncNotice").textContent, /不支持/); assert.equal(JSON.stringify(h.api.state.library), before); assert.equal(h.get("syncCode").value, "");
+  for (const unsafe of ["https://example.com/", "http://example.com/", "http://127.0.0.1:8899/", "http://192.168.1.10:8899/other", "http://user:secret@192.168.1.10:8899/", "http://192.168.1.10:8899/?token=x"]) assert.throws(() => h.api.syncAddress(unsafe));
+});
+await test("supported pairing stores tokens locally and fetches only scoped read-only task APIs", async () => {
+  const h = harness(); h.ready(); enableSync(h); h.respond({ token: "x".repeat(43), computerId: "fixture-pc", expiresIn: 28800 }); h.respond(snapshot()); await h.api.connectTaskSync();
+  assert.deepEqual(h.calls.map(call => call.url), ["http://192.168.1.10:8899/api/phone/plan-sync/pair", "http://192.168.1.10:8899/api/phone/plan-sync/plan"]);
+  for (const { options } of h.calls) { assert.equal(options.targetAddressSpace, "local"); assert.equal(options.credentials, "omit"); assert.equal(options.mode, "cors"); assert.equal(options.cache, "no-store"); assert.equal(options.redirect, "error"); assert.equal(options.headers["X-Codex-Phone"], "1"); }
+  assert.equal(h.calls[1].options.headers.Authorization, "Bearer " + "x".repeat(43)); assert.deepEqual(JSON.parse(h.calls[0].options.body), { code: "123456" }); assert.equal(h.stores.get("settings").get("taskSync").token, "x".repeat(43)); assert.equal(h.api.taskSync.connected, true); assert.ok([...h.timers.values()].some(timer => timer.delay === 5000));
+});
+await test("a late old PC response cannot replace a newly selected source", async () => {
+  const h = harness(); h.ready(); h.api.taskSync.config = savedSync(); const pending = defer(); h.answers.push(pending.promise); const poll = h.api.pollTaskSync(); await h.api.disconnectTaskSync(false); const next = snapshot("c", "next-pc"); await h.api.applyPlanSnapshot(next); pending.resolve(result(snapshot())); await poll;
+  assert.equal(h.api.state.library.planSync.computerId, "next-pc"); assert.equal(h.api.taskSync.connected, false); assert.equal(h.api.taskSync.timer, null);
+});
+await test("disconnect during a pending task write restores the prior phone cache before another source can write", async () => {
+  const h = harness(); h.ready(); const before = JSON.stringify(h.stores.get("records").get("library")), pending = defer(), originalPut = h.PhoneStore.put.bind(h.PhoneStore);
+  h.PhoneStore.put = async (name, value) => { await originalPut(name, value); if (name === "records" && value.planSync?.hash === "a".repeat(64)) await pending.promise; };
+  const update = h.api.applyPlanSnapshot(snapshot(), h.api.taskSync.generation); await new Promise(resolve => setTimeout(resolve, 0)); await h.api.disconnectTaskSync(false); pending.resolve(); assert.equal(await update, false); assert.equal(JSON.stringify(h.stores.get("records").get("library")), before); assert.equal(JSON.stringify(h.api.state.library), before);
+  await h.api.applyPlanSnapshot(snapshot("b", "new-pc")); assert.equal(h.stores.get("records").get("library").planSync.computerId, "new-pc");
+});
+await test("offline and expired sync retain all data and expiry stops polling without losing cached tasks", async () => {
+  const h = harness(); h.ready(); await h.api.applyPlanSnapshot(snapshot()); h.api.taskSync.config = savedSync(); const before = JSON.stringify(h.api.state.library); h.answers.push(Promise.reject(new TypeError("offline"))); await h.api.pollTaskSync(); assert.equal(JSON.stringify(h.api.state.library), before); assert.match(h.get("syncNotice").textContent, /已保留/);
+  h.api.taskSync.config.expiresAt = Date.now() - 1; await h.api.pollTaskSync(); assert.equal(h.api.taskSync.config.token, undefined); assert.equal(h.api.taskSync.timer, null); assert.match(h.get("syncNotice").textContent, /过期/); assert.equal(JSON.stringify(h.api.state.library), before);
+});
+await test("background suspends polling and returning foreground refreshes immediately", async () => {
+  const h = harness(); h.ready(); h.api.taskSync.config = savedSync(); h.document.hidden = true; await h.api.pollTaskSync(); assert.equal(h.calls.length, 0); h.documentEvents.get("visibilitychange")(); assert.equal(h.api.taskSync.timer, null);
+  h.respond(snapshot()); h.document.hidden = false; h.documentEvents.get("visibilitychange")(); await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(h.calls.length, 1); assert.equal(h.api.taskSync.connected, true);
 });
 console.log(`PASS offline phone UI ${count} checks`);

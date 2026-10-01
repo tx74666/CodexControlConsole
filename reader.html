@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN" data-reader-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="dark light">
+  <title>阅读 · Codex 文档</title>
+  <link rel="stylesheet" href="document-reader.css?v=reader-1.0.16">
+  <script src="document-reader.js?v=reader-1.0.16" defer></script>
+</head>
+<body>
+  <div class="reader-toolbar" aria-label="阅读设置" id="readerToolbar">
+    <div class="reader-toolbar-inner">
+      <span class="reader-label" id="readerLabel">阅读</span>
+      <div class="reader-font-controls" role="group" aria-label="字号" id="readerFontControls">
+        <button id="readerFontSmaller" type="button" aria-label="缩小字号">A−</button>
+        <output id="readerFontSize" aria-live="polite">18</output>
+        <button id="readerFontLarger" type="button" aria-label="放大字号">A＋</button>
+      </div>
+      <button id="readerTheme" type="button">浅色阅读</button>
+      <button id="readerRefresh" type="button">刷新</button>
+      <div class="reader-languages" role="group" aria-label="文档语言" id="readerLanguages" hidden>
+        <button id="readerChinese" type="button" lang="zh-CN" aria-pressed="false" disabled>中文</button>
+        <button id="readerEnglish" type="button" lang="en" aria-pressed="false" disabled>English</button>
+      </div>
+      <label class="reader-read-control" id="readerReadControl">
+        <input id="readerRead" type="checkbox" disabled>
+        <span id="readerReadLabel">已读</span>
+      </label>
+      <button class="reader-later" id="readerLater" type="button" aria-label="稍后阅读" title="稍后阅读" aria-pressed="false" disabled>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M6 4.5A1.5 1.5 0 0 1 7.5 3h9A1.5 1.5 0 0 1 18 4.5V21l-6-4-6 4Z" /></svg>
+      </button>
+    </div>
+  </div>
+  <main class="reader-page">
+    <header class="reader-heading">
+      <h1 id="readerTitle" tabindex="-1">正在打开文档…</h1>
+      <p id="readerMeta" class="reader-meta"></p>
+      <p id="readerStatus" class="reader-status" role="status" aria-live="polite">正在读取本地资料库。</p>
+    </header>
+    <article id="readerContent" class="reader-content" aria-labelledby="readerTitle" aria-busy="true"></article>
+    <noscript>此阅读窗口需要启用 JavaScript 才能读取本地文档。</noscript>
+  </main>
+</body>
+</html>

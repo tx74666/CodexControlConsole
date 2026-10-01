@@ -44,9 +44,24 @@ from desktop_layout import DesktopLayoutService
 from feedback_service import FeedbackService, FeedbackServiceError
 from app_uninstall import AppUninstallService
 from console_window_session import ConsoleWindowSessionService
+from console_instance import (
+    StartupLock, ConsoleInstanceError, find_running_console,
+    retire_older_instance, compare_versions,
+)
+from console_window_launcher import launch_or_focus as launch_or_focus_console_window
 from download_map import DownloadMapService
 from external_app_launcher import launch_or_focus_executable
 from reference_views import ReferenceViewSetService
+from document_library import DocumentLibraryService
+from phone_companion import PhoneCompanionService
+from phone_offline import build_phone_export
+from workspace_plan import (
+    MAX_PLAN_BYTES, PlanStateConflict,
+    read_plan as read_workspace_plan, plan_script as workspace_plan_script,
+    read_plan_state as read_workspace_plan_state,
+    read_actual_plan as read_actual_workspace_plan,
+    save_plan_state as save_workspace_plan_state,
+)
 
 
 def hidden_subprocess_kwargs():
@@ -120,6 +135,14 @@ USER_DATA_DIR = default_user_data_dir().resolve()
 CACHE_DIR = USER_DATA_DIR / "cache" if USER_DATA_DIR != APP_DIR else APP_DIR / "cache"
 INSTALLATION_STATE_FILE = CACHE_DIR / "installation.json"
 MEDIA_CONFIG_FILE = USER_DATA_DIR / "media.json"
+DOCUMENT_LIBRARY = DocumentLibraryService(CACHE_DIR / "documents.json")
+PHONE_COMPANION = PhoneCompanionService(
+    DOCUMENT_LIBRARY, lambda: read_actual_workspace_plan(USER_DATA_DIR), APP_DIR, APP_VERSION,
+    device_getter=DOCUMENT_LIBRARY.overview,
+    music_getter=lambda: phone_music_catalog(),
+    music_file_getter=lambda path: music_path_from_relative(path),
+    music_lyrics_getter=lambda path, language="": lyrics_path_from_music_relative(path, language),
+)
 _local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
 PUBLISHER_STATE_FILE = Path(
     os.environ.get("CODEX_CONTROL_PUBLISHER_STATE_FILE", "").strip()
@@ -323,7 +346,11 @@ def media_directory(name, extensions, legacy_candidates=()):
 
 
 migrate_legacy_user_cache()
-INSTALLATION_STATE = installation_state()
+with StartupLock(USER_DATA_DIR, DEFAULT_PORT):
+    INSTALLATION_STATE = installation_state()
+
+# Keep the plan source stable across restarts; pairing sessions still expire.
+PHONE_COMPANION.computer_id = INSTALLATION_STATE["installationId"]
 
 WORLD_CACHE = CACHE_DIR / "world.geojson"
 TRANSLATION_CACHE = CACHE_DIR / "translations.json"
@@ -528,17 +555,32 @@ def console_edition_payload():
             "portable": APP_IS_PORTABLE,
             "dataDirectory": str(USER_DATA_DIR),
             "installationId": INSTALLATION_STATE.get("installationId", ""),
+            "instanceId": RUNTIME_INSTANCE_ID,
+            "handoffProtocol": 1,
         },
     }
 
 
 ACTIVE_SERVER = None
+RUNTIME_INSTANCE_ID = uuid.uuid4().hex
 
 
 def shutdown_active_server():
     server = ACTIVE_SERVER
     if server:
         server.shutdown()
+
+
+def retire_console_instance(payload):
+    if payload.get("expectedInstanceId") != RUNTIME_INSTANCE_ID:
+        raise ValueError("The running Console changed; launch it again.")
+    if compare_versions(payload.get("version"), APP_VERSION) <= 0:
+        raise ValueError("Only a newer Console can replace this instance.")
+    # Respond before ending serve_forever; no process termination is involved.
+    timer = threading.Timer(0.2, shutdown_active_server)
+    timer.daemon = True
+    timer.start()
+    return {"accepted": True, "version": APP_VERSION}
 
 
 CONSOLE_WINDOW_SESSIONS = ConsoleWindowSessionService(shutdown_active_server)
@@ -1394,6 +1436,62 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/workspace-plan/state":
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            if parsed.query:
+                self.send_json({"error": "Saved task-plan address is invalid."}, status=400)
+                return
+            self.send_json(read_workspace_plan_state(USER_DATA_DIR))
+            return
+        if parsed.path == "/api/phone-companion/state":
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            self.send_json(PHONE_COMPANION.state())
+            return
+        if parsed.path in ("/api/workspace-plan", "/api/workspace-plan.js"):
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            payload = read_workspace_plan(USER_DATA_DIR)
+            if parsed.path.endswith('.js'):
+                self.send_bytes_response(workspace_plan_script(payload), "application/javascript; charset=utf-8")
+            else:
+                self.send_json(payload)
+            return
+        if parsed.path.startswith("/api/documents/"):
+            if not self.require_local_request():
+                return
+            # Selected local documents need the same Host/Origin boundary as
+            # actions, including reads (protect against DNS rebinding).
+            if not self.require_trusted_post_context():
+                return
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            try:
+                if parsed.path == "/api/documents/state":
+                    result = DOCUMENT_LIBRARY.state()
+                elif parsed.path == "/api/documents/list":
+                    result = DOCUMENT_LIBRARY.list(query.get("path", [""])[0])
+                elif parsed.path == "/api/documents/read":
+                    result = DOCUMENT_LIBRARY.read(query.get("path", [""])[0], expectedRoot=query.get("expectedRoot", [None])[0])
+                elif parsed.path == "/api/documents/sample-status":
+                    result = DOCUMENT_LIBRARY.sample_status()
+                elif parsed.path == "/api/documents/snapshots":
+                    result = DOCUMENT_LIBRARY.snapshots()
+                elif parsed.path == "/api/documents/overview":
+                    result = DOCUMENT_LIBRARY.overview()
+                elif parsed.path == "/api/documents/inbox":
+                    result = DOCUMENT_LIBRARY.inbox(expectedRoot=query.get("expectedRoot", [None])[0])
+                elif parsed.path == "/api/documents/guide":
+                    result = DOCUMENT_LIBRARY.guide(expectedRoot=query.get("expectedRoot", [None])[0])
+                elif parsed.path == "/api/documents/references":
+                    result = DOCUMENT_LIBRARY.references(module=query.get("module", [None])[0], expectedRoot=query.get("expectedRoot", [None])[0])
+                else:
+                    self.send_json({"error": "Document endpoint not found"}, status=404)
+                    return
+                self.send_json(result)
+            except (ValueError, OSError) as error:
+                self.send_json({"error": str(error)}, status=400)
+            return
         if parsed.path == "/api/media/builtins":
             if not self.require_local_request():
                 return
@@ -1694,7 +1792,62 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if not self.require_trusted_post_context():
             return
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/workspace-plan/state":
+            if not self.require_local_request():
+                return
+            try:
+                if parsed.query:
+                    raise ValueError("Saved task-plan address is invalid")
+                payload = self.read_json_body(max_bytes=MAX_PLAN_BYTES + 1024)
+                if not isinstance(payload, dict) or set(payload) != {"plan", "expectedHash"}:
+                    raise ValueError("Saved task-plan request is invalid")
+                self.send_json(save_workspace_plan_state(USER_DATA_DIR, payload["plan"], payload["expectedHash"]))
+            except PlanStateConflict:
+                self.send_json({"error": "电脑已有更新的计划；本机编辑已保留，请重新打开 Console。"}, status=409)
+            except RequestBodyError as error:
+                self.send_json({"error": str(error)}, status=error.status)
+            except (ValueError, OSError, RuntimeError):
+                self.send_json({"error": "计划未保存到电脑，本机清单已保留。请检查任务格式或稍后重试。"}, status=400)
+            return
+        if parsed.path == "/api/phone-offline/export":
+            if not self.require_local_request():
+                return
+            try:
+                if self.read_json_body(max_bytes=1024) != {}:
+                    raise ValueError("请从资料导出按钮执行。")
+                self.send_json(build_phone_export(
+                    DOCUMENT_LIBRARY, lambda: read_actual_workspace_plan(USER_DATA_DIR),
+                    DOCUMENT_LIBRARY.overview, APP_VERSION,
+                ))
+            except (ValueError, OSError, RuntimeError):
+                self.send_json({"error": "离线资料未导出，请检查 Document 中选择的资料库。"}, status=400)
+            return
+        if parsed.path.startswith("/api/phone-companion/"):
+            if not self.require_local_request():
+                return
+            try:
+                payload = self.read_json_body(max_bytes=1024)
+                if not isinstance(payload, dict):
+                    raise ValueError("手机连接设置必须为对象。")
+                allowed = {"host"} if parsed.path == "/api/phone-companion/start" else set()
+                if set(payload) - allowed:
+                    raise ValueError("手机连接设置包含未知内容。")
+                if parsed.path == "/api/phone-companion/start":
+                    result = PHONE_COMPANION.start(host=payload.get("host"))
+                elif parsed.path == "/api/phone-companion/stop":
+                    result = PHONE_COMPANION.stop()
+                elif parsed.path == "/api/phone-companion/pair-code":
+                    result = PHONE_COMPANION.renew_pairing()
+                else:
+                    self.send_json({"error": "Phone companion endpoint not found"}, status=404)
+                    return
+                self.send_json(result)
+            except (ValueError, OSError) as error:
+                self.send_json({"error": str(error)}, status=400)
+            return
         if parsed.path.startswith("/api/reference-views/") and not self.require_local_request():
+            return
+        if parsed.path.startswith("/api/documents/") and not self.require_local_request():
             return
         try:
             if parsed.path == "/api/wallpapers/upload":
@@ -1779,10 +1932,42 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             elif parsed.path.startswith("/api/reference-views/"):
                 request_limit = MAX_REFERENCE_VIEW_REQUEST_BYTES
             payload = self.read_json_body(request_limit)
+            if parsed.path.startswith("/api/documents/"):
+                if parsed.path == "/api/documents/select":
+                    result = DOCUMENT_LIBRARY.select(payload.get("path"))
+                elif parsed.path == "/api/documents/collect":
+                    result = DOCUMENT_LIBRARY.collect(payload.get("scenario"))
+                elif parsed.path == "/api/documents/cancel":
+                    result = DOCUMENT_LIBRARY.cancel()
+                elif parsed.path == "/api/documents/compare":
+                    result = DOCUMENT_LIBRARY.compare(payload.get("before"), payload.get("after"))
+                elif parsed.path == "/api/documents/inbox/register":
+                    result = DOCUMENT_LIBRARY.register_report(
+                        payload.get("id"), payload.get("path"), payload.get("title"),
+                        payload.get("summary"), payload.get("source"), payload.get("createdAt"),
+                    )
+                elif parsed.path == "/api/documents/inbox/read":
+                    result = DOCUMENT_LIBRARY.mark_report_read(payload.get("id"), payload.get("read"), expectedRoot=payload.get("expectedRoot"))
+                elif parsed.path == "/api/documents/inbox/move":
+                    result = DOCUMENT_LIBRARY.move_report(payload.get("id"), payload.get("status"), expectedRoot=payload.get("expectedRoot"))
+                elif parsed.path == "/api/documents/inbox/archive/clear":
+                    result = DOCUMENT_LIBRARY.clear_archive(expectedRoot=payload.get("expectedRoot"))
+                elif parsed.path == "/api/documents/inbox/archive/restore":
+                    result = DOCUMENT_LIBRARY.restore_archive(payload.get("undoToken"), expectedRoot=payload.get("expectedRoot"))
+                else:
+                    self.send_json({"error": "Document endpoint not found"}, status=404)
+                    return
+                self.send_json(result)
+                return
             if parsed.path == "/api/console/window-session":
                 if not self.require_local_request():
                     return
-                self.send_json(CONSOLE_WINDOW_SESSIONS.update(payload))
+                self.send_json({**CONSOLE_WINDOW_SESSIONS.update(payload), "version": APP_VERSION})
+                return
+            if parsed.path == "/api/console/retire":
+                if not self.require_local_request():
+                    return
+                self.send_json(retire_console_instance(payload))
                 return
             if parsed.path == "/api/media/builtins/sync":
                 if not self.require_local_request():
@@ -9086,6 +9271,17 @@ def list_music():
     return items
 
 
+def phone_music_catalog():
+    """Reuse the desktop's local tracks without downloads or audio analysis."""
+    if not MUSIC_DIR.is_dir():
+        return {"tracks": []}
+    tracks = list_music()
+    if MUSIC_LIBRARY_FILE.is_file():
+        for library in list_music_libraries():
+            tracks.extend(library.get("tracks") or [])
+    return {"tracks": tracks}
+
+
 def upload_music(files):
     saved = []
     saved_paths = []
@@ -9221,13 +9417,15 @@ def write_console_state(payload):
 
 
 def console_start_url(port):
+    # The daily launcher opens Common's current tasks. Module order and saved
+    # layouts remain untouched; explicit page links still open their module.
+    query = console_edition_query()
+    if console_module_allowed("workspace"):
+        return f"http://127.0.0.1:{port}/workspace.html{query}{'&' if query else '?'}consoleView=common"
     href = read_console_state().get("href") or "index.html"
-    if href not in CONSOLE_MODULE_HREFS.values():
-        href = "index.html"
-    module_id = console_module_id_from_href(href)
-    if not console_module_allowed(module_id):
+    if href not in CONSOLE_MODULE_HREFS.values() or not console_module_allowed(console_module_id_from_href(href)):
         href = CONSOLE_MODULE_HREFS["wallpaper"]
-    return f"http://127.0.0.1:{port}/{href}{console_edition_query()}"
+    return f"http://127.0.0.1:{port}/{href}{query}"
 
 
 def sanitize_string_map(value):
@@ -11598,24 +11796,8 @@ def pick_port(start):
 
 
 def running_console_port(start):
-    for port in range(start, start + 30):
-        if port_is_available(port):
-            continue
-        url = f"http://127.0.0.1:{port}/index.html"
-        try:
-            request = urllib.request.Request(url, headers={"User-Agent": "CodexWorldConsole/1.0"})
-            with urllib.request.urlopen(request, timeout=0.35) as response:
-                body = response.read(4096).decode("utf-8", errors="ignore")
-            if (
-                "Codex Console" in body
-                or "电脑总控台" in body
-                or "Codex World" in body
-                or "World Event Console" in body
-            ):
-                return port
-        except Exception:
-            continue
-    return None
+    instance = find_running_console(start, USER_DATA_DIR, INSTALLATION_STATE.get("installationId", ""))
+    return instance["port"] if instance else None
 
 
 def browser_candidates():
@@ -11637,7 +11819,7 @@ def browser_candidates():
     return [item for item in candidates if item and Path(item).exists()]
 
 
-def open_console_window(url):
+def start_console_browser(url):
     for browser in browser_candidates():
         try:
             subprocess.Popen(
@@ -11652,6 +11834,19 @@ def open_console_window(url):
     webbrowser.open(url)
 
 
+def open_console_window(url, *, replace=False):
+    host = urllib.parse.urlsplit(url).hostname
+    if sys.platform != "win32" or host not in {"127.0.0.1", "localhost", "::1"}:
+        # Preserve the original portable/explicit-LAN launch path. The native
+        # ownership mechanism is scoped to this Windows PC's loopback entry.
+        start_console_browser(url)
+        return {"launched": True, "existing": False, "nativeReuse": False}
+    with CONSOLE_WINDOW_SESSIONS.launching():
+        return launch_or_focus_console_window(
+            url, start_console_browser, USER_DATA_DIR, replace=replace,
+        )
+
+
 def main():
     global ACTIVE_SERVER
     parser = argparse.ArgumentParser(description="Codex Console")
@@ -11659,21 +11854,63 @@ def main():
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--edition", choices=tuple(CONSOLE_EDITION_MODULES.keys()), default=current_console_edition())
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--replace-window", action="store_true", help="Replace this Console's registered window after an update")
+    parser.add_argument("--document-root", help="Open Console Document with a local library folder")
     args = parser.parse_args()
     CONSOLE_CONFIG["edition"] = sanitize_console_edition(args.edition)
 
-    local_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
-    existing_port = running_console_port(args.port) if local_host == "127.0.0.1" else None
-    if existing_port:
-        url = console_start_url(existing_port)
-        if not args.no_browser:
-            open_console_window(url)
-        return
+    def startup_url(port):
+        if args.document_root:
+            query = console_edition_query()
+            return f"http://127.0.0.1:{port}/workspace.html{query}{'&' if query else '?'}consoleView=document"
+        return console_start_url(port)
 
-    port = pick_port(args.port)
-    url = console_start_url(port).replace("127.0.0.1", local_host, 1)
-    server = ConsoleHTTPServer((args.host, port), ConsoleHandler)
-    ACTIVE_SERVER = server
+    local_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+    server = None
+    server_thread = None
+    with StartupLock(USER_DATA_DIR, args.port):
+        if args.document_root:
+            DOCUMENT_LIBRARY.select(args.document_root)
+        instance = find_running_console(
+            args.port, USER_DATA_DIR, INSTALLATION_STATE.get("installationId", ""),
+        ) if local_host == "127.0.0.1" else None
+        replace_window = args.replace_window
+        if instance:
+            port = instance["port"]
+            if compare_versions(APP_VERSION, instance["runtime"]["version"]) > 0:
+                # An old release without handoff support must be updated normally;
+                # never leave it running and bind a second backend to another port.
+                retire_older_instance(instance, APP_VERSION)
+                replace_window = True
+            else:
+                if not args.no_browser:
+                    # This short-lived launcher does not own the running
+                    # server's session guard. Reuse its window; never close it
+                    # and let that backend mistake replacement for final exit.
+                    return open_console_window(startup_url(port), replace=False)
+                return
+        else:
+            port = pick_port(args.port)
+        url = startup_url(port).replace("127.0.0.1", local_host, 1)
+        server = ConsoleHTTPServer((args.host, port), ConsoleHandler)
+        ACTIVE_SERVER = server
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        try:
+            atomic_write_json(CACHE_DIR / "console-active-instance.json", {
+                "port": port, "instanceId": RUNTIME_INSTANCE_ID,
+            })
+            server_thread.start()
+            # Keep the gate until the browser window is registered; the pending
+            # record also suppresses duplicates during a slow Edge cold start.
+            if not args.no_browser:
+                open_console_window(url, replace=replace_window)
+        except BaseException:
+            if server_thread.is_alive():
+                server.shutdown()
+            CONSOLE_WINDOW_SESSIONS.stop()
+            server.server_close()
+            ACTIVE_SERVER = None
+            raise
 
     if sys.stdout:
         print()
@@ -11684,14 +11921,13 @@ def main():
         print("Press Ctrl+C to stop it.")
         print()
 
-    if not args.no_browser:
-        open_console_window(url)
-
     try:
-        server.serve_forever()
+        while server_thread.is_alive():
+            server_thread.join(0.5)
     except KeyboardInterrupt:
-        pass
+        server.shutdown()
     finally:
+        PHONE_COMPANION.stop()
         CONSOLE_WINDOW_SESSIONS.stop()
         server.server_close()
         ACTIVE_SERVER = None

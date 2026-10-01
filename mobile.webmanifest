@@ -1,0 +1,16 @@
+{
+  "id": "/mobile.html",
+  "name": "Codex Console",
+  "short_name": "Codex Console",
+  "description": "同一 Wi-Fi 下查看电脑状态、计划与阅读资料。",
+  "lang": "zh-CN",
+  "start_url": "/mobile.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111724",
+  "theme_color": "#151b29",
+  "icons": [
+    { "src": "/codex-resource-icon-128.png", "sizes": "128x128", "type": "image/png" },
+    { "src": "/codex-resource-icon-256.png", "sizes": "256x256", "type": "image/png" }
+  ]
+}

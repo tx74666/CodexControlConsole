@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#151b29">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Codex Console">
+  <title>Codex Console · iPhone</title>
+  <link rel="manifest" href="/mobile.webmanifest">
+  <link rel="apple-touch-icon" href="/codex-resource-icon-256.png">
+  <link rel="icon" href="/codex-resource-icon-128.png" type="image/png">
+  <link rel="stylesheet" href="/mobile.css">
+  <script src="/mobile.js" defer></script>
+</head>
+<body>
+  <header class="app-header" id="appHeader">
+    <div><p class="eyebrow">你的电脑，随手查看</p><h1>Codex Console</h1></div>
+    <span id="connectionLabel" class="connection-label">未连接</span>
+  </header>
+  <main id="main">
+    <section id="pairScreen" class="pair-screen" aria-labelledby="pairTitle">
+      <div class="pair-symbol" aria-hidden="true">⌘</div>
+      <h2 id="pairTitle">连接你的电脑</h2>
+      <p class="muted">让 iPhone 和电脑连接同一 Wi-Fi，在电脑的 Console「常用 → 内置资源 → 手机任务同步」开启连接，输入它显示的配对码。</p>
+      <form id="pairForm">
+        <label for="pairCode">配对码</label>
+        <input id="pairCode" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="6 位数字" aria-describedby="pairNotice">
+        <button id="pairSubmit" type="submit" class="primary">连接电脑</button>
+      </form>
+      <p id="pairNotice" class="notice" role="status" aria-live="polite"></p>
+      <details class="install-help"><summary>实时计划与离线 App</summary><p>这个页面连接电脑查看最新计划，电脑需保持开机。原主屏幕 App 继续保存离线资料和音乐。</p><p class="muted">需要离线查看最新计划时，配对后点「保存计划快照」，再导入原 App。电脑重启后使用新的配对码连接。</p></details>
+    </section>
+    <section id="offlineScreen" class="pair-screen" hidden aria-labelledby="offlineTitle">
+      <h2 id="offlineTitle">暂时连不上电脑</h2>
+      <p class="muted">确认电脑保持开机、手机入口已开启，两台设备仍在同一 Wi-Fi。这里不会把旧数据当成当前状态。</p>
+      <button id="offlineRetry" type="button" class="primary">重新连接</button>
+      <p id="offlineNotice" class="notice" role="status"></p>
+      <p id="offlinePlanNotice" class="muted small"></p><div id="offlineTaskGroups" class="card-stack"></div>
+    </section>
+    <div id="appScreen" hidden>
+      <div class="toolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
+      <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
+      <section id="tasksPanel" class="tab-panel" aria-labelledby="tasksTitle">
+        <div class="section-title"><div><p class="eyebrow">当前重要计划</p><h2 id="tasksTitle">计划清单</h2></div><span class="pill">只读</span></div>
+        <p id="planNotice" class="muted small">电脑 → 手机，每 5 秒更新；修改请在电脑完成。</p>
+        <div id="taskGroups" class="card-stack"></div>
+        <button id="savePlanSnapshot" type="button" class="text-button" disabled>保存计划快照</button><p class="muted small">此页面连接电脑读取计划。保存快照后，可在离线 App「资料与更新」导入；不会自动改写离线 App 的资料。</p>
+      </section>
+      <section id="musicPanel" class="tab-panel" hidden aria-labelledby="musicTitle">
+        <div class="section-title"><div><p class="eyebrow">电脑曲库，在手机播放</p><h2 id="musicTitle">音乐</h2></div><button id="musicRefresh" type="button" class="text-button">刷新曲库</button></div>
+        <p id="musicNotice" class="notice" role="status" aria-live="polite"></p>
+        <div class="card music-player">
+          <div class="music-player-heading"><span class="music-note" aria-hidden="true">♫</span><div><p class="eyebrow">正在聆听</p><h3 id="musicTrackTitle">选择一首音乐</h3><p id="musicTrackMeta" class="muted small">声音从 iPhone 播放</p></div></div>
+          <audio id="musicAudio" preload="none" playsinline></audio>
+          <div class="music-controls"><button id="musicPrevious" type="button" aria-label="上一首" disabled>‹‹</button><button id="musicPlay" type="button" class="primary" disabled>播放</button><button id="musicNext" type="button" aria-label="下一首" disabled>››</button></div>
+          <label class="visually-hidden" for="musicSeek">播放进度</label><input id="musicSeek" class="music-seek" type="range" min="0" max="1000" step="1" value="0" disabled>
+          <div class="music-timing"><span id="musicElapsed">0:00</span><span id="musicDuration">0:00</span><button id="musicRepeat" type="button" class="text-button" aria-label="切换循环模式">列表循环</button></div>
+        </div>
+        <details id="musicLyricsSection" class="music-lyrics-section" hidden><summary>歌词</summary><div id="musicLyricLanguages" class="reader-languages" hidden></div><p id="musicLyricsNotice" class="muted small"></p><div id="musicLyrics" class="music-lyrics" aria-label="本地歌词"></div></details>
+        <div class="music-library-tools"><label class="visually-hidden" for="musicSearch">搜索音乐</label><input id="musicSearch" type="search" placeholder="搜索音乐" autocomplete="off" spellcheck="false"><label class="visually-hidden" for="musicFolder">音乐文件夹</label><select id="musicFolder" aria-label="音乐文件夹"><option value="">全部文件夹</option></select></div>
+        <p id="musicListMeta" class="muted small"></p><div id="musicTracks" class="music-track-list"></div><button id="musicMore" type="button" class="secondary music-more" hidden>显示更多</button>
+        <p class="muted small music-footnote">音乐来自电脑已登记的曲库。电脑需保持开机与连接，手机播放不会控制电脑扬声器。</p>
+      </section>
+      <section id="devicePanel" class="tab-panel" hidden aria-labelledby="deviceTitle">
+        <div class="section-title"><div><p class="eyebrow">按需读取</p><h2 id="deviceTitle">电脑状态</h2></div></div>
+        <div id="memoryCard" class="card memory-card"></div>
+        <div id="hardwareCard" class="card hardware-card"></div>
+        <p class="muted small">记忆体只在打开页面或按刷新时读取；硬件信息来自保存的采样。</p>
+      </section>
+      <section id="documentsPanel" class="tab-panel" hidden aria-labelledby="documentsTitle">
+        <div class="section-title"><div><p class="eyebrow">重点先看，记录收好</p><h2 id="documentsTitle">文档</h2></div></div>
+        <div class="segment" id="inboxTabs" aria-label="阅读清单">
+          <button type="button" data-inbox="inbox" aria-pressed="true">待阅读 <span id="inboxCount">0</span></button>
+          <button type="button" data-inbox="later" aria-pressed="false">Later <span id="laterCount">0</span></button>
+          <button type="button" data-inbox="archive" aria-pressed="false">Archive <span id="archiveCount">0</span></button>
+        </div>
+        <div id="inboxList" class="card-stack"></div>
+        <details class="document-section"><summary>阅读重点 <span class="muted small">给人看</span></summary><div id="guideList" class="card-stack"></div></details>
+        <details class="document-section"><summary>参考资料 <span class="muted small">给人看</span></summary><div id="referenceList" class="card-stack"></div></details>
+        <details class="document-section"><summary>AI 原始记录 <span class="muted small">需要时展开</span></summary><div id="recordList" class="card-stack"></div></details>
+      </section>
+      <details class="session-settings"><summary>连接设置</summary><p class="muted small">实时页面读取电脑计划；原主屏幕 App 保留离线资料与音乐。电脑重启或配对过期后需重新连接。</p><p class="muted small">断开后，这台手机需要重新输入电脑显示的配对码。</p><button id="logoutButton" type="button" class="secondary">断开这台手机</button></details>
+    </div>
+  </main>
+  <nav id="bottomNav" class="bottom-nav" hidden aria-label="主要页面">
+    <button type="button" data-tab="tasks" aria-pressed="true"><span aria-hidden="true">◫</span>任务</button>
+    <button type="button" data-tab="music" aria-pressed="false"><span aria-hidden="true">♫</span>音乐</button>
+    <button type="button" data-tab="device" aria-pressed="false"><span aria-hidden="true">▣</span>设备</button>
+    <button type="button" data-tab="documents" aria-pressed="false"><span aria-hidden="true">▤</span>文档</button>
+  </nav>
+  <section id="readerScreen" class="reader-screen" hidden aria-labelledby="readerTitle" tabindex="-1">
+    <header class="reader-toolbar"><button id="readerBack" type="button" class="text-button">‹ 返回</button><div class="reader-font"><button id="fontSmaller" type="button" aria-label="缩小文字">A−</button><button id="fontLarger" type="button" aria-label="放大文字">A+</button></div></header>
+    <div class="reader-body"><p id="readerMeta" class="muted small"></p><h1 id="readerTitle">正在打开…</h1><p id="readerNotice" class="notice" role="status" aria-live="polite"></p><div id="readerLanguages" class="reader-languages" hidden></div><details id="readerContents" class="reader-contents" hidden><summary>文章目录</summary><nav id="readerHeadings" aria-label="文章目录"></nav></details><article id="readerContent"></article></div>
+    <footer id="readerActions" class="reader-actions" hidden><button id="readerLater" type="button" class="secondary">稍后阅读</button><button id="readerRead" type="button" class="primary">已读，归档</button></footer>
+  </section>
+  <noscript><p class="notice">请开启 Safari 的 JavaScript，再连接电脑。</p></noscript>
+</body>
+</html>

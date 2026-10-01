@@ -34,12 +34,7 @@ jobs:
       - name: Validate offline export and phone application
         run: node tools/check-phone-offline-ui.mjs
       - name: Build public phone application
-        run: |
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            python tools/build-phone-static.py --output-dir dist-phone/site --version "${GITHUB_REF_NAME#v}"
-          else
-            python tools/build-phone-static.py --output-dir dist-phone/site
-          fi
+        run: python tools/build-phone-static.py --output-dir dist-phone/site
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload phone application

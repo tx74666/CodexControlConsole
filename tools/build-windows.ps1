@@ -194,6 +194,15 @@ if ($BuildApplication) {
   @{ Source = "index.html"; Destination = "." },
   @{ Source = "music.html"; Destination = "." },
   @{ Source = "workspace.html"; Destination = "." },
+  @{ Source = "reader.html"; Destination = "." },
+  @{ Source = "document-reader.js"; Destination = "." },
+  @{ Source = "document-reader.css"; Destination = "." },
+  @{ Source = "mobile.html"; Destination = "." },
+  @{ Source = "mobile.js"; Destination = "." },
+  @{ Source = "mobile.css"; Destination = "." },
+  @{ Source = "mobile.webmanifest"; Destination = "." },
+  @{ Source = "phone-pairing.js"; Destination = "." },
+  @{ Source = "phone-offline-export.js"; Destination = "." },
   @{ Source = "styles.css"; Destination = "." },
   @{ Source = "app.js"; Destination = "." },
   @{ Source = "README.md"; Destination = "." },
@@ -216,7 +225,8 @@ if ($BuildApplication) {
   @{ Source = $NativeFileDragExe; Destination = "tools" },
   @{ Source = "tools\NativeFileDrag.cs"; Destination = "tools" },
   @{ Source = "tools\blender_live_selection_bridge.py"; Destination = "tools" },
-  @{ Source = "tools\DesktopLayout.ps1"; Destination = "tools" }
+  @{ Source = "tools\DesktopLayout.ps1"; Destination = "tools" },
+  @{ Source = "tools\Collect-DeviceSnapshot.ps1"; Destination = "tools" }
 )
 
   if ($InstallMode -ne "store") {

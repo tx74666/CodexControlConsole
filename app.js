@@ -1,4 +1,4 @@
-﻿const storageKeys = {
+const storageKeys = {
   language: "codexControl.language.v1",
   theme: "codexControl.theme.v1",
   selectedWallpaper: "codexControl.selectedWallpaper.v1",
@@ -18,6 +18,13 @@
   lastModule: "codexControl.lastModule.v1",
   downloadIntake: "codexControl.downloadIntake.v1",
   workspaceTodos: "codexControl.workspaceTodos.v1",
+  workspaceTodoDraft: "codexControl.workspaceTodoDraft.v1",
+  workspacePlanCache: "codexControl.workspacePlanCache.v1",
+  workspacePlanRevision: "codexControl.workspacePlanRevision.v1",
+  workspacePlanServerHash: "codexControl.workspacePlanServerHash.v1",
+  workspacePlanPending: "codexControl.workspacePlanPending.v1",
+  workspacePlanCacheOrigin: "codexControl.workspacePlanCacheOrigin.v1",
+  workspaceTodoBackup: "codexControl.workspaceTodoBackup.v1",
   tutorialMode: "codexControl.tutorialMode.v1",
   downloadMapPlugin: "codexControl.downloadMapPlugin.v1",
   updateProduct: "codexControl.updateProduct.v1",
@@ -38,8 +45,21 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
+const consoleUiVersion = "1.0.17";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
+let consoleVersionReloadPending = false;
+
+function refreshForNewConsoleVersion(version) {
+  if (consoleVersionReloadPending || typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) return;
+  const current = consoleUiVersion.split(".").map(Number);
+  const next = version.split(".").map(Number);
+  const difference = next.findIndex((part, index) => part !== current[index]);
+  if (difference < 0 || next[difference] < current[difference]) return;
+  saveWorkspaceTodoDraft();
+  consoleVersionReloadPending = true;
+  window.location.reload();
+}
 
 function consoleWindowSessionId() {
   let sessionId = "";
@@ -71,7 +91,10 @@ function sendConsoleWindowSession(action, options = {}) {
     headers: { "Content-Type": "application/json" },
     body,
     keepalive: Boolean(options.beacon)
-  }).catch(() => {});
+  }).then(response => response.ok ? response.json() : null)
+    .then(payload => {
+      if (action !== "close" && payload?.version) refreshForNewConsoleVersion(payload.version);
+    }).catch(() => {});
 }
 
 function startConsoleWindowSession() {
@@ -308,6 +331,44 @@ const i18n = {
     tutorialModeOff: "æ•™ç¨‹æ¨¡å¼å·²å…³é—­ï¼šåªä¿ç•™å…³é”®å…¥å£",
     consoleCommonTab: "\u5e38\u7528",
     consoleCollaborationTab: "\u534f\u4f5c",
+    documentTitle: "本地资料库",
+    documentDeviceTitle: "设备概况",
+    documentResourcesTitle: "资料",
+    documentResourcesEntry: "阅读重点 / AI 记录",
+    documentResourcesClose: "关闭",
+    documentResourcesCategories: "资料分类",
+    documentGuideTitle: "阅读重点",
+    documentGuideHint: "结论、重点和需要你处理的事。",
+    documentAITitle: "AI 记录",
+    documentAIHint: "完整技术记录与原始文件，供 AI 追溯，也可按需查阅。",
+    documentToolsTitle: "设置与工具",
+    documentInboxTitle: "待阅读",
+    documentInboxHint: "打开正文不会自动标为已读；阅读后请勾选“已读”。",
+    documentInboxHistory: "阅读历史",
+    documentInboxSectionTitle: "阅读清单",
+    documentInboxLater: "稍后",
+    documentInboxArchive: "归档",
+    documentInboxClearAll: "全部清空",
+    documentInboxUndo: "撤销",
+    documentOpenReader: "独立窗口阅读",
+    documentLocal: "普通本地文件",
+    documentPath: "资料文件夹路径",
+    documentPathHint: "选择文件夹，或粘贴完整路径",
+    documentOpenPath: "打开路径",
+    documentChoose: "打开文件夹",
+    documentRefresh: "刷新",
+    documentSnapshotHint: "内存状态在进入此页或刷新时读取。检查报告是带时间的已保存记录；新检查请按需采样。",
+    documentSampleTitle: "电脑与工作环境检查",
+    documentScenario: "工作场景与条件",
+    documentCollect: "新增轻量采样",
+    documentCancel: "取消采样",
+    documentBefore: "较早记录",
+    documentAfter: "较新记录",
+    documentCompare: "生成对比报告",
+    documentBrowse: "文件夹浏览",
+    documentHome: "总览",
+    documentUp: "上一级",
+    documentSelectFile: "选择资料文件",
     collaborationPanelToggleTitle: "\u6298\u53e0\u6216\u5c55\u5f00\u6b64\u9762\u677f",
     consoleDownloadsTab: "\u4e0b\u8f7d\u5730\u56fe",
     downloadMapTitle: "\u63d2\u4ef6\u5730\u56fe",
@@ -409,6 +470,10 @@ const i18n = {
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
     blenderCharacterTab: "Common",
+    blenderDocumentTab: "Document",
+    blenderDocumentsTitle: "参考文档",
+    blenderDocumentsBody: "选择语言，在独立阅读窗口中打开。",
+    blenderDocumentsRefresh: "刷新",
     blenderHelperTitle: "Blender Hub",
     blenderHelperBadge: "\u5730\u56fe",
     blenderHubReady: "\u53ef\u7528",
@@ -930,13 +995,19 @@ const i18n = {
     ruleLabel: "è§„åˆ™",
     pendingRule: "å¾…é…ç½®",
     quickSlotsTitle: "å¿«æ·åŒº",
+    workspaceTodoSaveFailed: "清单未能保存，请检查浏览器存储空间后重试。",
+    workspacePlanLoadFailed: "本地计划未能应用，已保留原清单。",
+    workspacePlanCacheMissing: "本地计划暂不可用，已保留现有任务。",
+    workspacePlanSyncFailed: "计划已保留在本机，暂未保存到电脑；恢复连接后会重试。",
+    workspacePlanSyncConflict: "电脑已有更新的计划，本机编辑已保留。载入电脑计划前会备份本机清单。",
+    workspacePlanLoadSaved: "载入电脑计划",
     workspaceTodoLabel: "Todo",
-    workspaceTodoTitle: "å¾…åŠžæ¸…å•",
+    workspaceTodoTitle: "当前计划",
     workspaceTodoProgress: (done, total) => `${done}/${total}`,
-    workspaceTodoPlaceholder: "å†™ä¸€ä¸ªæ–°çš„å¾…åŠž",
-    workspaceTodoCategoryLabel: "å¾…åŠžåˆ†ç±»",
-    addWorkspaceTodo: "åŠ å…¥",
-    resetWorkspaceTodo: "é‡ç½®ä¸ºæ–°ä»»åŠ¡æ¸…å•",
+    workspaceTodoPlaceholder: "添加一项细节",
+    workspaceTodoCategoryLabel: "任务类别",
+    addWorkspaceTodo: "加入",
+    resetWorkspaceTodo: "恢复本地计划",
     githubDownloadsTitle: "GitHub ä¸‹è½½",
     storeUpdatesTitle: "Microsoft Store æ›´æ–°",
     githubDownloadsStatus: "å¾…è¿žæŽ¥",
@@ -992,7 +1063,7 @@ const i18n = {
     todoMiniGameSandbox: "ä¿ç•™è‡ªç”±å®žéªŒä½",
     todoCommunityDevelop: "å‘å±•ç¤¾ç¾¤",
     todoEmptyGroup: "è¿™ä¸€ç»„å…ˆç©ºç€",
-    todoDeleteLabel: name => `åˆ é™¤ ${name}`,
+    todoDeleteLabel: name => `删除 ${name}`,
     downloadIntakeLabel: "è¯»å– Downloads",
     openDownloads: "æ‰“å¼€ Downloads",
     downloadsOpened: "å·²æ‰“å¼€ Downloadsã€‚",
@@ -1108,6 +1179,44 @@ const i18n = {
     tutorialModeOff: "Tutorial mode is off: showing only key actions",
     consoleCommonTab: "Common",
     consoleCollaborationTab: "Collaboration",
+    documentTitle: "Local document library",
+    documentDeviceTitle: "Device overview",
+    documentResourcesTitle: "Library",
+    documentResourcesEntry: "Reading highlights / AI records",
+    documentResourcesClose: "Close",
+    documentResourcesCategories: "Library sections",
+    documentGuideTitle: "Reading highlights",
+    documentGuideHint: "Conclusions, key points, and things that need your attention.",
+    documentAITitle: "AI records",
+    documentAIHint: "Full technical records and source files for AI traceability, available whenever you need them.",
+    documentToolsTitle: "Settings and tools",
+    documentInboxTitle: "To read",
+    documentInboxHint: "Opening a report does not mark it read. Check Read when you have finished.",
+    documentInboxHistory: "Reading history",
+    documentInboxSectionTitle: "Reading list",
+    documentInboxLater: "Later",
+    documentInboxArchive: "Archive",
+    documentInboxClearAll: "Clear All",
+    documentInboxUndo: "Undo",
+    documentOpenReader: "Read in a separate window",
+    documentLocal: "Local files",
+    documentPath: "Library folder path",
+    documentPathHint: "Choose a folder or paste its full path",
+    documentOpenPath: "Open path",
+    documentChoose: "Open folder",
+    documentRefresh: "Refresh",
+    documentSnapshotHint: "Memory is read when entering this page or refreshing. Reports are saved, timestamped records; collect a new sample when needed.",
+    documentSampleTitle: "Computer and work environment checks",
+    documentScenario: "Work scenario and conditions",
+    documentCollect: "Collect light sample",
+    documentCancel: "Cancel sample",
+    documentBefore: "Earlier record",
+    documentAfter: "Later record",
+    documentCompare: "Create comparison",
+    documentBrowse: "Browse folders",
+    documentHome: "Overview",
+    documentUp: "Parent folder",
+    documentSelectFile: "Select a document",
     collaborationPanelToggleTitle: "Collapse or expand this panel",
     consoleDownloadsTab: "Download Map",
     downloadMapTitle: "Plugin Map",
@@ -1209,6 +1318,10 @@ const i18n = {
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
     blenderCharacterTab: "Common",
+    blenderDocumentTab: "Document",
+    blenderDocumentsTitle: "Reference documents",
+    blenderDocumentsBody: "Choose a language to open the separate reading window.",
+    blenderDocumentsRefresh: "Refresh",
     blenderHelperTitle: "Blender Hub",
     blenderHelperBadge: "Map",
     blenderHubReady: "Ready",
@@ -1730,13 +1843,19 @@ const i18n = {
     ruleLabel: "Rule",
     pendingRule: "Pending",
     quickSlotsTitle: "Quick Slots",
+    workspaceTodoSaveFailed: "The list could not be saved. Check browser storage and retry.",
+    workspacePlanLoadFailed: "The local plan could not be applied. Your previous list is preserved.",
+    workspacePlanCacheMissing: "The local plan is unavailable. Your existing tasks are preserved.",
+    workspacePlanSyncFailed: "Tasks are kept locally but could not be saved on this PC. Saving will retry when connected.",
+    workspacePlanSyncConflict: "A newer plan is saved on this PC. Local edits will be backed up before loading it.",
+    workspacePlanLoadSaved: "Load saved PC plan",
     workspaceTodoLabel: "Todo",
     workspaceTodoTitle: "To-Do List",
     workspaceTodoProgress: (done, total) => `${done}/${total}`,
     workspaceTodoPlaceholder: "Add a task",
     workspaceTodoCategoryLabel: "Todo category",
     addWorkspaceTodo: "Add",
-    resetWorkspaceTodo: "Reset new task set",
+    resetWorkspaceTodo: "Restore local plan",
     githubDownloadsTitle: "GitHub Downloads",
     storeUpdatesTitle: "Microsoft Store Updates",
     githubDownloadsStatus: "Not linked",
@@ -2009,6 +2128,7 @@ const els = {
   resetWorkspaceTodo: document.getElementById("resetWorkspaceTodo"),
   workspaceTodoList: document.getElementById("workspaceTodoList"),
   workspaceTodoCount: document.getElementById("workspaceTodoCount"),
+  workspaceTodoStatus: document.getElementById("workspaceTodoStatus"),
   randomRealmReleaseStatusText: document.getElementById("randomRealmReleaseStatusText"),
   openSteamworks: document.getElementById("openSteamworks"),
   openSteamPublishFolder: document.getElementById("openSteamPublishFolder"),
@@ -2228,8 +2348,19 @@ let materialNotice = "";
 let renderTextureNotice = "";
 let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) === "true";
 let tutorialMode = localStorage.getItem(storageKeys.tutorialMode) === "true";
-const storedConsoleView = localStorage.getItem(storageKeys.consoleView);
-let activeConsoleView = normalizeConsoleWorkspaceView(storedConsoleView);
+const requestedConsoleView = new URLSearchParams(window.location.search).get("consoleView");
+let activeConsoleView = normalizeConsoleWorkspaceView(requestedConsoleView);
+const documentLibrary = {
+  loaded: false, busy: false, root: "", exists: false, path: "", file: "",
+  entries: [], sample: { status: "idle" }, sampleTimer: 0, sampleErrors: 0,
+  samplePollBusy: false, pendingSampleReport: null
+};
+const documentInbox = { entries: [], busy: false, loading: false, root: "", view: "inbox", undo: null, sequence: 0, refreshPending: false };
+let documentInboxChannel = null;
+let documentReadingWindow = null;
+let documentOverviewResult = null;
+const documentResources = { view: "guide", guideLoaded: false, guideItems: [], aiLoaded: false, sequence: 0, fileSequence: 0, browseSequence: 0, returnFocus: null };
+const blenderDocuments = { root: "", items: [], loaded: false, busy: false, sequence: 0, error: "", unavailable: "", fallbackUrl: "" };
 let activeBlenderView = normalizeBlenderWorkspaceView(localStorage.getItem(storageKeys.blenderView));
 let blenderViewTransitionTimer = 0;
 let blenderViewTransitionFrame = 0;
@@ -2301,6 +2432,10 @@ let feedbackTurnstileWidgetId = null;
 let feedbackTurnstileLoading = null;
 let pendingSteamworkAssetSlot = "";
 let steamworkThumbsEnabled = false;
+let activeWorkspacePlan = null;
+let workspaceTodoPersonalMode = false;
+let workspaceTodoNoticeKey = "";
+const workspacePlanSync = { ready: false, loading: false, hash: null, blocked: false, dirty: 0, saving: false, timer: 0, legacyCacheChecked: false, hadLocalTasks: false };
 let workspaceTodoGroups = loadWorkspaceTodos();
 let randomRealmArtContext = loadRandomRealmArtContext();
 let randomRealmBlenderProjects = [];
@@ -2637,6 +2772,7 @@ async function loadModuleData(id) {
       return results.every(result => result !== false) && activeViewLoaded !== false;
     }
     case "blender":
+      if (activeBlenderView === "document") return loadBlenderDocuments();
       if (hasRandomRealmArtTools()) {
         return (await loadRandomRealmBlenderProjects({ limit: 40, loadObjects: activeBlenderView === "builder" })) !== false;
       }
@@ -2688,6 +2824,7 @@ function syncRuntimeActivity(options = {}) {
   }
 
   if (isModuleForeground("blender")) {
+    if (activeBlenderView === "document") void loadBlenderDocuments({ force: Boolean(options.resume || options.moduleChanged) });
     startRandomRealmLiveSelectionPolling({ immediate: Boolean(options.resume || options.moduleChanged) });
     if (randomRealmPackedPackagePaths().length && !randomRealmTextureApplyPollTimer && !randomRealmTextureApplyPollInFlight) {
       scheduleRandomRealmTextureApplyPoll(options.resume || options.moduleChanged ? 250 : 2600);
@@ -2744,11 +2881,15 @@ function applyModuleHistory(id) {
 }
 
 function normalizeConsoleWorkspaceView(value) {
-  return value === "collaboration" || value === "downloads" ? "collaboration" : "common";
+  if (value === "document") return "document";
+  if (value === "collaboration" || value === "downloads") return "collaboration";
+  return "common";
 }
 
 async function loadActiveConsoleWorkspaceViewData() {
-  if (!runtimeActivityReady || !isModuleForeground("workspace") || activeConsoleView !== "collaboration") return true;
+  if (!runtimeActivityReady || !isModuleForeground("workspace")) return true;
+  if (activeConsoleView === "document") return loadDocumentLibrary();
+  if (activeConsoleView !== "collaboration") return true;
   const requests = [];
   if (!feedbackConfigLoaded && !feedbackConfigBusy) {
     requests.push(loadFeedbackConfig({ quiet: true }));
@@ -2787,7 +2928,7 @@ function setConsoleWorkspaceView(value, options = {}) {
     view.classList.toggle("active", active);
   }
 
-  if (runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "collaboration") {
+  if (runtimeActivityReady && isModuleForeground("workspace") && ["collaboration", "document"].includes(activeConsoleView)) {
     void loadActiveConsoleWorkspaceViewData();
   }
   if (feedbackInboxPollingAllowed()) {
@@ -2795,6 +2936,845 @@ function setConsoleWorkspaceView(value, options = {}) {
   } else {
     stopFeedbackInboxPolling();
   }
+}
+
+function documentNode(id) {
+  return document.getElementById(`document${id}`);
+}
+
+function documentText(zh, en) {
+  return language === "en" ? en : zh;
+}
+
+function documentNotice(message, error = false) {
+  const node = documentNode("Status");
+  if (!node) return;
+  node.textContent = message;
+  node.classList.toggle("document-error", error);
+  const dialogStatus = documentNode("ResourcesStatus");
+  if (dialogStatus) { dialogStatus.textContent = message; dialogStatus.classList.toggle("document-error", error); }
+}
+
+function documentSampleRunning() {
+  return ["running", "cancelling"].includes(documentLibrary.sample?.status);
+}
+
+function updateDocumentControls() {
+  const busy = documentLibrary.busy || documentInbox.busy;
+  const running = documentSampleRunning();
+  for (const id of ["Choose", "OpenPath", "RootInput"]) {
+    if (documentNode(id)) documentNode(id).disabled = busy || running;
+  }
+  for (const id of ["Refresh", "Home", "Up"]) {
+    if (documentNode(id)) documentNode(id).disabled = busy || (id !== "Refresh" && !documentLibrary.exists);
+  }
+  for (const id of ["Collect", "Scenario", "Before", "After", "Compare"]) {
+    if (documentNode(id)) documentNode(id).disabled = busy || running || !documentLibrary.exists;
+  }
+  const before = documentNode("Before");
+  const after = documentNode("After");
+  if (documentNode("Compare")) documentNode("Compare").disabled ||= !before?.value || !after?.value || before.value === after.value;
+  if (documentNode("Cancel")) {
+    documentNode("Cancel").hidden = !running;
+    documentNode("Cancel").disabled = busy || documentLibrary.sample.status === "cancelling";
+  }
+  documentNode("Entries")?.setAttribute("aria-busy", String(busy));
+  if (documentNode("OpenReader")) documentNode("OpenReader").disabled = busy || !documentLibrary.exists || !documentLibrary.file;
+  for (const control of document.querySelectorAll(".document-inbox-entry button, .document-inbox-entry input")) {
+    control.disabled = busy || !documentLibrary.exists;
+  }
+  for (const control of document.querySelectorAll(".document-guide-card button")) control.disabled = busy || !documentLibrary.exists;
+  if (documentNode("InboxClearAll")) documentNode("InboxClearAll").disabled = busy || !documentLibrary.exists || !documentInbox.entries.some(entry => documentInboxEntryStatus(entry) === "archive");
+  if (documentNode("InboxUndo")) documentNode("InboxUndo").disabled = busy || !documentLibrary.exists || !documentInbox.undo;
+}
+
+async function documentRequest(endpoint, payload) {
+  const path = `/api/documents/${endpoint}`;
+  const result = payload === undefined
+    ? await requestJson(path, { cache: "no-store" }, { timeoutMs: 20000 })
+    : await postJson(path, payload, { timeoutMs: endpoint === "select" ? 180000 : 20000 });
+  if (result.error && !result.truncated && result.status !== "partial" && !["state", "sample-status"].includes(endpoint)) throw new Error(result.error);
+  return result;
+}
+
+async function withDocumentAction(action) {
+  if (documentLibrary.busy || documentInbox.busy) return false;
+  documentLibrary.busy = true;
+  updateDocumentControls();
+  try {
+    await action();
+    return true;
+  } catch (error) {
+    documentNotice(documentText("操作未完成；已保存记录不受影响。", "Action did not complete; saved records are unchanged. ") + String(error.message || error), true);
+    return false;
+  } finally {
+    documentLibrary.busy = false;
+    updateDocumentControls();
+    if (documentLibrary.pendingSampleReport) void finishDocumentSampleReport();
+    if (documentInbox.refreshPending) requestDocumentInboxRefresh();
+    flushDocumentResourcesPending();
+  }
+}
+
+function saveDocumentPosition() {
+  try {
+    localStorage.setItem("codexControl.documentPosition.v1", JSON.stringify({ root: documentLibrary.root, path: documentLibrary.path, file: documentLibrary.file }));
+  } catch { /* Folder selection is independently saved by the local service. */ }
+}
+
+function documentRelativePath(target, currentFile = documentLibrary.file) {
+  let value;
+  try { value = decodeURIComponent(String(target).split("#")[0]); } catch { return null; }
+  if (!value || /^[a-z][a-z\d+.-]*:/i.test(value) || /^[\\/]/.test(value) || value.includes("\0")) return null;
+  const parts = String(currentFile).replaceAll("\\", "/").split("/").slice(0, -1);
+  for (const part of value.replaceAll("\\", "/").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (!parts.length) return null;
+      parts.pop();
+    } else parts.push(part);
+  }
+  return parts.join("/");
+}
+
+function appendDocumentInline(parent, source, depth = 0) {
+  const value = String(source);
+  if (depth > 4) { parent.appendChild(document.createTextNode(value)); return; }
+  const tokens = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\((?:<[^>]+>|[^)]+)\))/g;
+  let offset = 0;
+  for (const match of value.matchAll(tokens)) {
+    parent.appendChild(document.createTextNode(value.slice(offset, match.index)));
+    const token = match[0];
+    if (token.startsWith("`")) {
+      const code = document.createElement("code");
+      code.textContent = token.slice(1, -1); parent.appendChild(code);
+    } else if (token.startsWith("**")) {
+      const strong = document.createElement("strong");
+      appendDocumentInline(strong, token.slice(2, -2), depth + 1); parent.appendChild(strong);
+    } else {
+      const separator = token.indexOf("](");
+      const label = token.slice(1, separator);
+      const target = token.slice(separator + 2, -1).replace(/^<|>$/g, "");
+      const relative = documentRelativePath(target);
+      if (/^https?:\/\//i.test(target)) {
+        const anchor = document.createElement("a");
+        anchor.href = target; anchor.target = "_blank"; anchor.rel = "noopener noreferrer";
+        appendDocumentInline(anchor, label, depth + 1); parent.appendChild(anchor);
+      } else if (relative !== null) {
+        const button = document.createElement("button");
+        button.type = "button"; button.className = "document-inline-link";
+        appendDocumentInline(button, label, depth + 1);
+        button.addEventListener("click", () => void withDocumentAction(() => target.endsWith("/") ? browseDocumentFolder(relative) : readDocumentFile(relative)));
+        parent.appendChild(button);
+      } else {
+        parent.appendChild(document.createTextNode(label));
+      }
+    }
+    offset = match.index + token.length;
+  }
+  parent.appendChild(document.createTextNode(value.slice(offset)));
+}
+
+function renderDocumentMarkdown(source, container) {
+  container.replaceChildren();
+  const lines = String(source).replace(/\r\n?/g, "\n").split("\n");
+  const isTableRule = line => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line || "");
+  const tableCells = line => line.trim().replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, "|"));
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) { index += 1; continue; }
+    const fence = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fence) {
+      const content = []; index += 1;
+      while (index < lines.length && !lines[index].trimStart().startsWith(fence[1])) content.push(lines[index++]);
+      index += 1;
+      const pre = document.createElement("pre"); const code = document.createElement("code");
+      code.textContent = content.join("\n"); pre.appendChild(code); container.appendChild(pre); continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)/);
+    if (heading) {
+      const node = document.createElement(`h${heading[1].length}`); appendDocumentInline(node, heading[2]);
+      container.appendChild(node); index += 1; continue;
+    }
+    if (index + 1 < lines.length && line.includes("|") && isTableRule(lines[index + 1])) {
+      const wrap = document.createElement("div"); wrap.className = "document-table-scroll";
+      const table = document.createElement("table"); const head = document.createElement("thead");
+      const tr = document.createElement("tr");
+      for (const cell of tableCells(line)) { const th = document.createElement("th"); appendDocumentInline(th, cell); tr.appendChild(th); }
+      head.appendChild(tr); table.appendChild(head); index += 2;
+      const body = document.createElement("tbody");
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        const row = document.createElement("tr");
+        for (const cell of tableCells(lines[index++])) { const td = document.createElement("td"); appendDocumentInline(td, cell); row.appendChild(td); }
+        body.appendChild(row);
+      }
+      table.appendChild(body); wrap.appendChild(table); container.appendChild(wrap); continue;
+    }
+    const list = line.match(/^\s*(?:([-*+])|\d+[.)])\s+(.+)/);
+    if (list) {
+      const ordered = !list[1]; const node = document.createElement(ordered ? "ol" : "ul");
+      while (index < lines.length) {
+        const item = lines[index].match(ordered ? /^\s*\d+[.)]\s+(.+)/ : /^\s*[-*+]\s+(.+)/);
+        if (!item) break;
+        const li = document.createElement("li"); appendDocumentInline(li, item[1]); node.appendChild(li); index += 1;
+      }
+      container.appendChild(node); continue;
+    }
+    if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { container.appendChild(document.createElement("hr")); index += 1; continue; }
+    const quote = line.match(/^>\s?(.*)/);
+    const paragraph = document.createElement(quote ? "blockquote" : "p");
+    appendDocumentInline(paragraph, quote ? quote[1] : line);
+    container.appendChild(paragraph); index += 1;
+  }
+}
+
+function resetDocumentResources() {
+  documentResources.guideLoaded = false; documentResources.guideItems = []; documentResources.aiLoaded = false;
+  documentResources.sequence += 1; documentResources.fileSequence += 1; documentResources.browseSequence += 1;
+  documentResources.pendingLoad = false; documentResources.pendingSnapshots = false;
+  documentNode("GuideEntries").replaceChildren();
+  documentNode("ResourcesStatus").textContent = "";
+  setDocumentResourcesView("guide");
+}
+
+function setDocumentResourcesView(view) {
+  documentResources.view = view === "ai" ? "ai" : "guide";
+  for (const [name, suffix] of [["guide", "Guide"], ["ai", "AI"]]) {
+    const selected = name === documentResources.view;
+    const tab = documentNode(`${suffix}Tab`);
+    tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1;
+    documentNode(`${suffix}Panel`).hidden = !selected;
+  }
+}
+
+function showDocumentResources(view = "guide", options = {}) {
+  const dialog = documentNode("ResourcesDialog");
+  if (!dialog.open) {
+    documentResources.returnFocus = document.activeElement;
+    dialog.showModal();
+    if (documentNode("FolderSettings").open) documentResources.pendingSnapshots = true;
+  }
+  setDocumentResourcesView(view);
+  if (options.focusTab) documentNode(view === "ai" ? "AITab" : "GuideTab").focus();
+  if (options.load === false) return;
+  if (documentLibrary.busy || documentInbox.busy) { documentResources.pendingLoad = true; return; }
+  void withDocumentAction(async () => {
+    if (!documentLibrary.exists) { documentNode("FolderSettings").open = true; return; }
+    if (documentResources.view === "guide") await loadDocumentGuide();
+    else await loadDocumentAIRecords();
+  });
+}
+
+function renderDocumentGuide() {
+  const container = documentNode("GuideEntries"); container.replaceChildren();
+  for (const item of documentResources.guideItems) {
+    const card = document.createElement("article"); card.className = "document-guide-card";
+    const title = document.createElement("button"); title.type = "button"; title.textContent = item.title || item.path;
+    title.addEventListener("click", () => void openDocumentInboxEntry({ path: item.path }));
+    const summary = document.createElement("p"); summary.textContent = item.summary || "";
+    card.append(title, summary);
+    if (Array.isArray(item.highlights) && item.highlights.length) {
+      const list = document.createElement("ul");
+      for (const highlight of item.highlights) { const line = document.createElement("li"); line.textContent = String(highlight); list.appendChild(line); }
+      card.appendChild(list);
+    }
+    container.appendChild(card);
+  }
+  if (!documentResources.guideItems.length) {
+    const empty = document.createElement("p"); empty.className = "document-hint";
+    empty.textContent = documentText("暂无阅读重点。完整文件可在「AI 记录」中查阅。", "No reading highlights yet. Full files are available under AI records."); container.appendChild(empty);
+  }
+  updateDocumentControls();
+}
+
+function flushDocumentResourcesPending() {
+  if (documentLibrary.busy || documentInbox.busy || !documentNode("ResourcesDialog").open) return;
+  if (documentResources.pendingLoad) {
+    documentResources.pendingLoad = false; showDocumentResources(documentResources.view); return;
+  }
+  if (documentResources.pendingSnapshots && documentNode("FolderSettings").open && documentLibrary.exists) {
+    documentResources.pendingSnapshots = false; void withDocumentAction(loadDocumentSnapshots);
+  }
+}
+
+async function loadDocumentGuide() {
+  if (documentResources.guideLoaded) return;
+  const root = documentLibrary.root; const sequence = ++documentResources.sequence;
+  const result = await documentRequest(`guide?expectedRoot=${encodeURIComponent(root)}`);
+  if (sequence !== documentResources.sequence || !sameDocumentInboxRoot(root, documentLibrary.root)) return;
+  if (!sameDocumentInboxRoot(result.root, root)) throw new Error(documentText("资料库已切换，请重新打开资料。", "The library changed. Reopen the library."));
+  documentResources.guideItems = Array.isArray(result.items) ? result.items : [];
+  documentResources.guideLoaded = true; renderDocumentGuide();
+}
+
+async function loadDocumentAIRecords() {
+  if (documentResources.aiLoaded) return;
+  const root = documentLibrary.root;
+  await browseDocumentFolder(documentLibrary.path);
+  if (sameDocumentInboxRoot(root, documentLibrary.root)) documentResources.aiLoaded = true;
+}
+
+function bindDocumentResources() {
+  documentNode("ResourcesOpen").addEventListener("click", () => showDocumentResources());
+  documentNode("ResourcesClose").addEventListener("click", () => documentNode("ResourcesDialog").close());
+  documentNode("ResourcesDialog").addEventListener("close", () => {
+    documentResources.pendingLoad = false; documentResources.pendingSnapshots = false;
+    const target = documentResources.returnFocus;
+    (target?.isConnected && !target.disabled ? target : documentNode("ResourcesOpen")).focus({ preventScroll: true });
+  });
+  for (const [index, suffix] of ["Guide", "AI"].entries()) {
+    const tab = documentNode(`${suffix}Tab`);
+    tab.addEventListener("click", () => showDocumentResources(index ? "ai" : "guide"));
+    tab.addEventListener("keydown", event => {
+      const next = event.key === "Home" ? "guide" : event.key === "End" ? "ai" : ["ArrowLeft", "ArrowRight"].includes(event.key) ? (index ? "guide" : "ai") : "";
+      if (next) { event.preventDefault(); showDocumentResources(next, { focusTab: true }); }
+    });
+  }
+  documentNode("FolderSettings").addEventListener("toggle", () => {
+    documentResources.pendingSnapshots = documentNode("FolderSettings").open;
+    flushDocumentResourcesPending();
+  });
+}
+
+function clearDocumentReader() {
+  documentLibrary.file = "";
+  documentNode("FileTitle").dataset.i18n = "documentSelectFile";
+  documentNode("FileTitle").textContent = text("documentSelectFile");
+  documentNode("FileMeta").textContent = "";
+  documentNode("Content").replaceChildren();
+}
+
+async function readDocumentFile(path) {
+  documentNotice(documentText("正在读取文档…", "Reading document…"));
+  const root = documentLibrary.root; const sequence = ++documentResources.fileSequence;
+  const file = await documentRequest(`read?path=${encodeURIComponent(path)}&expectedRoot=${encodeURIComponent(root)}`);
+  if (sequence !== documentResources.fileSequence || !sameDocumentInboxRoot(root, documentLibrary.root)) return;
+  if (!sameDocumentInboxRoot(file.root, root)) throw new Error(documentText("资料库已切换，请重新打开文件。", "The library changed. Reopen the file."));
+  documentLibrary.file = file.path || path;
+  delete documentNode("FileTitle").dataset.i18n;
+  documentNode("FileTitle").textContent = file.name || documentLibrary.file;
+  documentNode("FileMeta").textContent = `${documentLibrary.file}${file.modifiedAt ? ` · ${documentText("文件修改于", "File modified")} ${file.modifiedAt}` : ""}`;
+  const container = documentNode("Content");
+  if (/\.md$/i.test(documentLibrary.file) || file.format === "markdown") renderDocumentMarkdown(file.content, container);
+  else { const pre = document.createElement("pre"); pre.textContent = file.content; container.replaceChildren(pre); }
+  for (const entry of documentNode("Entries").querySelectorAll("button[data-path]")) entry.setAttribute("aria-current", String(entry.dataset.path === documentLibrary.file));
+  saveDocumentPosition();
+  documentNotice(documentText("已读取本地文件。采样时间与条件请以报告正文为准。", "Local file loaded. See the report for sample time and conditions."));
+}
+
+async function browseDocumentFolder(path = "") {
+  const root = documentLibrary.root; const sequence = ++documentResources.browseSequence;
+  const listing = await documentRequest(`list?path=${encodeURIComponent(path)}&expectedRoot=${encodeURIComponent(root)}`);
+  if (sequence !== documentResources.browseSequence || !sameDocumentInboxRoot(root, documentLibrary.root)) return;
+  if (!sameDocumentInboxRoot(listing.root, root)) throw new Error(documentText("资料库已切换，请重新打开目录。", "The library changed. Reopen the folder."));
+  documentLibrary.path = listing.path || "";
+  documentLibrary.entries = Array.isArray(listing.entries) ? listing.entries : [];
+  documentNode("Breadcrumb").textContent = `/${documentLibrary.path}`;
+  const container = documentNode("Entries"); container.replaceChildren();
+  for (const entry of documentLibrary.entries) {
+    const button = document.createElement("button");
+    button.type = "button"; button.className = "document-entry";
+    button.dataset.path = entry.path;
+    button.setAttribute("aria-current", String(entry.path === documentLibrary.file));
+    const kind = document.createElement("span"); kind.className = "document-entry-kind";
+    kind.textContent = entry.isDirectory ? "DIR" : String(entry.name).split(".").pop().toUpperCase();
+    const name = document.createElement("span"); name.textContent = entry.name;
+    button.append(kind, name);
+    button.addEventListener("click", () => void withDocumentAction(() => entry.isDirectory ? browseDocumentFolder(entry.path) : readDocumentFile(entry.path)));
+    container.appendChild(button);
+  }
+  if (!documentLibrary.entries.length) container.textContent = documentText("此目录没有可浏览的资料文件。", "This folder has no readable documents.");
+  if (listing.truncated) documentNotice(listing.error, true);
+  saveDocumentPosition();
+}
+
+async function loadDocumentSnapshots() {
+  documentResources.pendingSnapshots = false;
+  const root = documentLibrary.root;
+  const result = await documentRequest("snapshots");
+  if (!sameDocumentInboxRoot(root, documentLibrary.root) || !sameDocumentInboxRoot(result.root, root)) return;
+  const snapshots = [...(result.snapshots || [])].sort((a, b) => String(a.sampledAt || a.id).localeCompare(String(b.sampledAt || b.id)));
+  for (const [id, fallback] of [["Before", snapshots.at(-2)], ["After", snapshots.at(-1)]]) {
+    const select = documentNode(id); const previous = select.value; select.replaceChildren();
+    const empty = document.createElement("option"); empty.value = ""; empty.textContent = documentText("选择记录", "Select a record"); select.appendChild(empty);
+    for (const snapshot of snapshots) {
+      const option = document.createElement("option"); option.value = snapshot.path || snapshot.id;
+      option.textContent = `${snapshot.sampledAt || snapshot.id} · ${snapshot.scenario || "—"} · ${snapshot.status || ""}`; select.appendChild(option);
+    }
+    select.value = snapshots.some(item => (item.path || item.id) === previous) ? previous : (fallback?.path || fallback?.id || "");
+  }
+  updateDocumentControls();
+}
+
+async function loadDocumentOverview() {
+  const root = documentLibrary.root;
+  const result = await documentRequest("overview");
+  if (!sameDocumentInboxRoot(root, documentLibrary.root) || !sameDocumentInboxRoot(result.root, root)) return;
+  documentOverviewResult = result;
+  renderDocumentOverview();
+}
+
+function documentDisplayTime(value) {
+  const date = new Date(value);
+  if (!value || !Number.isFinite(date.getTime())) return documentText("时间不可用", "Time unavailable");
+  const pad = number => String(number).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function renderDocumentOverview() {
+  const result = documentOverviewResult;
+  const container = documentNode("Overview");
+  if (!container || !result) return;
+  const summary = result.summary || result.snapshot || result;
+  container.replaceChildren();
+  const details = documentNode("OverviewDetails"); details.replaceChildren();
+  const gib = value => value === null || value === undefined || !Number.isFinite(Number(value)) ? documentText("未知／不可用", "Unknown / unavailable") : `${(Number(value) / 1073741824).toFixed(2)} GiB`;
+  const addMetrics = metrics => {
+    const grid = document.createElement("div"); grid.className = "document-overview-grid";
+    for (const [label, value] of metrics) {
+      const card = document.createElement("div"); const caption = document.createElement("span"); const strong = document.createElement("strong");
+      caption.textContent = label; strong.textContent = value; card.append(caption, strong); grid.appendChild(card);
+    }
+    container.appendChild(grid);
+  };
+  const current = result.currentMemory;
+  const liveMeta = document.createElement("p"); liveMeta.className = "document-overview-meta document-current-meta";
+  liveMeta.textContent = (current?.status === "available"
+    ? `${documentText("内存读取", "Memory read")} ${documentDisplayTime(current.readAt)}`
+    : documentText("当前内存不可用，刷新重试。", "Current memory unavailable. Refresh to retry."))
+    + (summary.sampledAt ? ` · ${documentText("设备档案", "Saved profile")} ${documentDisplayTime(summary.sampledAt)}${summary.status === "partial" ? documentText("（部分数据）", " (partial)") : ""}` : documentText(" · 暂无设备档案", " · No saved profile"))
+    + documentText(" · 本地时间", " · Local time");
+  const available = current?.status === "available";
+  addMetrics([
+    [documentText("设备", "Computer"), summary.model || documentText("尚无设备档案", "No device profile yet")],
+    [documentText("可用内存", "Available memory"), gib(available ? current.availableBytes : null)],
+    [documentText("内存占用", "Memory use"), available && Number.isFinite(current.usedPercent) ? `${current.usedPercent.toFixed(1)}%` : documentText("未知／不可用", "Unknown / unavailable")],
+    [documentText("总内存", "Total memory"), gib(available ? current.totalBytes : summary.physicalTotalBytes)]
+  ]);
+  container.appendChild(liveMeta);
+  if (summary.cpuModel || summary.installedMemoryBytes || summary.gpuModels?.length) {
+    const hardware = document.createElement("p"); hardware.className = "document-hint";
+    const gpuModels = (Array.isArray(summary.gpuModels) ? summary.gpuModels : []).filter(name => typeof name === "string" && name.trim());
+    hardware.textContent = `${documentText("配置记录", "Saved hardware")} · CPU：${summary.cpuModel || documentText("未知／不可用", "Unknown / unavailable")} · ${documentText("实装内存", "Installed memory")} ${gib(summary.installedMemoryBytes)} · ${documentText("GPU／显示适配器", "GPU / display adapters")}：${gpuModels.join("、") || documentText("未知／不可用", "Unknown / unavailable")}`;
+    details.appendChild(hardware);
+  }
+  const meta = document.createElement("p"); meta.className = "document-overview-meta";
+  meta.textContent = summary.sampledAt
+    ? `${documentText("最近一次采样，非实时监控", "Most recent saved sample, not live monitoring")} · ${documentDisplayTime(summary.sampledAt)}${documentText("（本地时间）", " (local time)")} · ${summary.scenario || "—"}${summary.status === "partial" ? documentText(" · 部分指标不可用", " · Some metrics unavailable") : ""}`
+    : documentText("暂无可读取的状态快照。可展开检查面板，按需新增一次轻量采样。", "No saved status sample yet. Expand the checks panel to collect a light sample.");
+  details.appendChild(meta);
+  if (!summary.sampledAt) return;
+  const conditions = document.createElement("p"); conditions.className = "document-hint";
+  const applications = (summary.applications || []).filter(item => typeof item === "string" || item.processCount > 0).map(item => typeof item === "string" ? item : item.name || item.label || item.group).filter(Boolean);
+  conditions.textContent = `${documentText("采样时可用内存", "Available at sample time")} ${gib(summary.availableBytes)} · ${documentText("采样时系统提交量", "System commit at sample time")} ${gib(summary.commitBytes)}${applications.length ? ` · ${documentText("采样时识别的应用／进程", "Apps/processes identified at sample time")}：${applications.join("、")}` : ""}`;
+  details.appendChild(conditions);
+  if (summary.report) {
+    const button = document.createElement("button"); button.type = "button"; button.className = "document-inline-link";
+    button.textContent = documentText("查看这次检查的完整报告", "Read this sample's full report");
+    button.addEventListener("click", () => void openDocumentInboxEntry({ path: summary.report }));
+    details.appendChild(button);
+  }
+}
+
+function documentInboxEntryStatus(entry) {
+  if (["inbox", "later", "archive", "cleared"].includes(entry?.status)) return entry.status;
+  return entry?.read ? "archive" : "inbox";
+}
+
+function sameDocumentInboxRoot(left, right) {
+  const normalize = value => {
+    const path = String(value || "").replaceAll("\\", "/").replace(/\/+$/, "");
+    return /^[a-z]:\//i.test(path) || path.startsWith("//") ? path.toLowerCase() : path;
+  };
+  return Boolean(left && right && normalize(left) === normalize(right));
+}
+
+function syncDocumentInboxTabPill() {
+  const selected = document.querySelector("#documentInboxTabs [aria-selected='true']");
+  const pill = documentNode("InboxTabPill");
+  if (!selected || !pill) return;
+  pill.style.width = `${selected.offsetWidth}px`;
+  pill.style.transform = `translateX(${selected.offsetLeft}px)`;
+}
+
+function setDocumentInboxView(view, options = {}) {
+  documentInbox.view = ["inbox", "later", "archive"].includes(view) ? view : "inbox";
+  renderDocumentInbox();
+  if (options.focus) {
+    const tab = document.querySelector(`#documentInboxTabs [data-inbox-status="${documentInbox.view}"]`);
+    tab?.focus({ preventScroll: true });
+    tab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+}
+
+function captureDocumentInboxFocus() {
+  const active = document.activeElement;
+  if (!documentNode("InboxEntries")?.contains(active)) return null;
+  const row = active.closest(".document-inbox-entry");
+  return row && active.dataset.inboxAction ? { id: row.dataset.reportId, action: active.dataset.inboxAction } : null;
+}
+
+function renderDocumentInbox(options = {}) {
+  if (!documentNode("Inbox")) return;
+  const focus = captureDocumentInboxFocus() || (document.activeElement === document.body ? options.restoreFocus : null);
+  if (documentInbox.root && !sameDocumentInboxRoot(documentInbox.root, documentLibrary.root)) {
+    documentInbox.entries = []; documentInbox.undo = null; documentInbox.root = documentLibrary.root; documentInbox.view = "inbox";
+  }
+  if (documentInbox.undo && !sameDocumentInboxRoot(documentInbox.undo.root, documentLibrary.root)) documentInbox.undo = null;
+  const groups = { inbox: [], later: [], archive: [] };
+  for (const entry of documentInbox.entries) groups[documentInboxEntryStatus(entry)]?.push(entry);
+  if (!groups[documentInbox.view]) documentInbox.view = "inbox";
+  const badge = documentNode("UnreadBadge");
+  badge.hidden = groups.inbox.length === 0; badge.textContent = String(groups.inbox.length);
+  badge.setAttribute("aria-label", `${groups.inbox.length} ${documentText("份待阅读报告", "reports to read")}`);
+  documentNode("Inbox").hidden = false;
+  for (const [status, suffix] of [["inbox", "Inbox"], ["later", "Later"], ["archive", "Archive"]]) {
+    documentNode(`InboxCount${suffix}`).textContent = String(groups[status].length);
+    const tab = documentNode(`InboxTab${suffix}`); const selected = status === documentInbox.view;
+    tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1;
+    if (selected) documentNode("InboxEntries").setAttribute("aria-labelledby", tab.id);
+  }
+  documentNode("InboxClearAll").hidden = documentInbox.view !== "archive";
+  documentNode("InboxUndoBar").hidden = !documentInbox.undo;
+  documentNode("InboxUndoMessage").textContent = documentInbox.undo
+    ? documentText(`已清空 ${documentInbox.undo.count} 份归档，原文件保留。`, `Cleared ${documentInbox.undo.count} archived reports. Files are kept.`) : "";
+  const list = documentNode("InboxEntries"); list.replaceChildren();
+  for (const entry of groups[documentInbox.view]) {
+    const status = documentInboxEntryStatus(entry);
+    const row = document.createElement("article"); row.className = "document-inbox-entry"; row.dataset.reportId = entry.id;
+    const copy = document.createElement("div"); copy.className = "document-inbox-copy";
+    const title = document.createElement("button"); title.type = "button"; title.className = "document-inbox-title"; title.textContent = entry.title;
+    title.dataset.inboxAction = "open";
+    title.title = documentText("在独立阅读窗口中打开", "Open in a separate reading window");
+    title.addEventListener("click", () => void openDocumentInboxEntry(entry));
+    const summary = document.createElement("p"); summary.className = "document-inbox-summary"; summary.textContent = entry.summary || "";
+    const meta = document.createElement("p"); meta.className = "document-file-meta";
+    meta.textContent = [entry.source, entry.createdAt || entry.registeredAt].filter(Boolean).join(" · ");
+    copy.append(title, summary, meta);
+    const actions = document.createElement("div"); actions.className = "document-inbox-actions";
+    const bookmark = document.createElement("button"); bookmark.type = "button"; bookmark.className = "document-inbox-bookmark"; bookmark.dataset.inboxAction = "bookmark";
+    const bookmarkLabel = status === "later" ? documentText("移回待阅读", "Move to To read") : documentText("稍后阅读", "Read later");
+    bookmark.title = bookmarkLabel; bookmark.dataset.tooltip = bookmarkLabel;
+    bookmark.setAttribute("aria-label", `${bookmarkLabel}：${entry.title}`); bookmark.setAttribute("aria-pressed", String(status === "later"));
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); icon.setAttribute("viewBox", "0 0 24 24"); icon.setAttribute("aria-hidden", "true"); icon.setAttribute("focusable", "false");
+    const outline = document.createElementNS("http://www.w3.org/2000/svg", "path"); outline.setAttribute("d", "M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17l-6-4-6 4Z"); icon.appendChild(outline); bookmark.appendChild(icon);
+    bookmark.addEventListener("click", () => void moveDocumentInboxEntry(entry.id, status === "later" ? "inbox" : "later"));
+    const label = document.createElement("label"); label.className = "document-inbox-read";
+    const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = status === "archive"; checkbox.dataset.inboxAction = "read";
+    checkbox.setAttribute("aria-label", `${documentText("已读", "Read")}：${entry.title}`);
+    checkbox.addEventListener("change", () => void setDocumentInboxRead(entry.id, checkbox.checked));
+    const caption = document.createElement("span"); caption.textContent = documentText("已读", "Read");
+    label.append(checkbox, caption); actions.append(bookmark, label); row.append(copy, actions); list.appendChild(row);
+  }
+  if (!groups[documentInbox.view].length) {
+    const empty = document.createElement("p"); empty.className = "document-inbox-empty";
+    empty.textContent = documentInbox.view === "later" ? documentText("没有稍后阅读的报告。", "Nothing saved for later.")
+      : documentInbox.view === "archive" ? documentText("归档为空。", "Archive is empty.") : documentText("没有待阅读的报告。", "Nothing to read.");
+    list.appendChild(empty);
+  }
+  updateDocumentControls();
+  if (focus) {
+    const row = [...list.children].find(item => item.dataset.reportId === focus.id);
+    const control = row?.querySelector(`[data-inbox-action="${focus.action}"]`);
+    (control || document.querySelector("#documentInboxTabs [aria-selected='true']"))?.focus({ preventScroll: true });
+  }
+  window.requestAnimationFrame(syncDocumentInboxTabPill);
+}
+
+function applyDocumentInboxResult(result, root, sequence) {
+  if (sequence !== documentInbox.sequence || !sameDocumentInboxRoot(root, documentLibrary.root)) return false;
+  if (!sameDocumentInboxRoot(result?.root, root)) throw new Error(documentText("资料库已切换，请刷新后重试。", "The library has changed. Refresh before retrying."));
+  if (documentInbox.root && !sameDocumentInboxRoot(documentInbox.root, root)) { documentInbox.undo = null; documentInbox.view = "inbox"; }
+  documentInbox.root = root;
+  documentInbox.entries = (Array.isArray(result.entries) ? result.entries : []).filter(entry => entry && typeof entry === "object" && documentInboxEntryStatus(entry) !== "cleared");
+  return true;
+}
+
+async function loadDocumentInbox() {
+  if (documentInbox.loading) { documentInbox.refreshPending = true; return false; }
+  const root = documentLibrary.root; const sequence = ++documentInbox.sequence;
+  if (!root || !documentLibrary.exists) return false;
+  documentInbox.loading = true;
+  try {
+    const result = await documentRequest(`inbox?expectedRoot=${encodeURIComponent(root)}`);
+    if (!applyDocumentInboxResult(result, root, sequence)) return false;
+    renderDocumentInbox(); return true;
+  } finally {
+    documentInbox.loading = false;
+    if (documentInbox.refreshPending) requestDocumentInboxRefresh();
+  }
+}
+
+function requestDocumentInboxRefresh() {
+  if (!documentLibrary.root || !documentLibrary.exists) return;
+  if (documentLibrary.busy || documentInbox.busy || documentInbox.loading) { documentInbox.refreshPending = true; return; }
+  documentInbox.refreshPending = false;
+  const root = documentLibrary.root;
+  void loadDocumentInbox().catch(error => {
+    if (sameDocumentInboxRoot(root, documentLibrary.root)) documentNotice(documentText("无法刷新阅读清单：", "Could not refresh the reading list: ") + String(error.message || error), true);
+  });
+}
+
+function broadcastDocumentInboxChange(root) {
+  try { documentInboxChannel?.postMessage({ type: "read-changed", root }); } catch { /* Focus refresh remains available. */ }
+}
+
+async function mutateDocumentInbox(endpoint, payload, applied) {
+  if (documentInbox.busy || documentLibrary.busy || !documentLibrary.exists || !sameDocumentInboxRoot(documentInbox.root, documentLibrary.root)) { renderDocumentInbox(); return false; }
+  const root = documentLibrary.root; const sequence = ++documentInbox.sequence;
+  const restoreFocus = captureDocumentInboxFocus();
+  documentInbox.busy = true; updateDocumentControls();
+  try {
+    const result = await documentRequest(endpoint, { ...payload, expectedRoot: root });
+    if (!applyDocumentInboxResult(result, root, sequence)) return false;
+    applied?.(result, root); broadcastDocumentInboxChange(root); return true;
+  } catch (error) {
+    if (sameDocumentInboxRoot(root, documentLibrary.root)) documentNotice(documentText("操作未完成，请重试。", "The action did not complete. Please retry. ") + String(error.message || error), true);
+    return false;
+  } finally {
+    documentInbox.busy = false; renderDocumentInbox({ restoreFocus });
+    if (documentInbox.refreshPending) requestDocumentInboxRefresh();
+    if (documentLibrary.pendingSampleReport) void finishDocumentSampleReport();
+    flushDocumentResourcesPending();
+  }
+}
+
+function moveDocumentInboxEntry(id, status) {
+  if (!["inbox", "later", "archive"].includes(status)) return Promise.resolve(false);
+  return mutateDocumentInbox("inbox/move", { id, status });
+}
+
+function clearDocumentInboxArchive() {
+  if (documentInbox.view !== "archive" || !documentInbox.entries.some(entry => documentInboxEntryStatus(entry) === "archive")) return Promise.resolve(false);
+  return mutateDocumentInbox("inbox/archive/clear", {}, (result, root) => {
+    if (result.clearedCount > 0 && typeof result.undoToken === "string" && result.undoToken) {
+      documentInbox.undo = { root, token: result.undoToken, count: result.clearedCount };
+    }
+  });
+}
+
+function restoreDocumentInboxArchive() {
+  const undo = documentInbox.undo;
+  if (!undo || !sameDocumentInboxRoot(undo.root, documentLibrary.root)) { documentInbox.undo = null; renderDocumentInbox(); return Promise.resolve(false); }
+  return mutateDocumentInbox("inbox/archive/restore", { undoToken: undo.token }, () => {
+    documentInbox.undo = null; documentNotice(documentText("已恢复刚才清空的归档。", "The cleared archive has been restored."));
+  });
+}
+
+function bindDocumentInbox() {
+  for (const tab of document.querySelectorAll("#documentInboxTabs [data-inbox-status]")) {
+    tab.addEventListener("click", () => setDocumentInboxView(tab.dataset.inboxStatus));
+    tab.addEventListener("keydown", event => {
+      const views = ["inbox", "later", "archive"], index = views.indexOf(tab.dataset.inboxStatus);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? 2 : event.key === "ArrowRight" ? (index + 1) % 3 : event.key === "ArrowLeft" ? (index + 2) % 3 : -1;
+      if (next >= 0) { event.preventDefault(); setDocumentInboxView(views[next], { focus: true }); }
+    });
+  }
+  documentNode("InboxClearAll")?.addEventListener("click", () => void clearDocumentInboxArchive());
+  documentNode("InboxUndo")?.addEventListener("click", () => void restoreDocumentInboxArchive());
+  window.addEventListener("resize", syncDocumentInboxTabPill);
+  try {
+    if (typeof BroadcastChannel === "function") {
+      documentInboxChannel = new BroadcastChannel("codexControl.documentInbox.v1");
+      documentInboxChannel.onmessage = event => {
+        if (event.data?.type === "read-changed" && sameDocumentInboxRoot(event.data.root, documentLibrary.root)) requestDocumentInboxRefresh();
+      };
+    }
+  } catch { /* Returning to the main window also reloads persisted inbox state. */ }
+  renderDocumentInbox();
+}
+async function openDocumentInboxEntry(entry) {
+  if (openDocumentReadingWindow(entry.path, entry.id)) return;
+  showDocumentResources("ai", { load: false });
+  const opened = await withDocumentAction(() => readDocumentFile(entry.path));
+  if (opened) {
+    const title = documentNode("FileTitle"); title.tabIndex = -1; title.focus({ preventScroll: true });
+    title.scrollIntoView({ behavior: "smooth", block: "start" });
+    documentNotice(documentText("浏览器未能打开阅读窗口，已在此处显示正文。", "The browser could not open the reading window. The report is shown here."));
+  }
+}
+
+function openDocumentReadingWindow(path, id = "") {
+  if (!path || !documentLibrary.root || !documentLibrary.exists) return false;
+  const url = new URL("reader.html", window.location.href);
+  url.search = new URLSearchParams({ path, root: documentLibrary.root, ...(id ? { id } : {}) }).toString();
+  return openDocumentReaderUrl(url);
+}
+
+function openDocumentReaderUrl(url) {
+  try {
+    if (documentReadingWindow && !documentReadingWindow.closed && documentReadingWindow.location.href === url.href) {
+      try { documentReadingWindow.focus(); } catch { /* Keep the existing reader even if focus is denied. */ }
+      return true;
+    }
+  } catch { /* A manually navigated window can still be reused by name. */ }
+  try {
+    // Keep this synchronous inside the click handler so browser popup rules
+    // permit it. This reading window has no second Console/backend launcher.
+    const reader = window.open(url.href, "codex-console-document-reader", "popup=yes,width=1024,height=840,resizable=yes,scrollbars=yes");
+    if (!reader) return false;
+    documentReadingWindow = reader;
+    try { reader.focus(); } catch { /* A focus refusal must not duplicate the reader. */ }
+    return true;
+  } catch { return false; }
+}
+
+async function setDocumentInboxRead(id, read) {
+  return mutateDocumentInbox("inbox/read", { id, read: Boolean(read) }, () => {
+    documentNotice(documentText("阅读状态已保存在本机。", "Read status saved on this computer."));
+  });
+}
+
+function showDocumentSampleStatus(sample) {
+  documentLibrary.sample = sample || { status: "idle" };
+  const labels = { idle: ["尚未开始新采样。", "No new sample running."], running: ["正在采样", "Sampling"], cancelling: ["正在取消采样", "Cancelling sample"], completed: ["采样完成", "Sample completed"], partial: ["采样部分完成；请查看报告中的不可用指标及原因", "Partial sample; see the report for unavailable metrics"], cancelled: ["采样已取消；原有有效记录保留", "Sample cancelled; previous records retained"], timeout: ["采样超时；原有有效记录保留", "Sample timed out; previous records retained"], failed: ["采样失败；原有有效记录保留", "Sample failed; previous records retained"] };
+  const label = labels[documentLibrary.sample.status] || ["采样状态未知", "Sample status unknown"];
+  documentNode("SampleStatus").textContent = `${documentText(...label)}${sample?.phase ? ` · ${sample.phase}` : ""}${sample?.error ? ` · ${sample.error}` : ""}`;
+  updateDocumentControls();
+}
+
+function scheduleDocumentSamplePoll() {
+  window.clearTimeout(documentLibrary.sampleTimer);
+  if (!documentSampleRunning()) return;
+  documentLibrary.sampleTimer = window.setTimeout(() => void pollDocumentSample(), 1500);
+}
+
+async function pollDocumentSample() {
+  if (documentLibrary.samplePollBusy) { scheduleDocumentSamplePoll(); return; }
+  documentLibrary.samplePollBusy = true;
+  try {
+    const sample = await documentRequest("sample-status");
+    documentLibrary.sampleErrors = 0; showDocumentSampleStatus(sample);
+    if (!documentSampleRunning()) {
+      if (sample.report) documentLibrary.pendingSampleReport = sample;
+      await finishDocumentSampleReport();
+    }
+  } catch (error) {
+    documentLibrary.sampleErrors += 1;
+    documentNode("SampleStatus").textContent = documentText("无法取得采样状态：", "Cannot read sample status: ") + error.message + documentText("。刷新可重新检查；已保存记录保留。", ". Refresh to retry; saved records are retained.");
+  } finally {
+    documentLibrary.samplePollBusy = false;
+  }
+  if (documentLibrary.sampleErrors < 3) scheduleDocumentSamplePoll();
+}
+
+async function finishDocumentSampleReport() {
+  const sample = documentLibrary.pendingSampleReport;
+  if (!sample || documentLibrary.busy || documentInbox.busy) return;
+  documentLibrary.pendingSampleReport = null;
+  if (sample.root && sample.root !== documentLibrary.root) return;
+  showDocumentResources("ai", { load: false });
+  await withDocumentAction(async () => {
+    await browseDocumentFolder(documentLibrary.path);
+    await loadDocumentSnapshots(); await loadDocumentOverview(); await readDocumentFile(sample.report);
+  });
+}
+
+async function loadDocumentLibrary(options = {}) {
+  if (!documentNode("RootInput")) return true;
+  return withDocumentAction(async () => {
+    const wasLoaded = documentLibrary.loaded;
+    const rootInputEdited = documentNode("RootInput").value !== documentLibrary.root;
+    const state = await documentRequest("state");
+    const changed = state.root !== documentLibrary.root;
+    documentLibrary.root = state.root || ""; documentLibrary.exists = Boolean(state.exists);
+    if (!rootInputEdited || options.force) documentNode("RootInput").value = documentLibrary.root;
+    if (changed || !documentLibrary.exists) {
+      documentLibrary.loaded = false;
+      documentLibrary.path = ""; clearDocumentReader(); documentNode("Entries").replaceChildren();
+      resetDocumentResources();
+      documentInbox.entries = []; documentInbox.undo = null; documentInbox.root = documentLibrary.root;
+      documentInbox.view = "inbox"; documentInbox.sequence = (documentInbox.sequence || 0) + 1; renderDocumentInbox();
+      documentOverviewResult = null; documentNode("Overview").replaceChildren(); documentNode("OverviewDetails").replaceChildren();
+    }
+    if (!documentLibrary.exists) {
+      documentNode("FolderSettings").open = true;
+      documentNotice(state.error || documentText(documentLibrary.root ? "原资料目录已失效。请重新选择文件夹或检查磁盘连接。" : "打开资料文件夹即可浏览；目录选择会保存在本机。", documentLibrary.root ? "The saved folder is unavailable. Choose another folder or reconnect the disk." : "Open a library folder to browse. The selection is saved locally."), Boolean(documentLibrary.root));
+      return;
+    }
+    await loadDocumentOverview();
+    await loadDocumentInbox();
+    if (wasLoaded && !changed && !options.force) return;
+    const sample = await documentRequest("sample-status"); showDocumentSampleStatus(sample); scheduleDocumentSamplePoll();
+    documentLibrary.loaded = true;
+    if (options.force) { documentResources.guideLoaded = false; documentResources.aiLoaded = false; }
+    if (documentNode("ResourcesDialog").open) {
+      if (documentResources.view === "guide") await loadDocumentGuide();
+      else await loadDocumentAIRecords();
+      if (documentNode("FolderSettings").open) await loadDocumentSnapshots();
+    }
+  });
+}
+
+function refreshDocumentOnFocus() {
+  if (!runtimeActivityReady || !isModuleForeground("workspace") || activeConsoleView !== "document"
+      || documentLibrary.busy || documentInbox.busy) return;
+  void loadDocumentLibrary();
+}
+
+async function selectDocumentFolder(path) {
+  if (documentSampleRunning()) return;
+  const selected = await withDocumentAction(async () => {
+    documentNotice(documentText("正在打开文件夹…", "Opening folder…"));
+    const result = await documentRequest("select", path ? { path } : {});
+    if (result.cancelled) { documentNotice(documentText("已取消选择；原资料库保留。", "Folder selection cancelled; previous library retained.")); return; }
+    documentLibrary.loaded = false;
+  });
+  if (selected && !documentLibrary.loaded) await loadDocumentLibrary({ force: true });
+}
+
+async function startDocumentSample() {
+  if (documentSampleRunning()) return;
+  await withDocumentAction(async () => {
+    const scenario = documentNode("Scenario").value.trim();
+    if (!scenario) throw new Error(documentText("请先填写工作场景与条件。", "Enter the work scenario and conditions first."));
+    showDocumentSampleStatus({ status: "running", phase: documentText("准备开始", "Starting") });
+    try {
+      const sample = await documentRequest("collect", { scenario }); showDocumentSampleStatus(sample); scheduleDocumentSamplePoll();
+      if (!documentSampleRunning() && sample.report) documentLibrary.pendingSampleReport = sample;
+    } catch (error) {
+      try { showDocumentSampleStatus(await documentRequest("sample-status")); scheduleDocumentSamplePoll(); }
+      catch { documentNode("SampleStatus").textContent = documentText("无法确认采样状态，请刷新后检查。", "Sample status could not be confirmed. Refresh to check."); }
+      throw error;
+    }
+  });
+}
+
+function bindDocumentLibrary() {
+  if (!documentNode("FolderForm")) return;
+  bindDocumentInbox();
+  bindDocumentResources();
+  documentNode("FolderForm").addEventListener("submit", event => {
+    event.preventDefault(); const path = documentNode("RootInput").value.trim();
+    if (path) void selectDocumentFolder(path);
+    else documentNotice(documentText("请填写完整目录路径，或使用“打开文件夹”。", "Enter a full folder path, or use Open folder."), true);
+  });
+  documentNode("Choose").addEventListener("click", () => void selectDocumentFolder());
+  documentNode("OpenReader")?.addEventListener("click", () => {
+    const entry = documentInbox.entries.find(item => item.path === documentLibrary.file);
+    if (!openDocumentReadingWindow(documentLibrary.file, entry?.id)) {
+      documentNotice(documentText("浏览器未能打开阅读窗口，可以继续在这里阅读。", "The browser could not open the reading window. You can keep reading here."));
+    }
+  });
+  documentNode("Refresh").addEventListener("click", () => void loadDocumentLibrary({ force: true }));
+  documentNode("Home").addEventListener("click", () => void withDocumentAction(() => browseDocumentFolder("")));
+  documentNode("Up").addEventListener("click", () => void withDocumentAction(() => browseDocumentFolder(documentLibrary.path.split("/").slice(0, -1).join("/"))));
+  documentNode("Collect").addEventListener("click", () => void startDocumentSample());
+  documentNode("Cancel").addEventListener("click", () => void withDocumentAction(async () => {
+    showDocumentSampleStatus({ ...documentLibrary.sample, status: "cancelling" });
+    try { showDocumentSampleStatus(await documentRequest("cancel", {})); }
+    finally { scheduleDocumentSamplePoll(); }
+  }));
+  for (const id of ["Before", "After"]) documentNode(id).addEventListener("change", updateDocumentControls);
+  documentNode("Compare").addEventListener("click", () => void withDocumentAction(async () => {
+    documentNotice(documentText("正在生成对比报告…", "Creating comparison report…"));
+    const result = await documentRequest("compare", { before: documentNode("Before").value, after: documentNode("After").value });
+    showDocumentResources("ai", { load: false });
+    await browseDocumentFolder(documentLibrary.path);
+    if (result.report) await readDocumentFile(result.report);
+  }));
+  updateDocumentControls();
 }
 
 function collaborationPanelCollapsed(panel) {
@@ -2854,8 +3834,133 @@ function bindCollaborationPanelCollapse() {
   }
 }
 
+function blenderDocumentNode(name) {
+  return document.getElementById(`blenderDocuments${name}`);
+}
+
+function blenderDocumentReaderUrl(reference, selectedLanguage, root) {
+  if (!reference || !root || !["zh-CN", "en"].includes(selectedLanguage)) return null;
+  const url = new URL("reader.html", window.location.href);
+  url.search = new URLSearchParams({ reference, lang: selectedLanguage, root }).toString();
+  return url;
+}
+
+function normalizeBlenderDocumentReferences(items) {
+  if (!Array.isArray(items)) return [];
+  const seen = new Set();
+  return items.filter(item => {
+    if (!item || item.module !== "blender" || typeof item.id !== "string" || !item.id || seen.has(item.id) || !Array.isArray(item.variants)) return false;
+    seen.add(item.id); return true;
+  }).map(item => ({
+    id: item.id, defaultLanguage: item.defaultLanguage,
+    variants: ["zh-CN", "en"].map(code => item.variants.find(variant => variant?.language === code)).filter(Boolean).map(variant => ({
+      language: variant.language,
+      label: variant.language === "zh-CN" ? "中文" : "English",
+      title: typeof variant.title === "string" ? variant.title : "",
+      summary: typeof variant.summary === "string" ? variant.summary : "",
+      available: variant.available === true
+    }))
+  })).filter(item => item.variants.length);
+}
+
+function renderBlenderDocuments() {
+  const container = blenderDocumentNode("Entries");
+  if (!container) return;
+  const status = blenderDocumentNode("Status");
+  container.replaceChildren(); container.setAttribute("aria-busy", String(blenderDocuments.busy));
+  blenderDocumentNode("Refresh").disabled = blenderDocuments.busy;
+  let notice = blenderDocuments.error;
+  if (blenderDocuments.busy) notice = documentText("正在载入参考文档…", "Loading reference documents…");
+  else if (blenderDocuments.unavailable === "missing-root") notice = documentText("请先在 Console → Document 选择资料文件夹。", "Select a library folder in Console → Document first.");
+  else if (blenderDocuments.unavailable === "missing-folder") notice = documentText("资料文件夹暂不可用，请在 Console → Document 检查。", "The library folder is unavailable. Check it in Console → Document.");
+  else if (!notice && blenderDocuments.loaded && !blenderDocuments.items.length) notice = documentText("此资料库尚无 Blender 参考文档。", "This library has no Blender reference documents yet.");
+  status.textContent = notice; status.hidden = !notice;
+  status.classList.toggle("error", Boolean(blenderDocuments.error));
+  const fallback = blenderDocumentNode("Fallback");
+  fallback.hidden = !blenderDocuments.fallbackUrl;
+  if (blenderDocuments.fallbackUrl) fallback.href = blenderDocuments.fallbackUrl;
+  else fallback.removeAttribute("href");
+  fallback.textContent = documentText("阅读窗口未打开，点击这里打开阅读页 ↗", "Reading window blocked? Open the reading page here ↗");
+  for (const item of blenderDocuments.items) {
+    const variant = item.variants.find(value => value.language === (language === "zh" ? "zh-CN" : "en"))
+      || item.variants.find(value => value.language === item.defaultLanguage) || item.variants[0];
+    const card = document.createElement("article"); card.className = "blender-document-card";
+    const heading = document.createElement("h3"); heading.textContent = variant.title || item.id;
+    const summary = document.createElement("p"); summary.textContent = variant.summary;
+    const actions = document.createElement("nav"); actions.className = "blender-document-languages";
+    actions.setAttribute("aria-label", documentText("阅读语言", "Reading language"));
+    for (const translation of item.variants) {
+      const url = blenderDocumentReaderUrl(item.id, translation.language, blenderDocuments.root);
+      const link = document.createElement(translation.available && url ? "a" : "span");
+      link.textContent = translation.label;
+      if (translation.available && url) {
+        link.href = url.href; link.target = "codex-console-document-reader";
+        link.setAttribute("aria-label", `${translation.label} · ${translation.title || item.id}`);
+        const sequence = blenderDocuments.sequence;
+        link.addEventListener("click", event => {
+          if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          if (sequence !== blenderDocuments.sequence || !sameDocumentInboxRoot(blenderDocuments.root, url.searchParams.get("root"))) return;
+          const knownRoot = documentLibrary.root || "";
+          if (knownRoot !== blenderDocuments.libraryRootSnapshot) { void loadBlenderDocuments({ force: true }); return; }
+          blenderDocuments.fallbackUrl = openDocumentReaderUrl(url) ? "" : url.href;
+          // Keep the active reading link in place for keyboard focus.
+          fallback.hidden = !blenderDocuments.fallbackUrl;
+          if (blenderDocuments.fallbackUrl) fallback.href = blenderDocuments.fallbackUrl;
+        });
+      } else {
+        link.className = "unavailable";
+        link.textContent += documentText(" · 暂不可读", " · unavailable");
+      }
+      actions.appendChild(link);
+    }
+    card.append(heading, summary, actions); container.appendChild(card);
+  }
+}
+
+async function loadBlenderDocuments(options = {}) {
+  if (!runtimeActivityReady || !isModuleForeground("blender") || activeBlenderView !== "document" || !blenderDocumentNode("Entries")) return true;
+  if (blenderDocuments.busy) return true;
+  if (blenderDocuments.loaded && !options.force) return true;
+  const sequence = ++blenderDocuments.sequence;
+  const knownRoot = documentLibrary.root || "";
+  blenderDocuments.busy = true; blenderDocuments.loaded = false;
+  blenderDocuments.error = ""; blenderDocuments.unavailable = ""; blenderDocuments.fallbackUrl = ""; blenderDocuments.items = [];
+  const isCurrent = () => sequence === blenderDocuments.sequence && knownRoot === (documentLibrary.root || "");
+  renderBlenderDocuments();
+  try {
+    const state = await documentRequest("state");
+    if (!isCurrent()) throw new Error(documentText("资料库已切换，请刷新。", "The library changed. Refresh to continue."));
+    blenderDocuments.root = typeof state.root === "string" ? state.root : "";
+    blenderDocuments.libraryRootSnapshot = knownRoot;
+    if (!blenderDocuments.root || !state.exists) {
+      blenderDocuments.unavailable = blenderDocuments.root ? "missing-folder" : "missing-root";
+      blenderDocuments.loaded = true; return true;
+    }
+    const root = blenderDocuments.root;
+    const result = await documentRequest(`references?module=blender&expectedRoot=${encodeURIComponent(root)}`);
+    if (!isCurrent() || !sameDocumentInboxRoot(root, result.root)) throw new Error(documentText("资料库已切换，请刷新。", "The library changed. Refresh to continue."));
+    blenderDocuments.items = normalizeBlenderDocumentReferences(result.items);
+    blenderDocuments.loaded = true; return true;
+  } catch (error) {
+    if (sequence === blenderDocuments.sequence) {
+      blenderDocuments.items = [];
+      blenderDocuments.error = documentText("无法载入参考文档：", "Could not load reference documents: ") + String(error.message || error);
+    }
+    return false;
+  } finally {
+    if (sequence === blenderDocuments.sequence) { blenderDocuments.busy = false; renderBlenderDocuments(); }
+  }
+}
+
+function bindBlenderDocuments() {
+  blenderDocumentNode("Refresh")?.addEventListener("click", () => void loadBlenderDocuments({ force: true }));
+  window.addEventListener("focus", () => void loadBlenderDocuments({ force: true }));
+  renderBlenderDocuments();
+}
+
 function normalizeBlenderWorkspaceView(value) {
-  return value === "builder" ? "builder" : "character";
+  return ["builder", "document"].includes(value) ? value : "character";
 }
 
 function setBlenderWorkspaceView(value, options = {}) {
@@ -2877,7 +3982,9 @@ function setBlenderWorkspaceView(value, options = {}) {
   }
 
   if (runtimeActivityReady && isModuleForeground("blender")) {
-    if (activeBlenderView === "builder") {
+    if (activeBlenderView === "document") {
+      void loadBlenderDocuments({ force: previousView !== activeBlenderView });
+    } else if (activeBlenderView === "builder") {
       const project = els.randomRealmBlenderProject?.value || "";
       if (project && randomRealmLoadedObjectsProject !== project) {
         loadRandomRealmBlenderObjects();
@@ -4538,6 +5645,8 @@ function applyLanguage() {
     renderBuiltinMedia();
     renderFeedback();
     renderWorkspaceTodos();
+    renderDocumentOverview();
+    renderDocumentInbox();
   }
   if (hasRandomRealmArtTools()) {
     renderRandomRealmUsedTextures();
@@ -4546,6 +5655,7 @@ function applyLanguage() {
   if (blenderGithubShareState) {
     renderBlenderGithubShare(blenderGithubShareState, { preserveForm: true });
   }
+  renderBlenderDocuments();
   tick();
 }
 
@@ -11479,7 +12589,151 @@ function renderMaterialImport(payload = {}) {
   setMaterialStatus(materialNotice || text("materialReady"));
 }
 
+function normalizeWorkspacePlan(value, { minimumGroups = 4, maximumGroups = 4 } = {}) {
+  if (!value || typeof value !== "object" || value.version !== 1 || typeof value.revision !== "string"
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(value.revision) || !Array.isArray(value.groups)
+      || value.groups.length < minimumGroups || value.groups.length > maximumGroups) return null;
+  const groupIds = new Set(), itemIds = new Set(), groups = []; let totalItems = 0;
+  for (const group of value.groups) {
+    if (!group || typeof group !== "object" || typeof group.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(group.id)
+        || groupIds.has(group.id) || typeof group.title !== "string" || !group.title.trim() || group.title.length > 120
+        || /[\u0000-\u001f]/.test(group.title) || typeof group.summary !== "string" || group.summary.length > 240 || /[\u0000-\u001f]/.test(group.summary)
+        || !Array.isArray(group.items) || group.items.length > 100 || (totalItems += group.items.length) > 300) return null;
+    groupIds.add(group.id);
+    const items = [];
+    for (const item of group.items) {
+      if (!item || typeof item !== "object" || typeof item.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(item.id)
+          || itemIds.has(item.id) || typeof item.text !== "string" || !item.text.trim() || item.text.length > 500 || /[\u0000-\u001f]/.test(item.text) || typeof item.done !== "boolean") return null;
+      itemIds.add(item.id); items.push({ id: item.id, text: item.text.trim(), textKey: "", done: item.done });
+    }
+    groups.push({ id: group.id, title: group.title.trim(), summary: group.summary.trim(), labelKey: "", items });
+  }
+  return { version: 1, revision: value.revision.trim(), groups };
+}
+
+function normalizeActualWorkspacePlan(value) {
+  return normalizeWorkspacePlan(value, { minimumGroups: 1, maximumGroups: 12 });
+}
+
+function cloneWorkspacePlanGroups(plan) {
+  return plan.groups.map(group => ({ ...group, items: group.items.map(item => ({ ...item })) }));
+}
+
+function restoreWorkspaceStorage(key, value) {
+  if (value === null) localStorage.removeItem(key);
+  else localStorage.setItem(key, value);
+}
+
+function mergeWorkspacePlanGroups(plan, previous, saved) {
+  if (!previous || !Array.isArray(saved) || saved.length !== 4) return null;
+  const previousGroups = new Map(previous.groups.map(group => [group.id, group]));
+  const nextGroups = new Map(plan.groups.map(group => [group.id, group]));
+  const groupIds = new Set(), itemIds = new Set();
+  const previousOwners = new Map(previous.groups.flatMap(group => group.items.map(item => [item.id, group.id])));
+  for (const group of saved) {
+    if (!group || typeof group !== "object" || groupIds.has(group.id) || !previousGroups.has(group.id)
+        || !nextGroups.has(group.id) || typeof group.title !== "string" || typeof group.summary !== "string" || !Array.isArray(group.items)) return null;
+    groupIds.add(group.id);
+    for (const item of group.items) {
+      if (!item || typeof item !== "object" || typeof item.id !== "string" || !item.id || itemIds.has(item.id)
+          || typeof item.text !== "string" || !item.text.trim() || typeof item.done !== "boolean"
+          || (previousOwners.has(item.id) && previousOwners.get(item.id) !== group.id)) return null;
+      itemIds.add(item.id);
+    }
+  }
+  // A new seed ID must not take ownership of an unrelated custom task. Moving
+  // seeded IDs between categories also requires an explicit migration instead.
+  for (const group of plan.groups) {
+    if (!previousGroups.has(group.id)) return null;
+    for (const item of group.items) {
+      if (previousOwners.has(item.id) ? previousOwners.get(item.id) !== group.id : itemIds.has(item.id)) return null;
+    }
+  }
+  return saved.map(group => {
+    const before = previousGroups.get(group.id), next = nextGroups.get(group.id);
+    const beforeItems = new Map(before.items.map(item => [item.id, item]));
+    const nextItems = new Map(next.items.map(item => [item.id, item]));
+    const items = group.items.filter(item => !beforeItems.has(item.id) || nextItems.has(item.id)).map(item => {
+      const oldSeed = beforeItems.get(item.id), newSeed = nextItems.get(item.id);
+      return oldSeed && newSeed && oldSeed.text !== newSeed.text
+        ? { ...item, text: newSeed.text, textKey: "" } : { ...item };
+    });
+    // Retain the user's order and deletions; only genuinely new IDs are appended.
+    for (const item of next.items) if (!beforeItems.has(item.id)) items.push({ ...item });
+    return { ...group, title: before.title === next.title ? group.title : next.title,
+      summary: before.summary === next.summary ? group.summary : next.summary, items };
+  });
+}
+
+function applyWorkspacePlan(plan, oldRaw, oldDraft, oldCache, oldRevision) {
+  let wroteList = false;
+  try {
+    let nextGroups = cloneWorkspacePlanGroups(plan), nextDraft = null;
+    if (oldRevision) {
+      const previous = normalizeWorkspacePlan(JSON.parse(oldCache || "null"));
+      if (!previous || previous.revision !== oldRevision) throw new Error("Previous plan is unavailable");
+      nextGroups = mergeWorkspacePlanGroups(plan, previous, JSON.parse(oldRaw || "null"));
+      if (!nextGroups) throw new Error("Saved tasks cannot be safely merged");
+      nextDraft = oldDraft;
+      try {
+        const draft = JSON.parse(oldDraft || "null");
+        if (draft && typeof draft.text === "string" && draft.planRevision === oldRevision
+            && nextGroups.some(group => group.id === draft.category)) {
+          nextDraft = JSON.stringify({ ...draft, planRevision: plan.revision });
+        }
+      } catch { /* Preserve an unreadable draft verbatim and in the backup. */ }
+    }
+    const backupRaw = localStorage.getItem(storageKeys.workspaceTodoBackup);
+    const backup = backupRaw === null ? { version: 1, revisions: [] } : JSON.parse(backupRaw);
+    if (backup?.version !== 1 || !Array.isArray(backup.revisions)) throw new Error("Invalid existing backup");
+    // This revision has not committed yet. A retry must capture edits made to
+    // the old list after an earlier failed attempt, before merging it again.
+    const snapshot = { revision: plan.revision, todos: oldRaw, draft: oldDraft, createdAt: new Date().toISOString() };
+    const backupIndex = backup.revisions.findIndex(item => item?.revision === plan.revision);
+    if (backupIndex < 0) backup.revisions.push(snapshot);
+    else backup.revisions[backupIndex] = snapshot;
+    localStorage.setItem(storageKeys.workspaceTodoBackup, JSON.stringify(backup));
+    const nextRaw = JSON.stringify(nextGroups);
+    localStorage.setItem(storageKeys.workspaceTodos, nextRaw); wroteList = true;
+    if (localStorage.getItem(storageKeys.workspaceTodos) !== nextRaw) throw new Error("Plan was not saved");
+    localStorage.setItem(storageKeys.workspacePlanCache, JSON.stringify(plan));
+    restoreWorkspaceStorage(storageKeys.workspaceTodoDraft, nextDraft);
+    if (localStorage.getItem(storageKeys.workspaceTodoDraft) !== nextDraft) throw new Error("Draft was not saved");
+    // The merged list, cached seed and retained draft must all save first.
+    localStorage.setItem(storageKeys.workspacePlanRevision, plan.revision);
+    return nextGroups;
+  } catch {
+    if (wroteList) {
+      try { restoreWorkspaceStorage(storageKeys.workspaceTodos, oldRaw); } catch { /* The original raw value remains in the migration backup. */ }
+      try { restoreWorkspaceStorage(storageKeys.workspacePlanCache, oldCache); } catch { /* Preserve the backup if storage remains unavailable. */ }
+      try { restoreWorkspaceStorage(storageKeys.workspaceTodoDraft, oldDraft); } catch { /* The original draft remains in the migration backup. */ }
+      try { restoreWorkspaceStorage(storageKeys.workspacePlanRevision, oldRevision); } catch { /* A failed commit is never announced as successful. */ }
+    }
+    workspaceTodoNoticeKey = "workspacePlanLoadFailed";
+    return null;
+  }
+}
+
+function normalizePersonalWorkspaceTodos(groups, plan = activeWorkspacePlan) {
+  const incoming = Array.isArray(groups) ? groups : [];
+  const groupIds = new Set();
+  const planGroups = plan?.groups;
+  const skeleton = planGroups ? [
+    ...incoming.map(group => planGroups.find(item => item.id === group?.id)).filter(Boolean),
+    ...planGroups
+  ] : incoming.filter(group => group && typeof group.id === "string" && typeof group.title === "string");
+  return skeleton.filter(group => !groupIds.has(group.id) && groupIds.add(group.id)).map(group => {
+    const saved = incoming.find(item => item?.id === group.id);
+    const ids = new Set();
+    const items = (Array.isArray(saved?.items) ? saved.items : []).map((item, index) => normalizeWorkspaceTodoItem(item, `${group.id}-${index}`))
+      .filter(item => item && !ids.has(item.id) && ids.add(item.id));
+    return { id: group.id, title: typeof saved?.title === "string" ? saved.title : group.title,
+      summary: typeof saved?.summary === "string" ? saved.summary : group.summary || "", labelKey: "", items };
+  });
+}
+
 function cloneDefaultWorkspaceTodos() {
+  if (activeWorkspacePlan) return cloneWorkspacePlanGroups(activeWorkspacePlan);
   return defaultWorkspaceTodoGroups.map(group => ({
     id: group.id,
     labelKey: group.labelKey,
@@ -11507,6 +12761,7 @@ function normalizeWorkspaceTodoItem(item, fallbackId = "") {
 }
 
 function normalizeWorkspaceTodoGroups(groups) {
+  if (workspaceTodoPersonalMode) return normalizePersonalWorkspaceTodos(groups);
   const incoming = Array.isArray(groups) ? groups : [];
   const savedById = new Map(
     incoming
@@ -11561,21 +12816,203 @@ function normalizeWorkspaceTodoGroups(groups) {
 
 function loadWorkspaceTodos() {
   try {
-    return normalizeWorkspaceTodoGroups(JSON.parse(localStorage.getItem(storageKeys.workspaceTodos) || "[]")).filter(group =>
-      Array.isArray(group.items) && group.items.length > 0
-    );
+    const raw = localStorage.getItem(storageKeys.workspaceTodos);
+    if (typeof workspacePlanSync !== "undefined" && !workspacePlanSync.legacyCacheChecked) {
+      // Capture this before a seed migration writes its initial task list. A
+      // fresh browser must not claim to be the owner's legacy desktop profile.
+      const origin = localStorage.getItem(storageKeys.workspacePlanCacheOrigin);
+      workspacePlanSync.hadLocalTasks = raw !== null && origin !== "seed";
+      if (raw === null) localStorage.setItem(storageKeys.workspacePlanCacheOrigin, "seed");
+      workspacePlanSync.legacyCacheChecked = true;
+    }
+    const oldRevision = localStorage.getItem(storageKeys.workspacePlanRevision);
+    const oldCache = localStorage.getItem(storageKeys.workspacePlanCache);
+    let cached = null;
+    try { cached = normalizeWorkspacePlan(JSON.parse(oldCache || "null")); } catch { /* Keep persisted tasks if a cache is damaged. */ }
+    const planError = typeof window.CODEX_WORKSPACE_PLAN_ERROR === "string" && Boolean(window.CODEX_WORKSPACE_PLAN_ERROR.trim());
+    const incoming = planError ? null : normalizeWorkspacePlan(window.CODEX_WORKSPACE_PLAN);
+    workspaceTodoPersonalMode = Boolean(oldRevision);
+    activeWorkspacePlan = cached?.revision === oldRevision ? cached : null;
+    if (incoming && incoming.revision !== oldRevision) {
+      const draft = localStorage.getItem(storageKeys.workspaceTodoDraft);
+      const migrated = applyWorkspacePlan(incoming, raw, draft, oldCache, oldRevision);
+      if (migrated) {
+        activeWorkspacePlan = incoming; workspaceTodoPersonalMode = true;
+        return migrated;
+      }
+    } else if (incoming && incoming.revision === oldRevision) activeWorkspacePlan = activeWorkspacePlan || incoming;
+    if (workspaceTodoPersonalMode && !activeWorkspacePlan) workspaceTodoNoticeKey = "workspacePlanCacheMissing";
+    else if (window.CODEX_WORKSPACE_PLAN && !incoming && !activeWorkspacePlan) workspaceTodoNoticeKey = "workspacePlanLoadFailed";
+    if (planError) workspaceTodoNoticeKey = "workspacePlanLoadFailed";
+    const groups = normalizeWorkspaceTodoGroups(JSON.parse(raw || "[]"));
+    return workspaceTodoPersonalMode ? groups : groups.filter(group => Array.isArray(group.items) && group.items.length > 0);
   } catch {
-    return cloneDefaultWorkspaceTodos();
+    workspaceTodoNoticeKey = "workspacePlanLoadFailed";
+    return workspaceTodoPersonalMode ? [] : cloneDefaultWorkspaceTodos();
   }
 }
 
 function resetWorkspaceTodoGroups() {
-  workspaceTodoGroups = cloneDefaultWorkspaceTodos();
-  saveWorkspaceTodos();
+  if (workspaceTodoPersonalMode && !activeWorkspacePlan) { workspaceTodoNoticeKey = "workspacePlanCacheMissing"; return; }
+  const next = cloneDefaultWorkspaceTodos();
+  if (saveWorkspaceTodos(next)) workspaceTodoGroups = next;
 }
 
-function saveWorkspaceTodos() {
-  localStorage.setItem(storageKeys.workspaceTodos, JSON.stringify(workspaceTodoGroups));
+function saveWorkspaceTodos(groups = workspaceTodoGroups) {
+  try {
+    localStorage.setItem(storageKeys.workspaceTodos, JSON.stringify(groups));
+    workspaceTodoNoticeKey = "";
+    if (typeof persistWorkspacePlanSoon === "function") persistWorkspacePlanSoon(groups);
+    return true;
+  } catch { workspaceTodoNoticeKey = "workspaceTodoSaveFailed"; return false; }
+}
+
+function workspacePlanSnapshot(groups = workspaceTodoGroups) {
+  if (workspaceTodoPersonalMode && !activeWorkspacePlan) return null;
+  const plan = normalizeActualWorkspacePlan({ version: 1, revision: activeWorkspacePlan?.revision || "local-plan-v1",
+    groups: groups.map(group => ({ id: group.id, title: workspaceTodoGroupTitle(group), summary: group.summary || "",
+      items: group.items.map(item => ({ id: item.id, text: workspaceTodoItemText(item), done: item.done })) })) });
+  if (!plan) return null;
+  return { version: 1, revision: plan.revision, groups: plan.groups.map(group => ({ id: group.id, title: group.title,
+    summary: group.summary, items: group.items.map(item => ({ id: item.id, text: item.text, done: item.done })) })) };
+}
+
+function workspacePlanPending() {
+  try {
+    const value = JSON.parse(localStorage.getItem(storageKeys.workspacePlanPending) || "null");
+    if (value && (value.baseHash === null || /^[a-f0-9]{64}$/.test(value.baseHash || "")) && normalizeActualWorkspacePlan(value.plan)) return value;
+  } catch { /* A damaged marker must never authorize replacing a saved plan. */ }
+  return null;
+}
+
+function markWorkspacePlanPending(groups = workspaceTodoGroups) {
+  const plan = workspacePlanSnapshot(groups);
+  if (!plan) throw new Error("Task plan cannot be safely saved");
+  const previous = workspacePlanPending();
+  let baseHash = workspacePlanSync.hash;
+  if (!workspacePlanSync.ready) {
+    const storedHash = localStorage.getItem(storageKeys.workspacePlanServerHash);
+    baseHash = previous ? previous.baseHash : /^[a-f0-9]{64}$/.test(storedHash || "") ? storedHash : null;
+  }
+  localStorage.setItem(storageKeys.workspacePlanPending, JSON.stringify({ baseHash, plan }));
+}
+
+function scheduleWorkspacePlanRetry() {
+  if (workspacePlanSync.timer || workspacePlanSync.blocked || document.hidden) return;
+  workspacePlanSync.timer = window.setTimeout(() => {
+    workspacePlanSync.timer = 0;
+    if (workspacePlanSync.ready) void persistWorkspacePlanNow();
+    else void initializeWorkspacePlanPersistence();
+  }, 5000);
+}
+
+function persistWorkspacePlanSoon(groups = workspaceTodoGroups) {
+  if (!hasWorkspace) return;
+  workspacePlanSync.dirty += 1;
+  try { markWorkspacePlanPending(groups); localStorage.setItem(storageKeys.workspacePlanCacheOrigin, "edited"); }
+  catch { workspaceTodoNoticeKey = "workspacePlanSyncFailed"; return; }
+  if (workspacePlanSync.blocked) { workspaceTodoNoticeKey = "workspacePlanSyncConflict"; return; }
+  if (workspacePlanSync.ready) void Promise.resolve().then(() => persistWorkspacePlanNow());
+}
+
+function applySavedWorkspacePlan(data) {
+  const plan = normalizeActualWorkspacePlan(data.plan), seed = data.seed ? normalizeWorkspacePlan(data.seed) : null;
+  if (!plan || data.seed && !seed || !/^[a-f0-9]{64}$/.test(data.hash || "") || seed && plan.revision !== seed.revision) throw new Error("Saved task plan is invalid");
+  const next = cloneWorkspacePlanGroups(plan), oldRaw = localStorage.getItem(storageKeys.workspaceTodos);
+  const nextRaw = JSON.stringify(next);
+  if (oldRaw !== nextRaw) {
+    const backup = JSON.parse(localStorage.getItem(storageKeys.workspaceTodoBackup) || '{"version":1,"revisions":[]}');
+    if (backup?.version !== 1 || !Array.isArray(backup.revisions)) throw new Error("Previous task backup is invalid");
+    const revision = `server-${data.hash}`;
+    const draft = localStorage.getItem(storageKeys.workspaceTodoDraft);
+    if (!backup.revisions.some(item => item?.revision === revision && item.todos === oldRaw && item.draft === draft)) {
+      backup.revisions.push({ revision, todos: oldRaw, draft, createdAt: new Date().toISOString() });
+      localStorage.setItem(storageKeys.workspaceTodoBackup, JSON.stringify(backup));
+    }
+    localStorage.setItem(storageKeys.workspaceTodos, nextRaw);
+    if (localStorage.getItem(storageKeys.workspaceTodos) !== nextRaw) throw new Error("Saved task list could not be cached");
+  }
+  if (seed) {
+    localStorage.setItem(storageKeys.workspacePlanCache, JSON.stringify(seed));
+    localStorage.setItem(storageKeys.workspacePlanRevision, seed.revision);
+  }
+  localStorage.setItem(storageKeys.workspacePlanServerHash, data.hash);
+  localStorage.removeItem(storageKeys.workspacePlanPending);
+  activeWorkspacePlan = seed; workspaceTodoPersonalMode = Boolean(seed); workspaceTodoGroups = next;
+  workspacePlanSync.hash = data.hash; workspacePlanSync.dirty = 0;
+  workspaceTodoNoticeKey = ""; renderWorkspaceTodos();
+}
+
+async function initializeWorkspacePlanPersistence() {
+  if (!hasWorkspace || workspacePlanSync.loading || workspacePlanSync.blocked) return;
+  workspacePlanSync.loading = true;
+  try {
+    const data = await requestJson("/api/workspace-plan/state", { cache: "no-store" }, { timeoutMs: 15000 });
+    if (data.error) throw new Error(data.error);
+    const pending = workspacePlanPending();
+    if (data.persisted) {
+      if (!normalizeActualWorkspacePlan(data.plan) || !/^[a-f0-9]{64}$/.test(data.hash || "")) throw new Error("Saved task plan is invalid");
+      if (pending && JSON.stringify(normalizeActualWorkspacePlan(pending.plan)) === JSON.stringify(normalizeActualWorkspacePlan(data.plan))) {
+        applySavedWorkspacePlan(data);
+      } else if (pending) {
+        if (pending.baseHash !== data.hash) {
+          workspacePlanSync.blocked = true; workspaceTodoNoticeKey = "workspacePlanSyncConflict"; renderWorkspaceTodos(); return;
+        }
+        workspacePlanSync.hash = data.hash; workspacePlanSync.dirty = Math.max(1, workspacePlanSync.dirty);
+      } else applySavedWorkspacePlan(data);
+    } else {
+      if (!workspacePlanSnapshot()) return;
+      workspacePlanSync.hash = null;
+      if (!workspacePlanSync.hadLocalTasks && !workspacePlanSync.dirty) {
+        // Existing desktop profiles migrate automatically. A fresh profile
+        // starts saving only after an explicit edit, so it cannot win a race
+        // against the owner's old profile with an untouched seed/default list.
+        workspacePlanSync.ready = true; return;
+      }
+      workspacePlanSync.dirty = Math.max(1, workspacePlanSync.dirty);
+    }
+    workspacePlanSync.ready = true;
+    if (workspacePlanSync.dirty) { markWorkspacePlanPending(); await persistWorkspacePlanNow(); }
+  } catch {
+    workspaceTodoNoticeKey = "workspacePlanSyncFailed"; renderWorkspaceTodos(); scheduleWorkspacePlanRetry();
+  } finally { workspacePlanSync.loading = false; }
+}
+
+async function persistWorkspacePlanNow() {
+  if (!workspacePlanSync.ready || workspacePlanSync.blocked || workspacePlanSync.saving || !workspacePlanSync.dirty) return;
+  workspacePlanSync.saving = true;
+  try {
+    while (workspacePlanSync.dirty && !workspacePlanSync.blocked) {
+      const dirty = workspacePlanSync.dirty, plan = workspacePlanSnapshot();
+      if (!plan) throw new Error("Task plan cannot be safely saved");
+      const data = await postJson("/api/workspace-plan/state", { plan, expectedHash: workspacePlanSync.hash }, { timeoutMs: 15000 });
+      if (!data.persisted || !/^[a-f0-9]{64}$/.test(data.hash || "")) throw new Error("Saved task plan is invalid");
+      workspacePlanSync.hash = data.hash;
+      localStorage.setItem(storageKeys.workspacePlanServerHash, data.hash);
+      if (workspacePlanSync.dirty === dirty) {
+        workspacePlanSync.dirty = 0; localStorage.removeItem(storageKeys.workspacePlanPending);
+      } else markWorkspacePlanPending();
+      workspaceTodoNoticeKey = ""; renderWorkspaceTodos();
+    }
+  } catch (error) {
+    workspacePlanSync.blocked = error.status === 409;
+    workspaceTodoNoticeKey = workspacePlanSync.blocked ? "workspacePlanSyncConflict" : "workspacePlanSyncFailed";
+    renderWorkspaceTodos(); scheduleWorkspacePlanRetry();
+  } finally { workspacePlanSync.saving = false; }
+}
+
+async function loadSavedWorkspacePlan(button) {
+  if (workspacePlanSync.loading || workspacePlanSync.saving) return;
+  if (button) button.disabled = true;
+  workspacePlanSync.loading = true;
+  try {
+    const data = await requestJson("/api/workspace-plan/state", { cache: "no-store" }, { timeoutMs: 15000 });
+    if (data.error || !data.persisted) throw new Error("Saved task plan is unavailable");
+    applySavedWorkspacePlan(data);
+    workspacePlanSync.blocked = false; workspacePlanSync.ready = true;
+  } catch {
+    workspaceTodoNoticeKey = "workspacePlanSyncConflict"; renderWorkspaceTodos();
+  } finally { workspacePlanSync.loading = false; if (button) button.disabled = false; }
 }
 
 function renderGithubDownloads() {
@@ -12044,6 +13481,15 @@ function waitForUpdatePoll(delay = 1000) {
   return new Promise(resolve => window.setTimeout(resolve, delay));
 }
 
+function hasReachedUpdateVersion(current, expected) {
+  if (current === expected && expected) return true;
+  if (!/^\d+\.\d+\.\d+$/.test(current) || !/^\d+\.\d+\.\d+$/.test(expected)) return false;
+  const actualParts = current.split(".").map(Number);
+  const expectedParts = expected.split(".").map(Number);
+  const difference = actualParts.findIndex((part, index) => part !== expectedParts[index]);
+  return difference < 0 || actualParts[difference] > expectedParts[difference];
+}
+
 async function waitForProductUpdateCompletion(product, targetVersion, timeout = 180000) {
   const expected = String(targetVersion || "").replace(/^v/i, "");
   const deadline = Date.now() + Math.max(1000, Number(timeout) || 180000);
@@ -12060,10 +13506,13 @@ async function waitForProductUpdateCompletion(product, targetVersion, timeout = 
         installError = state.updateError;
         break;
       }
-      if (!state.available && (!expected || current === expected)) {
+      if (expected ? hasReachedUpdateVersion(current, expected) : !state.available) {
         productUpdateBusy = false;
         renderConsoleUpdate();
-        if (product === "console") window.location.reload();
+        if (product === "console") {
+          saveWorkspaceTodoDraft();
+          window.location.reload();
+        }
         return true;
       }
     } catch (error) {
@@ -16381,11 +17830,12 @@ function workspaceTodoTotals(group = null) {
 }
 
 function pruneEmptyWorkspaceTodoGroups() {
+  if (workspaceTodoPersonalMode) return false;
   const next = workspaceTodoGroups.filter(group =>
     Array.isArray(group.items) &&
     group.items.length > 0
   );
-  if (next.length !== workspaceTodoGroups.length) {
+  if (next.length && next.length !== workspaceTodoGroups.length) {
     workspaceTodoGroups = next;
     return true;
   }
@@ -16414,6 +17864,15 @@ function renderWorkspaceTodos() {
   renderWorkspaceTodoCategoryOptions();
 
   const totals = workspaceTodoTotals();
+  if (els.workspaceTodoStatus) {
+    els.workspaceTodoStatus.hidden = !workspaceTodoNoticeKey;
+    els.workspaceTodoStatus.textContent = workspaceTodoNoticeKey ? text(workspaceTodoNoticeKey) : "";
+    if (workspaceTodoNoticeKey === "workspacePlanSyncConflict") {
+      const button = document.createElement("button"); button.type = "button"; button.className = "ghost-button";
+      button.textContent = text("workspacePlanLoadSaved"); button.addEventListener("click", () => void loadSavedWorkspacePlan(button));
+      els.workspaceTodoStatus.append(" ", button);
+    }
+  }
   if (els.workspaceTodoCount) {
     els.workspaceTodoCount.textContent = text("workspaceTodoProgress", totals.done, totals.total);
   }
@@ -16435,6 +17894,10 @@ function renderWorkspaceTodos() {
     count.textContent = text("workspaceTodoProgress", groupTotals.done, groupTotals.total);
     head.appendChild(count);
     card.appendChild(head);
+    if (group.summary) {
+      const summary = document.createElement("p"); summary.className = "todo-group-summary";
+      summary.textContent = group.summary; card.appendChild(summary);
+    }
 
     const list = document.createElement("div");
     list.className = "todo-items";
@@ -16453,6 +17916,7 @@ function renderWorkspaceTodos() {
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.checked = item.done;
+      checkbox.setAttribute("aria-label", workspaceTodoItemText(item));
       checkbox.addEventListener("change", () => toggleWorkspaceTodo(group.id, item.id, checkbox.checked));
       row.appendChild(checkbox);
 
@@ -16493,26 +17957,59 @@ function addWorkspaceTodo() {
     textKey: "",
     done: false
   });
-  els.workspaceTodoInput.value = "";
-  saveWorkspaceTodos();
+  if (!saveWorkspaceTodos()) { group.items.pop(); renderWorkspaceTodos(); return; }
+  els.workspaceTodoInput.value = ""; saveWorkspaceTodoDraft();
   renderWorkspaceTodos();
+}
+
+function saveWorkspaceTodoDraft() {
+  if (!els.workspaceTodoInput || !els.workspaceTodoCategory) return;
+  try {
+    const value = els.workspaceTodoInput.value;
+    if (value) {
+      localStorage.setItem(storageKeys.workspaceTodoDraft, JSON.stringify({
+        text: value, category: els.workspaceTodoCategory.value,
+        planRevision: activeWorkspacePlan?.revision || ""
+      }));
+    } else {
+      localStorage.removeItem(storageKeys.workspaceTodoDraft);
+    }
+  } catch {
+    // Existing to-dos remain independently saved if browser storage is full.
+  }
+}
+
+function restoreWorkspaceTodoDraft() {
+  if (!els.workspaceTodoInput || !els.workspaceTodoCategory || els.workspaceTodoInput.value) return;
+  try {
+    const draft = JSON.parse(localStorage.getItem(storageKeys.workspaceTodoDraft) || "null");
+    if (!draft || typeof draft.text !== "string") return;
+    if (workspaceTodoPersonalMode && !workspaceTodoGroups.some(group => group.id === draft.category)) return;
+    if (workspaceTodoPersonalMode && draft.planRevision !== activeWorkspacePlan?.revision) return;
+    els.workspaceTodoInput.value = draft.text;
+    if (workspaceTodoGroups.some(group => group.id === draft.category)) {
+      els.workspaceTodoCategory.value = draft.category;
+    }
+  } catch {
+    // A damaged draft does not affect the persisted list.
+  }
 }
 
 function toggleWorkspaceTodo(groupId, itemId, done) {
   const group = workspaceTodoGroups.find(item => item.id === groupId);
   const todo = group?.items.find(item => item.id === itemId);
   if (!todo) return;
-  todo.done = Boolean(done);
-  saveWorkspaceTodos();
+  const previous = todo.done; todo.done = Boolean(done);
+  if (!saveWorkspaceTodos()) todo.done = previous;
   renderWorkspaceTodos();
 }
 
 function deleteWorkspaceTodo(groupId, itemId) {
   const group = workspaceTodoGroups.find(item => item.id === groupId);
   if (!group) return;
-  group.items = group.items.filter(item => item.id !== itemId);
-  pruneEmptyWorkspaceTodoGroups();
-  saveWorkspaceTodos();
+  const previous = group.items; group.items = group.items.filter(item => item.id !== itemId);
+  if (!saveWorkspaceTodos()) group.items = previous;
+  else pruneEmptyWorkspaceTodoGroups();
   renderWorkspaceTodos();
 }
 
@@ -19000,6 +20497,7 @@ if (hasMusic && els.nowPlayingLyricsList) {
 }
 if (hasMusic && els.lyricsTimingEditor) bindLyricsTimingEditorEvents(els.lyricsTimingEditor);
 window.addEventListener("beforeunload", () => {
+  saveWorkspaceTodoDraft();
   flushConsoleStateBeforeUnload();
   if (hasMusic) {
     flushPendingMusicLyricMarks({ beacon: true });
@@ -19007,6 +20505,10 @@ window.addEventListener("beforeunload", () => {
   }
 });
 window.addEventListener("pagehide", closeConsoleWindowSession);
+window.addEventListener("focus", refreshDocumentOnFocus);
+window.addEventListener("focus", () => {
+  if (!consoleWindowSessionClosed) sendConsoleWindowSession("heartbeat");
+});
 window.addEventListener("pageshow", () => {
   if (consoleWindowSessionClosed) startConsoleWindowSession();
 });
@@ -19659,6 +21161,8 @@ if (hasWorkspace && els.resetWorkspaceTodo) {
   });
 }
 if (hasWorkspace && els.workspaceTodoInput) {
+  els.workspaceTodoInput.addEventListener("input", saveWorkspaceTodoDraft);
+  els.workspaceTodoCategory?.addEventListener("change", saveWorkspaceTodoDraft);
   els.workspaceTodoInput.addEventListener("keydown", event => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -19708,8 +21212,17 @@ if (hasMusic) {
 
 applyConsoleEdition(consoleEdition, { activate: false, forceRender: true });
 applyInstallModePolicy();
+bindDocumentLibrary();
+bindBlenderDocuments();
 startConsoleWindowSession();
 applyLanguage();
+restoreWorkspaceTodoDraft();
+void initializeWorkspacePlanPersistence();
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !hasWorkspace) return;
+  if (!workspacePlanSync.ready) void initializeWorkspacePlanPersistence();
+  else if (workspacePlanSync.dirty) void persistWorkspacePlanNow();
+});
 setConsoleWorkspaceView(activeConsoleView, { persist: false });
 setBlenderWorkspaceView(activeBlenderView, { persist: false });
 loadConsoleConfig();

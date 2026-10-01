@@ -1,5 +1,6 @@
 # Local runtime state
 cache/
+.console-startup.lock
 feedback-admin.json
 __pycache__/
 *.pyc

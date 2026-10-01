@@ -165,6 +165,13 @@ def main():
         require(restarting["restarting"], "self-update did not enter restart mode")
         require(f"$waitPid = {os.getpid()}" in restart_script, "helper does not wait for Console")
         require("--no-browser" in restart_script, "Console is not relaunched without duplicating its window")
+        require("Start-InstalledConsole -ReplaceWindow $true" in restart_script,
+                "successful update did not use the owned-window replacement path")
+        require(".console-startup.lock" in restart_script and "$startupGate.Lock(0, 1)" in restart_script,
+                "Setup leaves a gap for another Console launch")
+        require(restart_script.index("$startupGate.Dispose()") < restart_script.index("Start-InstalledConsole -ReplaceWindow $true"),
+                "update relaunch still holds the startup gate")
+        require("Stop-Process" not in restart_script, "Setup can still force-kill a running Console")
 
         installer.write_bytes(b"MZtampered")
         with (

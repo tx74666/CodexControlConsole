@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import threading
+from contextlib import contextmanager
 
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
@@ -24,6 +25,7 @@ class ConsoleWindowSessionService:
         self._ever_opened = False
         self._stopped = False
         self._shutdown_requested = False
+        self._launches = 0
 
     def _new_timer(self, delay, callback):
         timer = threading.Timer(delay, callback)
@@ -37,7 +39,7 @@ class ConsoleWindowSessionService:
             timer.cancel()
 
     def _schedule_shutdown_locked(self):
-        if self._stopped or self._shutdown_requested or self._sessions or self._shutdown_timer:
+        if self._stopped or self._shutdown_requested or self._sessions or self._shutdown_timer or self._launches:
             return
         self._shutdown_timer = self._new_timer(self.close_delay_seconds, self._shutdown_if_idle)
         self._shutdown_timer.start()
@@ -47,10 +49,24 @@ class ConsoleWindowSessionService:
             self._shutdown_timer = None
             if self._stopped:
                 return
-            if self._sessions:
+            if self._sessions or self._launches:
                 return
             self._shutdown_requested = True
         self.shutdown_callback()
+
+    @contextmanager
+    def launching(self):
+        """A replacement window may close the old page before its new page loads."""
+        with self._lock:
+            self._launches += 1
+            self._cancel_shutdown_locked()
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._launches -= 1
+                if self._ever_opened and not self._sessions:
+                    self._schedule_shutdown_locked()
 
     def update(self, payload):
         if not isinstance(payload, dict):

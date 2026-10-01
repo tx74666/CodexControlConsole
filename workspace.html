@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -19,7 +19,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=control-console-1061">
+  <link rel="stylesheet" href="styles.css?v=console-plan-sync-1.0.17">
 </head>
 <body>
   <main class="app-shell workspace-shell">
@@ -65,7 +65,7 @@
         <div class="strip-head">
           <div>
             <div class="section-label" data-i18n="workspaceTodoLabel">Todo</div>
-            <h2 id="workspaceTodoTitle" data-i18n="workspaceTodoTitle">待办清单</h2>
+            <h2 id="workspaceTodoTitle" data-i18n="workspaceTodoTitle">当前计划</h2>
           </div>
           <span id="workspaceTodoCount">0/0</span>
         </div>
@@ -74,12 +74,14 @@
           <input id="workspaceTodoInput" type="text" aria-label="写一个新的待办" data-i18n-aria="workspaceTodoPlaceholder" data-i18n-placeholder="workspaceTodoPlaceholder" placeholder="写一个新的待办">
           <button id="addWorkspaceTodo" class="ghost-button primary-action" type="button" data-i18n="addWorkspaceTodo">加入</button>
         </div>
+        <p id="workspaceTodoStatus" class="todo-status" role="status" aria-live="polite" hidden></p>
         <div id="workspaceTodoList" class="workspace-todo-list"></div>
       </section>
     </section>
   </main>
 
 <script src="/api/release-defaults.js"></script>
-<script src="app.js?v=control-console-1061"></script>
+<script src="/api/workspace-plan.js"></script>
+  <script src="app.js?v=console-plan-sync-1.0.17"></script>
 </body>
 </html>

@@ -72,7 +72,14 @@ $PythonSources = @(
   "blender_github_share.py",
   "console_update.py",
   "console_window_session.py",
+  "console_instance.py",
+  "console_window_launcher.py",
   "desktop_layout.py",
+  "document_library.py",
+  "workspace_plan.py",
+  "phone_companion.py",
+  "phone_offline.py",
+  "device_library.py",
   "download_map.py",
   "external_app_launcher.py",
   "feedback_service.py",
@@ -86,6 +93,8 @@ $PythonChecks = @(
   "tools/check-feedback.py",
   "tools/check-release-defaults.py",
   "tools/check-console-lifecycle.py",
+  "tools/check-console-instance.py",
+  "tools/check-console-window-launcher.py",
   "tools/check-console-update.py",
   "tools/check-world-update.py",
   "tools/check-clean-uninstall.py",
@@ -95,6 +104,12 @@ $PythonChecks = @(
   "tools/check-reference-views.py",
   "tools/check-download-map.py",
   "tools/check-desktop-layout.py",
+  "tools/check-document-library.py",
+  "tools/check-document-references.py",
+  "tools/check-workspace-plan.py",
+  "tools/check-phone-companion.py",
+  "tools/check-phone-offline.py",
+  "tools/test_device_library.py",
   "tools/check-external-app-launcher.py",
   "tools/check-http-boundary.py",
   "tools/check-runtime-state.py"
@@ -104,6 +119,31 @@ Push-Location $ProjectRoot
 try {
   $RequiredFiles = @($PythonSources + $PythonChecks + @(
     "app.js",
+    "reader.html",
+    "document-reader.js",
+    "document-reader.css",
+    "phone-pairing.js",
+    "phone-offline-export.js",
+    "phone/index.html",
+    "phone/app.js",
+    "phone/store.js",
+    "phone/styles.css",
+    "phone/sw.js",
+    "phone/manifest.webmanifest",
+    "tools/build-phone-static.py",
+    "tools/check-phone-offline-ui.mjs",
+    "mobile.html",
+    "mobile.js",
+    "mobile.css",
+    "mobile.webmanifest",
+    "tools/check-mobile-ui.mjs",
+    "tools/check-document-reader.mjs",
+    "tools/check-document-reader-page.mjs",
+    "tools/check-document-inbox-ui.mjs",
+    "tools/check-document-guide-ui.mjs",
+    "tools/check-blender-documents-ui.mjs",
+    "tools/check-workspace-plan-ui.mjs",
+    "tools/check-workspace-plan-persistence-ui.mjs",
     "tools/check-build-version.ps1",
     "tools/check-console-ui.mjs",
     "services/feedback-relay/src/index.js",
@@ -121,9 +161,32 @@ try {
     Invoke-QualityStep $check { & $Python $check }
   }
 
+  if ($env:OS -eq "Windows_NT") {
+    Invoke-QualityStep "Windows PowerShell sampler compatibility" {
+      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/Test-DeviceSnapshotCheckpoint.ps1
+    }
+  }
+
   Invoke-QualityStep "Application JavaScript syntax" { & $Node --check app.js }
+  Invoke-QualityStep "Phone pairing JavaScript syntax" { & $Node --check phone-pairing.js }
+  Invoke-QualityStep "Offline phone export JavaScript syntax" { & $Node --check phone-offline-export.js }
+  Invoke-QualityStep "Offline phone JavaScript syntax" { & $Node --check phone/app.js }
+  Invoke-QualityStep "Offline phone local storage syntax" { & $Node --check phone/store.js }
+  Invoke-QualityStep "Offline phone service worker syntax" { & $Node --check phone/sw.js }
+  Invoke-QualityStep "Offline phone UI" { & $Node tools/check-phone-offline-ui.mjs }
+  Invoke-QualityStep "Mobile JavaScript syntax" { & $Node --check mobile.js }
+  Invoke-QualityStep "Mobile companion UI" { & $Node tools/check-mobile-ui.mjs }
+  Invoke-QualityStep "Document reader JavaScript syntax" { & $Node --check document-reader.js }
+  Invoke-QualityStep "Document reader opening" { & $Node tools/check-document-reader.mjs }
+  Invoke-QualityStep "Document reader page behavior" { & $Node tools/check-document-reader-page.mjs }
+  Invoke-QualityStep "Document inbox categories and archive actions" { & $Node tools/check-document-inbox-ui.mjs }
+  Invoke-QualityStep "Document library entry and curated highlights" { & $Node tools/check-document-guide-ui.mjs }
+  Invoke-QualityStep "Blender document references and language pairing" { & $Node tools/check-blender-documents-ui.mjs }
+  Invoke-QualityStep "Personal workspace plan migration" { & $Node tools/check-workspace-plan-ui.mjs }
+  Invoke-QualityStep "Workspace plan persistence and phone source state" { & $Node tools/check-workspace-plan-persistence-ui.mjs }
   Invoke-QualityStep "UI regression script syntax" { & $Node --check tools/check-console-ui.mjs }
   Invoke-QualityStep "UI static contracts" { & $Node tools/check-console-ui.mjs --static-only }
+  Invoke-QualityStep "Relaunch UI state" { & $Node tools/check-console-relaunch-ui.mjs }
   Invoke-QualityStep "Feedback Worker syntax" { & $Node --check services/feedback-relay/src/index.js }
   Invoke-QualityStep "Feedback Worker tests" { & $Node --test services/feedback-relay/test/feedback.test.js }
 } finally {

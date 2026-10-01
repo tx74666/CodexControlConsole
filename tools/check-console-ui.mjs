@@ -6,6 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, "..");
@@ -109,7 +110,8 @@ function staticChecks() {
     "Local browser checks can reach the real desktop-layout data or restore helper"
   );
   const manifest = JSON.parse(readFileSync(join(projectRoot, "app-manifest.json"), "utf8"));
-  assert(manifest.version === "1.0.6", `unexpected app version: ${manifest.version}`);
+  assert(/^\d+\.\d+\.\d+$/.test(manifest.version), `unexpected app version: ${manifest.version}`);
+  assert(appSource.includes(`const consoleUiVersion = "${manifest.version}";`), "UI version differs from the packaged application");
   expectedAppVersion = manifest.version;
   assert(manifest.repository === "tx74666/CodexControlConsole", "update repository is not configured");
   const consoleHtml = readFileSync(join(projectRoot, "index.html"), "utf8");
@@ -258,7 +260,10 @@ function staticChecks() {
       && !consoleHtml.includes('id="collaborationDownloadsTab"')
       && !consoleHtml.includes('id="consoleDownloadsTab"')
       && !consoleHtml.includes('id="consoleDownloadsView"')
-      && consoleHtml.match(/data-console-view-target=/g)?.length === 2
+      && consoleHtml.match(/data-console-view-target=/g)?.length === 3
+      && consoleHtml.includes('id="consoleDocumentView"')
+      && consoleHtml.includes('id="documentCollect"')
+      && consoleHtml.indexOf('id="consoleCommonTab"') < consoleHtml.indexOf('id="consoleDocumentTab"')
       && !consoleHtml.includes('data-collaboration-view-target=')
       && !consoleHtml.includes('data-collaboration-view=')
       && !appSource.includes("setCollaborationWorkspaceView")
@@ -282,10 +287,28 @@ function staticChecks() {
     "Console Collaboration single-page layout is incomplete"
   );
   assert(
+    consoleHtml.includes('id="documentUnreadBadge"')
+      && consoleHtml.indexOf('id="consoleCommonTab"') < consoleHtml.indexOf('id="consoleDocumentTab"')
+      && consoleHtml.indexOf('id="consoleDocumentTab"') < consoleHtml.indexOf('id="consoleCollaborationTab"')
+      && consoleHtml.indexOf('class="candidate-strip workspace-todos"') < consoleHtml.indexOf('class="panel desktop-layout-panel')
+      && consoleHtml.includes('id="documentInboxTabs"')
+      && consoleHtml.includes('id="documentInboxTabLater"')
+      && consoleHtml.includes('id="documentInboxTabArchive"')
+      && consoleHtml.includes('id="documentInboxClearAll"')
+      && consoleHtml.includes('id="documentInboxUndo"')
+      && !consoleHtml.includes('id="documentInboxHistory"')
+      && /<details[^>]+desktop-layout-panel[^>]*>/.test(consoleHtml)
+      && /<details[^>]+builtin-media-panel[^>]*>/.test(consoleHtml)
+      && !/<details[^>]+(?:desktop-layout-panel|builtin-media-panel)[^>]+\bopen\b/.test(consoleHtml)
+      && consoleHtml.indexOf('id="documentOverview"') < consoleHtml.indexOf('id="documentInbox"')
+      && appSource.includes('normalizeConsoleWorkspaceView(requestedConsoleView)'),
+    "Document entry, report inbox, or collapsed Common panels are missing"
+  );
+  assert(
     !consoleHtml.includes('id="blenderHelperTab"')
       && !consoleHtml.includes('id="blenderHelperView"')
-      && consoleHtml.match(/data-blender-view-target=/g)?.length === 2
-      && appSource.includes('return value === "builder" ? "builder" : "character";'),
+      && consoleHtml.match(/data-blender-view-target=/g)?.length === 3
+      && appSource.includes('return ["builder", "document"].includes(value) ? value : "character";'),
     "Blender Helper was not fully migrated into Console Download Map"
   );
   assert(
@@ -376,6 +399,63 @@ function edgeExecutable() {
     join(process.env.LOCALAPPDATA || "", "Microsoft", "Edge", "Application", "msedge.exe")
   ].filter(Boolean);
   return candidates.find(existsSync) || "";
+}
+
+async function documentStateChecks() {
+  const source = readFileSync(join(projectRoot, "app.js"), "utf8");
+  const start = source.indexOf("async function loadDocumentLibrary(");
+  const end = source.indexOf("async function selectDocumentFolder(", start);
+  const makeContext = (state, loaded = false) => {
+    const nodes = new Map();
+    const calls = [];
+    const context = {
+      calls, state, runtimeActivityReady: true, activeConsoleView: "document", foreground: true,
+      documentLibrary: { loaded, busy: false, root: loaded ? "D:/library" : "", exists: loaded, path: "reports", file: "reports/reading.md" },
+      documentInbox: { entries: [{ id: "old" }], busy: false }, documentOverviewResult: { model: "old" },
+      documentResources: { guideLoaded: false, aiLoaded: false, view: "guide" },
+      documentNode: id => {
+        if (!nodes.has(id)) nodes.set(id, { value: id === "RootInput" && loaded ? "D:/library" : "", open: false, replaceChildren() { this.cleared = true; } });
+        return nodes.get(id);
+      },
+      documentRequest: async endpoint => { calls.push(endpoint); return endpoint === "state" ? context.state : { status: "idle" }; },
+      withDocumentAction: async action => { if (context.documentLibrary.busy || context.documentInbox.busy) return false; await action(); return true; },
+      documentNotice: message => { context.notice = message; }, documentText: zh => zh,
+      clearDocumentReader: () => { calls.push("clear-reader"); context.documentLibrary.file = ""; },
+      renderDocumentInbox: () => {},
+      resetDocumentResources: () => { calls.push("reset-resources"); },
+      loadDocumentOverview: async () => { calls.push("overview"); },
+      loadDocumentInbox: async () => { calls.push("inbox"); },
+      showDocumentSampleStatus: () => {}, scheduleDocumentSamplePoll: () => {},
+      browseDocumentFolder: async () => { calls.push("browse"); },
+      readDocumentFile: async () => { calls.push("read"); },
+      loadDocumentSnapshots: async () => { calls.push("snapshots"); },
+      isModuleForeground: () => context.foreground
+    };
+    runInNewContext(source.slice(start, end), context);
+    return context;
+  };
+  for (const loaded of [false, true]) {
+    const context = makeContext({ root: loaded ? "D:/library" : "", exists: false }, loaded);
+    await context.loadDocumentLibrary();
+    assert(context.documentNode("FolderSettings").open && !context.documentLibrary.loaded
+      && context.documentOverviewResult === null && context.documentInbox.entries.length === 0
+      && !context.calls.some(call => ["overview", "inbox", "browse", "read"].includes(call)),
+    `Unavailable ${loaded ? "cached" : "first-use"} library did not expose folder recovery safely`);
+  }
+  const context = makeContext({ root: "D:/library", exists: true }, true);
+  context.documentNode("RootInput").value = "D:/unfinished-input";
+  await context.loadDocumentLibrary();
+  assert(context.calls.join(",") === "state,overview,inbox"
+    && context.documentLibrary.file === "reports/reading.md"
+    && context.documentNode("RootInput").value === "D:/unfinished-input",
+  "Resume refresh reloaded the reader, skipped root validation, or discarded input");
+  let resumed = 0;
+  context.loadDocumentLibrary = () => { resumed += 1; };
+  context.documentLibrary.busy = true; context.refreshDocumentOnFocus();
+  context.documentLibrary.busy = false; context.activeConsoleView = "common"; context.refreshDocumentOnFocus();
+  context.activeConsoleView = "document"; context.foreground = false; context.refreshDocumentOnFocus();
+  context.foreground = true; context.refreshDocumentOnFocus();
+  assert(resumed === 1, "Focus refresh ran while busy or outside the foreground Document view");
 }
 
 async function waitForValue(read, predicate, message, timeoutMs = 12000, intervalMs = 80) {
@@ -1155,18 +1235,20 @@ async function runBrowserChecks(client) {
   await clickModule(client, "workspace");
   const consoleCommonState = await evaluate(client, `({
     active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
+    documentVisible: !document.querySelector('#consoleDocumentView')?.hidden,
     commonVisible: !document.querySelector('#consoleCommonView')?.hidden,
     collaborationHidden: Boolean(document.querySelector('#consoleCollaborationView')?.hidden),
     tabs: document.querySelectorAll('[data-console-view-target]').length,
     collaborationTabs: document.querySelectorAll('[data-collaboration-view-target]').length
   })`);
   assert(
-    consoleCommonState.active === "common"
-      && consoleCommonState.commonVisible
+    consoleCommonState.active === "document"
+      && consoleCommonState.documentVisible
+      && !consoleCommonState.commonVisible
       && consoleCommonState.collaborationHidden
-      && consoleCommonState.tabs === 2
+      && consoleCommonState.tabs === 3
       && consoleCommonState.collaborationTabs === 0,
-    `Console common view is not the stable default: ${JSON.stringify(consoleCommonState)}`
+    `Console device overview is not the stable default: ${JSON.stringify(consoleCommonState)}`
   );
   await evaluate(client, `document.querySelector('[data-console-view-target="collaboration"]')?.click()`);
   await waitForValue(
@@ -1575,7 +1657,7 @@ async function runBrowserChecks(client) {
       && consoleDownloadMapState.hubInsideDownloads
       && consoleDownloadMapState.coopInsideDownloads
       && consoleDownloadMapState.coopVisible
-      && consoleDownloadMapState.blenderTabs.join(",") === "character,builder"
+      && consoleDownloadMapState.blenderTabs.join(",") === "character,builder,document"
       && consoleDownloadMapState.helperViewCount === 0
       && consoleDownloadMapState.translatedTitle === "GitHub 下载"
       && consoleDownloadMapState.translatedMusicNav === "音乐"
@@ -2740,6 +2822,7 @@ async function runBrowserChecks(client) {
 
 async function main() {
   const cacheVersion = staticChecks();
+  await documentStateChecks();
   if (staticOnly) {
     console.log(`PASS Control Console UI static checks (${cacheVersion})`);
     return;
