@@ -20,7 +20,7 @@ const inbox = () => ({ entries: [
 ] });
 const dashboard = () => ({ version: "1.0.14", plan: plan(), device: { currentMemory: { status: "available", usedPercent: 91, availableBytes: 1024 ** 3, totalBytes: 16 * 1024 ** 3, readAt: "2026-10-01T11:00:00+08:00" }, model: "Dell fixture", cpuModel: "CPU", gpuModels: ["GPU"], sampledAt: "2026-09-27T11:00:00+08:00", installedMemoryBytes: 16 * 1024 ** 3 }, documents: { inbox: inbox(), guide: { items: [{ title: "阅读重点", path: "human.md", highlights: ["重点"] }] }, references: { items: [{ id: "nodes", defaultLanguage: "zh-CN", variants: [{ language: "zh-CN", label: "中文", title: "节点参考", path: "nodes.zh.md", available: true }, { language: "en", label: "English", title: "Nodes", path: "nodes.en.md", available: true }] }] } } });
 const playlist = () => ({ playback: "phone", tracks: [{ name: "<script>One</script>", path: "local/one.mp3", type: "mp3", size: 100 }, { name: "Two", path: "album/two.m4a", type: "m4a", size: 200 }, { name: "三首", path: "album/three.mp3", type: "mp3", lyrics: true, lyricsLanguage: "zh", lyricsLanguages: [{ code: "zh", label: "Chinese" }, { code: "en", label: "English" }] }], truncated: false });
-function harness() {
+function harness({ syncEnabled = false } = {}) {
   class Element {
     constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.style = { setProperty(key, value) { this[key] = value; } }; }
     append(...items) { this.children.push(...items); }
@@ -61,9 +61,12 @@ function harness() {
     async replaceLibrary(value) { if (this.failWrites) throw new Error("quota"); const old = stores.get("records").get("library"); if (old) stores.get("records").set("previousImport", structuredClone({ ...old, id: "previousImport" })); stores.get("records").set("library", structuredClone(value)); }
   };
   const runtime = { URL, URLSearchParams, AbortController, TypeError, Request, document, history, navigator: { serviceWorker: { controller: {}, ready: Promise.resolve({}), register: async () => ({ waiting: null, addEventListener() {}, async update() {} }), addEventListener() {} } }, PhoneStore, Blob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html" }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
-  const names = "state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,api,bootstrap,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
+  const names = "state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
   assert.ok(source.includes("  void bootstrap();\n})();"), "test export insertion must match only bootstrap footer");
-  runInNewContext(source.replace("  void bootstrap();\n})();", `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
+  // Exercise deferred sync explicitly in isolated tests; production stays offline by default.
+  const testSource = syncEnabled ? source.replace("const TASK_SYNC_ENABLED = false;", "const TASK_SYNC_ENABLED = true;") : source;
+  if (syncEnabled) assert.notEqual(testSource, source, "deferred sync tests must enable the source flag in memory");
+  runInNewContext(testSource.replace("  void bootstrap();\n})();", `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
   return { api, stores, PhoneStore, runtime, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
 }
@@ -228,32 +231,49 @@ await test("phone backups restore synced public groups as readonly without expor
   const malformed = structuredClone(backup); malformed.phoneState.planSnapshot.hash = "bad"; assert.throws(() => h.api.validateImport(malformed));
 });
 await test("Safari without LNA gets a safe top-level real-time link without any PC fetch", async () => {
-  const h = harness(); h.ready(); h.get("syncAddress").value = "http://192.168.1.10:8899/"; h.get("syncCode").value = "123456"; const before = JSON.stringify(h.api.state.library); await h.api.connectTaskSync();
+  const h = harness({ syncEnabled: true }); h.ready(); h.get("syncAddress").value = "http://192.168.1.10:8899/"; h.get("syncCode").value = "123456"; const before = JSON.stringify(h.api.state.library); await h.api.connectTaskSync();
   assert.equal(h.calls.length, 0); assert.equal(h.get("syncFallback").href, "http://192.168.1.10:8899/mobile.html"); assert.match(h.get("syncNotice").textContent, /不支持/); assert.equal(JSON.stringify(h.api.state.library), before); assert.equal(h.get("syncCode").value, "");
   for (const unsafe of ["https://example.com/", "http://example.com/", "http://127.0.0.1:8899/", "http://192.168.1.10:8899/other", "http://user:secret@192.168.1.10:8899/", "http://192.168.1.10:8899/?token=x"]) assert.throws(() => h.api.syncAddress(unsafe));
 });
 await test("supported pairing stores tokens locally and fetches only scoped read-only task APIs", async () => {
-  const h = harness(); h.ready(); enableSync(h); h.respond({ token: "x".repeat(43), computerId: "fixture-pc", expiresIn: 28800 }); h.respond(snapshot()); await h.api.connectTaskSync();
+  const h = harness({ syncEnabled: true }); h.ready(); enableSync(h); h.respond({ token: "x".repeat(43), computerId: "fixture-pc", expiresIn: 28800 }); h.respond(snapshot()); await h.api.connectTaskSync();
   assert.deepEqual(h.calls.map(call => call.url), ["http://192.168.1.10:8899/api/phone/plan-sync/pair", "http://192.168.1.10:8899/api/phone/plan-sync/plan"]);
   for (const { options } of h.calls) { assert.equal(options.targetAddressSpace, "local"); assert.equal(options.credentials, "omit"); assert.equal(options.mode, "cors"); assert.equal(options.cache, "no-store"); assert.equal(options.redirect, "error"); assert.equal(options.headers["X-Codex-Phone"], "1"); }
   assert.equal(h.calls[1].options.headers.Authorization, "Bearer " + "x".repeat(43)); assert.deepEqual(JSON.parse(h.calls[0].options.body), { code: "123456" }); assert.equal(h.stores.get("settings").get("taskSync").token, "x".repeat(43)); assert.equal(h.api.taskSync.connected, true); assert.ok([...h.timers.values()].some(timer => timer.delay === 5000));
 });
 await test("a late old PC response cannot replace a newly selected source", async () => {
-  const h = harness(); h.ready(); h.api.taskSync.config = savedSync(); const pending = defer(); h.answers.push(pending.promise); const poll = h.api.pollTaskSync(); await h.api.disconnectTaskSync(false); const next = snapshot("c", "next-pc"); await h.api.applyPlanSnapshot(next); pending.resolve(result(snapshot())); await poll;
+  const h = harness({ syncEnabled: true }); h.ready(); h.api.taskSync.config = savedSync(); const pending = defer(); h.answers.push(pending.promise); const poll = h.api.pollTaskSync(); await h.api.disconnectTaskSync(false); const next = snapshot("c", "next-pc"); await h.api.applyPlanSnapshot(next); pending.resolve(result(snapshot())); await poll;
   assert.equal(h.api.state.library.planSync.computerId, "next-pc"); assert.equal(h.api.taskSync.connected, false); assert.equal(h.api.taskSync.timer, null);
 });
 await test("disconnect during a pending task write restores the prior phone cache before another source can write", async () => {
-  const h = harness(); h.ready(); const before = JSON.stringify(h.stores.get("records").get("library")), pending = defer(), originalPut = h.PhoneStore.put.bind(h.PhoneStore);
+  const h = harness({ syncEnabled: true }); h.ready(); const before = JSON.stringify(h.stores.get("records").get("library")), pending = defer(), originalPut = h.PhoneStore.put.bind(h.PhoneStore);
   h.PhoneStore.put = async (name, value) => { await originalPut(name, value); if (name === "records" && value.planSync?.hash === "a".repeat(64)) await pending.promise; };
   const update = h.api.applyPlanSnapshot(snapshot(), h.api.taskSync.generation); await new Promise(resolve => setTimeout(resolve, 0)); await h.api.disconnectTaskSync(false); pending.resolve(); assert.equal(await update, false); assert.equal(JSON.stringify(h.stores.get("records").get("library")), before); assert.equal(JSON.stringify(h.api.state.library), before);
   await h.api.applyPlanSnapshot(snapshot("b", "new-pc")); assert.equal(h.stores.get("records").get("library").planSync.computerId, "new-pc");
 });
 await test("offline and expired sync retain all data and expiry stops polling without losing cached tasks", async () => {
-  const h = harness(); h.ready(); await h.api.applyPlanSnapshot(snapshot()); h.api.taskSync.config = savedSync(); const before = JSON.stringify(h.api.state.library); h.answers.push(Promise.reject(new TypeError("offline"))); await h.api.pollTaskSync(); assert.equal(JSON.stringify(h.api.state.library), before); assert.match(h.get("syncNotice").textContent, /已保留/);
+  const h = harness({ syncEnabled: true }); h.ready(); await h.api.applyPlanSnapshot(snapshot()); h.api.taskSync.config = savedSync(); const before = JSON.stringify(h.api.state.library); h.answers.push(Promise.reject(new TypeError("offline"))); await h.api.pollTaskSync(); assert.equal(JSON.stringify(h.api.state.library), before); assert.match(h.get("syncNotice").textContent, /已保留/);
   h.api.taskSync.config.expiresAt = Date.now() - 1; await h.api.pollTaskSync(); assert.equal(h.api.taskSync.config.token, undefined); assert.equal(h.api.taskSync.timer, null); assert.match(h.get("syncNotice").textContent, /过期/); assert.equal(JSON.stringify(h.api.state.library), before);
 });
 await test("background suspends polling and returning foreground refreshes immediately", async () => {
-  const h = harness(); h.ready(); h.api.taskSync.config = savedSync(); h.document.hidden = true; await h.api.pollTaskSync(); assert.equal(h.calls.length, 0); h.documentEvents.get("visibilitychange")(); assert.equal(h.api.taskSync.timer, null);
+  const h = harness({ syncEnabled: true }); h.ready(); h.api.taskSync.config = savedSync(); h.document.hidden = true; await h.api.pollTaskSync(); assert.equal(h.calls.length, 0); h.documentEvents.get("visibilitychange")(); assert.equal(h.api.taskSync.timer, null);
   h.respond(snapshot()); h.document.hidden = false; h.documentEvents.get("visibilitychange")(); await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(h.calls.length, 1); assert.equal(h.api.taskSync.connected, true);
+});
+await test("default offline boot refresh and foreground events ignore old PC tokens without losing saved content", async () => {
+  const h = harness(); h.ready(); enableSync(h); await h.api.applyPlanSnapshot(snapshot());
+  h.stores.get("media").set("saved-song", { id: "saved-song", blob: new Blob(["original audio"]) });
+  h.stores.get("music").set("saved-song", { id: "saved-song", name: "Saved song", offlineLyrics: [{ code: "en", content: "[00:01]Saved lyrics" }] });
+  const oldConnection = { id: "taskSync", ...savedSync() }; h.stores.get("settings").set("taskSync", structuredClone(oldConnection));
+  const before = JSON.stringify(h.stores.get("records").get("library")); h.respond({ tracks: [] });
+  await h.api.bootstrap(); await new Promise(resolve => setTimeout(resolve, 0));
+  // A stale in-memory config must remain harmless too, including direct dormant entry calls.
+  h.api.taskSync.config = savedSync(); await h.api.refresh(); await h.api.restoreTaskSync(); await h.api.connectTaskSync(); await h.api.pollTaskSync();
+  h.windowEvents.get("online")?.(); h.document.hidden = true; h.documentEvents.get("visibilitychange")?.();
+  h.document.hidden = false; h.documentEvents.get("visibilitychange")?.(); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(h.calls.map(call => call.url), ["./music-catalog.json"]); assert.equal(h.api.taskSync.timer, null);
+  assert.equal(JSON.stringify(h.stores.get("records").get("library")), before); assert.equal(JSON.stringify(h.api.state.library), before);
+  assert.deepEqual(h.stores.get("settings").get("taskSync"), oldConnection); assert.equal(await h.stores.get("media").get("saved-song").blob.text(), "original audio");
+  assert.equal(h.stores.get("music").get("saved-song").offlineLyrics[0].content, "[00:01]Saved lyrics"); assert.equal(h.api.state.library.planSync.readonly, true);
+  assert.ok(h.all(h.get("taskGroups"), "input").every(input => input.disabled)); assert.equal(h.api.state.library.files.length, 6);
 });
 console.log(`PASS offline phone UI ${count} checks`);

@@ -2,6 +2,7 @@
   "use strict";
   const VERSION = "__CONSOLE_PHONE_VERSION__";
   const BUILD = "__CONSOLE_PHONE_BUILD__";
+  const TASK_SYNC_ENABLED = false;
   let libraryMutationQueue = Promise.resolve();
 
   const el = id => document.getElementById(id);
@@ -90,7 +91,7 @@
       try { const response = await fetch("./music-catalog.json"); if (response.ok) { const payload = await response.json(); state.catalog = Array.isArray(payload.tracks) ? payload.tracks : []; } } catch { /* Imported data works even if the first public catalog download is incomplete. */ }
       await refreshDashboard(); await updateStorageNotice();
       el("restoreButton").hidden = !await PhoneStore.get("records", "previousImport");
-      await restoreTaskSync();
+      if (TASK_SYNC_ENABLED) await restoreTaskSync();
     } catch (error) { failure(error); }
     finally { setBusy(false); }
     void setupWorker();
@@ -99,18 +100,19 @@
     const data = await api("dashboard"); state.dashboard = data; state.ready = true;
     el("appScreen").hidden = false; el("bottomNav").hidden = false;
     el("connectionLabel").textContent = navigator.serviceWorker?.controller ? "本机离线" : "离线准备中"; el("connectionLabel").dataset.connected = "true";
-    el("updatedLabel").textContent = state.library ? `资料导入于 ${date(state.library.importedAt)}` : "导入资料后，就能离线查看计划与文档。";
+    el("updatedLabel").textContent = `本版 v${VERSION}`;
     renderPlan(data.plan); renderDevice(data.device); renderDocuments(); selectTab(state.tab); notice("appNotice");
   }
   async function refresh() {
     if (state.busy || state.mutationBusy) return; setBusy(true);
-    try { await libraryMutationQueue; state.library = await PhoneStore.get("records", "library") || null; await refreshDashboard(); if (taskSync.config?.token) await pollTaskSync(); if (state.tab === "music") await loadMusic(true); }
+    try { await libraryMutationQueue; state.library = await PhoneStore.get("records", "library") || null; await refreshDashboard(); if (TASK_SYNC_ENABLED && taskSync.config?.token) await pollTaskSync(); if (state.tab === "music") await loadMusic(true); }
     catch (error) { failure(error); } finally { setBusy(false); }
   }
   function selectTab(value) {
     if (!["tasks", "music", "device", "documents"].includes(value)) return;
     state.tab = value;
     el("appToolbar").hidden = value === "music";
+    el("taskSyncSection").hidden = !TASK_SYNC_ENABLED;
     for (const tab of ["tasks", "music", "device", "documents"]) el(`${tab}Panel`).hidden = tab !== value;
     for (const button of document.querySelectorAll("[data-tab]")) button.setAttribute("aria-pressed", String(button.dataset.tab === value));
     if (value === "music" && state.ready && !state.music.loaded) void loadMusic();
@@ -209,13 +211,16 @@
     return url.origin;
   }
   function supportsTaskSync(address) {
+    if (!TASK_SYNC_ENABLED) return false;
     try { return typeof Request === "function" && new Request(address + "/api/phone/plan-sync/plan", { targetAddressSpace: "local" }).targetAddressSpace === "local"; } catch { return false; }
   }
   function updateSyncFallback() {
+    if (!TASK_SYNC_ENABLED) return;
     try { el("syncFallback").href = syncAddress(el("syncAddress").value) + "/mobile.html"; el("syncFallback").hidden = false; }
     catch { el("syncFallback").hidden = true; el("syncFallback").removeAttribute("href"); }
   }
   function renderSyncState(message = "", error = false) {
+    if (!TASK_SYNC_ENABLED) return;
     const active = Boolean(taskSync.config?.token);
     el("syncDisconnect").hidden = !active; el("syncConnect").disabled = taskSync.busy;
     el("syncSummary").textContent = taskSync.connected ? "已连接 · 自动更新" : active ? "保留上次同步" : "电脑 → 手机";
@@ -226,6 +231,7 @@
     taskSync.generation += 1; taskSync.controller?.abort(); taskSync.controller = null; window.clearTimeout(taskSync.timer); taskSync.timer = null; taskSync.busy = false; taskSync.connected = false;
   }
   async function syncRequest(config, endpoint, payload, generation) {
+    if (!TASK_SYNC_ENABLED) throw Object.assign(new Error("任务同步暂未启用。"), { cancelled: true });
     const controller = new AbortController(); taskSync.controller = controller;
     const timeout = window.setTimeout(() => controller.abort(), 10000);
     try {
@@ -237,10 +243,11 @@
   }
   function scheduleTaskSync(generation) {
     window.clearTimeout(taskSync.timer); taskSync.timer = null;
+    if (!TASK_SYNC_ENABLED) return;
     if (generation === taskSync.generation && taskSync.config?.token && !document.hidden) taskSync.timer = window.setTimeout(() => { taskSync.timer = null; void pollTaskSync(); }, 5000);
   }
   async function pollTaskSync() {
-    if (taskSync.busy || document.hidden || !taskSync.config?.token) return;
+    if (!TASK_SYNC_ENABLED || taskSync.busy || document.hidden || !taskSync.config?.token) return;
     const generation = taskSync.generation, config = { ...taskSync.config }; taskSync.busy = true;
     try {
       if (config.expiresAt <= Date.now()) throw Object.assign(new Error("配对已过期，请输入电脑的新配对码。"), { auth: true });
@@ -257,6 +264,7 @@
     } finally { if (generation === taskSync.generation) { taskSync.busy = false; renderSyncState(); scheduleTaskSync(generation); } }
   }
   async function connectTaskSync() {
+    if (!TASK_SYNC_ENABLED) return;
     let address; try { address = syncAddress(el("syncAddress").value); } catch (error) { failure(error, "syncNotice"); return; }
     updateSyncFallback(); const code = el("syncCode").value.trim();
     if (!/^\d{6}$/.test(code)) { notice("syncNotice", "请输入电脑显示的 6 位配对码。", true); return; }
@@ -274,11 +282,13 @@
     if (generation === taskSync.generation && taskSync.config?.token) await pollTaskSync();
   }
   async function disconnectTaskSync(logout = true) {
+    if (!TASK_SYNC_ENABLED) { stopSyncRequests(); return; }
     const config = taskSync.config; stopSyncRequests(); taskSync.config = config?.address ? { address: config.address } : null;
     await PhoneStore.remove("settings", "taskSync"); renderSyncState("自动同步已断开，最后一次计划仍保留。"); renderPlan(state.library?.dashboard.plan);
     if (logout && config?.token) { try { await syncRequest(config, "logout", {}, taskSync.generation); } catch { /* Local revocation succeeds even if the PC cannot be reached. */ } }
   }
   async function restoreTaskSync() {
+    if (!TASK_SYNC_ENABLED) return;
     const saved = await PhoneStore.get("settings", "taskSync"); if (!saved?.address) return;
     try { saved.address = syncAddress(saved.address); } catch { return; }
     el("syncAddress").value = saved.address; updateSyncFallback(); taskSync.config = saved;
@@ -573,9 +583,10 @@
   function renderPlan(payload) {
     const plan = payload?.plan, container = el("taskGroups"), opened = new Map(Array.from(container.children).map(card => [card.dataset.group, card.open])); container.replaceChildren();
     const sync = state.library?.planSync;
-    el("planMode").textContent = sync ? "电脑记录 · 只读" : "本机保存";
-    el("planNotice").textContent = sync ? `${taskSync.connected ? "已同步电脑计划" : "上次同步的电脑计划"} · ${date(sync.updatedAt)}。修改请在电脑完成。` : "任务进度保存在这台手机；更新资料会保留已有勾选。";
-    if (!plan?.groups?.length) { container.append(node("p", "展开「任务同步」连接电脑，或在「资料与更新」导入计划。", "empty-state")); return; }
+    el("planMode").hidden = el("planNotice").hidden = !plan?.groups?.length;
+    el("planMode").textContent = sync ? "已保存 · 只读" : "本机保存";
+    el("planNotice").textContent = sync ? `保存于 ${date(sync.updatedAt)}，可离线查看。` : "勾选进度保存在这台手机。";
+    if (!plan?.groups?.length) { container.append(node("p", "还没有保存的计划。", "empty-state")); return; }
     plan.groups.forEach((group, index) => {
       const card = node("details", "", "card task-card"), heading = node("summary"); card.dataset.group = group.id; card.open = Boolean(opened.get(group.id)); heading.append(node("span", `0${index + 1}`, "task-number"), node("span", group.title)); card.append(heading);
       if (group.summary) card.append(node("p", group.summary, "muted")); const list = node("ul", "", "task-items");
@@ -598,7 +609,7 @@
     } else card.append(node("p", "上次保存的记忆体暂时无法读取。", "muted"));
     card.append(node("p", `电脑采样时间：${date(memory.readAt)}`, "muted small"));
     const hardware = el("hardwareCard"); hardware.replaceChildren(node("h3", "设备信息"), node("p", `保存的硬件采样 · ${date(device?.sampledAt)}`, "muted small"));
-    if (!device?.sampledAt) { hardware.append(node("p", "尚无保存的硬件资料，请在电脑的 Document 中采样。", "muted small")); return; }
+    if (!device?.sampledAt) { hardware.append(node("p", "还没有保存的设备资料。", "muted small")); return; }
     const list = node("dl", "", "hardware-list");
     for (const [label, value] of [["电脑", device.model], ["处理器", device.cpuModel], ["显卡", (device.gpuModels || []).join(" / ")], ["已安装记忆体", bytes(device.installedMemoryBytes)]]) {
       if (value) list.append(node("dt", label), node("dd", value));
@@ -623,7 +634,7 @@
       if (Array.isArray(item.highlights) && item.highlights.length) { const list = node("ul", "", "guide-highlights"); for (const highlight of item.highlights.slice(0, 8)) list.append(node("li", highlight)); wrapper.append(list); }
       guide.append(wrapper);
     }
-    if (!guide.children.length) guide.append(node("p", data.guide?.error || data.error || "还没有导入阅读重点。", "empty-state"));
+    if (!guide.children.length) guide.append(node("p", data.guide?.error || data.error || "还没有保存的阅读重点。", "empty-state"));
     const references = el("referenceList"); references.replaceChildren();
     for (const reference of Array.isArray(data.references?.items) ? data.references.items : []) {
       const variants = Array.isArray(reference.variants) ? reference.variants.filter(item => pathValue(item.path)) : [];
@@ -639,7 +650,7 @@
     for (const record of Array.isArray(data.records?.items) ? data.records.items : []) {
       if (pathValue(record.path)) records.append(documentButton(record, "AI 原始记录"));
     }
-    if (!records.children.length) records.append(node("p", "完整 AI 原始记录保存在电脑上；请在电脑的 Document → 资料 → AI 记录中查看。手机目前开放阅读重点、参考资料和阅读清单。", "muted small"));
+    if (!records.children.length) records.append(node("p", "AI 原始记录保存在电脑资料库中。", "muted small"));
   }
   function renderInbox() {
     const list = entries();
@@ -838,9 +849,11 @@
   el("dataFile").addEventListener("change", async () => { try { await reviewImport(el("dataFile").files[0]); } catch (error) { failure(error, "settingsNotice"); } finally { el("dataFile").value = ""; } });
   el("importConfirm").addEventListener("click", () => void commitImport());
   el("importCancel").addEventListener("click", () => { state.pendingImport = null; state.pendingSnapshot = null; el("importReview").hidden = true; });
-  el("syncForm").addEventListener("submit", event => { event.preventDefault(); void connectTaskSync(); });
-  el("syncAddress").addEventListener("input", updateSyncFallback);
-  el("syncDisconnect").addEventListener("click", () => { void disconnectTaskSync().catch(error => failure(error, "syncNotice")); });
+  if (TASK_SYNC_ENABLED) {
+    el("syncForm").addEventListener("submit", event => { event.preventDefault(); void connectTaskSync(); });
+    el("syncAddress").addEventListener("input", updateSyncFallback);
+    el("syncDisconnect").addEventListener("click", () => { void disconnectTaskSync().catch(error => failure(error, "syncNotice")); });
+  }
   el("backupButton").addEventListener("click", () => void backupLibrary());
   el("restoreButton").addEventListener("click", async () => { if (state.busy) return; setBusy(true); try { await disconnectTaskSync(false); await libraryMutationQueue; const previous = await PhoneStore.get("records", "previousImport"); if (!previous) return; const next = mergeLibrary({ ...previous, id: "library", importedAt: new Date().toISOString() }, state.library); await PhoneStore.replaceLibrary(next); state.library = next; closeReader(false); await refreshDashboard(); notice("settingsNotice", "已恢复上次导入的资料，本机进度仍然保留。"); } catch (error) { failure(error, "settingsNotice"); } finally { setBusy(false); } });
   el("checkUpdate").addEventListener("click", () => void checkUpdate());
@@ -870,8 +883,10 @@
   el("fontSmaller").addEventListener("click", () => setFont(state.font - 2));
   el("fontLarger").addEventListener("click", () => setFont(state.font + 2));
   window.addEventListener("popstate", () => closeReader(false));
-  document.addEventListener("visibilitychange", () => { if (document.hidden) { stopSyncRequests(); renderSyncState(); } else void pollTaskSync(); });
-  window.addEventListener("online", () => void pollTaskSync());
+  if (TASK_SYNC_ENABLED) {
+    document.addEventListener("visibilitychange", () => { if (document.hidden) { stopSyncRequests(); renderSyncState(); } else void pollTaskSync(); });
+    window.addEventListener("online", () => void pollTaskSync());
+  }
   try { const font = Number(localStorage.getItem("codexPhone.offlineReaderFont.v1")); if (font >= 14 && font <= 26) state.font = font; } catch { /* Presentation defaults work without storage. */ }
   document.documentElement.style.setProperty("--reader-size", `${state.font}px`);
   bindMusicMediaSession();
