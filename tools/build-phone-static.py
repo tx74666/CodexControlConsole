@@ -123,6 +123,22 @@ def _output_is_safe(output, allowed):
             raise ValueError("The output directory contains unknown files; use a clean output directory.")
 
 
+def _normal_output_directory(output_dir):
+    output = Path(output_dir)
+    if output.drive and not output.root:
+        raise ValueError("Use an absolute output path instead of a drive-relative path.")
+    if not output.is_absolute():
+        output = Path.cwd() / output
+    # Inspect the original components before resolving: an existing link in an
+    # ancestor (including one followed by '..') must never become a write route.
+    for component in (output, *output.parents):
+        if component.is_symlink() or getattr(component, "is_junction", lambda: False)():
+            raise ValueError("The output directory must not be a linked path.")
+    # Windows short names are aliases for ordinary directories, not links.
+    # Normalize them before comparing destinations or rebuilding an existing app.
+    return output.resolve()
+
+
 def _check_relative_assets(name, text):
     if name.endswith(".html"):
         references = re.findall(r"(?:src|href)\s*=\s*['\"]([^'\"]+)['\"]", text, flags=re.IGNORECASE)
@@ -138,9 +154,7 @@ def _check_relative_assets(name, text):
 
 def build_static(project_dir, output_dir, make_zip=False, version=None):
     project = Path(project_dir).resolve()
-    output = Path(output_dir).absolute()
-    if output.exists() and output.resolve() != output:
-        raise ValueError("The output directory must not be a linked path.")
+    output = _normal_output_directory(output_dir)
     phone_dir, music_dir = project / "phone", project / "public-music"
     if (phone_dir.is_symlink() or music_dir.is_symlink()
             or getattr(phone_dir, "is_junction", lambda: False)() or getattr(music_dir, "is_junction", lambda: False)()

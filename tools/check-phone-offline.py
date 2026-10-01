@@ -210,6 +210,65 @@ class StaticBuildChecks(unittest.TestCase):
         self.assertEqual((self.output / "important.txt").read_text(encoding="utf-8"), "Keep me")
         self.assertFalse((self.output / "index.html").exists())
 
+    def test_existing_output_with_parent_components_rebuilds_after_normalization(self):
+        first = builder.build_static(self.project, self.output)
+        spelling = self.output / ".." / self.output.name
+        rebuilt = builder.build_static(self.project, spelling)
+        self.assertEqual(rebuilt["buildId"], first["buildId"])
+        self.assertEqual(Path(rebuilt["outputDirectory"]), self.output.resolve())
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows short path regression")
+    def test_windows_short_name_output_rebuilds_without_bypassing_safety_checks(self):
+        import ctypes
+        from ctypes import wintypes
+
+        get_short_path = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+        get_short_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+        get_short_path.restype = wintypes.DWORD
+        required = get_short_path(str(self.base), None, 0)
+        if not required:
+            self.fail(f"GetShortPathNameW failed: {ctypes.get_last_error()}")
+        buffer = ctypes.create_unicode_buffer(required)
+        self.assertGreater(get_short_path(str(self.base), buffer, required), 0)
+        short_base = Path(buffer.value)
+        if short_base == self.base:
+            self.skipTest("The temporary volume does not generate short names")
+        short_output = short_base / self.output.name
+        first = builder.build_static(self.project, self.output)
+        rebuilt = builder.build_static(self.project, short_output, make_zip=True)
+        self.assertEqual(rebuilt["buildId"], first["buildId"])
+        self.assertEqual(Path(rebuilt["outputDirectory"]), self.output.resolve())
+        self.assertTrue(Path(rebuilt["archive"]).is_file())
+        sentinel = self.output / "important.txt"
+        sentinel.write_text("Keep me", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "unknown files"):
+            builder.build_static(self.project, short_output)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "Keep me")
+        source = self.project / "phone/index.html"
+        before = source.read_bytes()
+        with self.assertRaises(ValueError):
+            builder.build_static(self.project, short_base / "project/phone")
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_linked_output_or_ancestor_rejected_before_normalizing_or_writing(self):
+        ancestor = self.base / "alias"
+        ancestor.mkdir()
+        if sys.platform == "win32":
+            with self.assertRaisesRegex(ValueError, "absolute output path"):
+                builder.build_static(self.project, self.base.drive + "new-output")
+        for classification in ("is_symlink", "is_junction"):
+            original = getattr(Path, classification, lambda path: False)
+            for output, linked in ((self.output, self.output),
+                                   (ancestor / "new-output", ancestor),
+                                   (ancestor / ".." / "new-output", ancestor)):
+                with self.subTest(classification=classification, output=str(output)):
+                    with patch.object(Path, classification,
+                                      lambda path: path == linked or original(path), create=True):
+                        with self.assertRaisesRegex(ValueError, "linked path"):
+                            builder.build_static(self.project, output)
+                    self.assertFalse(output.exists())
+        self.assertEqual(list(ancestor.iterdir()), [])
+
     def test_relative_html_and_manifest_required_for_project_subdirectory(self):
         (self.project / "phone/index.html").write_text('<script src="/app.js"></script>', encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "relative URLs"):

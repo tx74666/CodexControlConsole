@@ -339,9 +339,11 @@
     const generation = state.generation; livePlan.busy = true;
     try {
       const snapshot = validateLivePlan(await api("plan")); if (generation !== state.generation) return;
+      el("connectionLabel").textContent = "已连接"; el("connectionLabel").dataset.connected = "true";
       if (!livePlan.snapshot || snapshot.hash !== livePlan.snapshot.hash || snapshot.computerId !== livePlan.snapshot.computerId) { livePlan.snapshot = snapshot; try { localStorage.setItem("codexPhone.planSnapshot.v1", JSON.stringify(snapshot)); } catch { /* The current plan remains readable in memory. */ } renderPlan({ plan: snapshot.plan, label: `电脑 → 手机 · 已同步 ${date(snapshot.updatedAt)}。修改请在电脑完成。` }); }
+      el("planNotice").textContent = `电脑 → 手机 · 已同步 ${date(snapshot.updatedAt)}。修改请在电脑完成。`;
       el("savePlanSnapshot").disabled = false; notice("appNotice");
-    } catch (error) { if (generation !== state.generation || error.auth || error.cancelled) return; el("planNotice").textContent = livePlan.snapshot ? `上次同步 · ${date(livePlan.snapshot.updatedAt)}。暂时连不上电脑，计划已保留。` : "电脑任务暂时不可读取，正在等待重连。"; }
+    } catch (error) { if (generation !== state.generation || error.auth || error.cancelled) return; el("connectionLabel").textContent = "计划未更新"; el("connectionLabel").dataset.connected = "false"; el("planNotice").textContent = livePlan.snapshot ? `上次同步 · ${date(livePlan.snapshot.updatedAt)}。暂时连不上电脑，计划已保留。` : "电脑任务暂时不可读取，正在等待重连。"; }
     finally { if (generation === state.generation) { livePlan.busy = false; window.clearTimeout(livePlan.timer); if (state.paired && !document.hidden) livePlan.timer = window.setTimeout(() => { livePlan.timer = null; void pollLivePlan(); }, 5000); } }
   }
   function savePlanSnapshot() {

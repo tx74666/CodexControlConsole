@@ -246,4 +246,13 @@ await test("saved task JSON contains no session token or documents and malformed
   const bad = harness(); bad.saved.set("codexPhone.planSnapshot.v1", JSON.stringify({ ...snapshot(), hash: "bad" })); bad.api.showOffline(new Error("offline")); assert.equal(bad.get("offlineTaskGroups").children.length, 0);
   const six = snapshot(); six.plan.groups.push({ id: "extra-1", title: "五", items: [] }, { id: "extra-2", title: "六", items: [] }); assert.equal(h.api.validateLivePlan(six).plan.groups.length, 6);
 });
+await test("connection failure is visible and an unchanged recovered plan clears the stale warning", async () => {
+  const h = harness(); h.ready(); h.respond(snapshot()); await h.api.pollLivePlan();
+  h.answers.push(Promise.reject(new Error("unavailable"))); await h.api.pollLivePlan();
+  assert.equal(h.get("connectionLabel").textContent, "计划未更新"); assert.equal(h.get("connectionLabel").dataset.connected, "false");
+  assert.match(h.get("planNotice").textContent, /计划已保留/);
+  h.respond(snapshot()); await h.api.pollLivePlan();
+  assert.equal(h.get("connectionLabel").textContent, "已连接"); assert.equal(h.get("connectionLabel").dataset.connected, "true");
+  assert.match(h.get("planNotice").textContent, /已同步/); assert.doesNotMatch(h.get("planNotice").textContent, /暂时连不上/);
+});
 console.log(`PASS phone UI ${count} checks`);
