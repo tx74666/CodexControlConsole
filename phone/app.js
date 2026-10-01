@@ -5,7 +5,8 @@
   let libraryMutationQueue = Promise.resolve();
 
   const el = id => document.getElementById(id);
-  const state = { ready: true, generation: 0, busy: false, tab: "tasks", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), library: null, catalog: [], saved: new Set(), pendingImport: null, registration: null, applyingUpdate: false, downloadController: null, music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, search: "", folder: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
+  const state = { ready: true, generation: 0, busy: false, tab: "tasks", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), library: null, catalog: [], saved: new Set(), pendingImport: null, registration: null, applyingUpdate: false, downloadController: null, music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, search: "", folder: "", tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
+  const MUSIC_TIERS = [{ value: "first", label: "1ST" }, { value: "second", label: "2ND" }, { value: "third", label: "3RD" }];
   const node = (tag, text = "", className = "") => {
     const result = document.createElement(tag);
     if (text) result.textContent = String(text);
@@ -211,13 +212,13 @@
     metadata.lyricsLanguages = options.filter(option => metadata.offlineLyrics.some(item => item.code === option.code)).map(option => ({ code: option.code, label: option.code === "zh" ? "中文" : option.label }));
     await PhoneStore.putTrack(metadata, { id: track.path, blob: new Blob([body], { type: musicMime(track.type) }) }); state.saved.add(track.path);
   }
-  async function downloadMusic(paths) {
+  async function downloadMusic(paths = state.music.tracks.filter(track => track.source && !state.saved.has(track.path)).map(track => track.path)) {
     if (state.downloadController) return; const controller = new AbortController(); state.downloadController = controller;
-    el("musicDownloadStop").hidden = false; el("musicDownloadAll").disabled = true; await requestPersistence(); let saved = 0;
+    el("musicDownloadStop").hidden = false; el("musicDownloadAll").disabled = true; renderMusicTracks(); await requestPersistence(); let saved = 0;
     try {
       const tracks = paths.map(path => state.music.tracks.find(track => track.path === path)).filter(track => track && !state.saved.has(track.path));
       for (const track of tracks) { notice("musicNotice", `正在下载 ${saved + 1}/${tracks.length}：${track.name}`); await saveMusicTrack(track, controller.signal); saved += 1; renderMusicTracks(); }
-      await loadMusic(true); await updateStorageNotice(); notice("musicNotice", state.catalog.length && state.catalog.every(track => state.saved.has(track.path)) ? "曲库已下载，可以离线听。" : saved ? `已下载 ${saved} 首，可以离线播放。` : "这些音乐已经下载到手机。");
+      await loadMusic(true); await updateStorageNotice(); notice("musicNotice", state.catalog.length && state.catalog.every(track => state.saved.has(track.path)) ? "全部已下载，可以离线听。" : saved ? `已下载 ${saved} 首，可以离线播放。` : "这些音乐已经下载到手机。");
     } catch (error) { if (error.name === "AbortError") notice("musicNotice", `已停止下载；已经完成的 ${saved} 首仍然保留。`); else failure(error, "musicNotice"); }
     finally { state.downloadController = null; el("musicDownloadStop").hidden = true; el("musicDownloadAll").disabled = false; renderMusicTracks(); }
   }
@@ -268,27 +269,36 @@
   }
   function filteredMusic() {
     const query = state.music.search.trim().toLocaleLowerCase();
-    return state.music.tracks.filter(track => (!state.music.folder || track.folder === state.music.folder) && (!query || `${track.name} ${track.folder}`.toLocaleLowerCase().includes(query)));
+    return MUSIC_TIERS.flatMap(tier => state.music.tracks.filter(track => musicTier(track) === tier.value && (!state.music.tier || musicTier(track) === state.music.tier) && (!state.music.folder || track.folder === state.music.folder) && (!query || `${track.name} ${["builtin", "local"].includes(track.folder) ? "" : track.folder}`.toLocaleLowerCase().includes(query))));
+  }
+  function musicTier(track) { return track.tier === "first" || track.tier === "second" ? track.tier : "third"; }
+  function renderMusicTierTabs() {
+    for (const button of document.querySelectorAll("[data-music-tier]")) {
+      const tier = button.dataset.musicTier, label = MUSIC_TIERS.find(item => item.value === tier)?.label || "全部", count = state.music.tracks.filter(track => !tier || musicTier(track) === tier).length;
+      button.textContent = `${label} ${count}`; button.setAttribute("aria-pressed", String(state.music.tier === tier));
+    }
   }
   function renderMusicTracks() {
-    const tracks = filteredMusic(), container = el("musicTracks"); container.replaceChildren();
+    const tracks = filteredMusic(), container = el("musicTracks"); container.replaceChildren(); renderMusicTierTabs(); let previousTier = "";
     tracks.slice(0, state.music.visible).forEach((track, index) => {
+      const tier = musicTier(track);
+      if (tier !== previousTier) { const heading = node("h3", MUSIC_TIERS.find(item => item.value === tier).label, "music-group-heading"); heading.append(node("span", `${tracks.filter(item => musicTier(item) === tier).length} 首`, "muted")); container.append(heading); previousTier = tier; }
       const row = node("div", "", "music-track-row"), button = node("button", "", "music-track"); button.type = "button"; button.setAttribute("aria-pressed", String(track.path === state.music.selected?.path));
       button.append(node("span", track.path === state.music.selected?.path ? "♫" : String(index + 1), "music-track-number")); const label = node("span", "", "music-track-label"); label.append(node("span", track.name, "music-track-name"), node("span", [track.type.toUpperCase(), track.lyrics ? "有歌词" : ""].filter(Boolean).join(" · "), "music-track-meta")); button.append(label); button.addEventListener("click", () => selectMusicTrack(track.path)); row.append(button);
-      if (state.saved.has(track.path)) row.append(node("span", "已下载", "music-saved")); else { const save = node("button", "下载", "music-save"); save.type = "button"; save.disabled = Boolean(state.downloadController) || !track.source; save.addEventListener("click", () => void downloadMusic([track.path])); row.append(save); } container.append(row);
+      const saved = state.saved.has(track.path), status = node("span", saved ? "已下载" : "未下载", "music-saved"); status.dataset.saved = String(saved); row.append(status); container.append(row);
     });
-    if (!tracks.length) container.append(node("p", state.music.loaded ? "没有匹配的音乐，可以添加本地音乐文件。" : "正在读取手机曲库…", "empty-state"));
-    const saved = state.music.tracks.filter(track => state.saved.has(track.path)).length; el("musicListMeta").textContent = `${tracks.length} 首音乐 · ${saved} 首已下载`;
+    if (!tracks.length) container.append(node("p", state.music.loaded ? "没有匹配的音乐，可以切换分类、调整搜索或添加音乐。" : "正在读取手机曲库…", "empty-state"));
+    const saved = state.music.tracks.filter(track => state.saved.has(track.path)).length, filtered = Boolean(state.music.tier || state.music.folder || state.music.search.trim()); el("musicListMeta").textContent = `${state.music.tracks.length} 首音乐 · ${saved} 首已下载${filtered ? ` · 显示 ${tracks.length} 首` : ""}`;
     el("musicMore").hidden = tracks.length <= state.music.visible;
-    const pending = state.music.tracks.filter(track => track.source && !state.saved.has(track.path)); el("musicDownloadAll").textContent = pending.length ? `下载原曲库（${bytes(state.catalog.reduce((total, track) => total + (Number(track.size) || 0), 0))}）` : "曲库已下载"; el("musicDownloadAll").disabled = !pending.length || Boolean(state.downloadController);
+    const pending = state.music.tracks.filter(track => track.source && !state.saved.has(track.path)), downloadable = state.music.tracks.filter(track => track.source); el("musicDownloadAll").textContent = state.downloadController ? "正在全部下载…" : pending.length ? pending.length < downloadable.length ? `继续下载（还剩 ${pending.length} 首）` : `全部下载（${bytes(pending.reduce((total, track) => total + (Number(track.size) || 0), 0))}）` : "全部已下载"; el("musicDownloadAll").disabled = !pending.length || Boolean(state.downloadController);
   }
   function renderMusicFolders() {
     const select = el("musicFolder"), folders = [...new Set(state.music.tracks.map(track => track.folder).filter(Boolean))].sort();
-    select.replaceChildren(); const all = node("option", "全部文件夹"); all.value = ""; select.append(all);
-    for (const folder of folders) { const option = node("option", folder.split("/").at(-1)); option.value = folder; select.append(option); }
+    select.replaceChildren(); const all = node("option", "全部来源"); all.value = ""; select.append(all);
+    for (const folder of folders) { const option = node("option", ({ builtin: "原曲库", local: "本地音乐" })[folder] || folder.split("/").at(-1)); option.value = folder; select.append(option); }
     if (!folders.includes(state.music.folder)) state.music.folder = "";
     select.value = state.music.folder;
-    select.hidden = !folders.length;
+    select.hidden = folders.length <= 1;
   }
   async function loadMusic(force = false) {
     const music = state.music;
@@ -319,11 +329,12 @@
   }
   function clearMusic() {
     stopMusicPlayback();
-    state.music.sequence += 1; state.music.tracks = []; state.music.loaded = false; state.music.loading = false; state.music.search = ""; state.music.folder = ""; state.music.visible = 60; state.music.truncated = false;
+    state.music.sequence += 1; state.music.tracks = []; state.music.loaded = false; state.music.loading = false; state.music.search = ""; state.music.folder = ""; state.music.tier = ""; state.music.visible = 60; state.music.truncated = false; renderMusicTierTabs();
     el("musicSearch").value = ""; el("musicFolder").replaceChildren(); el("musicTracks").replaceChildren(); el("musicListMeta").textContent = ""; el("musicMore").hidden = true; el("musicRefresh").disabled = false; notice("musicNotice");
   }
   function updateMusicControls() {
     const audio = el("musicAudio"), selected = state.ready && Boolean(state.music.selected);
+    el("musicPlayer").hidden = !selected;
     el("musicPlay").disabled = !selected; el("musicPrevious").disabled = !selected || state.music.tracks.length < 2; el("musicNext").disabled = !selected || state.music.tracks.length < 2;
     el("musicPlay").textContent = audio.paused ? "播放" : "暂停";
     el("musicRepeat").textContent = state.music.repeat === "one" ? "单曲循环" : state.music.repeat === "off" ? "播完停止" : "列表循环";
@@ -347,7 +358,7 @@
   }
   function selectMusicTrack(path) {
     const track = state.music.tracks.find(item => item.path === path); if (!track) return;
-    if (!state.saved.has(path)) { notice("musicNotice", "这首音乐还没有下载。先点「下载」，以后就能离线播放。", true); return; }
+    if (!state.saved.has(path)) { notice("musicNotice", "这首音乐还没有下载。点上面的「全部下载」，音乐和歌词会一起保存。", true); return; }
     if (!navigator.serviceWorker?.controller) { notice("musicNotice", "离线程序正在准备，请稍后点播放；首次使用请联网重开一次。", true); return; }
     const music = state.music, audio = el("musicAudio"); music.playSequence += 1; audio.pause(); clearMusicLyrics(); music.selected = track;
     el("musicTrackTitle").textContent = track.name; el("musicTrackMeta").textContent = `${track.type.toUpperCase()} · 已下载到手机`;
@@ -700,7 +711,7 @@
   el("applyUpdate").addEventListener("click", () => { if (!state.registration?.waiting) return; state.applyingUpdate = true; el("musicAudio").pause(); state.registration.waiting.postMessage({ type: "APPLY_UPDATE" }); });
   el("musicImportButton").addEventListener("click", () => el("musicFiles").click());
   el("musicFiles").addEventListener("change", async () => { await importMusicFiles([...el("musicFiles").files]); el("musicFiles").value = ""; });
-  el("musicDownloadAll").addEventListener("click", () => void downloadMusic(state.music.tracks.filter(track => track.source && !state.saved.has(track.path)).map(track => track.path)));
+  el("musicDownloadAll").addEventListener("click", () => downloadMusic());
   el("musicDownloadStop").addEventListener("click", () => state.downloadController?.abort());
   el("musicAddLyrics").addEventListener("click", () => el("musicLyricFile").click());
   el("musicLyricFile").addEventListener("change", async () => { const file = el("musicLyricFile").files[0]; if (!file || !state.music.selected) return; try { const track = await PhoneStore.get("music", state.music.selected.path); if (!track) throw new Error("请先保存这首音乐。"); await addLocalLyric(track, file); await loadMusic(true); el("musicLyricsSection").hidden = false; renderMusicLyricLanguages(state.music.selected); await loadMusicLyrics(track.id, track.lyricsLanguage); } catch (error) { failure(error, "musicNotice"); } finally { el("musicLyricFile").value = ""; } });
@@ -710,6 +721,7 @@
   el("musicNext").addEventListener("click", () => advanceMusic(1));
   el("musicRepeat").addEventListener("click", () => { state.music.repeat = state.music.repeat === "all" ? "one" : state.music.repeat === "one" ? "off" : "all"; updateMusicControls(); });
   el("musicSearch").addEventListener("input", () => { state.music.search = el("musicSearch").value; state.music.visible = 60; renderMusicTracks(); });
+  for (const button of document.querySelectorAll("[data-music-tier]")) button.addEventListener("click", () => { state.music.tier = button.dataset.musicTier; state.music.visible = 60; renderMusicTracks(); });
   el("musicFolder").addEventListener("change", () => { state.music.folder = el("musicFolder").value; state.music.visible = 60; renderMusicTracks(); });
   el("musicMore").addEventListener("click", () => { state.music.visible += 60; renderMusicTracks(); });
   el("musicSeek").addEventListener("input", () => { const audio = el("musicAudio"); if (state.music.selected && Number.isFinite(audio.duration) && audio.duration > 0) { audio.currentTime = audio.duration * Math.min(1000, Math.max(0, Number(el("musicSeek").value) || 0)) / 1000; updateMusicPosition(); } });

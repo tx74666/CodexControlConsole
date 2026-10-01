@@ -6,7 +6,7 @@ A Windows control console for music, wallpaper, Blender, Unity, Steamwork, Rando
 
 安装地址：[Codex Console iPhone](https://tx74666.github.io/CodexControlConsole/)。
 
-用 iPhone Safari 打开，选择「分享 → 添加到主屏幕」，再从主屏幕图标打开。音乐页包含原有 16 首曲库与歌词；点「下载原曲库」即可保存到手机，完成后离线播放，不需电脑保持开机。
+用 iPhone Safari 打开，选择「分享 → 添加到主屏幕」，再从主屏幕图标打开。音乐页包含原有 16 首曲库与歌词；点「全部下载」即可一次保存全部音乐和歌词到手机，完成后离线播放，不需电脑保持开机。曲库按 1ST、2ND、3RD 分组，筛选分类不会缩小全部下载的范围。手机安装图标使用独立深色底资源，原云形图案缩至画布的78%。
 
 私人任务、文档和设备资料通过电脑 Console 的「常用 → 内置资源 → 手机离线资料 → 导出资料」取得，再在手机「资料与更新 → 导入电脑资料」导入。私人资料不包含在公开网站内，手机勾选暂不回传电脑。
 

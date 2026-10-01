@@ -11,7 +11,7 @@ import zipfile
 
 PROJECT = Path(__file__).resolve().parents[1]
 PHONE_ASSETS = ("index.html", "styles.css", "app.js", "store.js", "sw.js", "manifest.webmanifest")
-ICONS = ("codex-resource-icon-128.png", "codex-resource-icon-256.png")
+ICONS = ("phone-icon-180.png", "phone-icon-192.png", "phone-icon-512.png")
 PUBLIC_TRACKS = (
     "Airborne.mp3", "Around the World.mp3", "Dancin.mp3", "Final Step.mp3", "Fire Inside.mp3",
     "Get Lucky.mp3", "House of Memories.mp3", "Liquid Roller.mp3", "Luminescence.mp3",
@@ -162,8 +162,12 @@ def build_static(project_dir, output_dir, make_zip=False, version=None):
         _check_relative_assets(name, phone_text[name])
         build_digest.update(b"\0" + name.encode("utf-8") + b"\0")
         build_digest.update(source_bytes)
+    for name in ICONS:
+        icon = _source_file(phone_dir, name)
+        build_digest.update(b"\0" + name.encode("utf-8") + b"\0")
+        build_digest.update(icon.read_bytes())
+        assets[name] = icon
     build_id = build_digest.hexdigest()[:16]
-    assets.update({name: _source_file(project, name) for name in ICONS})
     tracks = []
     for name in music_defaults["order"]:
         source = _source_file(music_dir, name)

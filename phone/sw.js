@@ -4,7 +4,7 @@ const VERSION = "__CONSOLE_PHONE_VERSION__";
 const BUILD = "__CONSOLE_PHONE_BUILD__";
 const PREFIX = "codex-console-phone-shell-" + encodeURIComponent(new URL(self.registration.scope).pathname) + "-";
 const CACHE = PREFIX + VERSION + "-" + BUILD;
-const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./store.js", "./manifest.webmanifest", "./codex-resource-icon-128.png", "./codex-resource-icon-256.png", "./music-catalog.json", "./version.json"];
+const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./store.js", "./manifest.webmanifest", "./phone-icon-180.png", "./phone-icon-192.png", "./phone-icon-512.png", "./music-catalog.json", "./version.json"];
 self.addEventListener("install", event => event.waitUntil((async () => { const cache = await caches.open(CACHE); await cache.addAll(SHELL); if (!self.registration.active) await self.skipWaiting(); })()));
 self.addEventListener("activate", event => event.waitUntil((async () => { for (const key of await caches.keys()) if (key.startsWith(PREFIX) && key !== CACHE) await caches.delete(key); await self.clients.claim(); })()));
 self.addEventListener("message", event => { if (event.data?.type === "APPLY_UPDATE") void self.skipWaiting(); });

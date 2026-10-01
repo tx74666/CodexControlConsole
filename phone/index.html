@@ -9,8 +9,8 @@
   <meta name="apple-mobile-web-app-title" content="Codex Console">
   <title>Codex Console · iPhone</title>
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="apple-touch-icon" href="./codex-resource-icon-256.png">
-  <link rel="icon" href="./codex-resource-icon-128.png" type="image/png">
+  <link rel="apple-touch-icon" href="./phone-icon-180.png" sizes="180x180">
+  <link rel="icon" href="./phone-icon-192.png" type="image/png">
   <link rel="stylesheet" href="./styles.css">
   <script src="./store.js" defer></script>
   <script src="./app.js" defer></script>
@@ -31,9 +31,12 @@
       </section>
       <section id="musicPanel" class="tab-panel" hidden aria-labelledby="musicTitle">
         <div class="section-title"><div><p class="eyebrow">原来的 16 首曲库，下载后离线听</p><h2 id="musicTitle">音乐</h2></div><button id="musicRefresh" type="button" class="text-button">刷新列表</button></div>
-        <div class="music-import-actions"><button id="musicImportButton" type="button" class="secondary">添加音乐</button><button id="musicDownloadAll" type="button" class="secondary">下载原曲库（83 MiB）</button><button id="musicDownloadStop" type="button" hidden>停止下载</button></div><input id="musicFiles" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.lrc,.txt" multiple hidden>
+        <div class="music-import-actions"><button id="musicDownloadAll" type="button" class="primary">全部下载（83 MiB）</button><button id="musicImportButton" type="button" class="text-button">添加其他音乐</button><button id="musicDownloadStop" type="button" hidden>停止下载</button></div><input id="musicFiles" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.lrc,.txt" multiple hidden>
+        <p class="muted small music-download-help">音乐和歌词一起保存；中断后可以继续下载。</p>
         <p id="musicNotice" class="notice" role="status" aria-live="polite"></p>
-        <div class="card music-player">
+        <div class="segment music-tier-tabs" id="musicTierTabs" aria-label="音乐分类"><button type="button" data-music-tier="" aria-pressed="true">全部</button><button type="button" data-music-tier="first" aria-pressed="false">1ST</button><button type="button" data-music-tier="second" aria-pressed="false">2ND</button><button type="button" data-music-tier="third" aria-pressed="false">3RD</button></div>
+        <div class="music-library-tools"><label class="visually-hidden" for="musicSearch">搜索音乐</label><input id="musicSearch" type="search" placeholder="搜索音乐" autocomplete="off" spellcheck="false"><label class="visually-hidden" for="musicFolder">音乐来源</label><select id="musicFolder" aria-label="音乐来源" hidden><option value="">全部来源</option></select></div>
+        <div class="card music-player" id="musicPlayer" hidden>
           <div class="music-player-heading"><span class="music-note" aria-hidden="true">♫</span><div><p class="eyebrow">正在聆听</p><h3 id="musicTrackTitle">选择一首音乐</h3><p id="musicTrackMeta" class="muted small">声音从 iPhone 播放</p></div></div>
           <audio id="musicAudio" preload="none" playsinline></audio>
           <div class="music-controls"><button id="musicPrevious" type="button" aria-label="上一首" disabled>‹‹</button><button id="musicPlay" type="button" class="primary" disabled>播放</button><button id="musicNext" type="button" aria-label="下一首" disabled>››</button></div>
@@ -42,9 +45,8 @@
         </div>
         <button id="musicAddLyrics" type="button" class="text-button" hidden>添加本地歌词</button><input id="musicLyricFile" type="file" accept=".lrc,.txt,text/plain" hidden>
         <details id="musicLyricsSection" class="music-lyrics-section" hidden><summary>歌词</summary><div id="musicLyricLanguages" class="reader-languages" hidden></div><p id="musicLyricsNotice" class="muted small"></p><div id="musicLyrics" class="music-lyrics" aria-label="本地歌词"></div></details>
-        <div class="music-library-tools"><label class="visually-hidden" for="musicSearch">搜索音乐</label><input id="musicSearch" type="search" placeholder="搜索音乐" autocomplete="off" spellcheck="false"><label class="visually-hidden" for="musicFolder">音乐文件夹</label><select id="musicFolder" aria-label="音乐文件夹"><option value="">全部文件夹</option></select></div>
         <p id="musicListMeta" class="muted small"></p><div id="musicTracks" class="music-track-list"></div><button id="musicMore" type="button" class="secondary music-more" hidden>显示更多</button>
-        <p class="muted small music-footnote">现有的 16 首音乐已在曲库里；下载到手机后可离线听。也可以另外添加自己的音乐。程序更新保留你的资料和音乐。</p>
+        <p class="muted small music-footnote">现有的 16 首音乐按 1ST、2ND、3RD 分类；「全部下载」会保存所有分类。程序更新保留你的资料和音乐。</p>
       </section>
       <section id="devicePanel" class="tab-panel" hidden aria-labelledby="deviceTitle">
         <div class="section-title"><div><p class="eyebrow">上次导入</p><h2 id="deviceTitle">设备资料</h2></div></div>
