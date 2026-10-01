@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-const source = readFileSync(new URL("../mobile.js", import.meta.url), "utf8");
+const normalizeScript = value => value.replace(/\r\n?/g, "\n");
+const source = normalizeScript(readFileSync(new URL("../mobile.js", import.meta.url), "utf8"));
 const html = readFileSync(new URL("../mobile.html", import.meta.url), "utf8");
 const css = readFileSync(new URL("../mobile.css", import.meta.url), "utf8");
 const manifest = JSON.parse(readFileSync(new URL("../mobile.webmanifest", import.meta.url), "utf8"));
@@ -18,7 +19,7 @@ const inbox = () => ({ entries: [
 ] });
 const dashboard = () => ({ version: "1.0.14", plan: plan(), device: { currentMemory: { status: "available", usedPercent: 91, availableBytes: 1024 ** 3, totalBytes: 16 * 1024 ** 3, readAt: "2026-10-01T11:00:00+08:00" }, model: "Dell fixture", cpuModel: "CPU", gpuModels: ["GPU"], sampledAt: "2026-09-27T11:00:00+08:00", installedMemoryBytes: 16 * 1024 ** 3 }, documents: { inbox: inbox(), guide: { items: [{ title: "阅读重点", path: "human.md", highlights: ["重点"] }] }, references: { items: [{ id: "nodes", defaultLanguage: "zh-CN", variants: [{ language: "zh-CN", label: "中文", title: "节点参考", path: "nodes.zh.md", available: true }, { language: "en", label: "English", title: "Nodes", path: "nodes.en.md", available: true }] }] } } });
 const playlist = () => ({ playback: "phone", tracks: [{ name: "<script>One</script>", path: "local/one.mp3", type: "mp3", size: 100 }, { name: "Two", path: "album/two.m4a", type: "m4a", size: 200 }, { name: "三首", path: "album/three.mp3", type: "mp3", lyrics: true, lyricsLanguage: "zh", lyricsLanguages: [{ code: "zh", label: "Chinese" }, { code: "en", label: "English" }] }], truncated: false });
-function harness() {
+function harness(script = source) {
   class Element {
     constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.style = { setProperty(key, value) { this[key] = value; } }; }
     append(...items) { this.children.push(...items); }
@@ -48,8 +49,9 @@ function harness() {
   const history = { state: null, pushState(value) { this.state = value; }, back() { this.state = null; } };
   const runtime = { URL, URLSearchParams, AbortController, TypeError, Blob, structuredClone, document, history, navigator: {}, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/mobile.html" }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
   const names = "state,livePlan,validateLivePlan,pollLivePlan,savePlanSnapshot,api,bootstrap,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,showPair,showOffline,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
-  assert.ok(source.includes("  void bootstrap();\n})();"), "test export insertion must match only bootstrap footer");
-  runInNewContext(source.replace("  void bootstrap();\n})();", `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
+  const normalized = normalizeScript(script), footer = "  void bootstrap();\n})();";
+  assert.equal(normalized.split(footer).length, 2, "test export insertion must match only bootstrap footer");
+  runInNewContext(normalized.replace(footer, `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
   return { api, runtime, get, document, calls, answers, saved, history, tabs, listTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.paired = true; api.state.dashboard = dashboard(); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
 }
@@ -64,6 +66,18 @@ await test("iPhone install entry, safe areas, touch sizes and four real tabs", (
   assert.doesNotMatch(source, /serviceWorker|\.innerHTML|document\.cookie/); assert.doesNotMatch(html, /onclick=|<script[^>]*>\s*[^<\s]/);
   const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
   for (const match of source.matchAll(/\bel\("([^"]+)"\)/g)) assert.ok(ids.has(match[1]), `Missing phone element ${match[1]}`);
+});
+await test("LF and Windows CRLF sources inject one test footer without starting the application", async () => {
+  for (const script of [source, source.replace(/\n/g, "\r\n")]) {
+    const h = harness(script);
+    assert.equal(h.calls.length, 0, "test loading must not start real bootstrap requests");
+    h.respond({ paired: false }); await h.api.bootstrap();
+    assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url, "/api/phone/status");
+    assert.equal(h.get("appScreen").hidden, true); assert.equal(h.api.state.paired, false);
+  }
+  const footer = "  void bootstrap();\n})();";
+  assert.throws(() => harness(source.replace(footer, "})();")), /must match only bootstrap footer/);
+  assert.throws(() => harness(source + "\n" + footer), /must match only bootstrap footer/);
 });
 await test("unpaired bootstrap never requests or displays private content", async () => {
   const h = harness(); h.ready(); h.respond({ paired: false }); await h.api.bootstrap();
