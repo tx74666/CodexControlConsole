@@ -2,28 +2,53 @@ name: Pages
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  validate:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate download page source
-        run: test -f docs/index.html
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate offline export and phone application
+        run: node tools/check-phone-offline-ui.mjs
+      - name: Build public phone application
+        run: python tools/build-phone-static.py --output-dir dist-phone/site
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload phone application
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist-phone/site
 
-      - name: Print release download page
-        run: |
-          echo "Downloads: https://github.com/${{ github.repository }}/releases/latest"
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy phone application
+        id: deployment
+        uses: actions/deploy-pages@v4

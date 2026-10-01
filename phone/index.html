@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#151b29">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Codex Console">
+  <title>Codex Console · iPhone</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./codex-resource-icon-256.png">
+  <link rel="icon" href="./codex-resource-icon-128.png" type="image/png">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./store.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <header class="app-header" id="appHeader">
+    <div><p class="eyebrow">随身计划、音乐与阅读</p><h1>Codex Console</h1></div>
+    <span id="connectionLabel" class="connection-label">本机离线</span>
+  </header>
+  <main id="main">
+    <div id="appScreen">
+      <div class="toolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
+      <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
+      <section id="tasksPanel" class="tab-panel" aria-labelledby="tasksTitle">
+        <div class="section-title"><div><p class="eyebrow">四件重要的事</p><h2 id="tasksTitle">计划清单</h2></div><span class="pill">本机保存</span></div>
+        <p id="planNotice" class="muted small">导入计划后可以勾选；进度保存在这台手机。</p>
+        <div id="taskGroups" class="card-stack"></div>
+      </section>
+      <section id="musicPanel" class="tab-panel" hidden aria-labelledby="musicTitle">
+        <div class="section-title"><div><p class="eyebrow">原来的 16 首曲库，下载后离线听</p><h2 id="musicTitle">音乐</h2></div><button id="musicRefresh" type="button" class="text-button">刷新列表</button></div>
+        <div class="music-import-actions"><button id="musicImportButton" type="button" class="secondary">添加音乐</button><button id="musicDownloadAll" type="button" class="secondary">下载原曲库（83 MiB）</button><button id="musicDownloadStop" type="button" hidden>停止下载</button></div><input id="musicFiles" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.lrc,.txt" multiple hidden>
+        <p id="musicNotice" class="notice" role="status" aria-live="polite"></p>
+        <div class="card music-player">
+          <div class="music-player-heading"><span class="music-note" aria-hidden="true">♫</span><div><p class="eyebrow">正在聆听</p><h3 id="musicTrackTitle">选择一首音乐</h3><p id="musicTrackMeta" class="muted small">声音从 iPhone 播放</p></div></div>
+          <audio id="musicAudio" preload="none" playsinline></audio>
+          <div class="music-controls"><button id="musicPrevious" type="button" aria-label="上一首" disabled>‹‹</button><button id="musicPlay" type="button" class="primary" disabled>播放</button><button id="musicNext" type="button" aria-label="下一首" disabled>››</button></div>
+          <label class="visually-hidden" for="musicSeek">播放进度</label><input id="musicSeek" class="music-seek" type="range" min="0" max="1000" step="1" value="0" disabled>
+          <div class="music-timing"><span id="musicElapsed">0:00</span><span id="musicDuration">0:00</span><button id="musicRepeat" type="button" class="text-button" aria-label="切换循环模式">列表循环</button></div>
+        </div>
+        <button id="musicAddLyrics" type="button" class="text-button" hidden>添加本地歌词</button><input id="musicLyricFile" type="file" accept=".lrc,.txt,text/plain" hidden>
+        <details id="musicLyricsSection" class="music-lyrics-section" hidden><summary>歌词</summary><div id="musicLyricLanguages" class="reader-languages" hidden></div><p id="musicLyricsNotice" class="muted small"></p><div id="musicLyrics" class="music-lyrics" aria-label="本地歌词"></div></details>
+        <div class="music-library-tools"><label class="visually-hidden" for="musicSearch">搜索音乐</label><input id="musicSearch" type="search" placeholder="搜索音乐" autocomplete="off" spellcheck="false"><label class="visually-hidden" for="musicFolder">音乐文件夹</label><select id="musicFolder" aria-label="音乐文件夹"><option value="">全部文件夹</option></select></div>
+        <p id="musicListMeta" class="muted small"></p><div id="musicTracks" class="music-track-list"></div><button id="musicMore" type="button" class="secondary music-more" hidden>显示更多</button>
+        <p class="muted small music-footnote">现有的 16 首音乐已在曲库里；下载到手机后可离线听。也可以另外添加自己的音乐。程序更新保留你的资料和音乐。</p>
+      </section>
+      <section id="devicePanel" class="tab-panel" hidden aria-labelledby="deviceTitle">
+        <div class="section-title"><div><p class="eyebrow">上次导入</p><h2 id="deviceTitle">设备资料</h2></div></div>
+        <div id="memoryCard" class="card memory-card"></div>
+        <div id="hardwareCard" class="card hardware-card"></div>
+        <p class="muted small">这是导入时保存的电脑资料，不是电脑当前状态。</p>
+      </section>
+      <section id="documentsPanel" class="tab-panel" hidden aria-labelledby="documentsTitle">
+        <div class="section-title"><div><p class="eyebrow">重点先看，记录收好</p><h2 id="documentsTitle">文档</h2></div></div>
+        <div class="segment" id="inboxTabs" aria-label="阅读清单">
+          <button type="button" data-inbox="inbox" aria-pressed="true">待阅读 <span id="inboxCount">0</span></button>
+          <button type="button" data-inbox="later" aria-pressed="false">Later <span id="laterCount">0</span></button>
+          <button type="button" data-inbox="archive" aria-pressed="false">Archive <span id="archiveCount">0</span></button>
+        </div>
+        <div id="inboxList" class="card-stack"></div>
+        <details class="document-section"><summary>阅读重点 <span class="muted small">给人看</span></summary><div id="guideList" class="card-stack"></div></details>
+        <details class="document-section"><summary>参考资料 <span class="muted small">给人看</span></summary><div id="referenceList" class="card-stack"></div></details>
+        <details class="document-section"><summary>AI 原始记录 <span class="muted small">需要时展开</span></summary><div id="recordList" class="card-stack"></div></details>
+      </section>
+      <details class="session-settings"><summary>资料与更新 <span class="muted small">v__CONSOLE_PHONE_VERSION__</span></summary>
+        <p class="muted small">首次用 Safari 打开后，分享 → 添加到主屏幕。请从主屏幕图标导入资料；以后离线使用。</p>
+        <div class="settings-actions"><button id="importButton" type="button" class="secondary">导入电脑资料</button><button id="backupButton" type="button" class="secondary">备份资料</button><button id="restoreButton" type="button" class="text-button" hidden>恢复上次导入</button></div>
+        <input id="dataFile" type="file" accept=".json,application/json" hidden>
+        <div id="importReview" class="card" hidden><h3>确认导入内容</h3><p id="importCounts" class="small"></p><p class="muted small">更新资料并保留这台手机的任务勾选与阅读状态。不会上传到 GitHub。</p><button id="importConfirm" type="button" class="primary">导入到手机</button><button id="importCancel" type="button">取消</button></div>
+        <p id="settingsNotice" class="notice" role="status" aria-live="polite"></p><p id="storageNotice" class="muted small"></p><p class="muted small">资料备份不含音频。请保留音乐原文件；清除网站数据会移除手机里的资料。</p>
+        <button id="checkUpdate" type="button" class="secondary">检查程序更新</button><button id="applyUpdate" type="button" class="primary" hidden>更新并重开</button><p id="updateNotice" class="notice" role="status"></p>
+      </details>
+    </div>
+  </main>
+  <nav id="bottomNav" class="bottom-nav" aria-label="主要页面">
+    <button type="button" data-tab="tasks" aria-pressed="true"><span aria-hidden="true">◫</span>任务</button>
+    <button type="button" data-tab="music" aria-pressed="false"><span aria-hidden="true">♫</span>音乐</button>
+    <button type="button" data-tab="device" aria-pressed="false"><span aria-hidden="true">▣</span>设备</button>
+    <button type="button" data-tab="documents" aria-pressed="false"><span aria-hidden="true">▤</span>文档</button>
+  </nav>
+  <section id="readerScreen" class="reader-screen" hidden aria-labelledby="readerTitle" tabindex="-1">
+    <header class="reader-toolbar"><button id="readerBack" type="button" class="text-button">‹ 返回</button><div class="reader-font"><button id="fontSmaller" type="button" aria-label="缩小文字">A−</button><button id="fontLarger" type="button" aria-label="放大文字">A+</button></div></header>
+    <div class="reader-body"><p id="readerMeta" class="muted small"></p><h1 id="readerTitle">正在打开…</h1><p id="readerNotice" class="notice" role="status" aria-live="polite"></p><div id="readerLanguages" class="reader-languages" hidden></div><details id="readerContents" class="reader-contents" hidden><summary>文章目录</summary><nav id="readerHeadings" aria-label="文章目录"></nav></details><article id="readerContent"></article></div>
+    <footer id="readerActions" class="reader-actions" hidden><button id="readerLater" type="button" class="secondary">稍后阅读</button><button id="readerRead" type="button" class="primary">已读，归档</button></footer>
+  </section>
+  <noscript><p class="notice">请开启 Safari 的 JavaScript，再使用 Console。</p></noscript>
+</body>
+</html>

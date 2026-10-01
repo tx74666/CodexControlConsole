@@ -2,6 +2,16 @@
 
 A Windows control console for music, wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.
 
+## iPhone · 离线手机版
+
+安装地址：[Codex Console iPhone](https://tx74666.github.io/CodexControlConsole/)。
+
+用 iPhone Safari 打开，选择「分享 → 添加到主屏幕」，再从主屏幕图标打开。音乐页包含原有 16 首曲库与歌词；点「下载原曲库」即可保存到手机，完成后离线播放，不需电脑保持开机。
+
+私人任务、文档和设备资料通过电脑 Console 的「常用 → 内置资源 → 手机离线资料 → 导出资料」取得，再在手机「资料与更新 → 导入电脑资料」导入。私人资料不包含在公开网站内，手机勾选暂不回传电脑。
+
+手机端「检查程序更新」只更新程序，保留本机资料与已下载歌曲。源码位于 `phone/`，手机版版本独立保存在 `phone/version.json`。Pages workflow 会在版本标签上传或手动运行时发布；不会修改 Windows 安装配置。
+
 ## Download / 下载
 
 Recommended: [CodexControlConsole-Setup-x64.exe](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe), the signed installer with the simplest update path.
