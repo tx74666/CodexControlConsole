@@ -47,7 +47,7 @@ function harness() {
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const musicTabs = ["", "first", "second", "third"].map(tier => { const button = new Element("button"); button.dataset.musicTier = tier; return button; });
   const documentEvents = new Map(), windowEvents = new Map();
-  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : selector === "[data-music-tier]" ? musicTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
+  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : selector === "button[data-music-tier]" ? musicTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
   const history = { state: null, pushState(value) { this.state = value; }, back() { this.state = null; } };
   const stores = new Map(["records", "music", "media", "settings"].map(name => [name, new Map()]));
   const PhoneStore = {
@@ -87,7 +87,6 @@ await test("relative project installation has four tabs and no PC connection req
   for (const match of source.matchAll(/\/api\/phone\/([^"']+)/g)) assert.ok(match[1].startsWith("plan-sync/"), "optional PC access must be limited to plan sync");
   for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.ok(!match[1].startsWith("/"), "project assets must remain relative");
   const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1])); for (const match of source.matchAll(/\bel\("([^"]+)"\)/g)) assert.ok(ids.has(match[1]), `Missing element ${match[1]}`);
-  assert.match(html, /id="musicDownloadAll"[^>]*class="primary">全部下载（83 MiB）/); assert.match(html, /音乐和歌词一起保存/);
   assert.deepEqual([...html.matchAll(/data-music-tier="([^"]*)"/g)].map(match => match[1]), ["", "first", "second", "third"]);
 });
 await test("JSON import validates registered content and rejects unsafe or incomplete packages", () => {
@@ -125,53 +124,50 @@ await test("public songs are listed without automatically downloading audio", as
   assert.equal(h.get("musicPlayer").hidden, true, "an empty player must not push the category list below the first screen");
   h.api.selectMusicTrack("builtin/one.mp3"); assert.equal(h.audio.playCalls, 0); assert.match(h.get("musicNotice").textContent, /还没有下载/);
 });
-await test("the original 16 songs retain their 1ST, 2ND and 3RD counts and desktop order", async () => {
+await test("the original songs retain their tiers and desktop order", async () => {
   const defaults = JSON.parse(readFileSync(new URL("../release-defaults.json", import.meta.url), "utf8")).music;
   const h = harness(); h.ready(); h.api.state.catalog = defaults.order.map(name => ({ name: name.replace(/\.mp3$/, ""), path: `builtin/${name}`, source: `music/${name}`, type: "mp3", size: 9, tier: defaults.tiers[name] }));
   const before = JSON.stringify(h.api.state.catalog); await h.api.loadMusic();
-  assert.deepEqual(h.musicTabs.map(button => button.textContent), ["全部 16", "1ST 3", "2ND 6", "3RD 7"]);
+  assert.deepEqual(h.get("musicTracks").children.filter(section => section.tagName === "SECTION").map(section => [section.dataset.musicTier, h.all(section, "button").filter(button => button.className === "music-track").length]), [["first", 3], ["second", 6], ["third", 7]]);
   assert.deepEqual(musicRows(h).slice(0, 3).map(button => h.all(button, "span").find(item => item.className === "music-track-name").textContent), ["Outrun", "Redline", "Liquid Roller"]);
-  assert.equal(JSON.stringify(h.api.state.catalog), before); assert.equal(h.get("musicFolder").hidden, true); assert.equal(h.calls.length, 0);
+  assert.equal(JSON.stringify(h.api.state.catalog), before); assert.equal(h.calls.length, 0);
 });
-await test("tier headings keep stable order and default only the phone display to 3RD", async () => {
+await test("tier groups keep stable order and default only the phone display to third", async () => {
   const h = harness(); h.ready(); h.api.state.catalog = groupedPlaylist(); const before = JSON.stringify(h.api.state.catalog); await h.api.loadMusic();
-  assert.deepEqual(h.musicTabs.map(button => button.textContent), ["全部 6", "1ST 2", "2ND 2", "3RD 2"]);
-  assert.deepEqual(h.all(h.get("musicTracks"), "h3").map(heading => heading.textContent), ["1ST2 首", "2ND2 首", "3RD2 首"]);
   assert.deepEqual(musicRows(h).map(button => h.all(button, "span").find(item => item.className === "music-track-name").textContent), ["First B", "First A", "Second B", "Second A", "Third default", "Third explicit"]);
   assert.equal(h.all(h.get("musicTracks"), "button").length, 6, "song rows must not add individual download buttons");
   assert.equal(JSON.stringify(h.api.state.catalog), before); assert.equal(h.api.state.catalog[0].tier, undefined);
 });
-await test("tier filtering combines with search and source without changing global counts", async () => {
+await test("tier filtering includes local songs without changing catalog order", async () => {
   const h = harness(); h.ready(); h.api.state.catalog = groupedPlaylist(); h.stores.get("music").set("local/one", { id: "local/one", name: "Second local B", tier: "second", type: "mp3" }); await h.api.loadMusic();
-  assert.equal(h.get("musicFolder").hidden, false); assert.deepEqual(h.get("musicFolder").children.map(option => option.textContent), ["全部来源", "原曲库", "本地音乐"]);
-  h.musicTabs[2].listeners.get("click")(); h.get("musicSearch").value = " b "; h.get("musicSearch").listeners.get("input")();
-  assert.equal(musicRows(h).length, 2); assert.match(h.get("musicTracks").textContent, /Second B/); assert.match(h.get("musicTracks").textContent, /Second local B/);
-  h.get("musicFolder").value = "builtin"; h.get("musicFolder").listeners.get("change")(); assert.equal(musicRows(h).length, 1); assert.doesNotMatch(h.get("musicTracks").textContent, /First B|Second A|Second local B/);
-  assert.deepEqual(h.musicTabs.map(button => button.textContent), ["全部 7", "1ST 2", "2ND 3", "3RD 2"]); assert.equal(h.musicTabs[2].attributes["aria-pressed"], "true"); assert.match(h.get("musicListMeta").textContent, /7 首音乐.*显示 1 首/);
-  h.get("musicSearch").value = "missing"; h.get("musicSearch").listeners.get("input")(); assert.equal(musicRows(h).length, 0); assert.match(h.get("musicTracks").textContent, /没有匹配/);
+  const before = JSON.stringify(h.api.state.catalog);
+  h.musicTabs[2].listeners.get("click")();
+  assert.deepEqual(musicRows(h).map(button => h.all(button, "span").find(item => item.className === "music-track-name").textContent), ["Second B", "Second A", "Second local B"]);
+  assert.doesNotMatch(h.get("musicTracks").textContent, /First B|Third default/); assert.equal(h.musicTabs[2].attributes["aria-pressed"], "true");
+  h.musicTabs[0].listeners.get("click")(); assert.equal(musicRows(h).length, 7); assert.equal(JSON.stringify(h.api.state.catalog), before);
 });
 await test("one all-download click saves every missing tier and its lyrics despite active filters", async () => {
   const h = harness(); h.ready(); h.api.state.catalog = [...groupedPlaylist(), ...publicPlaylist()]; const alreadySaved = h.api.state.catalog[1]; h.stores.get("media").set(alreadySaved.path, { id: alreadySaved.path, blob: new Blob(["prior"]) }); await h.api.loadMusic();
-  h.musicTabs[1].listeners.get("click")(); h.get("musicSearch").value = "B"; h.get("musicSearch").listeners.get("input")(); assert.equal(musicRows(h).length, 1);
+  h.musicTabs[1].listeners.get("click")(); assert.equal(musicRows(h).length, 2);
   for (const track of h.api.state.catalog.filter(item => item.path !== alreadySaved.path)) { h.answers.push({ ok: true, blob: async () => new Blob(["audio"], { type: "audio/mpeg" }) }); for (const language of track.lyricsLanguages || []) h.answers.push({ ok: true, text: async () => `[00:01]${language.code}` }); }
   await h.get("musicDownloadAll").listeners.get("click")();
   assert.deepEqual([...h.stores.get("media").keys()].sort(), h.api.state.catalog.map(track => track.path).sort()); assert.equal(h.stores.get("music").get("builtin/one.mp3").offlineLyrics.length, 2);
   const audioRequests = h.calls.filter(call => call.url.endsWith(".mp3")); assert.equal(audioRequests.length, 6); assert.ok(audioRequests.every(call => !call.url.endsWith(alreadySaved.source))); assert.equal(h.answers.length, 0);
-  assert.equal(h.api.state.music.tier, "first"); assert.equal(h.api.state.music.search, "B"); assert.equal(h.get("musicDownloadAll").textContent, "全部已下载"); assert.equal(h.get("musicDownloadAll").disabled, true); assert.equal(h.audio.playCalls, 0);
+  assert.equal(h.api.state.music.tier, "first"); assert.equal(h.get("musicDownloadAll").hidden, true); assert.equal(h.audio.playCalls, 0);
 });
 await test("stopping all-download preserves completed songs and resumes only missing songs", async () => {
   const h = harness(); h.ready(); h.api.state.catalog = groupedPlaylist().slice(0, 2); await h.api.loadMusic(); const blocked = defer(), urls = [];
   h.runtime.fetch = async (url, options) => { urls.push(url); if (url.endsWith("group-1.mp3")) { blocked.resolve(); return new Promise((_, reject) => options.signal.addEventListener("abort", () => reject(Object.assign(new Error("stopped"), { name: "AbortError" })))); } return { ok: true, blob: async () => new Blob(["audio"]) }; };
   const downloading = h.get("musicDownloadAll").listeners.get("click")(); await blocked.promise; assert.equal(h.get("musicDownloadAll").disabled, true); assert.equal(h.get("musicDownloadStop").hidden, false);
   h.get("musicDownloadStop").listeners.get("click")(); await downloading;
-  assert.deepEqual([...h.stores.get("media").keys()], ["builtin/group-0.mp3"]); assert.equal(h.get("musicDownloadAll").disabled, false); assert.equal(h.get("musicDownloadStop").hidden, true); assert.match(h.get("musicDownloadAll").textContent, /继续下载.*1 首/); assert.match(h.get("musicNotice").textContent, /已停止下载.*1 首仍然保留/);
+  assert.deepEqual([...h.stores.get("media").keys()], ["builtin/group-0.mp3"]); assert.equal(h.get("musicDownloadAll").disabled, false); assert.equal(h.get("musicDownloadAll").hidden, false); assert.equal(h.get("musicDownloadStop").hidden, true);
   const resumed = []; h.runtime.fetch = async url => { resumed.push(url); return { ok: true, blob: async () => new Blob(["audio"]) }; }; await h.get("musicDownloadAll").listeners.get("click")();
-  assert.equal(resumed.length, 1); assert.ok(resumed[0].endsWith("group-1.mp3")); assert.equal(h.stores.get("media").size, 2); assert.equal(h.get("musicDownloadAll").textContent, "全部已下载");
+  assert.equal(resumed.length, 1); assert.ok(resumed[0].endsWith("group-1.mp3")); assert.equal(h.stores.get("media").size, 2); assert.equal(h.get("musicDownloadAll").hidden, true);
 });
 await test("explicit save includes local translated lyrics and uses only relative public sources", async () => {
   const h = harness(); h.ready(); h.api.state.catalog = publicPlaylist(); await h.api.loadMusic(); h.answers.push({ ok: true, blob: async () => new Blob(["audio"], { type: "audio/mpeg" }) }, { ok: true, text: async () => "[00:01]中文" }, { ok: true, text: async () => "[00:01]English" }); await h.api.downloadMusic(["builtin/one.mp3"]);
   assert.equal(h.api.state.saved.has("builtin/one.mp3"), true); assert.equal(h.stores.get("music").get("builtin/one.mp3").offlineLyrics.length, 2); assert.ok(h.calls.every(call => call.url.startsWith("http://192.0.2.1:8899/CodexControlConsole/phone/music/")));
-  assert.equal(h.get("musicDownloadAll").textContent, "全部已下载"); assert.match(h.get("musicNotice").textContent, /全部已下载/);
+  assert.equal(h.get("musicDownloadAll").hidden, true);
 });
 await test("saved music starts synchronously through the local SW route, never PC or network audio", async () => {
   const h = harness(); h.ready(); h.api.state.catalog = publicPlaylist(); h.stores.get("media").set("builtin/one.mp3", { id: "builtin/one.mp3", blob: new Blob(["audio"]) }); h.stores.get("music").set("builtin/one.mp3", { id: "builtin/one.mp3", offlineLyrics: [], lyrics: false }); await h.api.loadMusic();

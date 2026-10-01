@@ -22,7 +22,7 @@
   </header>
   <main id="main">
     <div id="appScreen">
-      <div class="toolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
+      <div class="toolbar" id="appToolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
       <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
       <section id="tasksPanel" class="tab-panel" aria-labelledby="tasksTitle">
         <div class="section-title"><div><p class="eyebrow">当前重要计划</p><h2 id="tasksTitle">计划清单</h2></div><span id="planMode" class="pill">本机保存</span></div>
@@ -36,14 +36,12 @@
         </details>
       </section>
       <section id="musicPanel" class="tab-panel" hidden aria-labelledby="musicTitle">
-        <div class="section-title"><div><p class="eyebrow">原来的 16 首曲库，下载后离线听</p><h2 id="musicTitle">音乐</h2></div><button id="musicRefresh" type="button" class="text-button">刷新列表</button></div>
-        <div class="music-import-actions"><button id="musicDownloadAll" type="button" class="primary">全部下载（83 MiB）</button><button id="musicImportButton" type="button" class="text-button">添加其他音乐</button><button id="musicDownloadStop" type="button" hidden>停止下载</button></div><input id="musicFiles" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.lrc,.txt" multiple hidden>
-        <p class="muted small music-download-help">音乐和歌词一起保存；中断后可以继续下载。</p>
+        <div class="section-title"><h2 id="musicTitle">音乐</h2><button id="musicImportButton" type="button" class="text-button">添加音乐</button></div>
+        <div class="music-import-actions" id="musicDownloadActions" hidden><button id="musicDownloadAll" type="button" class="secondary" hidden>全部下载</button><button id="musicDownloadStop" type="button" class="text-button" hidden>停止</button></div><input id="musicFiles" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.lrc,.txt" multiple hidden>
         <p id="musicNotice" class="notice" role="status" aria-live="polite"></p>
-        <div class="segment music-tier-tabs" id="musicTierTabs" aria-label="音乐分类"><button type="button" data-music-tier="" aria-pressed="true">全部</button><button type="button" data-music-tier="first" aria-pressed="false">1ST</button><button type="button" data-music-tier="second" aria-pressed="false">2ND</button><button type="button" data-music-tier="third" aria-pressed="false">3RD</button></div>
-        <div class="music-library-tools"><label class="visually-hidden" for="musicSearch">搜索音乐</label><input id="musicSearch" type="search" placeholder="搜索音乐" autocomplete="off" spellcheck="false"><label class="visually-hidden" for="musicFolder">音乐来源</label><select id="musicFolder" aria-label="音乐来源" hidden><option value="">全部来源</option></select></div>
+        <div class="segment music-tier-tabs" id="musicTierTabs" aria-label="音乐分类"><button type="button" data-music-tier="" aria-pressed="true">全部</button><button type="button" data-music-tier="first" aria-pressed="false">1<sup>st</sup></button><button type="button" data-music-tier="second" aria-pressed="false">2<sup>nd</sup></button><button type="button" data-music-tier="third" aria-pressed="false">3<sup>rd</sup></button></div>
         <div class="card music-player" id="musicPlayer" hidden>
-          <div class="music-player-heading"><span class="music-note" aria-hidden="true">♫</span><div><p class="eyebrow">正在聆听</p><h3 id="musicTrackTitle">选择一首音乐</h3><p id="musicTrackMeta" class="muted small">声音从 iPhone 播放</p></div></div>
+          <div class="music-player-heading"><span class="music-note" aria-hidden="true">♫</span><div><p class="eyebrow">正在聆听</p><h3 id="musicTrackTitle">选择一首音乐</h3></div></div>
           <audio id="musicAudio" preload="none" playsinline></audio>
           <div class="music-controls"><button id="musicPrevious" type="button" aria-label="上一首" disabled>‹‹</button><button id="musicPlay" type="button" class="primary" disabled>播放</button><button id="musicNext" type="button" aria-label="下一首" disabled>››</button></div>
           <label class="visually-hidden" for="musicSeek">播放进度</label><input id="musicSeek" class="music-seek" type="range" min="0" max="1000" step="1" value="0" disabled>
@@ -51,8 +49,7 @@
         </div>
         <button id="musicAddLyrics" type="button" class="text-button" hidden>添加本地歌词</button><input id="musicLyricFile" type="file" accept=".lrc,.txt,text/plain" hidden>
         <details id="musicLyricsSection" class="music-lyrics-section" hidden><summary>歌词</summary><div id="musicLyricLanguages" class="reader-languages" hidden></div><p id="musicLyricsNotice" class="muted small"></p><div id="musicLyrics" class="music-lyrics" aria-label="本地歌词"></div></details>
-        <p id="musicListMeta" class="muted small"></p><div id="musicTracks" class="music-track-list"></div><button id="musicMore" type="button" class="secondary music-more" hidden>显示更多</button>
-        <p class="muted small music-footnote">现有的 16 首音乐按 1ST、2ND、3RD 分类；「全部下载」会保存所有分类。程序更新保留你的资料和音乐。</p>
+        <div id="musicTracks" class="music-track-list"></div><button id="musicMore" type="button" class="secondary music-more" hidden>显示更多</button>
       </section>
       <section id="devicePanel" class="tab-panel" hidden aria-labelledby="deviceTitle">
         <div class="section-title"><div><p class="eyebrow">上次导入</p><h2 id="deviceTitle">设备资料</h2></div></div>
