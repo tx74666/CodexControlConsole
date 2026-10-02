@@ -45,7 +45,7 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.17";
+const consoleUiVersion = "1.0.18";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -3329,29 +3329,116 @@ function renderDocumentOverview() {
   const summary = result.summary || result.snapshot || result;
   container.replaceChildren();
   const details = documentNode("OverviewDetails"); details.replaceChildren();
-  const gib = value => value === null || value === undefined || !Number.isFinite(Number(value)) ? documentText("未知／不可用", "Unknown / unavailable") : `${(Number(value) / 1073741824).toFixed(2)} GiB`;
-  const addMetrics = metrics => {
-    const grid = document.createElement("div"); grid.className = "document-overview-grid";
-    for (const [label, value] of metrics) {
-      const card = document.createElement("div"); const caption = document.createElement("span"); const strong = document.createElement("strong");
-      caption.textContent = label; strong.textContent = value; card.append(caption, strong); grid.appendChild(card);
-    }
-    container.appendChild(grid);
+  const unknown = documentText("未知／不可用", "Unknown / unavailable");
+  const number = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  const textValue = value => typeof value === "string" ? value.trim() : "";
+  const percent = value => number(value) !== null && value <= 100 ? value : null;
+  const gib = value => number(value) === null ? unknown : `${(value / 1073741824).toFixed(2)} GiB`;
+  const storageSize = value => number(value) === null ? unknown : value >= 1e12 ? `${(value / 1e12).toFixed(2)} TB` : `${(value / 1e9).toFixed(1)} GB`;
+  const node = (tag, className, text) => {
+    const element = document.createElement(tag); element.className = className;
+    if (text !== undefined) element.textContent = text;
+    return element;
   };
-  const current = result.currentMemory;
-  const liveMeta = document.createElement("p"); liveMeta.className = "document-overview-meta document-current-meta";
-  liveMeta.textContent = (current?.status === "available"
-    ? `${documentText("内存读取", "Memory read")} ${documentDisplayTime(current.readAt)}`
-    : documentText("当前内存不可用，刷新重试。", "Current memory unavailable. Refresh to retry."))
-    + (summary.sampledAt ? ` · ${documentText("设备档案", "Saved profile")} ${documentDisplayTime(summary.sampledAt)}${summary.status === "partial" ? documentText("（部分数据）", " (partial)") : ""}` : documentText(" · 暂无设备档案", " · No saved profile"))
-    + documentText(" · 本地时间", " · Local time");
-  const available = current?.status === "available";
-  addMetrics([
-    [documentText("设备", "Computer"), summary.model || documentText("尚无设备档案", "No device profile yet")],
-    [documentText("可用内存", "Available memory"), gib(available ? current.availableBytes : null)],
-    [documentText("内存占用", "Memory use"), available && Number.isFinite(current.usedPercent) ? `${current.usedPercent.toFixed(1)}%` : documentText("未知／不可用", "Unknown / unavailable")],
-    [documentText("总内存", "Total memory"), gib(available ? current.totalBytes : summary.physicalTotalBytes)]
-  ]);
+  const grid = node("div", "document-overview-grid");
+  const card = (kind, caption) => {
+    const element = node("div", `document-device-card document-device-${kind}`);
+    element.appendChild(node("span", "document-device-caption", caption)); grid.appendChild(element);
+    return element;
+  };
+  const meter = (parent, value, label) => {
+    if (percent(value) === null) return;
+    const bar = node("div", "document-device-meter");
+    bar.dataset.level = value >= 95 ? "high" : value >= 85 ? "warning" : "normal";
+    bar.setAttribute("role", "meter"); bar.setAttribute("aria-label", label);
+    bar.setAttribute("aria-valuemin", "0"); bar.setAttribute("aria-valuemax", "100"); bar.setAttribute("aria-valuenow", String(value));
+    const fill = node("span", "document-device-meter-fill"); fill.style.width = `${value}%`; bar.appendChild(fill); parent.appendChild(bar);
+  };
+  const usage = (parent, total, used, free, format, valuePercent = null) => {
+    total = number(total); used = number(used); free = number(free);
+    if (total !== null && used !== null && used > total) used = null;
+    if (total !== null && free !== null && free > total) free = null;
+    parent.appendChild(node("strong", "document-device-value", `${format(used)} / ${format(total)}`));
+    parent.appendChild(node("span", "document-device-sub", `${documentText("可用", "Available")} ${format(free)}${percent(valuePercent) !== null ? ` · ${valuePercent.toFixed(1)}%` : ""}`));
+    meter(parent, valuePercent, documentText("占用比例", "Usage percent"));
+  };
+  const identity = node("div", "document-device-identity");
+  identity.appendChild(node("strong", "document-device-model", textValue(summary.model) || documentText("尚无设备档案", "No device profile yet")));
+  const cpus = (Array.isArray(summary.cpus) ? summary.cpus : []).filter(cpu => textValue(cpu?.name));
+  const cpuNames = cpus.map(cpu => `${cpu.name}${number(cpu.cores) > 0 && number(cpu.logicalProcessors) > 0 ? documentText(` · ${cpu.cores} 核 ${cpu.logicalProcessors} 线程`, ` · ${cpu.cores} cores / ${cpu.logicalProcessors} threads`) : ""}`);
+  const cpuText = cpuNames.join(" · ") || textValue(summary.cpuModel);
+  if (cpuText) identity.appendChild(node("span", "document-device-cpu", `CPU · ${cpuText}`));
+  container.appendChild(identity);
+
+  const personal = result.deviceDetails;
+  if (personal?.status === "available" && textValue(personal.model).toLowerCase() === textValue(summary.model).toLowerCase() && textValue(summary.model)) {
+    const notes = [], purchase = personal.purchase;
+    if (number(purchase?.amount) !== null && /^[A-Z]{3}$/.test(purchase.currency || "")) {
+      const amount = purchase.amount.toLocaleString("en-US", { maximumFractionDigits: 2 });
+      const price = `${purchase.currency === "CNY" ? "¥" : `${purchase.currency} `}${amount}`;
+      let note = `${documentText("购入", "Purchase")} ${purchase.approximate === true ? documentText("约 ", "about ") : ""}${price}`;
+      if (Number.isInteger(purchase.year) && purchase.year >= 1900 && purchase.year <= 2100) note += ` · ${purchase.yearApproximate === true ? documentText("约 ", "around ") : ""}${purchase.year}`;
+      if (textValue(purchase.source).replace(/[-_]/g, " ").toLowerCase().includes("user recollection")) note += documentText("（回忆，待确认）", " (recollection, unconfirmed)");
+      notes.push(note);
+    }
+    if (textValue(personal.color)) notes.push(`${documentText("机身颜色", "Color")} · ${textValue(personal.color)}`);
+    if (notes.length) container.appendChild(node("p", "document-device-personal", notes.join(" · ")));
+  }
+
+  const current = result.currentMemory, memoryAvailable = current?.status === "available";
+  const ram = card("ram", documentText("内存 RAM · 已用 / 总量", "RAM · used / total"));
+  const ramTotal = memoryAvailable ? number(current.totalBytes) : null;
+  const ramFree = memoryAvailable ? number(current.availableBytes) : null;
+  const ramUsed = memoryAvailable ? (current.usedBytes === undefined && ramTotal !== null && ramFree !== null && ramFree <= ramTotal ? ramTotal - ramFree : number(current.usedBytes)) : null;
+  usage(ram, ramTotal, ramUsed, ramFree, gib, memoryAvailable && ramUsed !== null && ramTotal !== null && ramUsed <= ramTotal ? percent(current.usedPercent) : null);
+  const modules = (Array.isArray(summary.memoryModules) ? summary.memoryModules : []).filter(item => item && typeof item === "object");
+  const moduleText = item => `${gib(item.capacityBytes)}${number(item.configuredSpeedMHz) > 0 ? ` · ${item.configuredSpeedMHz} MT/s` : ""}`;
+  const matchingModules = modules.length > 0 && number(modules[0].capacityBytes) > 0 && modules.every(item => number(item.capacityBytes) === modules[0].capacityBytes && number(item.configuredSpeedMHz) === number(modules[0].configuredSpeedMHz));
+  const moduleSummary = matchingModules ? `${modules.length} × ${moduleText(modules[0])}` : modules.map(moduleText).join(" + ");
+  const installed = number(summary.installedMemoryBytes) !== null ? `${documentText("实装", "Installed")} ${gib(summary.installedMemoryBytes)}` : "";
+  if (installed || moduleSummary) ram.appendChild(node("span", "document-device-config", [installed, moduleSummary].filter(Boolean).join(" · ")));
+
+  const gpu = card("gpu", documentText("显卡 GPU · 显存已用 / 总量", "GPU · VRAM used / total"));
+  const liveGpus = (Array.isArray(result.currentGpu) ? result.currentGpu : []).filter(item => item && ["available", "partial"].includes(item.status) && textValue(item.name));
+  if (liveGpus.length) {
+    for (const adapter of liveGpus) {
+      const row = node("div", "document-device-adapter"); row.appendChild(node("strong", "document-device-gpu-name", adapter.name));
+      const total = number(adapter.totalBytes), used = number(adapter.usedBytes);
+      const usedPercent = total > 0 && used !== null && used <= total ? used / total * 100 : null;
+      usage(row, total, used, adapter.freeBytes, gib, null); meter(row, usedPercent, documentText("显存占用比例", "VRAM usage percent"));
+      const extra = [];
+      if (percent(adapter.utilizationPercent) !== null) extra.push(`${documentText("GPU 负载", "GPU load")} ${adapter.utilizationPercent.toFixed(0)}%`);
+      if (number(adapter.temperatureC) !== null && adapter.temperatureC <= 150) extra.push(`${adapter.temperatureC.toFixed(0)} °C`);
+      if (extra.length) row.appendChild(node("span", "document-device-sub", extra.join(" · ")));
+      if (adapter.status === "partial") row.appendChild(node("span", "document-device-config", documentText("部分读数不可用", "Some readings unavailable")));
+      gpu.appendChild(row);
+    }
+  } else {
+    const savedGpus = (Array.isArray(summary.gpus) ? summary.gpus : []).filter(item => textValue(item?.name));
+    const withCapacity = savedGpus.filter(item => number(item.dedicatedCapacityBytes) > 0);
+    const displayGpus = withCapacity.length ? withCapacity : savedGpus;
+    const names = displayGpus.length ? displayGpus.map(item => `${item.name}${number(item.dedicatedCapacityBytes) !== null ? ` · ${gib(item.dedicatedCapacityBytes)}` : ""}`) : (Array.isArray(summary.gpuModels) ? summary.gpuModels : []).map(textValue).filter(Boolean);
+    gpu.appendChild(node("strong", "document-device-gpu-name", names.join(" · ") || unknown));
+    gpu.appendChild(node("span", "document-device-config", documentText("配置记录 · 当前显存占用未知／不可用", "Saved hardware · current VRAM usage unknown / unavailable")));
+  }
+
+  const storage = card("storage", documentText("存储汇总 · 已用 / 总量", "Storage · used / total"));
+  const currentStorage = result.currentStorage, storageAvailable = ["available", "partial"].includes(currentStorage?.status);
+  const storageTotal = storageAvailable ? number(currentStorage.totalBytes) : null;
+  const storageUsed = storageAvailable ? number(currentStorage.usedBytes) : null;
+  usage(storage, storageTotal, storageUsed, storageAvailable ? currentStorage.freeBytes : null, storageSize, storageTotal > 0 && storageUsed !== null && storageUsed <= storageTotal ? storageUsed / storageTotal * 100 : null);
+  storage.appendChild(node("span", "document-device-config", currentStorage?.status === "partial" ? documentText("部分内置存储可读，汇总范围不完整", "Partial internal storage; incomplete total") : documentText("内置存储合计", "Combined internal storage")));
+  container.appendChild(grid);
+
+  const reads = new Map();
+  for (const [label, read] of [["RAM", memoryAvailable ? current : null], ["GPU", liveGpus.length ? result.currentGpuRead || liveGpus[0] : null], [documentText("存储", "Storage"), storageAvailable ? currentStorage : null]]) {
+    if (!read?.readAt) continue;
+    const time = documentDisplayTime(read.readAt); reads.set(time, [...(reads.get(time) || []), label]);
+  }
+  const liveTexts = [...reads].map(([time, labels]) => `${labels.join(" / ")} ${documentText("读取", "read")} ${time}`);
+  const hardwareAt = summary.hardwareSampledAt || summary.sampledAt;
+  const savedText = hardwareAt ? `${documentText("配置记录", "Saved hardware")} ${documentDisplayTime(hardwareAt)}${summary.status === "partial" ? documentText("（部分数据）", " (partial)") : ""}` : documentText("暂无设备档案", "No saved profile");
+  const liveMeta = node("p", "document-overview-meta document-current-meta", [...liveTexts, savedText, documentText("打开／刷新时读取 · 本地时间", "Read on open / refresh · local time")].join(" · "));
   container.appendChild(liveMeta);
   if (summary.cpuModel || summary.installedMemoryBytes || summary.gpuModels?.length) {
     const hardware = document.createElement("p"); hardware.className = "document-hint";

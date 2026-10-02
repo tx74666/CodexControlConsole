@@ -1,12 +1,15 @@
 """Local document browsing, a persistent report inbox and a fixed device sampler."""
 from contextlib import contextmanager
+import csv
 import ctypes
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import threading
 import uuid
 
@@ -24,6 +27,273 @@ MAX_GUIDE_ITEMS = 50
 REFERENCES_FILE = '.document-references.json'
 MAX_REFERENCE_BYTES = 128 * 1024
 MAX_REFERENCE_ITEMS = 100
+DEVICE_DETAILS_FILE = '.device-details.json'
+MAX_DEVICE_DETAILS_BYTES = 16 * 1024
+MAX_GPU_QUERY_BYTES = 64 * 1024
+GPU_QUERY_TIMEOUT = 2.0
+
+
+def _text_value(value, limit=256):
+    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+        return None
+    if any(ord(char) < 32 for char in value):
+        return None
+    return value.strip()
+
+
+def _integer_value(value, *, positive=False):
+    if type(value) is not int or value < (1 if positive else 0) or value > 2 ** 53 - 1:
+        return None
+    return value
+
+
+def _nvidia_smi_path():
+    """Only existing driver installation locations; never PATH or library files."""
+    if os.name != 'nt':
+        return None
+    candidates = (Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32' / 'nvidia-smi.exe',
+                  Path(os.environ.get('ProgramFiles', r'C:\Program Files')) / 'NVIDIA Corporation' / 'NVSMI' / 'nvidia-smi.exe')
+    for path in candidates:
+        try:
+            if not path.is_absolute() or not path.is_file():
+                continue
+            if any(part.is_symlink() or getattr(part, 'is_junction', lambda: False)() for part in (path, *path.parents)):
+                continue
+            return path
+        except (OSError, RuntimeError):
+            continue
+    return None
+
+
+def _gpu_query_output(driver):
+    # Spool a fixed, two-second query to a temporary file rather than retaining
+    # unbounded child output in memory. Read only the bounded result, then remove it.
+    query = '--query-gpu=index,name,pci.bus_id,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu'
+    with tempfile.TemporaryFile() as output:
+        process = subprocess.Popen([str(driver), query, '--format=csv,noheader,nounits'],
+                                   stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL,
+                                   shell=False, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        try:
+            try:
+                process.wait(timeout=GPU_QUERY_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                raise OSError('驅動顯存查詢超過 2 秒，已停止本次查詢。')
+            if process.returncode:
+                raise OSError('驅動顯存查詢失敗。')
+            output.seek(0)
+            raw = output.read(MAX_GPU_QUERY_BYTES + 1)
+            if len(raw) > MAX_GPU_QUERY_BYTES:
+                raise ValueError('驅動顯存查詢結果超過讀取限制。')
+            return raw.decode('utf-8-sig')
+        finally:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                    process.wait(timeout=1)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+
+
+def _gpu_number(value, *, memory=False, low=0, high=100):
+    if not re.fullmatch(r'-?\d+(?:\.\d+)?', value.strip()):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number < low or number > high:
+        return None
+    if memory:
+        converted = int(number * 1048576)
+        return converted if converted <= 2 ** 53 - 1 else None
+    return number
+
+
+def _windows_storage_volumes():
+    """Native fixed-volume enumeration, no filesystem walk and no drive details output."""
+    if os.name != 'nt':
+        raise OSError('此系統尚未提供本機存儲讀取。')
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.GetLogicalDrives.argtypes, kernel.GetLogicalDrives.restype = [], ctypes.c_uint32
+    kernel.GetDriveTypeW.argtypes, kernel.GetDriveTypeW.restype = [ctypes.c_wchar_p], ctypes.c_uint32
+    kernel.GetVolumeNameForVolumeMountPointW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    kernel.GetVolumeNameForVolumeMountPointW.restype = ctypes.c_int
+    kernel.GetDiskFreeSpaceExW.argtypes = [ctypes.c_wchar_p, *([ctypes.POINTER(ctypes.c_uint64)] * 3)]
+    kernel.GetDiskFreeSpaceExW.restype = ctypes.c_int
+    kernel.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+                                  ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    kernel.CreateFileW.restype = ctypes.c_void_p
+    kernel.DeviceIoControl.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+                                      ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
+    kernel.DeviceIoControl.restype = ctypes.c_int
+    kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [ctypes.c_void_p], ctypes.c_int
+
+    class StoragePropertyQuery(ctypes.Structure):
+        _fields_ = [('propertyId', ctypes.c_uint32), ('queryType', ctypes.c_uint32), ('additional', ctypes.c_ubyte)]
+
+    class StorageDeviceDescriptor(ctypes.Structure):
+        _fields_ = [('version', ctypes.c_uint32), ('size', ctypes.c_uint32),
+                    ('deviceType', ctypes.c_ubyte), ('deviceTypeModifier', ctypes.c_ubyte),
+                    ('removable', ctypes.c_ubyte), ('queueing', ctypes.c_ubyte),
+                    ('vendorOffset', ctypes.c_uint32), ('productOffset', ctypes.c_uint32),
+                    ('revisionOffset', ctypes.c_uint32), ('serialOffset', ctypes.c_uint32),
+                    ('busType', ctypes.c_uint32), ('rawLength', ctypes.c_uint32), ('raw', ctypes.c_ubyte)]
+
+    mask = kernel.GetLogicalDrives()
+    if not mask:
+        raise OSError('無法列出本機固定卷。')
+    records, seen = [], set()
+    for index in range(26):
+        if not mask & (1 << index):
+            continue
+        mount = chr(65 + index) + ':\\'
+        drive_type = kernel.GetDriveTypeW(mount)
+        if drive_type != 3:
+            if drive_type in (0, 1):
+                records.append({'error': True})
+            continue
+        identity = ctypes.create_unicode_buffer(64)
+        if not kernel.GetVolumeNameForVolumeMountPointW(mount, identity, len(identity)) or not identity.value:
+            records.append({'error': True})
+            continue
+        volume_id = identity.value.casefold()
+        if volume_id in seen:
+            continue
+        seen.add(volume_id)
+        handle = kernel.CreateFileW(identity.value.rstrip('\\'), 0, 3, None, 3, 0, None)
+        if handle in (None, ctypes.c_void_p(-1).value):
+            records.append({'error': True})
+            continue
+        try:
+            query = StoragePropertyQuery()
+            buffer = ctypes.create_string_buffer(4096)
+            returned = ctypes.c_uint32()
+            ok = kernel.DeviceIoControl(handle, 0x2D1400, ctypes.byref(query), ctypes.sizeof(query),
+                                        buffer, len(buffer), ctypes.byref(returned), None)
+            if not ok or returned.value < StorageDeviceDescriptor.busType.offset + 4:
+                records.append({'error': True})
+                continue
+            descriptor = ctypes.cast(buffer, ctypes.POINTER(StorageDeviceDescriptor)).contents
+            if descriptor.version < 32 or descriptor.size < 32:
+                records.append({'error': True})
+                continue
+            bus_type = descriptor.busType
+        finally:
+            kernel.CloseHandle(handle)
+        # Positive local-bus allowlist. Unknown/virtual/RAID/network backing is
+        # not assumed internal; USB (7) and other known external buses are omitted.
+        if bus_type in {4, 6, 7, 9, 12, 20}:
+            continue
+        if bus_type not in {1, 2, 3, 10, 11, 13, 17, 19}:
+            records.append({'error': True})
+            continue
+        available, total, free = ctypes.c_uint64(), ctypes.c_uint64(), ctypes.c_uint64()
+        if not kernel.GetDiskFreeSpaceExW(mount, ctypes.byref(available), ctypes.byref(total), ctypes.byref(free)):
+            records.append({'error': True})
+            continue
+        # Match caller-visible total with caller-available bytes (quotas may apply).
+        records.append({'identity': volume_id, 'totalBytes': total.value, 'freeBytes': available.value})
+    return records
+
+
+def current_storage():
+    result = {'readAt': datetime.now().astimezone().isoformat(), 'status': 'unavailable',
+              'totalBytes': None, 'usedBytes': None, 'freeBytes': None,
+              'source': 'GetDiskFreeSpaceExW (current-user fixed volumes)', 'reason': ''}
+    try:
+        records = _windows_storage_volumes()
+        total, free, read_count, incomplete, seen = 0, 0, 0, len(records) > 26, set()
+        for record in records[:26]:
+            if record.get('error'):
+                incomplete = True
+                continue
+            identity = record.get('identity')
+            size, available = _integer_value(record.get('totalBytes'), positive=True), _integer_value(record.get('freeBytes'))
+            if not isinstance(identity, str) or not identity or size is None or available is None or available > size:
+                incomplete = True
+                continue
+            if identity.casefold() in seen:
+                continue
+            seen.add(identity.casefold())
+            total, free, read_count = total + size, free + available, read_count + 1
+        if read_count:
+            if _integer_value(total, positive=True) is None or _integer_value(free) is None:
+                raise ValueError('匯總存儲容量超出有效數值範圍。')
+            result.update({'status': 'partial' if incomplete else 'available', 'totalBytes': total,
+                           'freeBytes': free, 'usedBytes': total - free,
+                           'reason': '部分固定卷無法讀取；僅彙總已確認的內置卷。' if incomplete else ''})
+        else:
+            result['reason'] = '未取得可用的內置固定卷資料。'
+    except (OSError, AttributeError, ValueError, TypeError, RuntimeError):
+        result['reason'] = '本機存儲暫時無法讀取；未知容量不以 0 代替。'
+    return result
+
+
+def current_gpu():
+    """One bounded, read-only driver query per overview; no saved usage fallback."""
+    result = {'readAt': datetime.now().astimezone().isoformat(), 'status': 'unavailable',
+              'source': 'nvidia-smi', 'reason': '', 'adapters': []}
+    try:
+        driver = _nvidia_smi_path()
+        if driver is None:
+            result['reason'] = '未找到受支援的 NVIDIA 驅動接口；目前顯存用量不可用。'
+            return result
+        rows = list(csv.reader(_gpu_query_output(driver).splitlines(), skipinitialspace=True))
+        rows = [row for row in rows if any(value.strip() for value in row)]
+        if not rows or len(rows) > 32:
+            raise ValueError('未取得有效的驅動顯卡清單。')
+        adapters, seen = [], set()
+        for row in rows:
+            if len(row) != 8:
+                raise ValueError('驅動顯卡欄位格式無效。')
+            index, name, pci, total, used, free, utilization, temperature = (value.strip() for value in row)
+            name = _text_value(name)
+            if name is None or not re.fullmatch(r'\d{1,4}', index):
+                raise ValueError('驅動顯卡識別資料無效。')
+            adapter_id = ('pci:' + pci.casefold() if re.fullmatch(r'(?:[\da-fA-F]{4}|[\da-fA-F]{8}):[\da-fA-F]{2}:[\da-fA-F]{2}\.[0-7]', pci)
+                          else 'nvidia:' + index)
+            if adapter_id in seen:
+                raise ValueError('驅動顯卡識別資料重複。')
+            seen.add(adapter_id)
+            total_bytes = _gpu_number(total, memory=True, low=1 / 1048576, high=(2 ** 53 - 1) / 1048576)
+            used_bytes = _gpu_number(used, memory=True, high=(2 ** 53 - 1) / 1048576)
+            free_bytes = _gpu_number(free, memory=True, high=(2 ** 53 - 1) / 1048576)
+            if total_bytes is not None:
+                if used_bytes is not None and used_bytes > total_bytes:
+                    used_bytes = None
+                if free_bytes is not None and free_bytes > total_bytes:
+                    free_bytes = None
+            available = all(value is not None for value in (total_bytes, used_bytes, free_bytes))
+            adapters.append({'adapterId': adapter_id, 'name': name, 'readAt': result['readAt'],
+                             'status': 'available' if available else 'partial', 'totalBytes': total_bytes,
+                             'usedBytes': used_bytes, 'freeBytes': free_bytes, 'source': 'nvidia-smi',
+                             'utilizationPercent': _gpu_number(utilization),
+                             'temperatureC': _gpu_number(temperature, low=-100, high=200),
+                             'reason': '' if available else '部分顯存指標無法讀取；未知數值不以 0 代替。'})
+        result['adapters'] = adapters
+        result['status'] = 'available' if all(item['status'] == 'available' for item in adapters) else 'partial'
+        result['reason'] = '' if result['status'] == 'available' else '部分顯卡顯存指標不可用。'
+    except (OSError, ValueError, UnicodeError, csv.Error, subprocess.SubprocessError) as exc:
+        result['reason'] = str(exc)
+    return result
+
+
+def _hardware_rows(value, kind):
+    if not isinstance(value, list):
+        return []
+    rows = []
+    for item in value[:32]:
+        if not isinstance(item, dict):
+            continue
+        if kind == 'cpus':
+            rows.append({'name': _text_value(item.get('name')), 'cores': _integer_value(item.get('cores'), positive=True),
+                         'logicalProcessors': _integer_value(item.get('logicalProcessors'), positive=True)})
+        elif kind == 'memoryModules':
+            rows.append({'capacityBytes': _integer_value(item.get('capacityBytes'), positive=True),
+                         'speedMHz': _integer_value(item.get('speedMHz'), positive=True),
+                         'configuredSpeedMHz': _integer_value(item.get('configuredSpeedMHz'), positive=True)})
+        elif kind == 'gpus':
+            rows.append({'name': _text_value(item.get('name')), 'driverVersion': _text_value(item.get('driverVersion'), 128),
+                         'dedicatedCapacityBytes': _integer_value(item.get('dedicatedCapacityBytes'), positive=True),
+                         'capacityReason': _text_value(item.get('capacityReason'), 512)})
+    return rows
 
 
 def _windows_memory_values():
@@ -54,9 +324,15 @@ def _windows_memory_values():
 
 def current_memory():
     result = {'readAt': datetime.now().astimezone().isoformat(), 'status': 'unavailable',
-              'availableBytes': None, 'totalBytes': None, 'usedPercent': None, 'reason': ''}
+              'availableBytes': None, 'totalBytes': None, 'usedBytes': None,
+              'usedPercent': None, 'source': 'GlobalMemoryStatusEx', 'reason': ''}
     try:
-        result.update(_windows_memory_values())
+        values = _windows_memory_values()
+        total, available = _integer_value(values.get('totalBytes'), positive=True), _integer_value(values.get('availableBytes'))
+        if total is None or available is None or available > total:
+            raise ValueError('系統記憶體數值無效。')
+        result.update(values)
+        result['usedBytes'] = total - available
         result['status'] = 'available'
     except (OSError, AttributeError, ValueError) as exc:
         result['reason'] = f'即時記憶體暫時無法讀取：{exc}'
@@ -630,33 +906,100 @@ finally { $picker.Dispose() }
         root = self._root()
         return {'root': str(root), 'snapshots': device_library.list_snapshots(root)}
 
+    def _device_details(self, model):
+        """Read a small, model-bound private note; never infer price or color."""
+        result = {'status': 'unavailable', 'model': None, 'purchase': None, 'color': None, 'reason': ''}
+        if not model:
+            result['reason'] = '尚無已保存型號可核對設備補充資料。'
+            return result
+        try:
+            candidate = self._root() / DEVICE_DETAILS_FILE
+            if not candidate.exists():
+                result['reason'] = '尚未記錄購買資訊或機身顏色。'
+                return result
+            if candidate.is_symlink() or getattr(candidate, 'is_junction', lambda: False)() or not candidate.is_file():
+                raise ValueError('設備補充資料必須是所選資料庫內的普通檔案。')
+            _, path = self._path(DEVICE_DETAILS_FILE)
+            with path.open('rb') as source:
+                raw = source.read(MAX_DEVICE_DETAILS_BYTES + 1)
+            if len(raw) > MAX_DEVICE_DETAILS_BYTES:
+                raise ValueError('設備補充資料超過 16 KiB。')
+            data = json.loads(raw.decode('utf-8-sig'))
+            if (not isinstance(data, dict) or type(data.get('schemaVersion')) is not int
+                    or data['schemaVersion'] != 1 or not _text_value(data.get('model'))):
+                raise ValueError('設備補充資料格式無效。')
+            if data['model'].strip().casefold() != model.strip().casefold():
+                result['reason'] = '補充資料型號與目前保存的設備不同，未套用。'
+                return result
+            purchase = data.get('purchase')
+            if purchase is not None:
+                if not isinstance(purchase, dict):
+                    raise ValueError('購買資訊格式無效。')
+                amount, currency, provenance = purchase.get('amount'), purchase.get('currency'), purchase.get('source')
+                year = purchase.get('year')
+                approximate, year_approximate = purchase.get('approximate'), purchase.get('yearApproximate', False)
+                if (type(amount) not in (int, float) or not math.isfinite(amount) or not 0 < amount <= 1000000000
+                        or not isinstance(currency, str) or not re.fullmatch(r'[A-Z]{3}', currency)
+                        or not isinstance(provenance, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,63}', provenance)
+                        or type(approximate) is not bool or type(year_approximate) is not bool
+                        or year is not None and (type(year) is not int or not 1900 <= year <= 2100)):
+                    raise ValueError('購買資訊數值或來源無效。')
+                purchase = {'amount': amount, 'currency': currency, 'approximate': approximate,
+                            'source': provenance, 'year': year, 'yearApproximate': year_approximate}
+            color = data.get('color')
+            if color is not None:
+                color = _text_value(color, 64)
+                if color is None:
+                    raise ValueError('機身顏色記錄無效。')
+            result.update({'status': 'available', 'model': model, 'purchase': purchase, 'color': color})
+        except (OSError, ValueError, UnicodeError, RuntimeError, RecursionError, OverflowError) as exc:
+            result['reason'] = '設備補充資料暫時不可用。' if not isinstance(exc, ValueError) else '設備補充資料格式或讀取範圍無效。'
+        return result
+
     def overview(self):
-        root = self._root()
-        memory = current_memory()
-        snapshots = device_library.list_snapshots(root)
-        for item in snapshots:
+        with self._document_scope() as root:
+            memory, gpu, storage = current_memory(), current_gpu(), current_storage()
+            result = {'root': str(root), 'currentMemory': memory, 'currentGpu': gpu['adapters'],
+                      'currentStorage': storage,
+                      'currentGpuRead': {key: value for key, value in gpu.items() if key != 'adapters'},
+                      'sampledAt': None, 'hardwareSampledAt': None, 'status': 'idle', 'applications': [],
+                      'gpuModels': [], 'cpus': [], 'memoryModules': [], 'gpus': []}
             try:
-                _, path = self._path(item.get('path') or f"snapshots/{item['id']}.json")
-                with path.open('rb') as source:
-                    raw = source.read(MAX_TEXT_BYTES + 1)
-                if len(raw) > MAX_TEXT_BYTES:
+                snapshots = device_library.list_snapshots(root)
+            except (OSError, ValueError, TypeError, RuntimeError, RecursionError):
+                snapshots = []
+            for item in snapshots:
+                try:
+                    _, path = self._path(item.get('path') or f"snapshots/{item['id']}.json")
+                    with path.open('rb') as source:
+                        raw = source.read(MAX_TEXT_BYTES + 1)
+                    if len(raw) > MAX_TEXT_BYTES:
+                        continue
+                    snapshot = json.loads(raw.decode('utf-8-sig'))
+                    if not isinstance(snapshot, dict):
+                        continue
+                    system = snapshot.get('system') if isinstance(snapshot.get('system'), dict) else {}
+                    hardware = snapshot.get('hardware') if isinstance(snapshot.get('hardware'), dict) else {}
+                    if snapshot.get('status') not in {'completed', 'partial'} or _integer_value(system.get('visiblePhysicalBytes'), positive=True) is None:
+                        continue
+                    cpus, modules, gpus = (_hardware_rows(hardware.get(key), key) for key in ('cpus', 'memoryModules', 'gpus'))
+                    result.update({'sampledAt': snapshot.get('sampledAt'),
+                                   'hardwareSampledAt': hardware.get('sampledAt') or snapshot.get('sampledAt'),
+                                   'scenario': snapshot.get('scenario'), 'status': snapshot.get('status'),
+                                   'physicalTotalBytes': system.get('visiblePhysicalBytes'),
+                                   'availableBytes': system.get('availablePhysicalBytes'), 'commitBytes': system.get('committedBytes'),
+                                   'model': _text_value(hardware.get('model')),
+                                   'cpuModel': ', '.join(cpu['name'] for cpu in cpus if cpu['name']),
+                                   'gpuModels': [adapter['name'] for adapter in gpus if adapter['name']],
+                                   'installedMemoryBytes': system.get('installedPhysicalBytes'),
+                                   'cpus': cpus, 'memoryModules': modules, 'gpus': gpus,
+                                   'report': item.get('report') or f"reports/{snapshot['id']}.md",
+                                   'applications': snapshot.get('groups') or []})
+                    break
+                except (ValueError, TypeError, AttributeError, KeyError, OSError, UnicodeError, RuntimeError, RecursionError):
                     continue
-                snapshot = json.loads(raw.decode('utf-8-sig'))
-                system, hardware = snapshot.get('system') or {}, snapshot.get('hardware') or {}
-                if snapshot.get('status') not in {'completed', 'partial'} or system.get('visiblePhysicalBytes') is None:
-                    continue
-                return {'root': str(root), 'currentMemory': memory, 'sampledAt': snapshot.get('sampledAt'),
-                        'scenario': snapshot.get('scenario'), 'status': snapshot.get('status'),
-                        'physicalTotalBytes': system.get('visiblePhysicalBytes'),
-                        'availableBytes': system.get('availablePhysicalBytes'), 'commitBytes': system.get('committedBytes'),
-                        'model': hardware.get('model'), 'cpuModel': ', '.join(cpu.get('name', '') for cpu in hardware.get('cpus') or []),
-                        'gpuModels': [gpu.get('name') for gpu in hardware.get('gpus') or [] if gpu.get('name')],
-                        'installedMemoryBytes': system.get('installedPhysicalBytes'),
-                        'report': item.get('report') or f"reports/{snapshot['id']}.md",
-                        'applications': snapshot.get('groups') or []}
-            except (ValueError, KeyError, OSError, UnicodeError):
-                continue
-        return {'root': str(root), 'currentMemory': memory, 'sampledAt': None, 'status': 'idle', 'applications': [], 'gpuModels': []}
+            result['deviceDetails'] = self._device_details(result.get('model'))
+            return result
 
     def compare(self, before, after):
         with self._lock:

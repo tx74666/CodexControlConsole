@@ -141,6 +141,7 @@ try {
     "tools/check-document-reader-page.mjs",
     "tools/check-document-inbox-ui.mjs",
     "tools/check-document-guide-ui.mjs",
+    "tools/check-device-overview-ui.mjs",
     "tools/check-blender-documents-ui.mjs",
     "tools/check-workspace-plan-ui.mjs",
     "tools/check-workspace-plan-persistence-ui.mjs",
@@ -181,6 +182,7 @@ try {
   Invoke-QualityStep "Document reader page behavior" { & $Node tools/check-document-reader-page.mjs }
   Invoke-QualityStep "Document inbox categories and archive actions" { & $Node tools/check-document-inbox-ui.mjs }
   Invoke-QualityStep "Document library entry and curated highlights" { & $Node tools/check-document-guide-ui.mjs }
+  Invoke-QualityStep "Device overview hardware and memory" { & $Node tools/check-device-overview-ui.mjs }
   Invoke-QualityStep "Blender document references and language pairing" { & $Node tools/check-blender-documents-ui.mjs }
   Invoke-QualityStep "Personal workspace plan migration" { & $Node tools/check-workspace-plan-ui.mjs }
   Invoke-QualityStep "Workspace plan persistence and phone source state" { & $Node tools/check-workspace-plan-persistence-ui.mjs }

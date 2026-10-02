@@ -761,10 +761,33 @@ h2 {
 .document-content th { background: var(--card-bg); }
 .document-overview { display: grid; gap: 9px; }
 .document-overview-meta { margin: 0; font-size: 13px; color: var(--muted); }
-.document-overview-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.document-overview-grid > div { display: grid; gap: 5px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card-bg); }
-.document-overview-grid span { font-size: 12px; color: var(--muted); }
-.document-overview-grid strong { font-size: 17px; overflow-wrap: anywhere; }
+.document-device-identity { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 18px; }
+.document-device-model { font-size: 18px; }
+.document-device-cpu { font-size: 12px; color: var(--soft); overflow-wrap: anywhere; }
+.document-device-personal { margin: 0; color: color-mix(in srgb, #ebcd88 35%, var(--text)); font-size: 12px; }
+.document-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.document-device-card {
+  --device-accent: #86b7ff;
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0;
+  padding: 13px 14px; border: 1px solid color-mix(in srgb, var(--device-accent) 24%, var(--line));
+  border-top: 2px solid var(--device-accent); border-radius: 10px;
+  background: color-mix(in srgb, var(--device-accent) 4%, var(--card-bg));
+}
+.document-device-gpu { --device-accent: #b5a1ff; }
+.document-device-storage { --device-accent: #91dcc9; }
+.document-device-caption { color: color-mix(in srgb, var(--device-accent) 45%, var(--text)); font-size: 12px; font-weight: 650; }
+.document-device-value { font-size: clamp(16px, 1.7vw, 21px); font-variant-numeric: tabular-nums; line-height: 1.35; overflow-wrap: anywhere; }
+.document-device-sub { color: var(--soft); font-size: 12px; font-variant-numeric: tabular-nums; }
+.document-device-config { color: var(--muted); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.document-device-card > .document-device-config:last-child { margin-top: auto; padding-top: 3px; }
+.document-device-adapter { display: flex; flex-direction: column; gap: 7px; }
+.document-device-adapter + .document-device-adapter { padding-top: 9px; border-top: 1px solid var(--line); }
+.document-device-gpu-name { font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.document-device-meter { height: 5px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--device-accent) 12%, var(--panel)); }
+.document-device-meter-fill { display: block; height: 100%; border-radius: inherit; background: var(--device-accent); }
+.document-device-meter[data-level="warning"] .document-device-meter-fill { background: #dfb46b; }
+.document-device-meter[data-level="high"] .document-device-meter-fill { background: #eb8d94; }
+.document-current-meta { font-size: 11px; line-height: 1.6; }
 .document-content a, .document-inline-link { color: var(--green); text-decoration: underline; text-underline-offset: 3px; }
 .document-inline-link { border: 0; background: transparent; padding: 0; cursor: pointer; font: inherit; text-align: left; }
 .document-unread-badge {
@@ -849,7 +872,7 @@ h2 {
   .document-layout { grid-template-columns: minmax(0, 1fr); }
   .document-entries { max-height: 240px; }
   .document-folder-form input { flex-basis: 100%; }
-  .document-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .document-overview-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .randomrealm-workspace {
