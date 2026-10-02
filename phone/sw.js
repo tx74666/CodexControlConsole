@@ -5,8 +5,28 @@ const BUILD = "__CONSOLE_PHONE_BUILD__";
 const PREFIX = "codex-console-phone-shell-" + encodeURIComponent(new URL(self.registration.scope).pathname) + "-";
 const CACHE = PREFIX + VERSION + "-" + BUILD;
 const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./store.js", "./manifest.webmanifest", `./phone-icon-180.png?v=${BUILD}`, `./phone-icon-192.png?v=${BUILD}`, `./phone-icon-512.png?v=${BUILD}`, "./music-catalog.json", "./version.json"];
-self.addEventListener("install", event => event.waitUntil((async () => { const cache = await caches.open(CACHE); await cache.addAll(SHELL); if (!self.registration.active) await self.skipWaiting(); })()));
-self.addEventListener("activate", event => event.waitUntil((async () => { for (const key of await caches.keys()) if (key.startsWith(PREFIX) && key !== CACHE) await caches.delete(key); await self.clients.claim(); })()));
+self.addEventListener("install", event => event.waitUntil((async () => { const cache = await caches.open(CACHE); await cache.addAll(SHELL.map(path => new Request(new URL(path, self.registration.scope), { cache: "reload" }))); await self.skipWaiting(); })()));
+async function refreshExistingClients() {
+  if (!self.clients.matchAll) return;
+  const scope = new URL(self.registration.scope);
+  const windows = await self.clients.matchAll({ type: "window" });
+  await Promise.all(windows.map(async client => {
+    const url = new URL(client.url);
+    if (url.origin !== scope.origin || ![scope.pathname, scope.pathname + "index.html"].includes(url.pathname)) return;
+    const channel = new MessageChannel();
+    const handled = await new Promise(resolve => {
+      const timer = setTimeout(() => resolve(false), 1200);
+      channel.port1.onmessage = event => { if (event.data?.handled === true) { clearTimeout(timer); resolve(true); } };
+      try { client.postMessage({ type: "CONSOLE_SHELL_UPDATED", version: VERSION, buildId: BUILD }, [channel.port2]); }
+      catch { clearTimeout(timer); resolve(false); }
+    });
+    channel.port1.close();
+    // Older phone pages have no update handler. Do not await navigation here:
+    // its fetch waits for activation itself to finish.
+    if (!handled && client.navigate) void client.navigate(client.url).catch(() => {});
+  }));
+}
+self.addEventListener("activate", event => event.waitUntil((async () => { for (const key of await caches.keys()) if (key.startsWith(PREFIX) && key !== CACHE) await caches.delete(key); await self.clients.claim(); await refreshExistingClients(); })()));
 self.addEventListener("message", event => { if (event.data?.type === "APPLY_UPDATE") void self.skipWaiting(); });
 function rangeParts(range, size) {
   if (!range) return null;

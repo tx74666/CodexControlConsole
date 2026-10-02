@@ -4,8 +4,8 @@ from PIL import Image
 
 
 PROJECT = Path(__file__).resolve().parents[1]
-BACKGROUND = (21, 27, 41, 255)
-FOREGROUND_RATIO = 0.66
+BACKGROUND = (255, 255, 255, 255)
+FOREGROUND_RATIO = 0.72
 SIZES = (180, 192, 512)
 
 
@@ -23,7 +23,7 @@ def main():
         canvas = Image.new("RGBA", (size, size), BACKGROUND)
         canvas.alpha_composite(artwork, ((size - artwork.width) // 2, (size - artwork.height) // 2))
         canvas.convert("RGB").save(PROJECT / "phone" / f"phone-icon-{size}.png", optimize=True)
-    print("Packaged original Console artwork: 180, 192, 512; opaque dark background; 66% foreground.")
+    print("Packaged original Console artwork: 180, 192, 512; opaque white background; 72% foreground.")
 
 
 if __name__ == "__main__":

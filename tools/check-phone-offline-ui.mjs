@@ -46,8 +46,9 @@ function harness({ syncEnabled = false } = {}) {
   const tabs = ["tasks", "music", "device", "documents"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const musicTabs = ["", "first", "second", "third"].map(tier => { const button = new Element("button"); button.dataset.musicTier = tier; return button; });
-  const documentEvents = new Map(), windowEvents = new Map();
-  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : selector === "button[data-music-tier]" ? musicTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
+  const documentEvents = new Map(), windowEvents = new Map(), workerEvents = new Map(), registrationEvents = new Map(), registrations = [], reloads = [];
+  const addEvent = (events, name, callback) => { const previous = events.get(name); events.set(name, (...args) => { previous?.(...args); return callback(...args); }); };
+  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : selector === "button[data-music-tier]" ? musicTabs : [], addEventListener(name, callback) { addEvent(documentEvents, name, callback); } };
   const history = { state: null, pushState(value) { this.state = value; }, back() { this.state = null; } };
   const stores = new Map(["records", "music", "media", "settings"].map(name => [name, new Map()]));
   const PhoneStore = {
@@ -60,15 +61,16 @@ function harness({ syncEnabled = false } = {}) {
     async putTrack(metadata, media) { if (this.failWrites) throw Object.assign(new Error("quota"), { name: "QuotaExceededError" }); stores.get("music").set(metadata.id, structuredClone(metadata)); stores.get("media").set(media.id, structuredClone(media)); },
     async replaceLibrary(value) { if (this.failWrites) throw new Error("quota"); const old = stores.get("records").get("library"); if (old) stores.get("records").set("previousImport", structuredClone({ ...old, id: "previousImport" })); stores.get("records").set("library", structuredClone(value)); }
   };
-  const runtime = { URL, URLSearchParams, AbortController, TypeError, Request, document, history, navigator: { serviceWorker: { controller: {}, ready: Promise.resolve({}), register: async () => ({ waiting: null, addEventListener() {}, async update() {} }), addEventListener() {} } }, PhoneStore, Blob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html" }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
-  const names = "state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
+  const registration = { waiting: null, installing: null, updateCalls: 0, addEventListener(name, callback) { registrationEvents.set(name, callback); }, async update() { this.updateCalls++; if (this.updateError) throw this.updateError; if (this.onUpdate) await this.onUpdate(); } };
+  const runtime = { URL, URLSearchParams, AbortController, TypeError, Request, document, history, navigator: { onLine: true, serviceWorker: { controller: {}, ready: Promise.resolve(registration), register: async (...args) => { registrations.push(args); return registration; }, addEventListener(name, callback) { workerEvents.set(name, callback); } } }, PhoneStore, Blob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html", reload() { reloads.push(true); } }, addEventListener(name, callback) { addEvent(windowEvents, name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
+  const names = "state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
   assert.ok(source.includes("  void bootstrap();\n})();"), "test export insertion must match only bootstrap footer");
   // Exercise deferred sync explicitly in isolated tests; production stays offline by default.
   const testSource = syncEnabled ? source.replace("const TASK_SYNC_ENABLED = false;", "const TASK_SYNC_ENABLED = true;") : source;
   if (syncEnabled) assert.notEqual(testSource, source, "deferred sync tests must enable the source flag in memory");
   runInNewContext(testSource.replace("  void bootstrap();\n})();", `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
-  return { api, stores, PhoneStore, runtime, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
+  return { api, stores, PhoneStore, runtime, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, timers, documentEvents, windowEvents, workerEvents, registrationEvents, registration, registrations, reloads, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
 }
 
 function importFixture() {
@@ -81,6 +83,21 @@ const groupedPlaylist = () => [
   { name: "Third default", tier: undefined }, { name: "First B", tier: "first" }, { name: "Second B", tier: "second" }, { name: "First A", tier: "first" }, { name: "Second A", tier: "second" }, { name: "Third explicit", tier: "third" }
 ].map((track, index) => ({ ...track, path: `builtin/group-${index}.mp3`, type: "mp3", size: 9, source: `music/group-${index}.mp3` }));
 const musicRows = h => h.all(h.get("musicTracks"), "button").filter(button => button.className === "music-track");
+const snapshot = (hash = "a", computerId = "fixture-pc") => ({ format: "codex-console-plan-snapshot", schemaVersion: 1, hash: hash.repeat(64), updatedAt: "2026-10-01T12:00:00Z", computerId, plan: plan().plan });
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+function workerHarness({ active = true, clients = [], installError = null } = {}) {
+  const listeners = new Map(), deleted = [], claimed = [], skipped = [], precached = [], timers = new Map(); let nextTimer = 1;
+  class Channel {
+    constructor() {
+      this.port1 = { onmessage: null, close() {} };
+      this.port2 = { postMessage: data => this.port1.onmessage?.({ data }), close() {} };
+    }
+  }
+  const self = { registration: { scope: "https://example.test/project/phone/", active: active ? {} : null }, clients: { async claim() { claimed.push(true); }, async matchAll() { return clients; } }, addEventListener: (name, fn) => listeners.set(name, fn), async skipWaiting() { skipped.push(true); } };
+  const context = { self, URL, Headers, Request, Response, Blob, MessageChannel: Channel, importScripts() {}, PhoneStore: {}, setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, caches: { async open() { return { async addAll(requests) { precached.push(...requests); if (installError) throw installError; } }; }, async keys() { return ["codex-console-phone-shell-%2Fproject%2Fphone%2F-old-old", "unrelated-cache", "codex-console-phone-shell-%2Fother%2F-old-old"]; }, async delete(key) { deleted.push(key); } } };
+  runInNewContext(swSource, context);
+  return { listeners, deleted, claimed, skipped, precached, timers, async run(name) { let done; listeners.get(name)({ waitUntil(promise) { done = promise; } }); return done; } };
+}
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
 await test("relative project installation has four tabs and no PC connection requirement", () => {
@@ -188,11 +205,99 @@ await test("quota failure never reports an unsaved audio blob as offline-ready",
 await test("failed update checks preserve imported data and active music", async () => {
   const h = harness(); h.ready(); const before = JSON.stringify(h.api.state.library); h.audio.paused = false; h.answers.push(Promise.reject(new TypeError("offline"))); await h.api.checkUpdate(); assert.equal(h.audio.paused, false); assert.equal(JSON.stringify(h.api.state.library), before); assert.match(h.get("updateNotice").textContent, /继续使用/);
 });
+await test("online startup checks for a fresh shell and reloads once after the old controller changes", async () => {
+  const h = harness(); h.ready(); const before = JSON.stringify(h.api.state.library), applied = [];
+  h.stores.get("media").set("saved-song", { id: "saved-song", blob: new Blob(["original audio"]) });
+  h.registration.waiting = { postMessage(message) { applied.push(message); } };
+  h.respond({ tracks: [] }); h.respond({ version: "99.0.0", buildId: "a".repeat(16) }); await h.api.bootstrap(); await settle();
+  assert.ok(h.calls.some(call => call.url === "./version.json" && call.options.cache === "no-store")); assert.ok(h.registration.updateCalls > 0);
+  assert.equal(h.registrations[0][1].updateViaCache, "none"); assert.ok(applied.some(message => message.type === "APPLY_UPDATE"));
+  h.runtime.navigator.serviceWorker.controller = {}; h.workerEvents.get("controllerchange")(); await settle();
+  h.workerEvents.get("controllerchange")(); await settle(); assert.equal(h.reloads.length, 1);
+  assert.equal(JSON.stringify(h.api.state.library), before); assert.equal(await h.stores.get("media").get("saved-song").blob.text(), "original audio");
+});
+await test("the first offline controller installation does not unnecessarily reload the app", async () => {
+  const h = harness(); h.ready(); h.runtime.navigator.serviceWorker.controller = null;
+  h.respond({ version: "__CONSOLE_PHONE_VERSION__", buildId: "__CONSOLE_PHONE_BUILD__" }); await h.api.setupWorker(); await settle();
+  h.runtime.navigator.serviceWorker.controller = {}; h.workerEvents.get("controllerchange")(); await settle();
+  assert.equal(h.reloads.length, 0); assert.equal(h.audio.pauseCalls, 0);
+});
+await test("updated playing pages acknowledge migration immediately and defer their own reload until paused", async () => {
+  const h = harness(); h.ready(); h.api.state.catalog = publicPlaylist();
+  h.stores.get("media").set("builtin/one.mp3", { id: "builtin/one.mp3", blob: new Blob(["saved music"]) });
+  h.stores.get("music").set("builtin/one.mp3", { id: "builtin/one.mp3", offlineLyrics: [], lyrics: false });
+  await h.api.loadMusic(); h.api.selectMusicTrack("builtin/one.mp3"); const before = JSON.stringify(h.api.state.library), pauses = h.audio.pauseCalls;
+  h.respond({ version: "__CONSOLE_PHONE_VERSION__", buildId: "__CONSOLE_PHONE_BUILD__" }); await h.api.setupWorker(); await settle();
+  h.runtime.navigator.serviceWorker.controller = {}; h.workerEvents.get("controllerchange")(); const acknowledgements = [];
+  h.workerEvents.get("message")({ source: h.runtime.navigator.serviceWorker.controller, data: { type: "CONSOLE_SHELL_UPDATED", version: "99.0.0", buildId: "a".repeat(16) }, ports: [{ postMessage(value) { acknowledgements.push(value); } }] });
+  assert.equal(acknowledgements[0]?.handled, true); await settle(); assert.equal(h.reloads.length, 0); assert.equal(h.audio.paused, false); assert.equal(h.audio.pauseCalls, pauses);
+  h.audio.paused = true; h.audio.listeners.get("pause")?.(); await settle(); assert.equal(h.reloads.length, 1);
+  assert.equal(JSON.stringify(h.api.state.library), before); assert.equal(await h.stores.get("media").get("builtin/one.mp3").blob.text(), "saved music");
+});
+await test("automatic update waits for an in-progress library save before reloading", async () => {
+  const h = harness(); h.ready(); const pending = defer(), originalPut = h.PhoneStore.put.bind(h.PhoneStore);
+  h.PhoneStore.put = async (name, value) => { if (name === "records") await pending.promise; await originalPut(name, value); };
+  const saved = h.api.mutateLibrary(library => { library.reading = { "to-read": "later" }; }); h.api.state.updatePending = true;
+  const reload = h.api.maybeReloadUpdate(); await settle(); assert.equal(h.reloads.length, 0); pending.resolve(); await saved; await reload;
+  assert.equal(h.stores.get("records").get("library").reading["to-read"], "later"); assert.equal(h.reloads.length, 1);
+});
+await test("automatic update also waits for a second library save queued during the first save", async () => {
+  const h = harness(); h.ready(); const firstGate = defer(), secondGate = defer(), originalPut = h.PhoneStore.put.bind(h.PhoneStore); let writes = 0;
+  h.PhoneStore.put = async (name, value) => { if (name === "records") await (++writes === 1 ? firstGate.promise : secondGate.promise); await originalPut(name, value); };
+  const first = h.api.mutateLibrary(library => { library.reading = { "to-read": "later" }; }); await settle();
+  h.api.state.updatePending = true; const reload = h.api.maybeReloadUpdate();
+  const second = h.api.mutateLibrary(library => { library.taskDone = { "task-0": true }; });
+  firstGate.resolve(); await first; await settle(); assert.equal(writes, 2); assert.equal(h.reloads.length, 0);
+  assert.equal(h.stores.get("records").get("library").reading["to-read"], "later"); assert.equal(h.stores.get("records").get("library").taskDone["task-0"], undefined);
+  secondGate.resolve(); await second; await reload; const saved = h.stores.get("records").get("library");
+  assert.equal(saved.reading["to-read"], "later"); assert.equal(saved.taskDone["task-0"], true); assert.equal(h.reloads.length, 1);
+});
+await test("slow import reads defer shell reload through review and recover after cancel confirm or failure", async () => {
+  for (const action of ["cancel", "confirm", "fail"]) {
+    const h = harness(); h.ready(); const pending = defer(), before = JSON.stringify(h.stores.get("records").get("library"));
+    const review = h.api.reviewImport({ size: 100, text: () => pending.promise }); h.api.state.updatePending = true;
+    await h.api.maybeReloadUpdate(); await settle(); assert.equal(h.reloads.length, 0, `reload while ${action} import is still reading`);
+    if (action === "fail") {
+      pending.reject(new Error("file read failed")); await assert.rejects(review, /file read failed/); await settle();
+      assert.equal(h.reloads.length, 1); assert.equal(JSON.stringify(h.stores.get("records").get("library")), before); continue;
+    }
+    pending.resolve(JSON.stringify(snapshot("b"))); await review; await settle();
+    assert.equal(h.get("importReview").hidden, false); assert.equal(h.reloads.length, 0); assert.equal(JSON.stringify(h.stores.get("records").get("library")), before);
+    if (action === "cancel") h.get("importCancel").listeners.get("click")(); else await h.api.commitImport();
+    await settle(); assert.equal(h.reloads.length, 1);
+    if (action === "cancel") assert.equal(JSON.stringify(h.stores.get("records").get("library")), before);
+    else assert.equal(h.stores.get("records").get("library").planSync.hash, "b".repeat(64));
+  }
+});
+await test("offline automatic startup keeps saved plans documents and music without interrupting playback", async () => {
+  const h = harness(); h.ready(); await h.api.applyPlanSnapshot(snapshot()); h.audio.paused = false;
+  h.stores.get("media").set("saved-song", { id: "saved-song", blob: new Blob(["offline music"]) }); const before = JSON.stringify(h.stores.get("records").get("library"));
+  h.answers.push(() => { throw new TypeError("offline catalog"); }, () => { throw new TypeError("offline update"); }); await h.api.bootstrap(); await settle();
+  assert.equal(h.reloads.length, 0); assert.equal(h.audio.paused, false); assert.equal(h.audio.pauseCalls, 0); assert.equal(JSON.stringify(h.api.state.library), before);
+  assert.equal(h.api.state.library.planSync.readonly, true); assert.equal(h.api.state.library.files.length, 6); assert.equal(await h.stores.get("media").get("saved-song").blob.text(), "offline music");
+});
 await test("shell cache is build-specific and activation never removes user data", async () => {
   assert.match(swSource, /VERSION \+ "-" \+ BUILD/); assert.match(swSource, /encodeURIComponent\(new URL\(self.registration.scope\).pathname\)/); assert.doesNotMatch(swSource, /deleteDatabase|\.clear\(/); assert.match(storeSource, /db.transaction\(\["music", "media"\], "readwrite"\)/);
-  const listeners = new Map(), deleted = [], claimed = []; const self = { registration: { scope: "https://example.test/project/phone/", active: {} }, clients: { async claim() { claimed.push(true); } }, addEventListener: (name, fn) => listeners.set(name, fn), async skipWaiting() {} };
-  const context = { self, URL, Headers, Response, Blob, importScripts() {}, PhoneStore: {}, caches: { async keys() { return ["codex-console-phone-shell-%2Fproject%2Fphone%2F-old-old", "unrelated-cache", "codex-console-phone-shell-%2Fother%2F-old-old"]; }, async delete(key) { deleted.push(key); } } };
-  runInNewContext(swSource, context); let done; listeners.get("activate")({ waitUntil(promise) { done = promise; } }); await done; assert.deepEqual(deleted, ["codex-console-phone-shell-%2Fproject%2Fphone%2F-old-old"]); assert.equal(claimed.length, 1);
+  const h = workerHarness(); await h.run("activate"); assert.deepEqual(h.deleted, ["codex-console-phone-shell-%2Fproject%2Fphone%2F-old-old"]); assert.equal(h.claimed.length, 1);
+});
+await test("a complete fresh shell activates automatically while failed precaching keeps the old worker", async () => {
+  const complete = workerHarness(); await complete.run("install"); assert.equal(complete.skipped.length, 1); assert.ok(complete.precached.length > 0);
+  assert.ok(complete.precached.every(request => request.cache === "reload"), "new shell installation must fetch fresh responses rather than old HTTP cache entries");
+  const incomplete = workerHarness({ installError: new TypeError("offline midway") }); await assert.rejects(incomplete.run("install"), /offline midway/); assert.equal(incomplete.skipped.length, 0);
+});
+await test("legacy pages without a handler navigate once without blocking worker activation", async () => {
+  const messages = [], navigated = [], unrelated = [];
+  const legacy = { type: "window", url: "https://example.test/project/phone/index.html", postMessage(message) { messages.push(message); }, navigate(url) { navigated.push(url); return new Promise(() => {}); } };
+  const other = { type: "window", url: "https://example.test/other/index.html", postMessage() { unrelated.push("message"); }, navigate() { unrelated.push("navigate"); } };
+  const h = workerHarness({ clients: [legacy, other] }), activated = h.run("activate"); await settle();
+  for (const timer of [...h.timers.values()]) timer.fn();
+  let deadline; try { await Promise.race([activated, new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("activation waited for client navigation")), 500); })]); } finally { clearTimeout(deadline); }
+  assert.deepEqual(navigated, [legacy.url]); assert.equal(messages.length, 1); assert.equal(messages[0].type, "CONSOLE_SHELL_UPDATED"); assert.deepEqual(unrelated, []);
+});
+await test("an acknowledged updated page is never forced to navigate by the migration bridge", async () => {
+  const messages = [], navigated = [];
+  const current = { type: "window", url: "https://example.test/project/phone/", postMessage(message, ports) { messages.push(message); ports[0].postMessage({ handled: true }); }, navigate(url) { navigated.push(url); } };
+  const h = workerHarness({ clients: [current] }); await h.run("activate"); assert.equal(messages.length, 1); assert.deepEqual(navigated, []);
 });
 await test("local SW audio returns full HEAD and all Safari single byte ranges", async () => {
   const context = { self: { registration: { scope: "https://example.test/project/phone/", active: {} }, addEventListener() {} }, URL, Headers, Response, Blob, importScripts() {}, PhoneStore: { async get(_, id) { return id === "test" ? { blob: new Blob(["0123456789"], { type: "audio/wav" }) } : null; } } };
@@ -201,7 +306,6 @@ await test("local SW audio returns full HEAD and all Safari single byte ranges",
   const head = await api.localAudio(new Request("https://example.test/project/phone/audio/test", { method: "HEAD" }), "test"); assert.equal(head.headers.get("Content-Length"), "10"); assert.equal(await head.text(), "");
   const bad = await api.localAudio(new Request("https://example.test/project/phone/audio/test", { headers: { Range: "bytes=99-" } }), "test"); assert.equal(bad.status, 416); assert.equal(bad.headers.get("Content-Range"), "bytes */10"); assert.equal((await api.localAudio(new Request("https://example.test/project/phone/audio/missing"), "missing")).status, 404);
 });
-const snapshot = (hash = "a", computerId = "fixture-pc") => ({ format: "codex-console-plan-snapshot", schemaVersion: 1, hash: hash.repeat(64), updatedAt: "2026-10-01T12:00:00Z", computerId, plan: plan().plan });
 const enableSync = h => { h.runtime.Request = class { constructor(_, options) { this.targetAddressSpace = options.targetAddressSpace; } }; h.get("syncAddress").value = "http://192.168.1.10:8899/"; h.get("syncCode").value = "123456"; };
 const savedSync = () => ({ address: "http://192.168.1.10:8899", token: "x".repeat(43), computerId: "fixture-pc", expiresAt: Date.now() + 3600000 });
 await test("task snapshots validate bounded groups and never accept malformed private records", () => {
@@ -257,20 +361,20 @@ await test("offline and expired sync retain all data and expiry stops polling wi
 });
 await test("background suspends polling and returning foreground refreshes immediately", async () => {
   const h = harness({ syncEnabled: true }); h.ready(); h.api.taskSync.config = savedSync(); h.document.hidden = true; await h.api.pollTaskSync(); assert.equal(h.calls.length, 0); h.documentEvents.get("visibilitychange")(); assert.equal(h.api.taskSync.timer, null);
-  h.respond(snapshot()); h.document.hidden = false; h.documentEvents.get("visibilitychange")(); await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(h.calls.length, 1); assert.equal(h.api.taskSync.connected, true);
+  h.respond({ version: "__CONSOLE_PHONE_VERSION__", buildId: "__CONSOLE_PHONE_BUILD__" }); h.respond(snapshot()); h.document.hidden = false; h.documentEvents.get("visibilitychange")(); await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(h.calls.filter(call => call.url.includes("/api/phone/")).length, 1); assert.equal(h.api.taskSync.connected, true);
 });
 await test("default offline boot refresh and foreground events ignore old PC tokens without losing saved content", async () => {
   const h = harness(); h.ready(); enableSync(h); await h.api.applyPlanSnapshot(snapshot());
   h.stores.get("media").set("saved-song", { id: "saved-song", blob: new Blob(["original audio"]) });
   h.stores.get("music").set("saved-song", { id: "saved-song", name: "Saved song", offlineLyrics: [{ code: "en", content: "[00:01]Saved lyrics" }] });
   const oldConnection = { id: "taskSync", ...savedSync() }; h.stores.get("settings").set("taskSync", structuredClone(oldConnection));
-  const before = JSON.stringify(h.stores.get("records").get("library")); h.respond({ tracks: [] });
+  const before = JSON.stringify(h.stores.get("records").get("library")); h.respond({ tracks: [] }); h.respond({ version: "__CONSOLE_PHONE_VERSION__", buildId: "__CONSOLE_PHONE_BUILD__" });
   await h.api.bootstrap(); await new Promise(resolve => setTimeout(resolve, 0));
   // A stale in-memory config must remain harmless too, including direct dormant entry calls.
   h.api.taskSync.config = savedSync(); await h.api.refresh(); await h.api.restoreTaskSync(); await h.api.connectTaskSync(); await h.api.pollTaskSync();
   h.windowEvents.get("online")?.(); h.document.hidden = true; h.documentEvents.get("visibilitychange")?.();
   h.document.hidden = false; h.documentEvents.get("visibilitychange")?.(); await new Promise(resolve => setTimeout(resolve, 0));
-  assert.deepEqual(h.calls.map(call => call.url), ["./music-catalog.json"]); assert.equal(h.api.taskSync.timer, null);
+  assert.ok(h.calls.some(call => call.url === "./version.json")); assert.ok(h.calls.every(call => ["./music-catalog.json", "./version.json"].includes(call.url)), "offline viewing may check the public app version but must not contact a PC"); assert.equal(h.api.taskSync.timer, null);
   assert.equal(JSON.stringify(h.stores.get("records").get("library")), before); assert.equal(JSON.stringify(h.api.state.library), before);
   assert.deepEqual(h.stores.get("settings").get("taskSync"), oldConnection); assert.equal(await h.stores.get("media").get("saved-song").blob.text(), "original audio");
   assert.equal(h.stores.get("music").get("saved-song").offlineLyrics[0].content, "[00:01]Saved lyrics"); assert.equal(h.api.state.library.planSync.readonly, true);

@@ -83,6 +83,7 @@
   }
   function setBusy(value) {
     state.busy = value; el("refreshButton").disabled = value || state.mutationBusy;
+    if (!value) void maybeReloadUpdate();
   }
   async function bootstrap() {
     setBusy(true);
@@ -296,13 +297,16 @@
     void pollTaskSync();
   }
   async function reviewImport(file) {
-    state.pendingImport = null; state.pendingSnapshot = null; el("importReview").hidden = true;
-    if (!file || file.size > 24 * 1024 * 1024) throw new Error("资料包超过 24 MiB，请在电脑减少要导出的文档。");
-    const data = JSON.parse(await file.text());
-    if (data?.format === "codex-console-plan-snapshot") { const snapshot = validatePlanSnapshot(data); state.pendingSnapshot = snapshot; el("importCounts").textContent = `${snapshot.plan.groups.length} 项主要计划 · ${snapshot.plan.groups.reduce((total, group) => total + group.items.length, 0)} 个细项。电脑保存于 ${date(snapshot.updatedAt)}。`; el("importReviewHelp").textContent = "只更新任务，以电脑记录为准。文档、阅读状态和音乐保留；原手机勾选保存为备份。"; el("importReview").hidden = false; return; }
-    const library = validateImport(data); state.pendingImport = library; el("importReviewHelp").textContent = "更新资料并保留这台手机的任务勾选与阅读状态。不会上传到 GitHub。";
-    const groups = library.dashboard.plan?.plan?.groups || []; el("importCounts").textContent = `${groups.length} 项主要计划 · ${groups.reduce((total, group) => total + group.items.length, 0)} 个细项 · ${library.files.length} 份文档。导出于 ${date(library.exportedAt)}。`;
-    el("importReview").hidden = false; notice("settingsNotice");
+    state.reviewingImport = (state.reviewingImport || 0) + 1;
+    try {
+      state.pendingImport = null; state.pendingSnapshot = null; el("importReview").hidden = true;
+      if (!file || file.size > 24 * 1024 * 1024) throw new Error("资料包超过 24 MiB，请在电脑减少要导出的文档。");
+      const data = JSON.parse(await file.text());
+      if (data?.format === "codex-console-plan-snapshot") { const snapshot = validatePlanSnapshot(data); state.pendingSnapshot = snapshot; el("importCounts").textContent = `${snapshot.plan.groups.length} 项主要计划 · ${snapshot.plan.groups.reduce((total, group) => total + group.items.length, 0)} 个细项。电脑保存于 ${date(snapshot.updatedAt)}。`; el("importReviewHelp").textContent = "只更新任务，以电脑记录为准。文档、阅读状态和音乐保留；原手机勾选保存为备份。"; el("importReview").hidden = false; return; }
+      const library = validateImport(data); state.pendingImport = library; el("importReviewHelp").textContent = "更新资料并保留这台手机的任务勾选与阅读状态。不会上传到 GitHub。";
+      const groups = library.dashboard.plan?.plan?.groups || []; el("importCounts").textContent = `${groups.length} 项主要计划 · ${groups.reduce((total, group) => total + group.items.length, 0)} 个细项 · ${library.files.length} 份文档。导出于 ${date(library.exportedAt)}。`;
+      el("importReview").hidden = false; notice("settingsNotice");
+    } finally { state.reviewingImport -= 1; void maybeReloadUpdate(); }
   }
   async function commitImport() {
     if (state.busy || !state.pendingImport && !state.pendingSnapshot) return; el("importConfirm").disabled = true; setBusy(true);
@@ -324,22 +328,70 @@
     catch { el("storageNotice").textContent = "资料保存在这台手机，可随时导出备份。"; }
   }
   async function requestPersistence() { try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch { /* Storage availability is checked on every write. */ } }
+  function updateIsIdle() {
+    return !state.busy && !state.mutationBusy && !state.mediaSaving && !state.reviewingImport && !state.downloadController && !state.pendingImport && !state.pendingSnapshot && el("musicAudio").paused;
+  }
+  async function maybeReloadUpdate() {
+    if (!state.updatePending || state.reloadingUpdate) return;
+    el("applyUpdate").hidden = false;
+    if (!updateIsIdle()) { notice("updateNotice", "新版已准备，播放或保存结束后会自动更新。"); return; }
+    state.reloadingUpdate = true;
+    let pending;
+    do { pending = libraryMutationQueue; await pending; } while (pending !== libraryMutationQueue);
+    if (!updateIsIdle()) { state.reloadingUpdate = false; return; }
+    window.location.reload();
+  }
+  function prepareWaitingUpdate() {
+    if (!state.registration?.waiting) return;
+    el("applyUpdate").hidden = false;
+    state.registration.waiting.postMessage({ type: "APPLY_UPDATE" });
+  }
   async function setupWorker() {
     if (!navigator.serviceWorker) { notice("updateNotice", "这个浏览器暂时不支持离线程序，请使用新版 iPhone Safari。", true); return; }
     try {
+      if (!state.workerEventsBound) {
+        state.workerEventsBound = true;
+        let previousController = navigator.serviceWorker.controller;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          const controller = navigator.serviceWorker.controller;
+          if (previousController && controller !== previousController) state.updatePending = true;
+          previousController = controller;
+          updateMusicControls(); void maybeReloadUpdate();
+        });
+        navigator.serviceWorker.addEventListener("message", event => {
+          if (event.data?.type !== "CONSOLE_SHELL_UPDATED") return;
+          event.ports?.[0]?.postMessage({ handled: true });
+          if (event.data.buildId !== BUILD) { state.updatePending = true; void maybeReloadUpdate(); }
+        });
+      }
       state.registration = await navigator.serviceWorker.register("./sw.js", { scope: "./", updateViaCache: "none" });
-      const watch = () => { if (state.registration.waiting) { el("applyUpdate").hidden = false; notice("updateNotice", "新版程序已准备，更新不会清除你的资料和音乐。"); } };
+      const watch = () => prepareWaitingUpdate();
       watch(); state.registration.addEventListener("updatefound", () => state.registration.installing?.addEventListener("statechange", watch));
-      navigator.serviceWorker.addEventListener("controllerchange", () => { if (state.applyingUpdate) window.location.reload(); else updateMusicControls(); });
       await navigator.serviceWorker.ready; updateMusicControls();
       el("connectionLabel").textContent = "本机离线";
-      notice("updateNotice", state.registration.waiting ? "新版程序已准备，更新不会清除你的资料和音乐。" : "离线程序已保存，可以从主屏幕离线打开。");
+      if (!state.updatePending) notice("updateNotice", "离线程序已保存，联网打开时会自动检查更新。");
+      await checkUpdate({ automatic: true });
     } catch { notice("updateNotice", "离线程序尚未完整保存。首次使用请联网后重开一次。", true); }
   }
-  async function checkUpdate() {
-    el("checkUpdate").disabled = true; notice("updateNotice", "正在检查程序更新…");
-    try { const response = await fetch("./version.json", { cache: "no-store" }); if (!response.ok) throw new Error(); const data = await response.json(); await state.registration?.update(); notice("updateNotice", data.version === VERSION && data.buildId === BUILD ? `当前已是 v${VERSION}。` : `发现程序更新 v${data.version}，正在准备更新。`); if (state.registration?.waiting) el("applyUpdate").hidden = false; }
-    catch { notice("updateNotice", "当前无法检查更新；已保存的资料和音乐可以继续使用。"); } finally { el("checkUpdate").disabled = false; }
+  async function checkUpdate({ automatic = false } = {}) {
+    if (state.updatePromise) return state.updatePromise;
+    if (automatic && (navigator.onLine === false || document.hidden || Date.now() - (state.lastUpdateCheck || 0) < 30000)) return;
+    state.lastUpdateCheck = Date.now();
+    state.updatePromise = (async () => {
+      el("checkUpdate").disabled = true;
+      if (!automatic) notice("updateNotice", "正在检查程序更新…");
+      const controller = new AbortController(), timeout = window.setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch("./version.json", { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error(); const data = await response.json();
+        if (typeof data.version !== "string" || typeof data.buildId !== "string") throw new Error();
+        await state.registration?.update();
+        if (!state.updatePending) notice("updateNotice", data.version === VERSION && data.buildId === BUILD ? `当前已是 v${VERSION}。` : `正在更新到 v${data.version}，资料和音乐保留。`);
+        prepareWaitingUpdate(); await maybeReloadUpdate();
+      } catch { notice("updateNotice", "当前无法检查更新；已保存的资料和音乐可以继续使用。"); }
+      finally { window.clearTimeout(timeout); el("checkUpdate").disabled = false; state.updatePromise = null; }
+    })();
+    return state.updatePromise;
   }
   function musicMime(type) { return ({ mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", wav: "audio/wav", flac: "audio/flac", ogg: "audio/ogg", opus: "audio/ogg" })[type] || "application/octet-stream"; }
   function publicSource(value) { const path = pathValue(value); if (!path || path !== value || !path.startsWith("music/")) throw new Error("音乐来源无效。"); return new URL(path.split("/").map(encodeURIComponent).join("/"), window.location.href).href; }
@@ -366,7 +418,7 @@
       for (const track of tracks) { notice("musicNotice", `正在下载：${track.name}`); await saveMusicTrack(track, controller.signal); renderMusicTracks(); }
       await loadMusic(true); await updateStorageNotice(); notice("musicNotice");
     } catch (error) { if (error.name === "AbortError") notice("musicNotice", "已停止下载，已保存的音乐仍保留。"); else failure(error, "musicNotice"); }
-    finally { state.downloadController = null; el("musicDownloadStop").hidden = true; el("musicDownloadAll").disabled = false; renderMusicTracks(); }
+    finally { state.downloadController = null; el("musicDownloadStop").hidden = true; el("musicDownloadAll").disabled = false; renderMusicTracks(); void maybeReloadUpdate(); }
   }
   function lyricFileInfo(file) {
     const stem = file.name.replace(/\.(lrc|txt)$/i, ""), match = /^(.*)\.(zh|en|fr|ja|ko|de|es|it)$/i.exec(stem);
@@ -374,6 +426,7 @@
   }
   async function importMusicFiles(files) {
     if (state.downloadController) { notice("musicNotice", "请等保存完成或点停止，再添加音乐。"); return; }
+    state.mediaSaving = (state.mediaSaving || 0) + 1;
     await requestPersistence(); const batch = new Map(), audioFiles = files.filter(file => /\.(mp3|m4a|aac|wav|flac|ogg|opus)$/i.test(file.name)), lyricFiles = files.filter(file => /\.(lrc|txt)$/i.test(file.name)); let unassigned = 0;
     try {
       for (const file of audioFiles) {
@@ -390,11 +443,15 @@
       await loadMusic(true); await updateStorageNotice(); notice("musicNotice", unassigned ? "部分歌词未找到对应音乐，请选中歌曲后添加本地歌词。" : "");
       if (state.music.selected?.lyrics) { renderMusicLyricLanguages(state.music.selected); el("musicLyricsSection").hidden = false; void loadMusicLyrics(state.music.selected.path, state.music.selected.lyricsLanguage); }
     } catch (error) { await loadMusic(true); failure(error, "musicNotice"); }
+    finally { state.mediaSaving -= 1; void maybeReloadUpdate(); }
   }
   async function addLocalLyric(track, file, info = lyricFileInfo(file)) {
-    if (file.size > 262144) throw new Error("歌词超过 256 KiB。"); const content = await file.text();
-    track.offlineLyrics = [...(track.offlineLyrics || []).filter(item => item.code !== info.code), { code: info.code, content, format: info.format }]; track.lyrics = true; track.lyricsLanguage ||= info.code;
-    track.lyricsLanguages = track.offlineLyrics.map(item => ({ code: item.code, label: ({ original: "原文", zh: "中文", en: "English", fr: "Français", ja: "日本語", ko: "한국어" })[item.code] || item.code })); await PhoneStore.put("music", track);
+    state.mediaSaving = (state.mediaSaving || 0) + 1;
+    try {
+      if (file.size > 262144) throw new Error("歌词超过 256 KiB。"); const content = await file.text();
+      track.offlineLyrics = [...(track.offlineLyrics || []).filter(item => item.code !== info.code), { code: info.code, content, format: info.format }]; track.lyrics = true; track.lyricsLanguage ||= info.code;
+      track.lyricsLanguages = track.offlineLyrics.map(item => ({ code: item.code, label: ({ original: "原文", zh: "中文", en: "English", fr: "Français", ja: "日本語", ko: "한국어" })[item.code] || item.code })); await PhoneStore.put("music", track);
+    } finally { state.mediaSaving -= 1; void maybeReloadUpdate(); }
   }
   function musicTime(value) {
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "0:00";
@@ -848,7 +905,7 @@
   el("importButton").addEventListener("click", () => el("dataFile").click());
   el("dataFile").addEventListener("change", async () => { try { await reviewImport(el("dataFile").files[0]); } catch (error) { failure(error, "settingsNotice"); } finally { el("dataFile").value = ""; } });
   el("importConfirm").addEventListener("click", () => void commitImport());
-  el("importCancel").addEventListener("click", () => { state.pendingImport = null; state.pendingSnapshot = null; el("importReview").hidden = true; });
+  el("importCancel").addEventListener("click", () => { state.pendingImport = null; state.pendingSnapshot = null; el("importReview").hidden = true; void maybeReloadUpdate(); });
   if (TASK_SYNC_ENABLED) {
     el("syncForm").addEventListener("submit", event => { event.preventDefault(); void connectTaskSync(); });
     el("syncAddress").addEventListener("input", updateSyncFallback);
@@ -857,7 +914,7 @@
   el("backupButton").addEventListener("click", () => void backupLibrary());
   el("restoreButton").addEventListener("click", async () => { if (state.busy) return; setBusy(true); try { await disconnectTaskSync(false); await libraryMutationQueue; const previous = await PhoneStore.get("records", "previousImport"); if (!previous) return; const next = mergeLibrary({ ...previous, id: "library", importedAt: new Date().toISOString() }, state.library); await PhoneStore.replaceLibrary(next); state.library = next; closeReader(false); await refreshDashboard(); notice("settingsNotice", "已恢复上次导入的资料，本机进度仍然保留。"); } catch (error) { failure(error, "settingsNotice"); } finally { setBusy(false); } });
   el("checkUpdate").addEventListener("click", () => void checkUpdate());
-  el("applyUpdate").addEventListener("click", () => { if (!state.registration?.waiting) return; state.applyingUpdate = true; el("musicAudio").pause(); state.registration.waiting.postMessage({ type: "APPLY_UPDATE" }); });
+  el("applyUpdate").addEventListener("click", () => { if (!state.registration?.waiting && !state.updatePending) return; state.applyingUpdate = true; el("musicAudio").pause(); prepareWaitingUpdate(); void maybeReloadUpdate(); });
   el("musicImportButton").addEventListener("click", () => el("musicFiles").click());
   el("musicFiles").addEventListener("change", async () => { await importMusicFiles([...el("musicFiles").files]); el("musicFiles").value = ""; });
   el("musicDownloadAll").addEventListener("click", () => downloadMusic());
@@ -871,7 +928,7 @@
   for (const button of document.querySelectorAll("button[data-music-tier]")) button.addEventListener("click", () => { state.music.tier = button.dataset.musicTier; state.music.visible = 60; renderMusicTracks(); });
   el("musicMore").addEventListener("click", () => { state.music.visible += 60; renderMusicTracks(); });
   el("musicSeek").addEventListener("input", () => { const audio = el("musicAudio"); if (state.music.selected && Number.isFinite(audio.duration) && audio.duration > 0) { audio.currentTime = audio.duration * Math.min(1000, Math.max(0, Number(el("musicSeek").value) || 0)) / 1000; updateMusicPosition(); } });
-  for (const event of ["play", "pause", "loadedmetadata", "durationchange"]) el("musicAudio").addEventListener(event, updateMusicControls);
+  for (const event of ["play", "pause", "loadedmetadata", "durationchange"]) el("musicAudio").addEventListener(event, () => { updateMusicControls(); if (event === "pause") void maybeReloadUpdate(); });
   el("musicAudio").addEventListener("timeupdate", updateMusicPosition);
   el("musicAudio").addEventListener("ended", () => advanceMusic(1, true));
   el("musicAudio").addEventListener("error", () => void musicAudioError());
@@ -883,6 +940,8 @@
   el("fontSmaller").addEventListener("click", () => setFont(state.font - 2));
   el("fontLarger").addEventListener("click", () => setFont(state.font + 2));
   window.addEventListener("popstate", () => closeReader(false));
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { void maybeReloadUpdate(); void checkUpdate({ automatic: true }); } });
+  window.addEventListener("online", () => void checkUpdate({ automatic: true }));
   if (TASK_SYNC_ENABLED) {
     document.addEventListener("visibilitychange", () => { if (document.hidden) { stopSyncRequests(); renderSyncState(); } else void pollTaskSync(); });
     window.addEventListener("online", () => void pollTaskSync());
