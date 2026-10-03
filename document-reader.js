@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const UI_VERSION = "1.0.16";
+  const UI_VERSION = "1.0.19";
   const preferenceKeys = { font: "codexControl.readerFontSize.v1", theme: "codexControl.readerTheme.v1" };
   const saved = key => { try { return localStorage.getItem(key); } catch { return null; } };
   const save = (key, value) => { try { localStorage.setItem(key, String(value)); } catch { /* Reading remains available without browser storage. */ } };
@@ -231,12 +231,33 @@
         const label = token.slice(image ? 2 : 1, split);
         let target = token.slice(split + 2, -1).trim();
         target = target.startsWith("<") && target.endsWith(">") ? target.slice(1, -1) : target.replace(/\s+["'][^"']*["']$/, "");
-        if (image) parent.appendChild(document.createTextNode(`${text("图片", "Image")}：${label}`));
+        if (image) appendImage(parent, label, target);
         else appendLink(parent, label, target, depth);
       }
       offset = match.index + token.length;
     }
     parent.appendChild(document.createTextNode(value.slice(offset)));
+  }
+
+  function appendImage(parent, label, target) {
+    let decoded;
+    try { decoded = decodeURIComponent(target); } catch { decoded = ""; }
+    const relative = decoded && !/[\u0000-\u001f\u007f:?#]/.test(decoded)
+      && libraryPath(target, state.path, true);
+    if (!relative || !/\.(?:png|jpe?g|webp|gif)$/i.test(relative) || !state.root) {
+      parent.appendChild(document.createTextNode(`${text("图片", "Image")}：${label}`)); return;
+    }
+    const url = new URL("/api/documents/image", window.location.origin);
+    url.searchParams.set("path", relative); url.searchParams.set("expectedRoot", state.root);
+    const wrapper = document.createElement("span"); wrapper.className = "reader-image";
+    const anchor = document.createElement("a"); anchor.href = url.href; anchor.target = "_blank"; anchor.rel = "noopener noreferrer";
+    anchor.title = text("打开原图", "Open full image");
+    const image = document.createElement("img"); image.alt = label; image.loading = "lazy"; image.decoding = "async";
+    image.addEventListener("error", () => {
+      wrapper.classList.add("reader-image-error");
+      wrapper.textContent = `${text("图片无法显示，请核对文件和 1 MiB 大小限制", "Image unavailable; check the file and 1 MiB limit")}：${label}`;
+    }, { once: true });
+    image.src = url.href; anchor.appendChild(image); wrapper.appendChild(anchor); parent.appendChild(wrapper);
   }
 
   function appendLink(parent, label, target, depth) {

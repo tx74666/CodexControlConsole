@@ -1473,6 +1473,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     result = DOCUMENT_LIBRARY.list(query.get("path", [""])[0])
                 elif parsed.path == "/api/documents/read":
                     result = DOCUMENT_LIBRARY.read(query.get("path", [""])[0], expectedRoot=query.get("expectedRoot", [None])[0])
+                elif parsed.path == "/api/documents/image":
+                    image = DOCUMENT_LIBRARY.image(query.get("path", [""])[0], expectedRoot=query.get("expectedRoot", [None])[0])
+                    self.send_bytes_response(image["content"], image["mimeType"])
+                    return
                 elif parsed.path == "/api/documents/sample-status":
                     result = DOCUMENT_LIBRARY.sample_status()
                 elif parsed.path == "/api/documents/snapshots":
@@ -2288,6 +2292,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     def send_bytes_response(self, body, content_type="application/octet-stream", status=200):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()

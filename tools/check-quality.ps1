@@ -105,6 +105,7 @@ $PythonChecks = @(
   "tools/check-download-map.py",
   "tools/check-desktop-layout.py",
   "tools/check-document-library.py",
+  "tools/check-document-images.py",
   "tools/check-document-references.py",
   "tools/check-workspace-plan.py",
   "tools/check-phone-companion.py",
@@ -139,6 +140,7 @@ try {
     "tools/check-mobile-ui.mjs",
     "tools/check-document-reader.mjs",
     "tools/check-document-reader-page.mjs",
+    "tools/check-document-images.mjs",
     "tools/check-document-inbox-ui.mjs",
     "tools/check-document-guide-ui.mjs",
     "tools/check-device-overview-ui.mjs",
@@ -180,6 +182,7 @@ try {
   Invoke-QualityStep "Document reader JavaScript syntax" { & $Node --check document-reader.js }
   Invoke-QualityStep "Document reader opening" { & $Node tools/check-document-reader.mjs }
   Invoke-QualityStep "Document reader page behavior" { & $Node tools/check-document-reader-page.mjs }
+  Invoke-QualityStep "Local document images and reader boundaries" { & $Node tools/check-document-images.mjs }
   Invoke-QualityStep "Document inbox categories and archive actions" { & $Node tools/check-document-inbox-ui.mjs }
   Invoke-QualityStep "Document library entry and curated highlights" { & $Node tools/check-document-guide-ui.mjs }
   Invoke-QualityStep "Device overview hardware and memory" { & $Node tools/check-device-overview-ui.mjs }

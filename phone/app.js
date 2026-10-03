@@ -4,6 +4,8 @@
   const BUILD = "__CONSOLE_PHONE_BUILD__";
   const TASK_SYNC_ENABLED = false;
   let libraryMutationQueue = Promise.resolve();
+  const readerImageUrls = new Map();
+  const IMAGE_MIME_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
 
   const el = id => document.getElementById(id);
   const state = { ready: true, generation: 0, busy: false, tab: "tasks", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), library: null, catalog: [], saved: new Set(), pendingImport: null, registration: null, applyingUpdate: false, downloadController: null, music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
@@ -39,6 +41,37 @@
     return parts.length ? parts.join("/") : null;
   }
   function samePath(left, right) { return Boolean(pathValue(left) && pathValue(right) && pathValue(left).toLowerCase() === pathValue(right).toLowerCase()); }
+  function imagePath(value, base = "") {
+    if (typeof value !== "string") return null;
+    let decoded; try { decoded = decodeURIComponent(value); } catch { return null; }
+    if (/[#?]/.test(decoded)) return null;
+    const relative = pathValue(decoded, base);
+    return relative && IMAGE_MIME_TYPES[relative.split(".").at(-1).toLowerCase()] ? relative : null;
+  }
+  function imageBytes(asset) {
+    const data = asset?.data, mimeType = asset?.mimeType;
+    if (!asset || typeof asset.path !== "string" || asset.path.includes("#") || pathValue(asset.path) !== asset.path || mimeType !== IMAGE_MIME_TYPES[asset.path.split(".").at(-1).toLowerCase()] || typeof data !== "string" || !data || data.length > 4 * Math.ceil(1024 * 1024 / 3) || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) throw new Error("资料图片的路径、格式或大小无效。");
+    let decoded; try { decoded = atob(data); } catch { throw new Error("资料图片编码无效。"); }
+    if (!decoded.length || decoded.length > 1024 * 1024) throw new Error("每张资料图片不能超过 1 MiB。");
+    const value = Uint8Array.from(decoded, char => char.charCodeAt(0)), header = String.fromCharCode(...value.slice(0, 12));
+    const valid = mimeType === "image/png" ? value.length >= 33 && header.startsWith("\x89PNG\r\n\x1a\n") && String.fromCharCode(...value.slice(12, 16)) === "IHDR" : mimeType === "image/jpeg" ? value.length >= 4 && value[0] === 255 && value[1] === 216 && value[2] === 255 : mimeType === "image/gif" ? value.length >= 13 && /^(GIF87a|GIF89a)/.test(header) : mimeType === "image/webp" && value.length >= 20 && header.startsWith("RIFF") && header.slice(8) === "WEBP";
+    if (!valid) throw new Error("资料图片内容与声明的格式不一致。");
+    return value;
+  }
+  async function validateImageDecoding(library) {
+    for (const asset of library.assets || []) {
+      const image = node("img"), url = URL.createObjectURL(new Blob([imageBytes(asset)], { type: asset.mimeType }));
+      let timer;
+      try {
+        await new Promise((resolve, reject) => {
+          const invalid = () => reject(new Error("资料图片损坏或无法在手机显示，请重新导出截图。"));
+          image.onload = () => image.naturalWidth > 0 && image.naturalHeight > 0 && image.naturalWidth <= 16384 && image.naturalHeight <= 16384 && image.naturalWidth * image.naturalHeight <= 32 * 1024 * 1024 ? resolve() : invalid();
+          image.onerror = invalid; timer = window.setTimeout(invalid, 10000); image.src = url;
+        });
+      } finally { window.clearTimeout(timer); image.onload = null; image.onerror = null; image.removeAttribute("src"); URL.revokeObjectURL(url); }
+    }
+  }
+  function releaseReaderImages() { for (const url of readerImageUrls.values()) URL.revokeObjectURL(url); readerImageUrls.clear(); }
   function entries() { return Array.isArray(state.dashboard?.documents?.inbox?.entries) ? state.dashboard.documents.inbox.entries : []; }
   function entryStatus(item) { return ["inbox", "later", "archive"].includes(item?.status) ? item.status : item?.read ? "archive" : "inbox"; }
 
@@ -123,9 +156,11 @@
     const path = value => { const result = pathValue(value); if (!result || result !== value) throw new Error("资料包含有无效的文档路径。"); return result; };
     const id = value => { if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value)) throw new Error("资料编号无效。"); return value; };
     const phoneBackup = data?.format === "codex-console-phone-backup";
+    const documentsOnly = data?.format === "codex-console-phone-data" && data.importScope === "documents";
     if (!data || !["codex-console-phone-data", "codex-console-phone-backup"].includes(data.format) || data.schemaVersion !== 1 || !data.dashboard || !Array.isArray(data.files) || data.files.length > 200) throw new Error("请选择 Console 导出的资料 JSON，或手机资料备份。");
+    if (data.importScope !== undefined && !documentsOnly) throw new Error("资料包的导入范围无效。");
     text(data.exportedAt, 60, "导出时间"); if (Number.isNaN(new Date(data.exportedAt).getTime())) throw new Error("导出时间无效。");
-    const dashboard = structuredClone(data.dashboard), plan = dashboard.plan?.plan, taskIds = new Set();
+    const dashboard = structuredClone(data.dashboard), plan = documentsOnly ? null : dashboard.plan?.plan, taskIds = new Set();
     const synced = phoneBackup && data.phoneState?.planSnapshot ? validatePlanSnapshot(data.phoneState.planSnapshot) : null;
     if (synced && JSON.stringify(validatePlanSnapshot({ ...synced, plan }).plan) !== JSON.stringify(synced.plan)) throw new Error("备份的电脑任务与来源快照不一致。");
     if (plan) {
@@ -153,15 +188,46 @@
       files.push({ path: relative, name: text(file.name || relative.split("/").at(-1), 255, "文件名"), content: file.content, format: file.format === "markdown" ? "markdown" : "text", modifiedAt: text(file.modifiedAt || "", 60, "文件时间") });
     }
     for (const path of requiredFiles) if (!filePaths.has(path)) throw new Error("资料包缺少已登记的文档正文，请重新从电脑导出。");
+    const assets = [], assetPaths = new Set(); let assetBytes = 0;
+    if (data.assets !== undefined && (!Array.isArray(data.assets) || data.assets.length > 200)) throw new Error("资料图片清单无效或过长。");
+    for (const asset of data.assets || []) {
+      const value = imageBytes(asset), key = asset.path.toLowerCase();
+      if (assetPaths.has(key)) throw new Error("资料包包含重复的图片。");
+      assetPaths.add(key); assetBytes += value.length; if (assetBytes > 8 * 1024 * 1024) throw new Error("资料图片总大小不能超过 8 MiB，请减少截图。");
+      assets.push({ path: asset.path, mimeType: asset.mimeType, data: asset.data });
+    }
     const device = dashboard.device || {}, memory = device.currentMemory || {};
     dashboard.device = { model: String(device.model || "").slice(0, 200), cpuModel: String(device.cpuModel || "").slice(0, 500), gpuModels: (Array.isArray(device.gpuModels) ? device.gpuModels : []).slice(0, 8).map(value => String(value).slice(0, 200)), installedMemoryBytes: Number.isFinite(device.installedMemoryBytes) ? device.installedMemoryBytes : null, sampledAt: String(device.sampledAt || "").slice(0, 60), currentMemory: { status: memory.status === "available" ? "available" : "unavailable", readAt: String(memory.readAt || "").slice(0, 60), usedPercent: memory.usedPercent, totalBytes: memory.totalBytes, availableBytes: memory.availableBytes } };
     dashboard.plan = { plan: synced?.plan || plan || null }; delete documents.records;
-    const library = { id: "library", exportedAt: data.exportedAt, importedAt: new Date().toISOString(), dashboard, files, reading: data.phoneState?.reading || {}, taskDone: data.phoneState?.taskDone || {} };
+    const library = { id: "library", exportedAt: data.exportedAt, importedAt: new Date().toISOString(), dashboard, files, assets, reading: data.phoneState?.reading || {}, taskDone: data.phoneState?.taskDone || {} };
+    if (documentsOnly) { library.importScope = "documents"; library.dashboard.device = {}; library.taskDone = {}; }
     if (synced) library.planSync = { computerId: synced.computerId, hash: synced.hash, updatedAt: synced.updatedAt, syncedAt: new Date().toISOString(), readonly: true };
     if (phoneBackup && data.phoneState?.localTaskBackup) library.localTaskBackup = validateLocalTaskBackup(data.phoneState.localTaskBackup);
     return library;
   }
   function mergeLibrary(next, previous) {
+    if (next.importScope === "documents") {
+      const merged = structuredClone(previous || emptyLibrary()), previousDocuments = merged.dashboard.documents, incomingDocuments = next.dashboard.documents;
+      const pathKey = item => item.path.toLowerCase();
+      const combine = (existing = [], incoming = [], key) => { const replacements = new Map(incoming.map(item => [key(item), item])), oldKeys = new Set(existing.map(key)); return [...existing.map(item => replacements.get(key(item)) || item), ...incoming.filter(item => !oldKeys.has(key(item)))]; };
+      const oldEntries = new Map(previousDocuments.inbox.entries.map(item => [item.id, item]));
+      merged.dashboard.documents = {
+        guide: { ...previousDocuments.guide, ...incomingDocuments.guide, items: combine(previousDocuments.guide.items, incomingDocuments.guide.items, pathKey) },
+        inbox: { ...previousDocuments.inbox, ...incomingDocuments.inbox, entries: combine(previousDocuments.inbox.entries, incomingDocuments.inbox.entries, item => item.id) },
+        references: { ...previousDocuments.references, ...incomingDocuments.references, items: combine(previousDocuments.references.items, incomingDocuments.references.items, item => item.id) }
+      };
+      merged.reading = { ...(merged.reading || {}) };
+      for (const entry of merged.dashboard.documents.inbox.entries) {
+        const old = oldEntries.get(entry.id), status = merged.reading?.[entry.id] || (old ? entryStatus(old) : next.reading?.[entry.id] || entryStatus(entry));
+        entry.status = status; entry.read = status === "archive"; merged.reading[entry.id] = status;
+      }
+      merged.files = combine(merged.files, next.files, pathKey); merged.assets = combine(merged.assets, next.assets, pathKey);
+      const documents = merged.dashboard.documents;
+      if (merged.files.length > 200 || merged.assets.length > 200 || documents.guide.items.length > 50 || documents.inbox.entries.length > 5000 || documents.references.items.length > 100) throw new Error("合并后的资料数量超过手机限制，原资料保留。请先备份并减少旧资料。");
+      const pictureBytes = merged.assets.reduce((total, asset) => total + asset.data.length * 3 / 4 - (asset.data.endsWith("==") ? 2 : asset.data.endsWith("=") ? 1 : 0), 0);
+      if (pictureBytes > 8 * 1024 * 1024 || merged.files.reduce((total, file) => total + file.content.length, 0) > 16 * 1024 * 1024) throw new Error("合并后的资料超过手机保存限制，原资料保留。请先备份并减少旧资料。");
+      merged.exportedAt = next.exportedAt; merged.importedAt = next.importedAt; delete merged.importScope; return merged;
+    }
     const reading = {}, taskDone = {};
     for (const entry of next.dashboard.documents.inbox.entries) { const status = previous?.reading?.[entry.id] || next.reading?.[entry.id]; if (["inbox", "later", "archive"].includes(status)) { reading[entry.id] = status; entry.status = status; entry.read = status === "archive"; } }
     for (const group of next.dashboard.plan?.plan?.groups || []) for (const item of group.items) { const old = previous?.taskDone?.[item.id], restored = next.taskDone?.[item.id]; if (typeof old === "boolean") taskDone[item.id] = old; else if (typeof restored === "boolean") taskDone[item.id] = restored; }
@@ -298,20 +364,29 @@
   }
   async function reviewImport(file) {
     state.reviewingImport = (state.reviewingImport || 0) + 1;
+    const sequence = state.importReviewSequence = (state.importReviewSequence || 0) + 1;
     try {
       state.pendingImport = null; state.pendingSnapshot = null; el("importReview").hidden = true;
       if (!file || file.size > 24 * 1024 * 1024) throw new Error("资料包超过 24 MiB，请在电脑减少要导出的文档。");
       const data = JSON.parse(await file.text());
+      if (sequence !== state.importReviewSequence) return;
       if (data?.format === "codex-console-plan-snapshot") { const snapshot = validatePlanSnapshot(data); state.pendingSnapshot = snapshot; el("importCounts").textContent = `${snapshot.plan.groups.length} 项主要计划 · ${snapshot.plan.groups.reduce((total, group) => total + group.items.length, 0)} 个细项。电脑保存于 ${date(snapshot.updatedAt)}。`; el("importReviewHelp").textContent = "只更新任务，以电脑记录为准。文档、阅读状态和音乐保留；原手机勾选保存为备份。"; el("importReview").hidden = false; return; }
-      const library = validateImport(data); state.pendingImport = library; el("importReviewHelp").textContent = "更新资料并保留这台手机的任务勾选与阅读状态。不会上传到 GitHub。";
-      const groups = library.dashboard.plan?.plan?.groups || []; el("importCounts").textContent = `${groups.length} 项主要计划 · ${groups.reduce((total, group) => total + group.items.length, 0)} 个细项 · ${library.files.length} 份文档。导出于 ${date(library.exportedAt)}。`;
+      const library = validateImport(data); await validateImageDecoding(library); if (sequence !== state.importReviewSequence) return;
+      state.pendingImport = library; const documentsOnly = library.importScope === "documents";
+      el("importReviewHelp").textContent = documentsOnly ? "合并图文资料，保留手机现有任务、其他文档、阅读状态和音乐。不会上传到 GitHub。" : "更新资料并保留这台手机的任务勾选与阅读状态。不会上传到 GitHub。";
+      const groups = library.dashboard.plan?.plan?.groups || []; el("importCounts").textContent = `${documentsOnly ? "" : `${groups.length} 项主要计划 · ${groups.reduce((total, group) => total + group.items.length, 0)} 个细项 · `}${library.files.length} 份文档${library.assets.length ? ` · ${library.assets.length} 张图片` : ""}。导出于 ${date(library.exportedAt)}。`;
       el("importReview").hidden = false; notice("settingsNotice");
     } finally { state.reviewingImport -= 1; void maybeReloadUpdate(); }
   }
   async function commitImport() {
     if (state.busy || !state.pendingImport && !state.pendingSnapshot) return; el("importConfirm").disabled = true; setBusy(true);
     if (state.pendingSnapshot) { try { await disconnectTaskSync(false); await applyPlanSnapshot(state.pendingSnapshot); state.pendingSnapshot = null; el("importReview").hidden = true; notice("settingsNotice", "电脑任务快照已保存；文档、阅读状态和音乐保留。"); } catch (error) { failure(error, "settingsNotice"); } finally { el("importConfirm").disabled = false; setBusy(false); } return; }
-    try { await disconnectTaskSync(false); await libraryMutationQueue; const next = mergeLibrary(state.pendingImport, state.library); await PhoneStore.replaceLibrary(next); state.library = next; state.pendingImport = null; closeReader(false); await refreshDashboard(); el("importReview").hidden = true; el("restoreButton").hidden = false; notice("settingsNotice", "资料已保存到手机；本机勾选和阅读状态已保留。"); await updateStorageNotice(); }
+    try {
+      const incoming = state.pendingImport; if (incoming.importScope !== "documents") await disconnectTaskSync(false);
+      const pending = libraryMutationQueue.then(async () => { const next = mergeLibrary(incoming, state.library); await PhoneStore.replaceLibrary(next); state.library = next; return next; });
+      libraryMutationQueue = pending.catch(() => {}); await pending;
+      state.pendingImport = null; closeReader(false); await refreshDashboard(); el("importReview").hidden = true; el("restoreButton").hidden = false; notice("settingsNotice", "资料已保存到手机；本机勾选和阅读状态已保留。"); await updateStorageNotice();
+    }
     catch (error) { failure(error, "settingsNotice"); } finally { el("importConfirm").disabled = false; setBusy(false); }
   }
   async function backupLibrary() {
@@ -320,7 +395,7 @@
     const phoneState = { reading: state.library.reading, taskDone: state.library.planSync ? {} : state.library.taskDone };
     if (state.library.planSync) phoneState.planSnapshot = validatePlanSnapshot({ format: "codex-console-plan-snapshot", schemaVersion: 1, ...state.library.planSync, plan: state.library.dashboard.plan.plan });
     if (state.library.localTaskBackup) phoneState.localTaskBackup = validateLocalTaskBackup(state.library.localTaskBackup);
-    const payload = { format: "codex-console-phone-backup", schemaVersion: 1, exportedAt: new Date().toISOString(), dashboard: state.library.dashboard, files: state.library.files, phoneState };
+    const payload = { format: "codex-console-phone-backup", schemaVersion: 1, exportedAt: new Date().toISOString(), dashboard: state.library.dashboard, files: state.library.files, ...(state.library.assets?.length ? { assets: state.library.assets } : {}), phoneState };
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })), anchor = node("a"); anchor.href = url; anchor.download = `Codex-Console-手机资料-${new Date().toISOString().slice(0, 10)}.json`; document.body.append(anchor); anchor.click(); anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 60000); notice("settingsNotice", "资料备份已准备，音频仍保留在手机和原文件中。");
   }
   async function updateStorageNotice() {
@@ -722,6 +797,7 @@
 
   function closeReader(pop = false) {
     state.readerSequence += 1; state.reader = null; state.headings.clear();
+    releaseReaderImages();
     el("readerScreen").hidden = true; el("readerActions").hidden = true; el("readerContent").replaceChildren(); el("readerHeadings").replaceChildren(); el("readerLanguages").replaceChildren(); el("readerContents").hidden = true;
     el("readerTitle").textContent = ""; el("readerMeta").textContent = ""; notice("readerNotice");
     document.body.dataset.reading = "false"; el("main").inert = false; el("bottomNav").inert = false; el("appHeader").inert = false;
@@ -732,6 +808,7 @@
     const path = pathValue(value);
     if (!path) { notice("appNotice", "文档路径无效，请从清单重新打开。", true); return; }
     const sequence = ++state.readerSequence;
+    releaseReaderImages();
     const old = state.reader;
     const entry = entries().find(item => samePath(item.path, path) && (!entryId || item.id === entryId)) || null;
     state.reader = { path, entryId: reference ? "" : entry?.id || "", reference, loaded: false };
@@ -820,11 +897,24 @@
       else {
         const split = token.indexOf("]("); const image = token.startsWith("!"); const label = token.slice(image ? 2 : 1, split);
         let target = token.slice(split + 2, -1).trim(); target = target.startsWith("<") && target.endsWith(">") ? target.slice(1, -1) : target.replace(/\s+["'][^"']*["']$/, "");
-        if (image) parent.append(document.createTextNode(`图片：${label}`)); else appendLink(parent, label, target, depth + 1);
+        if (image) appendImage(parent, label, target); else appendLink(parent, label, target, depth + 1);
       }
       offset = match.index + token.length;
     }
     parent.append(document.createTextNode(value.slice(offset)));
+  }
+  function appendImage(parent, label, target) {
+    const relative = imagePath(target, state.reader?.path || ""), asset = relative && state.library?.assets?.find(item => item.path.toLowerCase() === relative.toLowerCase());
+    const fallback = () => node("span", `图片：${label || "截图"}（未包含在资料包中）`, "reader-image-unavailable");
+    if (!asset) { parent.append(fallback()); return; }
+    const key = asset.path.toLowerCase(); let url = readerImageUrls.get(key);
+    try { if (!url) { url = URL.createObjectURL(new Blob([imageBytes(asset)], { type: asset.mimeType })); readerImageUrls.set(key, url); } }
+    catch { parent.append(fallback()); return; }
+    const group = node("span", "", "reader-image"), anchor = node("a"), image = node("img");
+    anchor.href = url; anchor.target = "_blank"; anchor.rel = "noopener noreferrer"; anchor.setAttribute("aria-label", `${label || "截图"}，打开原图`);
+    image.alt = label || "截图"; image.loading = "lazy"; image.decoding = "async"; image.src = url;
+    image.addEventListener("error", () => { group.replaceChildren(node("span", `图片：${label || "截图"}（暂时无法显示）`, "reader-image-unavailable")); });
+    anchor.append(image); group.append(anchor); if (label) group.append(node("span", label, "reader-image-caption")); parent.append(group);
   }
   function appendLink(parent, label, target, depth = 0) {
     if (/[\u0000-\u001f\u007f]/.test(target)) { parent.append(document.createTextNode(label)); return; }

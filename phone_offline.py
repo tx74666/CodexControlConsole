@@ -4,10 +4,11 @@ The generated packet is intended for the user's local file transfer. It is not
 a static-site input and never includes an arbitrary document tree or music.
 """
 from datetime import datetime, timezone
+import base64
 import json
 import re
 
-from document_library import MAX_TEXT_BYTES
+from document_library import MAX_TEXT_BYTES, markdown_image_paths
 from workspace_plan import normalize_plan
 
 
@@ -69,6 +70,7 @@ def build_phone_export(document_library, plan_getter, device_getter, version):
         if used_bytes > MAX_EXPORT_BYTES:
             raise ValueError("离线资料包超过 8 MiB，请减少已登记资料后重试。")
         paths, seen = [], set()
+        image_paths, seen_images = [], set()
         for candidate in [item["path"] for item in guide.get("items", [])] + [
                 item["path"] for item in inbox.get("entries", [])] + [
                 variant["path"] for item in references.get("items", [])
@@ -84,6 +86,28 @@ def build_phone_export(document_library, plan_getter, device_getter, version):
             if used_bytes > MAX_EXPORT_BYTES:
                 raise ValueError("离线资料包超过 8 MiB，请减少已登记资料后重试。")
             payload["files"].append(document)
+            if document.get('format') == 'markdown':
+                try:
+                    for image_path in markdown_image_paths(document.get('content', ''), path):
+                        identity = image_path.casefold()
+                        if identity not in seen_images:
+                            image_paths.append(image_path)
+                            seen_images.add(identity)
+                except ValueError as exc:
+                    raise ValueError(f'文檔 {path} 的圖片不能匯出：{exc}') from exc
+        if image_paths:
+            payload['assets'] = []
+            for image_path in image_paths:
+                try:
+                    image = document_library.image(image_path, expectedRoot=expected_root)
+                except (ValueError, OSError) as exc:
+                    raise ValueError(f'圖片 {image_path} 不能匯出：{exc}') from exc
+                asset = {'path': image_path, 'mimeType': image['mimeType'],
+                         'data': base64.b64encode(image['content']).decode('ascii')}
+                used_bytes += len(_json_bytes(asset)) + (2 if payload['assets'] else 0)
+                if used_bytes > MAX_EXPORT_BYTES:
+                    raise ValueError('含圖片的離線資料包超過 8 MiB，請縮小閱讀副本後重試；原始資料未更動。')
+                payload['assets'].append(asset)
         # Keep the public size guarantee explicit if the packet structure grows.
         if len(_json_bytes(payload)) > MAX_EXPORT_BYTES:
             raise ValueError("离线资料包超过 8 MiB，原始资料未更动。")

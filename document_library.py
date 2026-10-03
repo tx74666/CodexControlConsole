@@ -12,12 +12,16 @@ import subprocess
 import tempfile
 import threading
 import uuid
+from urllib.parse import unquote
 
 import device_library
 
 
 TEXT_EXTENSIONS = {'.md', '.txt', '.json', '.csv', '.log', '.ps1', '.py', '.cmd'}
 MAX_TEXT_BYTES = 2 * 1024 * 1024
+MAX_IMAGE_BYTES = 1024 * 1024
+IMAGE_MIME_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                    '.webp': 'image/webp', '.gif': 'image/gif'}
 INBOX_FILE = '.document-inbox.json'
 INBOX_LOCK_FILE = '.document-inbox.lock'
 MAX_INBOX_ENTRIES = 5000
@@ -31,6 +35,54 @@ DEVICE_DETAILS_FILE = '.device-details.json'
 MAX_DEVICE_DETAILS_BYTES = 16 * 1024
 MAX_GPU_QUERY_BYTES = 64 * 1024
 GPU_QUERY_TIMEOUT = 2.0
+
+
+def document_image_path(target, document_path=''):
+    """Resolve one Markdown image reference, without allowing URLs or root escape."""
+    if not isinstance(target, str) or re.search(r'%(?![0-9a-fA-F]{2})', target):
+        raise ValueError('圖片相對路徑無效。')
+    try:
+        value = unquote(target, errors='strict').replace('\\', '/')
+    except (UnicodeError, ValueError) as exc:
+        raise ValueError('圖片相對路徑無效。') from exc
+    if not value or value.startswith('/') or re.search(r'[\x00-\x1f\x7f:?#]', value):
+        raise ValueError('圖片只可使用資料庫內的相對路徑。')
+    parts = document_path.replace('\\', '/').split('/')[:-1] if document_path else []
+    for part in value.split('/'):
+        if not part or part == '.':
+            continue
+        if part == '..':
+            if not parts:
+                raise ValueError('圖片路徑不可離開所選資料庫。')
+            parts.pop()
+        else:
+            parts.append(part)
+    if not parts or Path(parts[-1]).suffix.lower() not in IMAGE_MIME_TYPES:
+        raise ValueError('圖片只支援 PNG、JPEG、WebP 或 GIF。')
+    return '/'.join(parts)
+
+
+def markdown_image_paths(source, document_path):
+    """Collect the inline images displayed by our reader; code and URLs stay text."""
+    fence = None
+    for line in str(source).replace('\r\n', '\n').replace('\r', '\n').split('\n'):
+        marker = re.match(r'^\s{0,3}(`{3,}|~{3,})', line)
+        if fence:
+            if re.fullmatch(r'\s{0,3}' + re.escape(fence[0]) + '{' + str(len(fence)) + r',}\s*', line):
+                fence = None
+            continue
+        if marker:
+            fence = marker.group(1)
+            continue
+        for match in re.finditer(r'`[^`\n]+`|!\[[^\]\n]*\]\((?:<[^>\n]+>|[^)\n]+)\)', line):
+            token = match.group(0)
+            if not token.startswith('!['):
+                continue
+            target = token[token.index('](') + 2:-1].strip()
+            target = target[1:-1] if target.startswith('<') and target.endswith('>') else re.sub(r'\s+["\'][^"\']*["\']$', '', target)
+            if re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', target) or target.startswith('//'):
+                continue
+            yield document_image_path(target, document_path)
 
 
 def _text_value(value, limit=256):
@@ -498,6 +550,31 @@ finally { $picker.Dispose() }
     def read(self, relative, expectedRoot=None):
         with self._document_scope(expectedRoot):
             return self._read_document(relative)
+
+    def image(self, relative, expectedRoot=None):
+        """Read a bounded library image, with the same selected-root pin as text."""
+        if expectedRoot is None:
+            raise ValueError('讀取圖片需要目前資料庫位置，請從主視窗重新開啟。')
+        if not isinstance(relative, str) or re.search(r'[\x00-\x1f\x7f:?#]', relative):
+            raise ValueError('圖片相對路徑無效。')
+        with self._document_scope(expectedRoot) as root:
+            _, path = self._path(relative)
+            mime = IMAGE_MIME_TYPES.get(path.suffix.lower())
+            if not path.is_file() or not mime:
+                raise ValueError('圖片只支援資料庫內的 PNG、JPEG、WebP 或 GIF。')
+            with path.open('rb') as source:
+                content = source.read(MAX_IMAGE_BYTES + 1)
+            if len(content) > MAX_IMAGE_BYTES:
+                raise ValueError('單張圖片超過 1 MiB，請先保存較小的閱讀副本。')
+            valid = ((mime == 'image/png' and content.startswith(b'\x89PNG\r\n\x1a\n'))
+                     or (mime == 'image/jpeg' and content.startswith(b'\xff\xd8\xff'))
+                     or (mime == 'image/gif' and content[:6] in (b'GIF87a', b'GIF89a'))
+                     or (mime == 'image/webp' and len(content) >= 12
+                         and content[:4] == b'RIFF' and content[8:12] == b'WEBP'))
+            if not valid:
+                raise ValueError('圖片內容與副檔名不符，請重新保存 PNG、JPEG、WebP 或 GIF。')
+            return {'root': str(root), 'path': Path(relative).as_posix(),
+                    'mimeType': mime, 'content': content}
 
     def _read_document(self, relative):
         root, path = self._path(relative)

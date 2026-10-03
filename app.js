@@ -45,7 +45,7 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.18";
+const consoleUiVersion = "1.0.19";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -3037,10 +3037,30 @@ function documentRelativePath(target, currentFile = documentLibrary.file) {
   return parts.join("/");
 }
 
+function appendDocumentImage(parent, label, target) {
+  let decoded;
+  try { decoded = decodeURIComponent(target); } catch { decoded = ""; }
+  const relative = decoded && !/[\u0000-\u001f\u007f:?#]/.test(decoded) && documentRelativePath(target);
+  if (!relative || !/\.(?:png|jpe?g|webp|gif)$/i.test(relative) || !documentLibrary.root) {
+    parent.appendChild(document.createTextNode(`图片：${label}`)); return;
+  }
+  const url = new URL("/api/documents/image", window.location.origin);
+  url.searchParams.set("path", relative); url.searchParams.set("expectedRoot", documentLibrary.root);
+  const wrapper = document.createElement("span"); wrapper.className = "document-image";
+  const anchor = document.createElement("a"); anchor.href = url.href; anchor.target = "_blank"; anchor.rel = "noopener noreferrer";
+  anchor.title = documentText("打开原图", "Open full image");
+  const image = document.createElement("img"); image.alt = label; image.loading = "lazy"; image.decoding = "async";
+  image.addEventListener("error", () => {
+    wrapper.classList.add("document-image-error");
+    wrapper.textContent = `${documentText("图片无法显示，请核对文件和 1 MiB 大小限制", "Image unavailable; check the file and 1 MiB limit")}：${label}`;
+  }, { once: true });
+  image.src = url.href; anchor.appendChild(image); wrapper.appendChild(anchor); parent.appendChild(wrapper);
+}
+
 function appendDocumentInline(parent, source, depth = 0) {
   const value = String(source);
   if (depth > 4) { parent.appendChild(document.createTextNode(value)); return; }
-  const tokens = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\((?:<[^>]+>|[^)]+)\))/g;
+  const tokens = /(`[^`]+`|\*\*[^*]+\*\*|!?\[[^\]]*\]\((?:<[^>]+>|[^)]+)\))/g;
   let offset = 0;
   for (const match of value.matchAll(tokens)) {
     parent.appendChild(document.createTextNode(value.slice(offset, match.index)));
@@ -3053,8 +3073,11 @@ function appendDocumentInline(parent, source, depth = 0) {
       appendDocumentInline(strong, token.slice(2, -2), depth + 1); parent.appendChild(strong);
     } else {
       const separator = token.indexOf("](");
-      const label = token.slice(1, separator);
-      const target = token.slice(separator + 2, -1).replace(/^<|>$/g, "");
+      const image = token.startsWith("!");
+      const label = token.slice(image ? 2 : 1, separator);
+      let target = token.slice(separator + 2, -1).trim();
+      target = target.startsWith("<") && target.endsWith(">") ? target.slice(1, -1) : target.replace(/\s+["'][^"']*["']$/, "");
+      if (image) { appendDocumentImage(parent, label, target); offset = match.index + token.length; continue; }
       const relative = documentRelativePath(target);
       if (/^https?:\/\//i.test(target)) {
         const anchor = document.createElement("a");

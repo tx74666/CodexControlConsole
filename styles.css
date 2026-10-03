@@ -752,6 +752,9 @@ h2 {
 .document-content h2 { font-size: 20px; margin-top: 26px; }
 .document-content h3 { font-size: 17px; margin-top: 20px; }
 .document-content p { margin: 8px 0; }
+.document-image { display: block; margin: 12px 0; }
+.document-image img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
+.document-image-error { color: var(--muted); font-size: .9em; }
 .document-content pre { overflow: auto; max-height: 70vh; padding: 14px; border: 1px solid var(--line); border-radius: 10px; white-space: pre; background: var(--card-bg); }
 .document-content code { font-size: .92em; font-family: Consolas, monospace; }
 .document-content blockquote { margin: 10px 0; padding: 7px 13px; border-left: 3px solid var(--green); color: var(--muted); }

@@ -120,6 +120,9 @@ button:disabled, input:disabled { opacity: .5; cursor: default; }
 .reader-content th:last-child, .reader-content td:last-child { border-right: 0; }
 .reader-content tbody tr:last-child td { border-bottom: 0; }
 .reader-plain-note { color: var(--reader-muted); font-size: .85em; }
+.reader-image { display: block; margin: 1em 0; }
+.reader-image img { display: block; max-width: 100%; height: auto; border: 1px solid var(--reader-line); border-radius: 8px; }
+.reader-image-error { color: var(--reader-error); font-size: .85em; }
 @media (max-width: 520px) {
   .reader-toolbar-inner { padding: 9px 14px; gap: 7px; }
   .reader-label { display: none; }
