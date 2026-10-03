@@ -28,7 +28,7 @@ def valid_plan():
 class ExportChecks(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="codex-phone-export-check-")
-        self.base = Path(self.temp.name)
+        self.base = Path(self.temp.name).resolve()
         self.root = self.base / "library"
         self.root.mkdir()
         (self.root / "reports").mkdir()
@@ -142,7 +142,7 @@ class ExportChecks(unittest.TestCase):
 class StaticBuildChecks(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="codex-phone-static-check-")
-        self.base = Path(self.temp.name)
+        self.base = Path(self.temp.name).resolve()
         self.project = self.base / "project"
         self.project.mkdir()
         self.output = self.base / "dist-phone"
@@ -231,6 +231,22 @@ class StaticBuildChecks(unittest.TestCase):
             self.assertIn("vendor/jsQR.js", archive.namelist())
             self.assertIn("connection-qr.js", archive.namelist())
             self.assertNotIn("vendor/private-config.js", archive.namelist())
+
+    def test_actual_vendor_crlf_bytes_are_preserved_without_normalization(self):
+        originals = {}
+        for name in ("vendor/jsQR.js", "vendor/jsQR.LICENSE"):
+            source = self.project / "phone" / name
+            data = source.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+            self.assertIn(b"\r\n", data)
+            source.write_bytes(data)
+            originals[name] = data
+        result = builder.build_static(self.project, self.output, make_zip=True)
+        for name, data in originals.items():
+            self.assertEqual((self.project / "phone" / name).read_bytes(), data)
+            self.assertEqual((self.output / name).read_bytes(), data)
+        with zipfile.ZipFile(result["archive"]) as archive:
+            for name, data in originals.items():
+                self.assertEqual(archive.read(name), data)
 
     def test_unknown_vendor_output_file_rejected_without_modifying_existing_bundle(self):
         builder.build_static(self.project, self.output)

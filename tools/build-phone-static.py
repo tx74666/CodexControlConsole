@@ -236,7 +236,7 @@ def build_static(project_dir, output_dir, make_zip=False, version=None):
         if target.exists() and target.resolve() != target:
             raise ValueError("A build destination is a linked path.")
         target.parent.mkdir(parents=True, exist_ok=True)
-        if relative in PHONE_ASSETS:
+        if relative in PHONE_ASSETS and not relative.startswith("vendor/"):
             text = (phone_text[relative].replace("__CONSOLE_PHONE_VERSION__", version)
                     .replace("__CONSOLE_PHONE_BUILD__", build_id))
             target.write_text(text, encoding="utf-8", newline="\n")
