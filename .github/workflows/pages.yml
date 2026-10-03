@@ -30,6 +30,7 @@ jobs:
           node-version: '22'
       - name: Validate offline export and phone application
         run: |
+          python -m pip install --disable-pip-version-check --only-binary=:all: qrcode==8.2
           python tools/check-release-security.py
           node tools/check-phone-offline-ui.mjs
           node tools/check-connection-qr-ui.mjs
