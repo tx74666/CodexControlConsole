@@ -303,12 +303,22 @@ def check_main_older_handoff():
             choose_port = stack.enter_context(mock.patch.object(world_console, "pick_port"))
             server = stack.enter_context(mock.patch.object(world_console, "ConsoleHTTPServer"))
             thread = stack.enter_context(mock.patch.object(world_console.threading, "Thread"))
-            thread.return_value.is_alive.return_value = False
+            companion = stack.enter_context(mock.patch.object(world_console, "PHONE_COMPANION"))
+            backend_thread = mock.Mock()
+            backend_thread.is_alive.return_value = False
+            restore_thread = mock.Mock()
+            def make_thread(*args, **kwargs):
+                if kwargs.get("target") == server.return_value.serve_forever:
+                    return backend_thread
+                if kwargs.get("target") == companion.restore:
+                    return restore_thread
+                raise AssertionError("handoff started an unexpected background thread")
+            thread.side_effect = make_thread
             window = stack.enter_context(mock.patch.object(world_console, "open_console_window"))
             sessions = stack.enter_context(mock.patch.object(world_console, "CONSOLE_WINDOW_SESSIONS"))
             events = []
             retire.side_effect = (lambda *_: events.append("retired")) if supported else retire.side_effect
-            thread.return_value.start.side_effect = lambda: events.append("serving")
+            backend_thread.start.side_effect = lambda: events.append("serving")
             window.side_effect = lambda *_args, **_kwargs: events.append("window")
             try:
                 world_console.main()
@@ -325,6 +335,10 @@ def check_main_older_handoff():
                         "handoff opened a window before the old server retired and the new server started")
                 server.return_value.server_close.assert_called_once_with()
                 sessions.stop.assert_called_once_with()
+                backend_thread.start.assert_called_once_with()
+                restore_thread.start.assert_called_once_with()
+                companion.restore.assert_not_called()
+                companion.shutdown.assert_called_once_with()
                 require(world_console.ACTIVE_SERVER is None, "finished backend left ACTIVE_SERVER registered")
             else:
                 server.assert_not_called()

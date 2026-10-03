@@ -8964,3 +8964,4 @@ body.music-track-dragging .delete-track-button {
 .phone-pair-code { font-size: 32px; letter-spacing: 5px; font-variant-numeric: tabular-nums; }
 .phone-pair-dialog details { margin-top: 20px; font-size: 13px; }
 .phone-pair-dialog summary { min-height: 30px; cursor: pointer; }
+.phone-remembered-device{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 0;border-bottom:1px solid var(--line)}.phone-remembered-settings{margin:14px 0}.phone-remembered-settings summary{cursor:pointer}

@@ -31,6 +31,35 @@ class ConnectionQrChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             qr.connection_qr_png({"enabled": False, "url": "http://192.168.1.20:8899/"})
 
+    def test_stable_hostname_and_invitation_are_encoded_in_fragment(self):
+        constructor = qr.qrcode.QRCode
+        codes = []
+        def create(**kwargs):
+            code = constructor(**kwargs); codes.append(code); return code
+        token = "a" * 43
+        state = {"enabled": True, "url": "http://192.168.1.20:8899/",
+                 "connectionUrl": "http://codex-0123456789abcdef.local:8899/",
+                 "qrUrl": "http://codex-0123456789abcdef.local:8899/?tab=transfer#qrToken=" + token,
+                 "qrToken": token, "discovery": {"available": True, "hostname": "codex-0123456789abcdef.local"}}
+        with patch.object(qr.qrcode, "QRCode", create):
+            data = qr.connection_qr_png(state)
+            qr.connection_qr_png(state, use_ip=True)
+        encoded = [b"".join(item.data for item in code.data_list).decode() for code in codes]
+        self.assertEqual(encoded[0], state["qrUrl"])
+        self.assertEqual(encoded[1], "http://192.168.1.20:8899/?tab=transfer#qrToken=" + token)
+        with Image.open(io.BytesIO(data)) as image:
+            self.assertLessEqual(max(image.size), 450)
+
+    def test_unadvertised_hostname_external_invitation_and_pin_fragment_are_rejected(self):
+        base = {"enabled": True, "url": "http://192.168.1.20:8899/"}
+        for extras in ({"connectionUrl": "http://codex-0123456789abcdef.local:8899/"},
+                       {"qrUrl": "http://example.com:8899/?tab=transfer#qrToken=" + "a" * 43},
+                       {"qrUrl": "http://192.168.1.20:8899/?tab=transfer#code=123456"},
+                       {"qrToken": "123456"},
+                       {"qrToken": "a" * 43, "qrUrl": "http://192.168.1.20:8899/?tab=transfer#qrToken=" + "b" * 43}):
+            with self.subTest(extras=extras), self.assertRaises(ValueError):
+                qr.connection_qr_png({**base, **extras})
+
     def test_only_valid_private_network_addresses_are_encoded(self):
         for target in ("https://192.168.1.20:8899/", "http://example.com:8899/", "http://127.0.0.1:8899/",
                        "http://user:pass@192.168.1.20:8899/", "http://192.168.1.20:8899/?code=123456",

@@ -25,14 +25,15 @@
     <section id="pairScreen" class="pair-screen" aria-labelledby="pairTitle">
       <div class="pair-symbol" aria-hidden="true">⌘</div>
       <h2 id="pairTitle">连接你的电脑</h2>
-      <p class="muted">让 iPhone 和电脑连接同一 Wi-Fi，在电脑的 Console「互传 → 连接手机」开启连接，输入它显示的配对码。</p>
+      <p class="muted">手机和电脑连接同一 Wi-Fi，扫描电脑 Console「互传 → 连接手机」的二维码即可自动连接。也可以输入配对码。</p>
       <form id="pairForm">
         <label for="pairCode">配对码</label>
         <input id="pairCode" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="6 位数字" aria-describedby="pairNotice">
+        <label class="pair-remember"><input id="pairRemember" type="checkbox" checked> 记住这台手机（90 天内无需重新配对）</label>
         <button id="pairSubmit" type="submit" class="primary">连接电脑</button>
       </form>
       <p id="pairNotice" class="notice" role="status" aria-live="polite"></p>
-      <details class="install-help"><summary>实时计划与离线 App</summary><p>这个页面连接电脑查看最新计划，电脑需保持开机。原主屏幕 App 继续保存离线资料和音乐。</p><p class="muted">需要离线查看最新计划时，配对后点「保存计划快照」，再导入原 App。电脑重启后使用新的配对码连接。</p></details>
+      <details class="install-help"><summary>实时互传与离线 App</summary><p>这个页面连接电脑进行互传，电脑需保持开机。勾选记住后，电脑和手机重启也可以重新进入；断开这台手机或电脑忘记设备后需重新扫码。</p><p class="muted">原主屏幕 App 保留离线资料和音乐；请从其中的「互传」扫码一次，保存电脑入口。</p></details>
     </section>
     <section id="offlineScreen" class="pair-screen" hidden aria-labelledby="offlineTitle">
       <h2 id="offlineTitle">暂时连不上电脑</h2>
@@ -86,7 +87,7 @@
         <details class="document-section"><summary>参考资料 <span class="muted small">给人看</span></summary><div id="referenceList" class="card-stack"></div></details>
         <details class="document-section"><summary>AI 原始记录 <span class="muted small">需要时展开</span></summary><div id="recordList" class="card-stack"></div></details>
       </section>
-      <details class="session-settings"><summary>连接设置</summary><p class="muted small">实时页面读取电脑计划；原主屏幕 App 保留离线资料与音乐。电脑重启或配对过期后需重新连接。</p><p class="muted small">断开后，这台手机需要重新输入电脑显示的配对码。</p><button id="logoutButton" type="button" class="secondary">断开这台手机</button></details>
+      <details class="session-settings"><summary>连接设置</summary><p class="muted small">已记住的手机可在同一 Wi-Fi 下再次进入。原主屏幕 App 保留离线资料与音乐。</p><p class="muted small">断开会撤销这台手机的记忆，之后需重新扫码或输入配对码。</p><button id="logoutButton" type="button" class="secondary">断开并忘记这台手机</button></details>
     </div>
   </main>
   <nav id="bottomNav" class="bottom-nav" hidden aria-label="主要页面">

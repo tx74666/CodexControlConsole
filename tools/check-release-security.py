@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,9 @@ def position(text, value):
 
 
 def main():
+    desktop_version = json.loads((ROOT / "app-manifest.json").read_text(encoding="utf-8"))["version"]
+    phone_version = json.loads((ROOT / "phone" / "version.json").read_text(encoding="utf-8"))["version"]
+    require(desktop_version == phone_version, "Windows and iPhone release versions must match")
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     audit_workflow = (ROOT / ".github" / "workflows" / "security-audit.yml").read_text(encoding="utf-8")
     store_audit_workflow = (ROOT / ".github" / "workflows" / "store-package-audit.yml").read_text(encoding="utf-8")
@@ -97,6 +101,8 @@ def main():
     locked_packages = {
         "colorama==0.4.6",
         "qrcode==8.2",
+        "ifaddr==0.2.0",
+        "zeroconf==0.151.5",
         "altgraph==0.17.5",
         "packaging==26.2",
         "pefile==2024.8.26",

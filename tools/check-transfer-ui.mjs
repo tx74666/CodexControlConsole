@@ -65,10 +65,12 @@ await test("pairing QR changes with LAN address, reveals no pairing code and fal
   assert.ok(/\}\)\(\);\s*$/.test(pairing));
   const context = { ...h.runtime, document: { ...h.document, getElementById: get } };
   runInNewContext(pairing.replace(/\}\)\(\);\s*$/, "globalThis.PAIRING_TEST = {render}; })();"), context);
-  const state = { enabled: true, availableInterfaces: [{ address: "192.168.0.2", name: "Wi-Fi" }], host: "192.168.0.2", url: "http://192.168.0.2:8899/", pairingCode: "123456", pairingExpiresAt: "2099-10-03T12:00:00Z", pairedCount: 0 };
+  const state = { enabled: true, availableInterfaces: [{ address: "192.168.0.2", name: "Wi-Fi" }], host: "192.168.0.2", url: "http://192.168.0.2:8899/", connectionUrl: "http://codex-0123456789abcdef.local:8899/", qrGeneration: "non-secret-generation", qrUrl: "http://codex-0123456789abcdef.local:8899/?tab=transfer#qrToken=secret-qrcode", discovery: { available: true }, rememberedDevices: [{ id: "device-one", name: "iPhone" }], pairingCode: "123456", pairingExpiresAt: "2099-10-03T12:00:00Z", pairedCount: 0 };
   context.PAIRING_TEST.render(state); assert.equal(qr.hidden, false); assert.match(source, /^\/api\/phone-companion\/qr\.png\?version=/); assert.doesNotMatch(source, /123456/);
-  assert.match(get("phoneCompanionUrl").href, /tab=transfer/); const initial = assignments; context.PAIRING_TEST.render(state); assert.equal(assignments, initial);
-  qr.listeners.get("error")({}); assert.equal(qr.hidden, true); assert.match(get("phoneCompanionUrl").textContent, /192\.168\.0\.2/);
+  assert.match(source, /version=non-secret-generation/); assert.doesNotMatch(source, /qrToken|secret-qrcode/);
+  assert.match(get("phoneCompanionUrl").href, /codex-0123456789abcdef.local.*tab=transfer/); const initial = assignments; context.PAIRING_TEST.render(state); assert.equal(assignments, initial);
+  qr.listeners.get("error")({}); assert.equal(qr.hidden, true); assert.match(get("phoneCompanionUrl").textContent, /codex-0123456789abcdef.local/);
+  get("phoneCompanionQrIp").listeners.get("click")({}); assert.match(source, /address=ip/); assert.match(get("phoneCompanionUrl").href, /192\.168\.0\.2/);
   context.PAIRING_TEST.render({ ...state, enabled: false }); assert.equal(qr.hidden, true); assert.equal(qr.dataset.url, undefined);
 });
 await test("no automatic requests until a paired transfer page becomes active", async () => {

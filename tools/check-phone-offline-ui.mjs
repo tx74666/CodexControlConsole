@@ -63,7 +63,7 @@ function harness({ syncEnabled = false } = {}) {
   };
   const registration = { waiting: null, installing: null, updateCalls: 0, addEventListener(name, callback) { registrationEvents.set(name, callback); }, async update() { this.updateCalls++; if (this.updateError) throw this.updateError; if (this.onUpdate) await this.onUpdate(); } };
   const runtime = { URL, URLSearchParams, AbortController, TypeError, Request, document, history, navigator: { onLine: true, serviceWorker: { controller: {}, ready: Promise.resolve(registration), register: async (...args) => { registrations.push(args); return registration; }, addEventListener(name, callback) { workerEvents.set(name, callback); } } }, PhoneStore, Blob, atob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html", reload() { reloads.push(true); } }, addEventListener(name, callback) { addEvent(windowEvents, name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
-  const names = "transferAddress,restoreTransferConnection,openTransferConnection,forgetTransferConnection,state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
+  const names = "parseTransferAddress,acceptTransferQr,transferAddress,restoreTransferConnection,openTransferConnection,forgetTransferConnection,state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
   assert.ok(source.includes("  void bootstrap();\n})();"), "test export insertion must match only bootstrap footer");
   // Exercise deferred sync explicitly in isolated tests; production stays offline by default.
   const testSource = syncEnabled ? source.replace("const TASK_SYNC_ENABLED = false;", "const TASK_SYNC_ENABLED = true;") : source;
@@ -139,6 +139,21 @@ await test("transfer refuses public addresses, credentials, arbitrary paths and 
 await test("transfer can open even when optional address preferences cannot be saved", async () => {
   const h = harness(); h.PhoneStore.failWrites = true; h.get("transferAddress").value = "http://192.168.1.10:8899/";
   await h.api.openTransferConnection(); assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=transfer");
+});
+await test("PWA QR saves only stable computer address and one click reopens without any token", async () => {
+  const h = harness(); h.ready(); const privateBefore = JSON.stringify([...h.stores.get("records")]);
+  const token = "a".repeat(43), stable = "http://codex-0123456789abcdef.local:8899/?tab=transfer";
+  await h.api.acceptTransferQr(stable + "#qrToken=" + token);
+  assert.equal(h.runtime.window.location.href, stable + "#qrToken=" + token); assert.equal(h.stores.get("settings").get("transferConnection").address, stable);
+  assert.equal(h.get("transferRemembered").hidden, false); assert.match(h.get("transferComputerName").textContent, /codex-0123456789abcdef.local/);
+  await h.api.restoreTransferConnection(); await h.api.openTransferConnection(true); assert.equal(h.runtime.window.location.href, stable);
+  assert.equal(JSON.stringify([...h.stores.get("records")]), privateBefore); assert.equal(h.calls.length, 0); assert.doesNotMatch(JSON.stringify([...h.stores.get("settings")]), /qrToken|aaaa/);
+});
+await test("PWA rejects public credential arbitrary fragment and forged local QR navigation", async () => {
+  const h = harness(); const before = h.runtime.window.location.href, token = "a".repeat(43);
+  for (const value of ["https://evil.test/#qrToken=" + token, "http://codex-0123456789abcdef.local.evil.test/#qrToken=" + token, "http://user:secret@192.168.1.2/#qrToken=" + token, "http://192.168.1.2/evil#qrToken=" + token, "http://192.168.1.2/#qrToken=" + token + "&token=x", "http://192.168.1.2/#qrToken=short", "http://192.168.1.2/#pair=notpin"]) await assert.rejects(h.api.acceptTransferQr(value));
+  assert.equal(h.runtime.window.location.href, before); assert.equal(h.stores.get("settings").has("transferConnection"), false); assert.equal(h.calls.length, 0);
+  assert.equal(h.api.parseTransferAddress("http://10.1.2.3:8899/#pair=123456", true).pairing, "#pair=123456");
 });
 
 await test("relative project installation has five tabs and optional transfer connection", () => {

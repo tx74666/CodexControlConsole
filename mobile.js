@@ -1,5 +1,15 @@
 (() => {
   "use strict";
+  const launchUrl = new URL(window.location.href), launchFragment = new URLSearchParams(launchUrl.hash.slice(1));
+  let launchPairing = null;
+  if (launchFragment.has("qrToken") || launchFragment.has("pair")) {
+    launchUrl.hash = "";
+    history.replaceState?.(history.state, "", launchUrl.href);
+    const fields = [...launchFragment];
+    if (fields.length === 1 && fields[0][0] === "qrToken" && /^[A-Za-z0-9_-]{32,128}$/.test(fields[0][1])) launchPairing = { qrToken: fields[0][1] };
+    else if (fields.length === 1 && fields[0][0] === "pair" && /^\d{6}$/.test(fields[0][1])) launchPairing = { code: fields[0][1] };
+    else launchPairing = { invalid: true };
+  }
 
   const el = id => document.getElementById(id);
   const state = { paired: false, generation: 0, busy: false, tab: "tasks", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, search: "", folder: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
@@ -114,6 +124,7 @@
     el("refreshButton").disabled = value || state.mutationBusy;
     el("offlineRetry").disabled = value;
     el("pairSubmit").disabled = value;
+    el("pairRemember").disabled = value;
     el("logoutButton").disabled = value || state.mutationBusy;
   }
   async function bootstrap() {
@@ -121,12 +132,26 @@
     setBusy(true);
     try {
       const status = await api("status");
+      if (status.paired && (!launchPairing || status.remembered)) {
+        if (launchPairing) state.tab = "transfer";
+        launchPairing = null;
+        await refreshDashboard(); void pollLivePlan(); return;
+      }
+      if (launchPairing) {
+        const pairing = launchPairing; launchPairing = null;
+        if (pairing.invalid) { showPair("二维码无效，请重新扫描电脑 Console 的连接二维码，或使用配对码。"); return; }
+        notice("pairNotice", "正在连接并记住这台手机…");
+        await api("pair", { ...pairing, remember: Boolean(el("pairRemember").checked), deviceName: phoneDeviceName() });
+        state.tab = "transfer";
+        await refreshDashboard(); void pollLivePlan(); return;
+      }
       if (!status.paired) { showPair(); return; }
       await refreshDashboard();
       void pollLivePlan();
     } catch (error) { failure(error, el("pairScreen").hidden ? "appNotice" : "pairNotice"); }
     finally { setBusy(false); }
   }
+  function phoneDeviceName() { return /iPad/i.test(navigator.userAgent || "") ? "iPad" : /iPhone/i.test(navigator.userAgent || "") ? "iPhone" : "手机"; }
   async function refreshDashboard() {
     const generation = state.generation;
     const data = await api("dashboard");
@@ -640,7 +665,7 @@
     event.preventDefault(); if (state.busy) return;
     const code = el("pairCode").value.trim(); if (!/^\d{6}$/.test(code)) { notice("pairNotice", "请输入电脑显示的 6 位配对码。", true); return; }
     setBusy(true); notice("pairNotice", "正在连接电脑…");
-    try { await api("pair", { code }); el("pairCode").value = ""; await refreshDashboard(); void pollLivePlan(); }
+    try { await api("pair", { code, remember: Boolean(el("pairRemember").checked), deviceName: phoneDeviceName() }); el("pairCode").value = ""; await refreshDashboard(); void pollLivePlan(); }
     catch (error) { el("pairCode").value = ""; failure(error, "pairNotice"); }
     finally { setBusy(false); }
   });

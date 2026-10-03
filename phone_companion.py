@@ -2,7 +2,7 @@
 
 This server is separate from the desktop control server. It never forwards
 requests, selects a library, executes a program, or exposes an arbitrary file.
-Pairings exist only in memory and are revoked when the companion is stopped.
+PIN sessions are temporary; explicitly remembered phones use hashed local credentials.
 """
 from __future__ import annotations
 
@@ -21,13 +21,14 @@ import secrets
 import socket
 import sqlite3
 import stat
-import subprocess
 import threading
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from workspace_plan import MAX_PLAN_BYTES, normalize_actual_plan
 from transfer_store import TransferError, read_transfer_request, send_transfer_attachment
+from phone_device_store import DeviceStoreError, REMEMBER_TTL, TOKEN_PATTERN
+from phone_discovery import discover_lan_interfaces
 
 
 PAIR_TTL = 300
@@ -41,6 +42,7 @@ AUDIO_CHUNK_BYTES = 64 * 1024
 AUDIO_TYPES = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
                ".aac": "audio/aac", ".flac": "audio/flac", ".ogg": "audio/ogg", ".opus": "audio/ogg"}
 COOKIE_NAME = "codex_phone_session"
+REMEMBER_COOKIE_NAME = "codex_phone_device"
 PLAN_SYNC_PREFIX = "/api/phone/plan-sync/"
 PLAN_SYNC_ORIGIN = "https://tx74666.github.io"
 NETWORK_WARNING = "只在你信任的同一 Wi-Fi 内使用。当前连接未加密；电脑关闭、休眠或关闭手机入口后不能访问。"
@@ -63,37 +65,6 @@ def is_lan_address(value):
         return isinstance(address, ipaddress.IPv4Address) and any(address in item for item in _LAN_NETWORKS)
     except (ValueError, TypeError):
         return False
-
-
-def discover_lan_interfaces():
-    """Read physical active adapters once; do not choose a VPN or change routing."""
-    if os.name != "nt":
-        return []
-    script = r"""$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$rows = @()
-foreach ($adapter in (Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.HardwareInterface })) {
-  $config = Get-NetIPConfiguration -InterfaceIndex $adapter.ifIndex
-  if (-not $config.IPv4DefaultGateway) { continue }
-  foreach ($address in $config.IPv4Address) {
-    $rows += [PSCustomObject]@{ address = $address.IPAddress; name = $adapter.Name }
-  }
-}
-ConvertTo-Json -InputObject @($rows) -Compress
-"""
-    try:
-        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                                capture_output=True, encoding="utf-8", timeout=12,
-                                creationflags=subprocess.CREATE_NO_WINDOW)
-        if result.returncode:
-            return []
-        rows = json.loads(result.stdout.lstrip("\ufeff"))
-        if isinstance(rows, dict):
-            rows = [rows]
-        return [{"address": item["address"], "name": str(item.get("name") or "Wi-Fi / Ethernet")[:80]}
-                for item in rows if isinstance(item, dict) and is_lan_address(item.get("address", ""))]
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return []
 
 
 class PhoneRequestError(ValueError):
@@ -154,7 +125,8 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         if cookie:
-            self.send_header("Set-Cookie", cookie)
+            for value in cookie if isinstance(cookie, (list, tuple)) else [cookie]:
+                self.send_header("Set-Cookie", value)
         if getattr(self, "_plan_sync_cors", False):
             self.send_header("Access-Control-Allow-Origin", PLAN_SYNC_ORIGIN)
             self.send_header("Vary", "Origin")
@@ -169,15 +141,19 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         if not is_lan_address(self.client_address[0]):
             raise PhoneRequestError("只允许同一局域网设备访问。", 403)
         hosts = self.headers.get_all("Host", [])
-        if len(hosts) != 1 or hosts[0] != companion.authority:
+        if len(hosts) != 1 or hosts[0] not in companion.authorities:
             raise PhoneRequestError("访问地址不匹配，请使用电脑显示的手机地址。", 403)
-        if any(value.strip().casefold() == "cross-site"
+        navigation = (not post and self.command in {"GET", "HEAD"}
+                      and urlsplit(self.path).path in {"/", "/mobile.html"}
+                      and self.headers.get_all("Sec-Fetch-Mode", []) == ["navigate"]
+                      and self.headers.get_all("Sec-Fetch-Dest", []) == ["document"])
+        if not navigation and any(value.strip().casefold() == "cross-site"
                for header in self.headers.get_all("Sec-Fetch-Site", []) for value in header.split(",")):
             raise PhoneRequestError("不允许跨网站请求。", 403)
         origins = self.headers.get_all("Origin", [])
-        if origins and (len(origins) != 1 or origins[0] != "http://" + companion.authority):
+        if origins and (len(origins) != 1 or origins[0] != "http://" + hosts[0]):
             raise PhoneRequestError("请求来源不匹配。", 403)
-        if post and (len(origins) != 1 or origins[0] != "http://" + companion.authority
+        if post and (len(origins) != 1 or origins[0] != "http://" + hosts[0]
                      or self.headers.get_all("X-Codex-Phone", []) != ["1"]):
             raise PhoneRequestError("请从手机入口提交操作。", 403)
         if not companion.enabled:
@@ -189,7 +165,8 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         companion = self.server.companion
         if not is_lan_address(self.client_address[0]):
             raise PhoneRequestError("只允许同一局域网设备访问。", 403)
-        if self.headers.get_all("Host", []) != [companion.authority]:
+        hosts = self.headers.get_all("Host", [])
+        if len(hosts) != 1 or hosts[0] not in companion.authorities:
             raise PhoneRequestError("访问地址不匹配，请使用电脑显示的同步地址。", 403)
         if self.headers.get_all("Origin", []) != [PLAN_SYNC_ORIGIN]:
             raise PhoneRequestError("只允许已发布的手机版请求计划同步。", 403)
@@ -267,6 +244,8 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         cookie = SimpleCookie()
         try:
             cookie.load(raw)
+            if REMEMBER_COOKIE_NAME in cookie:
+                return "device:" + cookie[REMEMBER_COOKIE_NAME].value
             return cookie[COOKIE_NAME].value if COOKIE_NAME in cookie else ""
         except Exception:
             return ""
@@ -293,7 +272,16 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 self._send(content, content_type=content_type)
                 return
             if parsed.path == "/api/phone/status":
-                self._send({"paired": companion.is_paired(self._token(), self.client_address[0])})
+                token = self._token()
+                if not companion.is_paired(token, self.client_address[0]):
+                    self._send({"paired": False})
+                else:
+                    session = companion.session(token, self.client_address[0])
+                    result = {"paired": True}
+                    if session.get("remembered"):
+                        result.update({"remembered": True, "version": companion.version,
+                                       "connectionUrl": companion.connection_url})
+                    self._send(result)
                 return
             session = companion.session(self._token(), self.client_address[0])
             if parsed.path.startswith("/api/phone/transfer/"):
@@ -341,7 +329,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 raise PhoneRequestError("手机入口没有此功能。", 404)
         except PhoneRequestError as error:
             self._send({"error": str(error)}, error.status, headers=error.headers)
-        except TransferError as error:
+        except (TransferError, DeviceStoreError) as error:
             self._send({"error": str(error)}, error.status)
         except (ValueError, OSError, RuntimeError, sqlite3.Error):
             self._send({"error": "暂时无法读取，请回到电脑检查资料库。"}, 400)
@@ -429,10 +417,20 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 return
             body = self._body()
             if parsed.path == "/api/phone/pair":
-                if set(body) != {"code"}:
+                if (set(body) - {"code", "qrToken", "remember", "deviceName"}
+                        or ("code" in body) == ("qrToken" in body)):
                     raise PhoneRequestError("请输入电脑显示的配对码。")
-                token = companion.pair(body["code"], self.client_address[0])
-                self._send({"paired": True, "expiresIn": SESSION_TTL}, cookie=companion.cookie(token))
+                token, remembered = companion.pair_phone(body, self.client_address[0])
+                cookies = []
+                if remembered:
+                    cookies.append(companion.remember_cookie(remembered["token"]))
+                else:
+                    cookies.append(companion.remember_cookie("", max_age=0))
+                cookies.append(companion.cookie(token))
+                self._send({"paired": True, "remembered": bool(remembered),
+                            "expiresIn": REMEMBER_TTL if remembered else SESSION_TTL,
+                            "deviceId": remembered["device"]["id"] if remembered else None,
+                            "connectionUrl": companion.connection_url, "version": companion.version}, cookie=cookies)
                 return
             token = self._token()
             session = companion.session(token, self.client_address[0])
@@ -444,12 +442,12 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 if body:
                     raise PhoneRequestError("请求内容无效。")
                 companion.logout(token)
-                self._send({"paired": False}, cookie=companion.cookie("", max_age=0))
+                self._send({"paired": False}, cookie=[companion.remember_cookie("", max_age=0), companion.cookie("", max_age=0)])
             else:
                 raise PhoneRequestError("手机入口没有此功能。", 404)
         except PhoneRequestError as error:
             self._send({"error": str(error)}, error.status)
-        except TransferError as error:
+        except (TransferError, DeviceStoreError) as error:
             self._send({"error": str(error)}, error.status)
         except (ValueError, OSError, RuntimeError, sqlite3.Error):
             self._send({"error": "操作未完成，请刷新后重试。"}, 400)
@@ -458,7 +456,8 @@ class _PhoneHandler(BaseHTTPRequestHandler):
 class PhoneCompanionService:
     def __init__(self, document_library, plan_getter, app_dir, version, device_getter=None,
                  *, clock=None, interface_getter=None, music_getter=None,
-                 music_file_getter=None, music_lyrics_getter=None, computer_id=None, transfer_store=None):
+                 music_file_getter=None, music_lyrics_getter=None, computer_id=None, transfer_store=None,
+                 device_store=None, announcer=None, monitor_interval=60):
         self.documents = document_library
         self.plan_getter = plan_getter
         self.device_getter = device_getter or document_library.overview
@@ -487,6 +486,18 @@ class PhoneCompanionService:
         self.music_file_getter = music_file_getter
         self.music_lyrics_getter = music_lyrics_getter
         self.transfer_store = transfer_store
+        self.device_store = device_store
+        self.announcer = announcer
+        self._network_fingerprint = ""
+        self._auto_settings = {"enabled": False}
+        self._restore_status = "disabled"
+        self._monitor_interval = max(30, monitor_interval)
+        self._monitor_stop = threading.Event()
+        self._monitor_thread = None
+        self._lifecycle_lock = threading.RLock()
+        self._qr_token = ""
+        self._qr_generation = ""
+        self._shutdown_requested = False
         self._music_lock = threading.RLock()
         self._music_cache = None
         self._music_checked_at = 0
@@ -501,6 +512,28 @@ class PhoneCompanionService:
         with self._lock:
             return f"{self._host}:{self._port}" if self._server is not None else ""
 
+    @property
+    def hostname(self):
+        return "codex-" + hashlib.sha256(self.computer_id.encode("utf-8")).hexdigest()[:12] + ".local"
+
+    @property
+    def authorities(self):
+        with self._lock:
+            return {self.authority, f"{self.hostname}:{self._port}"} if self._server is not None else set()
+
+    def _discovery_state(self):
+        value = self.announcer.state() if self.announcer is not None else {
+            "available": False, "status": "unavailable", "error": "本地发现暂不可用，请使用电脑显示的地址。"}
+        return {**value, "hostname": self.hostname}
+
+    @property
+    def connection_url(self):
+        with self._lock:
+            if self._server is None:
+                return ""
+            authority = f"{self.hostname}:{self._port}" if self._discovery_state().get("available") else self.authority
+            return "http://" + authority + "/"
+
     def _prune(self):
         now = self._clock()
         self._sessions = {key: value for key, value in self._sessions.items() if value["expires"] > now}
@@ -508,10 +541,16 @@ class PhoneCompanionService:
                           for key, stamps in self._attempts.items() if any(stamp > now - 60 for stamp in stamps)}
         if self._code and self._code_expires <= now:
             self._code = ""
+            self._qr_token = ""
 
     def state(self, include_interfaces=True):
         with self._lock:
             self._prune()
+            try:
+                devices = self.device_store.list() if self.device_store else []
+                device_error = ""
+            except (DeviceStoreError, OSError, sqlite3.Error):
+                devices, device_error = [], "设备信任记录暂不可用，请稍后重试。"
             remaining = max(0, self._code_expires - self._clock()) if self._code else 0
             result = {"enabled": self._server is not None, "host": self._host, "port": self._port,
                       "url": "http://" + self.authority + "/" if self._server is not None else "",
@@ -519,6 +558,16 @@ class PhoneCompanionService:
                       "pairingExpiresAt": datetime.fromtimestamp(time.time() + remaining, timezone.utc).isoformat() if remaining else None,
                       "pairingExpiresIn": int(remaining), "pairedCount": len(self._sessions),
                       "networkWarning": NETWORK_WARNING, "transport": "http-lan"}
+            result.update({"connectionUrl": self.connection_url, "stableUrl": self.connection_url,
+                           "qrToken": self._qr_token, "qrGeneration": self._qr_generation,
+                           "qrExpiresIn": int(remaining) if self._qr_token else 0,
+                           "qrUrl": self.connection_url + "?tab=transfer#qrToken=" + self._qr_token if self._qr_token else "",
+                           "ipQrUrl": result["url"] + "?tab=transfer#qrToken=" + self._qr_token if self._qr_token else "",
+                           "discovery": self._discovery_state(),
+                           "autoRestore": {"enabled": self._auto_settings.get("enabled") is True,
+                                           "networkAvailable": bool(self._network_fingerprint), "status": self._restore_status,
+                                           "error": "当前网络标识暂不可用；当前入口可临时使用，下次需手动开启。" if self._server is not None and not self._network_fingerprint else ""},
+                           "rememberedDevices": devices, "deviceTrustError": device_error})
         if include_interfaces:
             result["availableInterfaces"] = self._available_interfaces()
         return result
@@ -533,6 +582,11 @@ class PhoneCompanionService:
             return [dict(item) for item in self._interface_cache if isinstance(item, dict)]
 
     def start(self, host=None, port=8899):
+        with self._lifecycle_lock:
+            self._shutdown_requested = False
+            return self._start(host, port)
+
+    def _start(self, host=None, port=8899, *, persist=True):
         interfaces = self._available_interfaces(force=True)
         addresses = [item.get("address") for item in interfaces if isinstance(item, dict) and is_lan_address(item.get("address", ""))]
         host = host or (addresses[0] if addresses else "")
@@ -540,6 +594,12 @@ class PhoneCompanionService:
             raise ValueError("没有可用的 Wi-Fi / Ethernet 地址，请先将电脑接入同一 Wi-Fi。")
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("手机入口端口无效。")
+        selected = next((item for item in interfaces if item.get("address") == host), {})
+        fingerprint = selected.get("fingerprint", "")
+        if not isinstance(fingerprint, str) or not re.fullmatch(r"[a-f0-9]{64}", fingerprint):
+            fingerprint = ""
+        if not persist and fingerprint != self._auto_settings.get("fingerprint"):
+            raise ValueError("当前物理网络与已设置的网络不同。")
         with self._lock:
             if self._server is not None:
                 if self._host != host:
@@ -550,17 +610,32 @@ class PhoneCompanionService:
             except OSError as error:
                 raise ValueError("无法开启手机入口，地址已变化或端口正被使用。") from error
             self._server, self._host, self._port = server, host, server.server_address[1]
+            self._network_fingerprint = fingerprint
             self._sessions.clear()
             self._attempts.clear()
             self._new_code()
             self._thread = threading.Thread(target=server.serve_forever, name="console-phone-companion", daemon=True)
             self._thread.start()
+        try:
+            if self.announcer is not None:
+                self.announcer.start(self.hostname, host, self._port, self.version)
+            if persist and self.device_store:
+                self._auto_settings = {"enabled": True, "fingerprint": self._network_fingerprint, "port": self._port} if self._network_fingerprint else {"enabled": False}
+                self.device_store.save_settings(self._auto_settings)
+        except (ValueError, OSError, RuntimeError, sqlite3.Error):
+            self._close_listener()
+            raise
+        self._restore_status = "connected" if self._auto_settings.get("enabled") else "manual"
+        if self._auto_settings.get("enabled"):
+            self._ensure_monitor()
         return self.state(include_interfaces=False)
 
     def _new_code(self):
         self._code = f"{secrets.randbelow(1000000):06d}"
         self._code_expires = self._clock() + PAIR_TTL
         self._code_failures = 0
+        self._qr_token = secrets.token_urlsafe(32)
+        self._qr_generation = secrets.token_hex(16)
 
     def renew_pairing(self):
         with self._lock:
@@ -570,11 +645,22 @@ class PhoneCompanionService:
         return self.state(include_interfaces=False)
 
     def stop(self):
+        with self._lifecycle_lock:
+            self._monitor_stop.set()
+            self._auto_settings = {"enabled": False}
+            if self.device_store:
+                self.device_store.save_settings(self._auto_settings)
+            self._restore_status = "disabled"
+            return self._close_listener()
+
+    def _close_listener(self):
         with self._lock:
             server, thread = self._server, self._thread
             self._server = self._thread = None
             self._host, self._port = "", None
             self._code = ""
+            self._qr_token = ""
+            self._network_fingerprint = ""
             self._sessions.clear()
             self._attempts.clear()
         if server is not None:
@@ -582,9 +668,79 @@ class PhoneCompanionService:
             server.server_close()
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=3)
+        if self.announcer is not None:
+            self.announcer.stop()
         return self.state(include_interfaces=False)
 
-    def pair(self, code, peer, *, scope="phone"):
+    def shutdown(self):
+        """Process exit preserves only the explicit same-network start setting."""
+        self._monitor_stop.set()
+        with self._lifecycle_lock:
+            self._shutdown_requested = True
+            self._monitor_stop.set()
+            result = self._close_listener()
+        thread = self._monitor_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2)
+        return result
+
+    def _ensure_monitor(self):
+        if self._monitor_thread is not None and self._monitor_thread.is_alive() and not self._monitor_stop.is_set():
+            return
+        self._monitor_stop = threading.Event()
+        event = self._monitor_stop
+        def watch():
+            while not event.wait(self._monitor_interval):
+                try:
+                    self.check_network()
+                except (ValueError, OSError, RuntimeError, sqlite3.Error):
+                    self._restore_status = "unavailable"
+        self._monitor_thread = threading.Thread(target=watch, name="console-phone-network", daemon=True)
+        self._monitor_thread.start()
+
+    def restore(self):
+        if not self.device_store:
+            return self.state(False)
+        with self._lifecycle_lock:
+            if self._shutdown_requested:
+                return self.state(False)
+            self._auto_settings = self.device_store.settings()
+            if self._auto_settings.get("enabled"):
+                self._ensure_monitor()
+                self.check_network()
+        return self.state(False)
+
+    def check_network(self):
+        """One slow physical-interface read per minute, never a subnet scan."""
+        with self._lifecycle_lock:
+            if self._shutdown_requested or not self._auto_settings.get("enabled") or self._monitor_stop.is_set():
+                return
+            interfaces = self._available_interfaces(force=True)
+            selected = next((item for item in interfaces if item.get("fingerprint") == self._auto_settings.get("fingerprint")
+                             and is_lan_address(item.get("address", ""))), None)
+            if selected is None:
+                self._close_listener()
+                self._restore_status = "waiting-for-approved-network"
+                return
+            if self.enabled and self._host == selected["address"]:
+                return
+            self._close_listener()
+            try:
+                self._start(selected["address"], self._auto_settings["port"], persist=False)
+                self._restore_status = "connected"
+            except (ValueError, OSError, RuntimeError):
+                self._restore_status = "unavailable"
+
+    def forget_devices(self, body):
+        if not self.device_store or not isinstance(body, dict) or (set(body) != {"id"} and body != {"all": True}):
+            raise PhoneRequestError("设备移除请求无效。")
+        with self._lock:
+            self.device_store.revoke(body.get("id"), all_devices=body.get("all") is True)
+            self._sessions = {key: item for key, item in self._sessions.items() if not item.get("deviceId")
+                              or (not body.get("all") and item["deviceId"] != body.get("id"))}
+        return self.state(False)
+
+    def pair(self, code, peer, *, scope="phone", qr_token=None, remembered=None):
         if scope not in ("phone", "plan-sync"):
             raise PhoneRequestError("配对权限无效。", 403)
         with self._lock:
@@ -597,27 +753,61 @@ class PhoneCompanionService:
             if len(attempts) >= 5 or sum(len(items) for items in self._attempts.values()) >= 20:
                 raise PhoneRequestError("配对尝试过多，请稍后重试。", 429)
             attempts.append(self._clock())
-            if (not isinstance(code, str) or len(code) != 6 or not code.isascii() or not code.isdigit()
-                    or not self._code or not secrets.compare_digest(code, self._code)):
+            valid = (isinstance(code, str) and len(code) == 6 and code.isascii() and code.isdigit()
+                     and self._code and secrets.compare_digest(code, self._code)) if qr_token is None else (
+                         scope == "phone" and isinstance(qr_token, str) and re.fullmatch(r"[A-Za-z0-9_-]{43}", qr_token)
+                         and self._qr_token and secrets.compare_digest(qr_token, self._qr_token))
+            if not valid:
                 self._code_failures += 1
                 if self._code_failures >= 8:
                     self._code = ""
+                    self._qr_token = ""
                 raise PhoneRequestError("配对码错误或已失效，请在电脑上获取新配对码。", 401)
             if len(self._sessions) >= 8:
                 raise PhoneRequestError("已配对设备过多，请在电脑上关闭后重新开启手机入口。", 429)
             root = self.documents.state().get("root", "")
+            if remembered is not None:
+                if scope != "phone" or not self.device_store:
+                    raise PhoneRequestError("电脑端暂不能记住设备，请使用临时配对。", 503)
+                credential, device = self.device_store.register(root, self._network_fingerprint, remembered["name"])
+                remembered.update({"token": credential, "device": device})
             token = secrets.token_urlsafe(32)
             self._sessions[token] = {"expires": self._clock() + SESSION_TTL, "peer": peer,
                                      "root": root, "scope": scope}
+            if remembered is not None:
+                self._sessions[token].update({"deviceId": device["id"], "remembered": True})
             self._code = ""  # One successful pairing consumes the code.
+            self._qr_token = ""
             return token
+
+    def pair_phone(self, body, peer):
+        remember = body.get("remember", False)
+        name = body.get("deviceName", "我的手机")
+        if type(remember) is not bool or not isinstance(name, str) or len(name) > 80 or any(ord(c) < 32 for c in name):
+            raise PhoneRequestError("设备名称或记住设置无效。")
+        remembered = {"name": name} if remember else None
+        token = self.pair(body.get("code"), peer, qr_token=body.get("qrToken"), remembered=remembered)
+        return token, remembered
 
     @staticmethod
     def cookie(token, max_age=SESSION_TTL):
         return f"{COOKIE_NAME}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict"
 
+    @staticmethod
+    def remember_cookie(token, max_age=REMEMBER_TTL):
+        return f"{REMEMBER_COOKIE_NAME}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict"
+
     def session(self, token, peer, *, scope="phone"):
         with self._lock:
+            if isinstance(token, str) and token.startswith("device:"):
+                if scope != "phone" or self._server is None or not is_lan_address(peer) or not self.device_store:
+                    raise PhoneRequestError("请先扫码连接电脑。", 401)
+                root = self.documents.state().get("root", "")
+                try:
+                    device = self.device_store.authenticate(token[7:], root, self._network_fingerprint)
+                except DeviceStoreError as error:
+                    raise PhoneRequestError(str(error), error.status) from error
+                return {"root": root, "scope": "phone", "peer": peer, "remembered": True, "deviceId": device["id"]}
             self._prune()
             session = self._sessions.get(token)
             if (self._server is None or not session or session["peer"] != peer
@@ -625,7 +815,13 @@ class PhoneCompanionService:
                 raise PhoneRequestError("请先使用电脑显示的配对码连接。", 401)
             if session["root"] != self.documents.state().get("root", ""):
                 self._sessions.pop(token, None)
+                if session.get("deviceId") and self.device_store:
+                    self.device_store.revoke(session["deviceId"])
                 raise PhoneRequestError("电脑资料库已切换，请重新配对。", 401)
+            if session.get("deviceId") and (not self.device_store or not self.device_store.active(
+                    session["deviceId"], session["root"], self._network_fingerprint)):
+                self._sessions.pop(token, None)
+                raise PhoneRequestError("设备已被移除，请重新扫码连接。", 401)
             return dict(session)
 
     def is_paired(self, token, peer):
@@ -637,7 +833,15 @@ class PhoneCompanionService:
 
     def logout(self, token):
         with self._lock:
-            self._sessions.pop(token, None)
+            session = self._sessions.pop(token, None)
+            if self.device_store:
+                if isinstance(token, str) and token.startswith("device:"):
+                    self.device_store.revoke(token=token[7:])
+                    matched = TOKEN_PATTERN.fullmatch(token[7:])
+                    if matched:
+                        self._sessions = {key: item for key, item in self._sessions.items() if item.get("deviceId") != matched[1]}
+                elif session and session.get("deviceId"):
+                    self.device_store.revoke(session["deviceId"])
 
     def asset(self, path):
         name = ASSETS.get(path)

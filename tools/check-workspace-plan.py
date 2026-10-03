@@ -82,6 +82,7 @@ class PlanChecks(unittest.TestCase):
             allow_local = True
             allow_trusted = True
             output = None
+            def _private_phone_path(self): return False  # API-only route fixture, no static files.
             def require_local_request(self): return self.allow_local
             def require_trusted_post_context(self): return self.allow_trusted
             def send_bytes_response(self, body, mime): self.output = (body, mime)
@@ -246,6 +247,7 @@ class SavedPlanChecks(unittest.TestCase):
             output = None
             body = {'plan': sample(), 'expectedHash': None}
             limit = None
+            def _private_phone_path(self): return False  # API-only route fixture, no static files.
             def require_local_request(self): return self.allow_local
             def require_trusted_post_context(self): return self.allow_trusted
             def send_json(self, payload, status=200): self.output = (payload, status)

@@ -258,6 +258,7 @@ class ReferenceChecks(unittest.TestCase):
             require_local_request = console.ConsoleHandler.require_local_request
             require_trusted_post_context = console.ConsoleHandler.require_trusted_post_context
             connection = object()
+            def _private_phone_path(inner): return False  # This fixture dispatches API routes only.
             def __init__(inner, host='127.0.0.1:8898', origin=None, client='127.0.0.1', fetch_site=None):
                 inner.path = '/api/documents/references?' + urlencode({'module': 'blender', 'expectedRoot': str(self.root)})
                 inner.headers = Message()

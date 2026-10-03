@@ -19,7 +19,7 @@ const inbox = () => ({ entries: [
 ] });
 const dashboard = () => ({ version: "1.0.14", plan: plan(), device: { currentMemory: { status: "available", usedPercent: 91, availableBytes: 1024 ** 3, totalBytes: 16 * 1024 ** 3, readAt: "2026-10-01T11:00:00+08:00" }, model: "Dell fixture", cpuModel: "CPU", gpuModels: ["GPU"], sampledAt: "2026-09-27T11:00:00+08:00", installedMemoryBytes: 16 * 1024 ** 3 }, documents: { inbox: inbox(), guide: { items: [{ title: "阅读重点", path: "human.md", highlights: ["重点"] }] }, references: { items: [{ id: "nodes", defaultLanguage: "zh-CN", variants: [{ language: "zh-CN", label: "中文", title: "节点参考", path: "nodes.zh.md", available: true }, { language: "en", label: "English", title: "Nodes", path: "nodes.en.md", available: true }] }] } } });
 const playlist = () => ({ playback: "phone", tracks: [{ name: "<script>One</script>", path: "local/one.mp3", type: "mp3", size: 100 }, { name: "Two", path: "album/two.m4a", type: "m4a", size: 200 }, { name: "三首", path: "album/three.mp3", type: "mp3", lyrics: true, lyricsLanguage: "zh", lyricsLanguages: [{ code: "zh", label: "Chinese" }, { code: "en", label: "English" }] }], truncated: false });
-function harness(script = source) {
+function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.html") {
   class Element {
     constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.style = { setProperty(key, value) { this[key] = value; } }; }
     append(...items) { this.children.push(...items); }
@@ -38,6 +38,7 @@ function harness(script = source) {
   }
   const nodes = new Map(), calls = [], answers = [], saved = new Map(), timers = new Map(); let nextTimer = 1;
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
+  get("pairRemember").checked = true;
   const audio = get("musicAudio"); audio.paused = true; audio.currentTime = 0; audio.duration = NaN; audio.src = ""; audio.playCalls = 0; audio.pauseCalls = 0; audio.loadCalls = 0; const mediaEvents = [];
   audio.pause = () => { audio.paused = true; audio.pauseCalls++; mediaEvents.push("pause"); };
   audio.load = () => { audio.loadCalls++; audio.duration = NaN; audio.currentTime = 0; mediaEvents.push("load"); };
@@ -46,14 +47,15 @@ function harness(script = source) {
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const documentEvents = new Map(), windowEvents = new Map();
   const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
-  const history = { state: null, pushState(value) { this.state = value; }, back() { this.state = null; } };
-  const runtime = { URL, URLSearchParams, AbortController, TypeError, Blob, structuredClone, document, history, navigator: {}, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/mobile.html" }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
+  const replacedUrls = [];
+  const history = { state: null, replaceState(value, unused, url) { this.state = value; replacedUrls.push(url); runtime.window.location.href = url; }, pushState(value) { this.state = value; }, back() { this.state = null; } };
+  const runtime = { URL, URLSearchParams, AbortController, TypeError, Blob, structuredClone, document, history, navigator: {}, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: initialUrl }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
   const names = "state,livePlan,validateLivePlan,pollLivePlan,savePlanSnapshot,api,bootstrap,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,showPair,showOffline,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
   const normalized = normalizeScript(script), footer = "  void bootstrap();\n})();";
   assert.equal(normalized.split(footer).length, 2, "test export insertion must match only bootstrap footer");
   runInNewContext(normalized.replace(footer, `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
-  return { api, runtime, get, document, calls, answers, saved, history, tabs, listTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.paired = true; api.state.dashboard = dashboard(); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
+  return { api, runtime, get, document, calls, answers, saved, history, replacedUrls, tabs, listTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.paired = true; api.state.dashboard = dashboard(); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
 }
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
@@ -232,6 +234,28 @@ await test("untrusted catalog URLs cannot direct playback outside the phone endp
   const tracks = h.api.musicTrackList(data); assert.equal(tracks.length, 3); h.ready(); h.api.state.music.tracks = tracks; h.api.selectMusicTrack("local/one.mp3"); assert.match(h.audio.src, /^\/api\/phone\/music\/audio\?path=/); assert.doesNotMatch(h.audio.src, /evil/);
 });
 const snapshot = (hash = "a") => ({ format: "codex-console-plan-snapshot", schemaVersion: 1, hash: hash.repeat(64), updatedAt: "2026-10-01T12:00:00Z", computerId: "fixture-pc", plan: plan().plan });
+await test("QR fragment is removed before any request and automatically pairs remembered phone", async () => {
+  const token = "q".repeat(43), h = harness(source, "http://codex-0123456789abcdef.local:8899/?tab=transfer#qrToken=" + token);
+  assert.equal(h.calls.length, 0); assert.equal(h.replacedUrls.length, 1); assert.doesNotMatch(h.runtime.window.location.href, /qrToken|#/);
+  h.respond({ paired: false }); h.respond({ paired: true, remembered: true }); h.respond(dashboard()); h.respond(snapshot()); await h.api.bootstrap(); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.calls[1].url, "/api/phone/pair"); assert.deepEqual(JSON.parse(h.calls[1].options.body), { qrToken: token, remember: true, deviceName: "手机" });
+  assert.equal(h.api.state.tab, "transfer"); assert.equal(h.get("pairScreen").hidden, true); assert.equal(h.get("transferPanel").hidden, false);
+  assert.doesNotMatch(JSON.stringify([...h.saved]), /qrToken|qqqq/);
+});
+await test("invalid QR clears fragment and leaves PIN fallback without sending token", async () => {
+  const h = harness(source, "http://192.168.1.2:8899/?tab=transfer#qrToken=short&token=extra");
+  assert.equal(h.replacedUrls.length, 1); h.respond({ paired: false }); await h.api.bootstrap(); assert.equal(h.calls.length, 1); assert.equal(h.get("pairScreen").hidden, false); assert.match(h.get("pairNotice").textContent, /二维码无效/);
+});
+await test("already remembered device opens QR without consuming another device invitation", async () => {
+  const h = harness(source, "http://codex-0123456789abcdef.local:8899/?tab=transfer#qrToken=" + "q".repeat(43));
+  h.respond({ paired: true, remembered: true }); h.respond(dashboard()); h.respond(snapshot()); await h.api.bootstrap(); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(h.calls.some(call => call.url === "/api/phone/pair"), false); assert.equal(h.api.state.tab, "transfer"); assert.equal(h.get("appScreen").hidden, false);
+});
+await test("PIN fallback carries user visible remember choice and device label", async () => {
+  const h = harness(); h.get("pairRemember").checked = false; h.get("pairCode").value = "123456"; h.respond({ paired: true }); h.respond(dashboard()); h.respond(snapshot());
+  await h.get("pairForm").listeners.get("submit")({ preventDefault() {} }); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(JSON.parse(h.calls[0].options.body), { code: "123456", remember: false, deviceName: "手机" });
+});
 await test("LAN task polling reads only actual tasks and keeps expanded groups on updates", async () => {
   const h = harness(); h.ready(); h.api.renderPlan(plan()); h.get("taskGroups").children[0].open = true; h.respond(snapshot()); await h.api.pollLivePlan();
   assert.equal(h.calls[0].url, "/api/phone/plan"); assert.equal(h.calls[0].options.method, "GET"); assert.equal(h.get("taskGroups").children[0].open, true); assert.match(h.get("planNotice").textContent, /已同步/); assert.ok(h.saved.has("codexPhone.planSnapshot.v1")); assert.equal(h.get("savePlanSnapshot").disabled, false);

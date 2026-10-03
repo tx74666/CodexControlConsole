@@ -252,6 +252,8 @@ if ($BuildApplication) {
   "--workpath", (Join-Path $BuildRoot "work"),
   "--specpath", (Join-Path $BuildRoot "spec"),
   "--paths", $ProjectRoot,
+  "--collect-submodules", "zeroconf",
+  "--collect-submodules", "ifaddr",
   "--exclude-module", "tkinter"
 )
 

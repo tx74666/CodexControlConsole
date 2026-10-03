@@ -78,6 +78,8 @@ $PythonSources = @(
   "document_library.py",
   "workspace_plan.py",
   "phone_companion.py",
+  "phone_device_store.py",
+  "phone_discovery.py",
   "phone_connection_qr.py",
   "transfer_store.py",
   "phone_offline.py",
@@ -111,6 +113,8 @@ $PythonChecks = @(
   "tools/check-document-references.py",
   "tools/check-workspace-plan.py",
   "tools/check-phone-companion.py",
+  "tools/check-phone-devices.py",
+  "tools/check-phone-discovery.py",
   "tools/check-phone-connection-qr.py",
   "tools/check-transfer.py",
   "tools/check-phone-offline.py",
@@ -134,6 +138,10 @@ try {
     "phone/store.js",
     "phone/styles.css",
     "phone/sw.js",
+    "phone/connection-qr.js",
+    "phone/vendor/jsQR.js",
+    "phone/vendor/jsQR.LICENSE",
+    "tools/check-connection-qr-ui.mjs",
     "phone/manifest.webmanifest",
     "tools/build-phone-static.py",
     "tools/check-phone-offline-ui.mjs",
@@ -180,6 +188,8 @@ try {
   Invoke-QualityStep "Offline phone JavaScript syntax" { & $Node --check phone/app.js }
   Invoke-QualityStep "Offline phone local storage syntax" { & $Node --check phone/store.js }
   Invoke-QualityStep "Offline phone service worker syntax" { & $Node --check phone/sw.js }
+  Invoke-QualityStep "Phone QR scanner syntax" { & $Node --check phone/connection-qr.js }
+  Invoke-QualityStep "Phone QR scanner behavior" { & $Node tools/check-connection-qr-ui.mjs }
   Invoke-QualityStep "Offline phone UI" { & $Node tools/check-phone-offline-ui.mjs }
   Invoke-QualityStep "Mobile JavaScript syntax" { & $Node --check mobile.js }
   Invoke-QualityStep "Mobile companion UI" { & $Node tools/check-mobile-ui.mjs }

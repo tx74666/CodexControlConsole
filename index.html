@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Codex Console</title>
-  <link rel="shortcut icon" href="favicon.ico?v=console-transfer-1.0.21">
-  <link rel="icon" type="image/x-icon" sizes="any" href="favicon.ico?v=console-transfer-1.0.21">
-  <link rel="icon" type="image/png" sizes="256x256" href="codex-resource-icon-256.png?v=console-transfer-1.0.21">
-  <link rel="icon" type="image/png" sizes="128x128" href="codex-resource-icon-128.png?v=console-transfer-1.0.21">
-  <link rel="icon" type="image/png" sizes="64x64" href="codex-resource-icon-64.png?v=console-transfer-1.0.21">
-  <link rel="icon" type="image/png" sizes="48x48" href="codex-resource-icon-48.png?v=console-transfer-1.0.21">
-  <link rel="icon" type="image/png" sizes="32x32" href="codex-resource-icon-32.png?v=console-transfer-1.0.21">
-  <link rel="manifest" href="site.webmanifest?v=console-transfer-1.0.21">
+  <link rel="shortcut icon" href="favicon.ico?v=console-connect-1.0.25">
+  <link rel="icon" type="image/x-icon" sizes="any" href="favicon.ico?v=console-connect-1.0.25">
+  <link rel="icon" type="image/png" sizes="256x256" href="codex-resource-icon-256.png?v=console-connect-1.0.25">
+  <link rel="icon" type="image/png" sizes="128x128" href="codex-resource-icon-128.png?v=console-connect-1.0.25">
+  <link rel="icon" type="image/png" sizes="64x64" href="codex-resource-icon-64.png?v=console-connect-1.0.25">
+  <link rel="icon" type="image/png" sizes="48x48" href="codex-resource-icon-48.png?v=console-connect-1.0.25">
+  <link rel="icon" type="image/png" sizes="32x32" href="codex-resource-icon-32.png?v=console-connect-1.0.25">
+  <link rel="manifest" href="site.webmanifest?v=console-connect-1.0.25">
   <script>
     (() => {
       const moduleHrefs = {
@@ -50,7 +50,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=console-transfer-1.0.21">
+  <link rel="stylesheet" href="styles.css?v=console-connect-1.0.25">
   <link rel="stylesheet" href="transfer-panel.css?v=console-transfer-1">
 </head>
 <body>
@@ -1315,18 +1315,22 @@
     <select id="phoneCompanionInterface"></select>
     <p id="phoneCompanionStatus" role="status" aria-live="polite">正在读取连接信息…</p>
     <div id="phoneCompanionDetails" hidden>
-      <p>1. 用手机相机扫码打开互传，再输入配对码：</p>
+      <p>1. 手机 Console「互传 → 扫码连接电脑」，或用手机相机扫码：</p>
       <img id="phoneCompanionQr" class="phone-pair-qr" alt="手机互传入口二维码" width="180" height="180" hidden>
+      <button id="phoneCompanionQrIp" class="status-button" type="button" hidden>二维码打不开？改用 IP 入口</button>
       <p>也可以在手机版的「互传」中输入这个电脑地址，或在 Safari 打开：</p>
       <a id="phoneCompanionUrl" target="_blank" rel="noopener noreferrer"></a>
-      <p>2. 输入配对码：</p><strong id="phoneCompanionCode" class="phone-pair-code"></strong>
+      <p>首次扫码会自动连接并记住手机，以后直接进入。二维码是临时入口，配对记忆可保留 90 天。</p>
+      <details><summary>备用：配对码</summary><strong id="phoneCompanionCode" class="phone-pair-code"></strong>
       <p id="phoneCompanionExpiry"></p>
-      <p>3. 若手机版提示打开实时入口，在 Safari 使用上面的地址。离线资料和已下载音乐仍保存在原主屏幕 App。</p>
+      </details>
+      <p>已保存的资料和音乐仍保存在原主屏幕 App。电脑退出后重新打开，会恢复手机入口；手动关闭入口则保持关闭。</p>
       <p id="phoneCompanionPeers"></p>
     </div>
+    <details class="phone-remembered-settings"><summary>已记住的手机</summary><div id="phoneCompanionDevices"></div></details>
     <div class="phone-pair-actions">
       <button id="phoneCompanionStart" class="status-button" type="button" disabled>开启手机入口</button>
-      <button id="phoneCompanionRenew" class="status-button" type="button" hidden>新配对码</button>
+      <button id="phoneCompanionRenew" class="status-button" type="button" hidden>刷新连接二维码</button>
       <button id="phoneCompanionStop" class="status-button" type="button" hidden>关闭手机入口</button>
     </div>
     <details><summary>连接不上？</summary><p>确认手机没有使用移动数据或访客 Wi‑Fi。Windows 若弹出防火墙提示，只允许你信任的家庭网络。这里使用局域网 HTTP，请只在可信 Wi‑Fi 使用，不要做路由器端口转发。电脑休眠、Console 退出或入口关闭后，手机会断开。重启 Console 后需要重新开启并配对。</p><p>手机查看电脑保存的计划，单向同步；手机页面在后台时暂停更新，回到前台会重新读取。断线时明确显示上次保存的计划。Read / Later 与电脑共用同一文档归档状态。</p></details>
@@ -1345,8 +1349,8 @@
 <script src="/api/release-defaults.js"></script>
 <script src="/api/workspace-plan.js"></script>
 <script src="transfer-panel.js?v=console-transfer-1"></script>
-<script src="app.js?v=console-transfer-1.0.21"></script>
-<script src="phone-pairing.js?v=console-transfer-1.0.21"></script>
-<script src="phone-offline-export.js?v=console-transfer-1.0.21"></script>
+<script src="app.js?v=console-connect-1.0.25"></script>
+<script src="phone-pairing.js?v=console-connect-1.0.25"></script>
+<script src="phone-offline-export.js?v=console-connect-1.0.25"></script>
 </body>
 </html>

@@ -120,7 +120,7 @@ The phone app is **offline first**. After its first HTTPS installation, plans, i
 
 Build the public app with `python tools/build-phone-static.py --output-dir dist-phone/site --zip`. Only phone application assets and the 16 existing public music tracks and their lyrics enter this package. **Download all** saves the entire catalog sequentially and resumes missing tracks after an interruption. Songs are not all downloaded on first opening. Private music can also be imported from Files. App updates preserve local data and saved music.
 
-The iPhone app is available at [https://tx74666.github.io/CodexControlConsole/](https://tx74666.github.io/CodexControlConsole/). The Pages workflow deploys when a version tag is uploaded or when run manually; `phone/version.json` controls the phone version independently of Windows releases. Open this address in iPhone Safari, choose **Add to Home Screen**, then import private data and download the existing music from the home-screen app. **Check for updates** refreshes the program online and preserves local data and saved music. No App Store / TestFlight binary is produced by the Windows build.
+The iPhone app is available at [https://tx74666.github.io/CodexControlConsole/](https://tx74666.github.io/CodexControlConsole/). Windows and iPhone releases share one version; release checks require `phone/version.json` to match `app-manifest.json`. After the Windows release passes, run the Pages workflow manually from `main` to publish the matching phone app. Open this address in iPhone Safari, choose **Add to Home Screen**, then import private data and download the existing music from the home-screen app. **Check for updates** refreshes the program online and preserves local data and saved music. No App Store / TestFlight binary is produced by the Windows build.
 
 手机首次安装：
 
@@ -131,7 +131,7 @@ The iPhone app is available at [https://tx74666.github.io/CodexControlConsole/](
 
 手机 **1.0.22** 将主屏幕图标改回白底，原云形图案从66%稍放大到画布宽度约72%，保留四周留白及180、192、512三种尺寸。联网打开、恢复前台或重新联网时自动检查程序更新；新版完整保存后自动切换，正在播放音乐、下载或保存资料时延后重开。旧版1.0.16的页面没有自动重开处理，新程序提供一次兼容重开，已保存的资料与音乐继续使用。离线时保留已保存版本；「检查程序更新」也继续可用。桌面图标不变。**1.0.20** 的离线查看模式和 **1.0.19** 精简的音乐页继续保留：任务同步入口收起，不会恢复旧的电脑连接。电脑修改不会自动更新手机资料；私人计划与设备资料仍通过「资料与更新」保存在手机，不会上传到公开 GitHub。iOS 主屏幕的既有图标可能仍显示旧图案，程序更新不保证系统立即替换它；不要为换图标删除包含离线资料的主屏幕 App。
 
-`dist-phone/CodexConsole-iPhone-1.0.22.zip` 是用于部署的网页包，不能直接在 iPhone 上当作安装包打开。手机资料备份不包含音频，请保留音乐原文件。
+`dist-phone/CodexConsole-iPhone-1.0.25.zip` 是用于部署的网页包，不能直接在 iPhone 上当作安装包打开。手机资料备份不包含音频，请保留音乐原文件。
 
 ### 电脑 → 手机任务同步（后续功能，当前手机版不启用）
 
@@ -144,23 +144,27 @@ The iPhone app is available at [https://tx74666.github.io/CodexControlConsole/](
 
 Safari 当前未普遍启用让 HTTPS 网页直接访问 HTTP 局域网电脑的 Local Network Access 能力，所以不能保证原主屏幕 App 内直接更新。上面的同源局域网页面是兼容入口；它与原 App 使用不同的储存区，不能自动修改原 App 的离线副本。后台或锁屏时轮询暂停，回到前台立即重读。电脑需开机、保持 Console 运行，两端接入同一可信 Wi-Fi。每个用户配对自己的电脑；个人任务、配对码与会话凭证不会上传 GitHub。电脑重启、网络地址变化、配对过期或切换资料库后需重新连接。
 
-### 文字与图片互传（Windows 1.0.21 / iPhone 1.0.24）
+### 文字与图片互传（电脑与手机统一 1.0.25）
 
-电脑打开 **互传 → 连接手机**，开启同 Wi-Fi 入口。手机扫描电脑二维码，或在原主屏幕 Console 的 **互传** 页填写电脑显示的地址，点 **打开互传**，输入六位配对码。地址会保存在原手机 App，后续可直接打开；电脑地址变化或配对过期时重新连接。
+电脑打开 **互传 → 连接手机**，首次开启同 Wi-Fi 入口。手机 Console 打开 **互传 → 扫码连接电脑**，扫描电脑二维码，即可完成配对并记住手机；之后点击已保存电脑的 **打开互传**。扫码只在手机本地识别，也可选择二维码图片。手填地址与六位配对码收在备用入口。
+
+电脑通过 Bonjour/mDNS 提供固定的 `codex-….local` 名称。开启入口后，Console 重启会在已设置的物理网络恢复连接；同一网络的 IP 变化会在下一次网络检查时重新绑定，通常一分钟内。记住设备的凭据有效 90 天，电脑 **已记住的手机** 可移除设备，手机退出连接也会撤销该设备。电脑关闭入口会停止访问并取消自动开启；再次手动开启同一网络后，未撤销的设备仍可使用。切换资料库、网络或浏览器清除凭据后需要重新扫码。
+
+网络匹配使用物理网卡、Windows 网络名称及网关；缺少这些信息时，只允许手动开启。路由器隔离设备或阻断 mDNS 时，电脑可切换 **改用 IP 入口** 二维码；这种备用地址在电脑 IP 变化后需要重新扫码。直接使用系统相机扫码可以连接；要在原手机 Console 保存电脑快捷入口，使用 App 内的扫码按钮。
 
 两端可以输入文字、选择最多四张图片并发送，查看同一份收发记录。电脑可直接打开收到的原图，手机可查看及保存附件。发送成功后才清空输入；失败时保留文字和所选图片。原图按原始字节保存，HEIC 可以收发与下载，不保证电脑浏览器能预览。每张图片最多 12 MiB，每次请求最多 24 MiB，文字最多 20,000 字。
 
-互传历史保存在当前电脑资料库的 `互传/.console-transfer`，未选资料库时使用应用本地数据目录；不会进入公开 GitHub、手机发布包或反馈服务。二维码和配对沿用受限手机入口，任务同步仍保持关闭。原 HTTPS 离线 App 通过打开电脑的局域网页面使用互传；两者储存区独立，手机原有文档、音乐和阅读进度继续保留。电脑须保持开机并运行 Console，首次连接仅在可信 Wi-Fi 使用。后台与锁屏期间停止收发列表轮询，回到前台再刷新。
+原图保存在当前电脑资料库的 `互传`，历史索引与预览在 `互传/.console-transfer`；未选资料库时使用应用本地数据目录。这些内容不会进入公开 GitHub、手机发布包或反馈服务。任务同步仍保持关闭。原 HTTPS 离线 App 通过打开电脑的局域网页面使用互传；两者储存区独立，手机原有文档、音乐和阅读进度继续保留。电脑须保持开机并运行 Console，首次连接仅在可信 Wi-Fi 使用。后台与锁屏期间停止收发列表轮询，回到前台再刷新。
 
 ### Optional local companion (same Wi-Fi)
 
 The earlier limited Wi-Fi companion remains available through the local `/api/phone-companion/*` interfaces for compatibility, with a one-time pairing code and a physical LAN address. It is not the offline app and has no desktop top-bar entry. Its local HTTP page requires the computer to remain awake.
 
-The mobile companion has **Tasks / Music / Device / Documents** tabs: saved task groups and actual desktop progress, direct phone playback of the computer's local music library, a compact computer overview, document highlights and registered references, and a focused reader. **Read / Later / Archive** uses the existing desktop document registry. Task snapshots are read-only on the phone and refresh every five seconds in the foreground; other tabs are not sampled by the task poll.
+The mobile companion has **Tasks / Music / Device / Documents / Transfer** tabs: saved task groups and actual desktop progress, direct phone playback of the computer's local music library, a compact computer overview, document highlights and registered references, a focused reader, and bidirectional text/image transfer. **Read / Later / Archive** uses the existing desktop document registry. Task snapshots are read-only on the phone and refresh every five seconds in the foreground; other tabs are not sampled by the task poll.
 
 Music loads on demand and plays through the phone's own audio output after tapping a track or Play. Search, previous/next, seeking, repeat modes, and existing local lyrics with available language variants are supported. It uses authenticated byte-range streaming from registered tracks, without downloading new songs, modifying the desktop playlist, or controlling computer speakers. Playback stops and private media is cleared on logout or a detected lost connection. Safari format support and background playback must be checked on the user's actual iPhone; no offline download is provided.
 
-Phone access is off after every Console restart. Enabling it starts a separate limited server on the selected physical LAN IPv4 address, port **8899**. It serves only mobile assets and the bounded phone APIs; it does not expose desktop program controls, arbitrary files, folder selection, sampling, or the full desktop API. Pairing codes expire after five minutes and one successful use; sessions expire after eight hours or when the entrance is closed. Changing the selected library requires a new pairing. Task snapshots are saved locally; personal documents are not cached for offline use. The cross-origin pairing token has only task-read permission and is never exported with phone backups.
+Phone access is initially off. Enabling it starts a separate limited server on the selected physical LAN IPv4 address, port **8899**, with a stable mDNS hostname where available. The explicitly configured network is remembered for later restarts and DHCP changes; other networks do not automatically open an entrance. Stopping the entrance disables automatic restoration. It serves only mobile assets and the bounded phone APIs; it does not expose desktop program controls, arbitrary files, folder selection, sampling, or the full desktop API. Pairing codes and QR invitations expire after five minutes and one successful use; temporary sessions expire after eight hours or when the entrance is closed. Remembered phones receive a 90-day HttpOnly cookie; only its hash is stored in the computer's private application data, bound to the selected library and network. QR invitations use a fragment that the phone removes before making requests. Changing the selected library requires a new pairing. Task snapshots are saved locally; personal documents are not cached for offline use. The separate cross-origin pairing token has only task-read permission and is never exported with phone backups.
 
 This first version uses **unencrypted local HTTP** and is intended only for a trusted home Wi-Fi. Do not forward its port through the router. Windows Firewall may need the user to allow the installed Console on their trusted network. The computer must remain awake with Console running. This is a home-screen web app; no iOS App Store / TestFlight binary is produced by the Windows build.
 

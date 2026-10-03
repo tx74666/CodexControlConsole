@@ -322,7 +322,8 @@ class TransferChecks(unittest.TestCase):
                 self.assertEqual(response_headers["Content-Length"], str(len(image_bytes())))
                 self.assertEqual(request(attachment["previewUrl"])[2]["Content-Type"], "image/jpeg")
                 with patch.object(desktop.PHONE_COMPANION, "state", return_value={"enabled": True,
-                        "url": "http://192.168.1.55:8899", "pairingCode": "987654"}):
+                        "url": "http://192.168.1.55:8899", "pairingCode": "987654",
+                        "qrToken": "a" * 43, "qrUrl": "http://192.168.1.55:8899/?tab=transfer#qrToken=" + "a" * 43}):
                     status, code_image, response_headers = request("/api/phone-companion/qr.png?version=http%3A%2F%2F192.168.1.55%3A8899")
                     self.assertEqual(status, 200)
                     self.assertEqual(response_headers["Content-Type"], "image/png")

@@ -55,6 +55,8 @@ from external_app_launcher import launch_or_focus_executable
 from reference_views import ReferenceViewSetService
 from document_library import DocumentLibraryService
 from phone_companion import PhoneCompanionService
+from phone_device_store import PhoneDeviceStore
+from phone_discovery import DiscoveryAnnouncer
 from transfer_store import TransferStore, TransferError, read_transfer_request, send_transfer_attachment
 from phone_offline import build_phone_export
 from workspace_plan import (
@@ -141,6 +143,7 @@ DOCUMENT_LIBRARY = DocumentLibraryService(CACHE_DIR / "documents.json")
 _transfer_local_data = Path(os.environ.get("LOCALAPPDATA", "").strip() or Path.home() / "AppData" / "Local")
 TRANSFER_STORE = TransferStore(lambda: DOCUMENT_LIBRARY.state().get("root", ""),
                               _transfer_local_data / "CodexControlConsole" / "transfers", public_root=APP_DIR)
+PHONE_DEVICE_STORE = PhoneDeviceStore(CACHE_DIR / "phone-private")
 PHONE_COMPANION = PhoneCompanionService(
     DOCUMENT_LIBRARY, lambda: read_actual_workspace_plan(USER_DATA_DIR), APP_DIR, APP_VERSION,
     device_getter=DOCUMENT_LIBRARY.overview,
@@ -148,6 +151,7 @@ PHONE_COMPANION = PhoneCompanionService(
     music_file_getter=lambda path: music_path_from_relative(path),
     music_lyrics_getter=lambda path, language="": lyrics_path_from_music_relative(path, language),
     transfer_store=TRANSFER_STORE,
+    device_store=PHONE_DEVICE_STORE, announcer=DiscoveryAnnouncer(),
 )
 _local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
 PUBLISHER_STATE_FILE = Path(
@@ -1442,6 +1446,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        if self._private_phone_path():
+            self.send_error(404)
+            return
         if parsed.path.startswith("/api/transfer/"):
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
@@ -1474,14 +1481,16 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
             query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-            if (len(parsed.query) > 600 or set(query) - {"version"}
+            if (len(parsed.query) > 600 or set(query) - {"version", "address"}
                     or any(len(value) != 1 for value in query.values())
+                    or ("address" in query and query["address"] != ["ip"])
                     or len(query.get("version", [""])[0]) > 180):
                 self.send_json({"error": "手机连接二维码请求无效。"}, status=400)
                 return
             try:
                 from phone_connection_qr import connection_qr_png
-                self.send_bytes_response(connection_qr_png(PHONE_COMPANION.state(False)), "image/png")
+                self.send_bytes_response(connection_qr_png(PHONE_COMPANION.state(False),
+                    use_ip=query.get("address") == ["ip"]), "image/png")
             except ValueError as error:
                 self.send_json({"error": str(error)}, status=409)
             except (ImportError, OSError, RuntimeError):
@@ -1825,10 +1834,20 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_HEAD(self):
+        if self._private_phone_path():
+            self.send_error(404)
+            return
         if urllib.parse.urlparse(self.path).path.startswith("/api/transfer/"):
             self.do_GET()
             return
         super().do_HEAD()
+
+    def _private_phone_path(self):
+        try:
+            target = Path(self.translate_path(self.path)).resolve()
+            return target.is_relative_to(PHONE_DEVICE_STORE.directory)
+        except (OSError, ValueError):
+            return True
 
     def do_POST(self):
         try:
@@ -1895,7 +1914,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 payload = self.read_json_body(max_bytes=1024)
                 if not isinstance(payload, dict):
                     raise ValueError("手机连接设置必须为对象。")
-                allowed = {"host"} if parsed.path == "/api/phone-companion/start" else set()
+                allowed = {"host"} if parsed.path == "/api/phone-companion/start" else {"id", "all"} if parsed.path == "/api/phone-companion/forget-device" else set()
                 if set(payload) - allowed:
                     raise ValueError("手机连接设置包含未知内容。")
                 if parsed.path == "/api/phone-companion/start":
@@ -1904,6 +1923,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     result = PHONE_COMPANION.stop()
                 elif parsed.path == "/api/phone-companion/pair-code":
                     result = PHONE_COMPANION.renew_pairing()
+                elif parsed.path == "/api/phone-companion/forget-device":
+                    result = PHONE_COMPANION.forget_devices(payload)
                 else:
                     self.send_json({"error": "Phone companion endpoint not found"}, status=404)
                     return
@@ -11967,6 +11988,7 @@ def main():
                 "port": port, "instanceId": RUNTIME_INSTANCE_ID,
             })
             server_thread.start()
+            threading.Thread(target=PHONE_COMPANION.restore, name="console-phone-startup-restore", daemon=True).start()
             # Keep the gate until the browser window is registered; the pending
             # record also suppresses duplicates during a slow Edge cold start.
             if not args.no_browser:
@@ -11994,7 +12016,7 @@ def main():
     except KeyboardInterrupt:
         server.shutdown()
     finally:
-        PHONE_COMPANION.stop()
+        PHONE_COMPANION.shutdown()
         CONSOLE_WINDOW_SESSIONS.stop()
         server.server_close()
         ACTIVE_SERVER = None

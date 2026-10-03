@@ -6,7 +6,11 @@ Codex Console is a local Windows control center. Music, wallpapers, desktop layo
 
 ## Same-Wi-Fi text and image transfer
 
-The optional phone connection sends selected text and images directly between the paired phone and this computer. Transfer history and original attachments are stored locally in the selected document library's `互传/.console-transfer` folder, or the application's local data directory when no library is selected. They are not uploaded to GitHub, the public phone website, or the feedback service. Closing the phone connection revokes access; transfer history remains available on the computer. The local HTTP connection is intended for a trusted local network.
+The optional phone connection sends selected text and images directly between the paired phone and this computer. Original attachments are stored locally in the selected document library's `互传` folder; history and previews are in `互传/.console-transfer`. When no library is selected, the application's local data directory is used. They are not uploaded to GitHub, the public phone website, or the feedback service. The local HTTP connection is intended for a trusted local network.
+
+Scanning a QR code processes camera frames or the selected image locally on the phone. The pairing invitation is valid for five minutes and one use, and is removed from the address before phone requests. A remembered phone holds a 90-day HttpOnly credential cookie. The computer keeps only a hash of that credential, device name and timestamps in private application data, bound to the document library and configured network. Saved phone shortcuts contain the computer address, not a pairing secret. Users can remove remembered phones on the computer or revoke their own connection by logging out on the phone.
+
+When enabled, local mDNS announces a pseudonymous computer name, local address, port and program version on the selected network. It does not announce document paths or credentials. Console can restore the entrance after restarting on the configured physical network and update its address after a DHCP change. Closing the phone entrance stops access and disables automatic restoration; it retains transfer history and remembered-device records until the user removes them.
 
 ## Feedback reports
 

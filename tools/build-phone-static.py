@@ -10,7 +10,7 @@ import zipfile
 
 
 PROJECT = Path(__file__).resolve().parents[1]
-PHONE_ASSETS = ("index.html", "styles.css", "app.js", "store.js", "sw.js", "manifest.webmanifest")
+PHONE_ASSETS = ("index.html", "styles.css", "app.js", "store.js", "sw.js", "manifest.webmanifest", "connection-qr.js", "vendor/jsQR.js", "vendor/jsQR.LICENSE")
 ICONS = ("phone-icon-180.png", "phone-icon-192.png", "phone-icon-512.png")
 PUBLIC_TRACKS = (
     "Airborne.mp3", "Around the World.mp3", "Dancin.mp3", "Final Step.mp3", "Fire Inside.mp3",
@@ -35,8 +35,15 @@ SEMVER = re.compile(
 
 def _source_file(directory, name):
     directory = Path(directory).resolve()
+    relative = Path(name)
+    if (relative.is_absolute() or any(part in (".", "..") for part in relative.parts)
+            or len(relative.parts) not in (1, 2)
+            or (len(relative.parts) == 2 and (relative.parts[0] != "vendor" or name not in PHONE_ASSETS))):
+        raise ValueError(f"Missing or linked outside the public source directory: {name}")
     source = directory / name
-    if source.is_symlink() or not source.is_file() or source.resolve().parent != directory:
+    parents = [source.parent] if source.parent != directory else []
+    if (any(path.is_symlink() or getattr(path, "is_junction", lambda: False)() for path in [source, *parents])
+            or not source.is_file() or source.resolve() != source):
         raise ValueError(f"Missing or linked outside the public source directory: {name}")
     return source
 
@@ -114,10 +121,11 @@ def _output_is_safe(output, allowed):
     for child in output.iterdir():
         if child.is_symlink() or getattr(child, "is_junction", lambda: False)():
             raise ValueError("The output directory contains a linked path.")
-        if child.name == "music" and child.is_dir():
+        if child.name in {"music", "vendor"} and child.is_dir():
             for item in child.iterdir():
-                relative = "music/" + item.name
-                if not item.is_file() or item.is_symlink() or relative not in allowed:
+                relative = child.name + "/" + item.name
+                if (not item.is_file() or item.is_symlink() or getattr(item, "is_junction", lambda: False)()
+                        or relative not in allowed):
                     raise ValueError("The output directory contains unknown files; use a clean output directory.")
         elif not child.is_file() or child.name not in allowed:
             raise ValueError("The output directory contains unknown files; use a clean output directory.")
@@ -255,7 +263,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-dir", default=str(PROJECT))
     parser.add_argument("--output-dir", default=str(PROJECT / "dist-phone"))
-    parser.add_argument("--version", help="Override the independent phone version for this build.")
+    parser.add_argument("--version", help="Override the version for a standalone test or archival build.")
     parser.add_argument("--zip", action="store_true", help="Also write a versioned static ZIP beside the output directory.")
     args = parser.parse_args()
     print(json.dumps(build_static(args.project_dir, args.output_dir, args.zip, args.version), ensure_ascii=False))

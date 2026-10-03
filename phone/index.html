@@ -13,6 +13,8 @@
   <link rel="icon" href="./phone-icon-192.png?v=__CONSOLE_PHONE_BUILD__" type="image/png">
   <link rel="stylesheet" href="./styles.css">
   <script src="./store.js" defer></script>
+  <script src="./vendor/jsQR.js" defer></script>
+  <script src="./connection-qr.js" defer></script>
   <script src="./app.js" defer></script>
 </head>
 <body>
@@ -72,14 +74,18 @@
       <section id="transferPanel" class="tab-panel" hidden aria-labelledby="transferTitle">
         <div class="section-title"><div><p class="eyebrow">手机 ↔ 电脑</p><h2 id="transferTitle">文字与图片互传</h2></div></div>
         <div class="card transfer-launcher">
-          <p>在电脑 Console 的「互传」页面开启手机连接，然后填写电脑显示的地址。连接后，两边都能发送文字和图片。</p>
+          <p>电脑 Console → 互传 → 连接手机，开启后用这里扫码。首次连接会记住手机，以后直接打开互传。</p>
+          <button id="transferScan" type="button" class="primary">扫码连接电脑</button>
+          <div id="transferRemembered" class="transfer-remembered" hidden><p id="transferComputerName" class="muted small"></p><div class="settings-actions"><button id="transferRememberedOpen" type="button" class="primary">打开已记住电脑的互传</button><button id="transferForget" type="button" class="text-button">忘记电脑入口</button></div></div>
+          <details id="transferManual"><summary>备用：手填地址或选择二维码照片</summary><button id="transferQrPhoto" type="button" class="secondary">选择二维码照片</button><input id="transferQrFile" type="file" accept="image/*" hidden>
           <form id="transferConnectForm">
             <label for="transferAddress">电脑显示的手机地址</label>
             <input id="transferAddress" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.10:8899/" required>
-            <div class="settings-actions"><button id="transferOpen" type="submit" class="primary">打开互传</button><button id="transferForget" type="button" class="text-button" hidden>忘记地址</button></div>
+            <div class="settings-actions"><button id="transferOpen" type="submit" class="secondary">用地址打开</button></div>
           </form>
+          </details>
           <p id="transferNotice" class="notice small" role="status" aria-live="polite"></p>
-          <p class="muted small">两端接入同一可信 Wi-Fi，电脑保持开机并运行 Console。首次进入输入电脑上的配对码；这个地址会保存在手机，收发内容保存在电脑。</p>
+          <p class="muted small">同一 Wi-Fi，电脑保持开机并运行 Console。请在这个 App 内扫码，才能保存电脑入口；用系统相机扫码可直接互传，但不会替这个 App 保存入口。收发内容保存在电脑。</p>
         </div>
       </section>
       <details class="session-settings"><summary>资料与更新 <span class="muted small">v__CONSOLE_PHONE_VERSION__</span></summary>
@@ -99,6 +105,7 @@
     <button type="button" data-tab="documents" aria-pressed="false"><span aria-hidden="true">▤</span>文档</button>
     <button type="button" data-tab="transfer" aria-pressed="false"><span aria-hidden="true">⇄</span>互传</button>
   </nav>
+  <dialog id="transferQrDialog" class="transfer-qr-dialog" aria-labelledby="transferQrTitle"><div class="section-title"><h2 id="transferQrTitle">扫码连接电脑</h2><button id="transferQrClose" type="button" class="text-button">关闭</button></div><video id="transferQrVideo" playsinline muted></video><canvas id="transferQrCanvas" hidden></canvas><p id="transferQrNotice" class="notice" role="status" aria-live="polite"></p><div class="settings-actions"><button id="transferQrRetry" type="button" class="secondary">重新扫码</button><button id="transferQrPhotoInDialog" type="button" class="text-button">选择二维码照片</button></div></dialog>
   <section id="readerScreen" class="reader-screen" hidden aria-labelledby="readerTitle" tabindex="-1">
     <header class="reader-toolbar"><button id="readerBack" type="button" class="text-button">‹ 返回</button><div class="reader-font"><button id="fontSmaller" type="button" aria-label="缩小文字">A−</button><button id="fontLarger" type="button" aria-label="放大文字">A+</button></div></header>
     <div class="reader-body"><p id="readerMeta" class="muted small"></p><h1 id="readerTitle">正在打开…</h1><p id="readerNotice" class="notice" role="status" aria-live="polite"></p><div id="readerLanguages" class="reader-languages" hidden></div><details id="readerContents" class="reader-contents" hidden><summary>文章目录</summary><nav id="readerHeadings" aria-label="文章目录"></nav></details><article id="readerContent"></article></div>

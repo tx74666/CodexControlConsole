@@ -11,6 +11,8 @@
   const state = { ready: true, generation: 0, busy: false, tab: "tasks", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), library: null, catalog: [], saved: new Set(), pendingImport: null, registration: null, applyingUpdate: false, downloadController: null, music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
   const MUSIC_TIERS = [{ value: "first", number: "1", suffix: "st" }, { value: "second", number: "2", suffix: "nd" }, { value: "third", number: "3", suffix: "rd" }];
   const taskSync = { generation: 0, controller: null, timer: null, config: null, busy: false, connected: false };
+  let rememberedTransferAddress = "";
+  const transferScanner = window.CodexPhoneQrScanner?.create({ video: el("transferQrVideo"), canvas: el("transferQrCanvas"), onResult: acceptTransferQr, onNotice: (message, error) => notice("transferQrNotice", message, error) }) || null;
   const node = (tag, text = "", className = "") => {
     const result = document.createElement(tag);
     if (text) result.textContent = String(text);
@@ -143,6 +145,7 @@
     catch (error) { failure(error); } finally { setBusy(false); }
   }
   function selectTab(value) {
+    if (value !== "transfer") transferScanner?.stop();
     if (!["tasks", "music", "device", "documents", "transfer"].includes(value)) return;
     state.tab = value;
     el("appToolbar").hidden = value === "music";
@@ -277,31 +280,61 @@
     if (url.protocol !== "http:" || !privateAddress || url.username || url.password || url.search || url.hash || !["/", "/mobile.html"].includes(url.pathname)) throw new Error("请使用电脑显示的同 Wi-Fi 手机地址，不要使用公网、localhost 或其他网页地址。");
     return url.origin;
   }
-  function transferAddress(value) {
+  function parseTransferAddress(value, allowPairing = false) {
     let url; try { url = new URL(String(value).trim()); } catch { throw new Error("请输入电脑显示的完整手机地址。"); }
     const parts = url.hostname.split(".").map(Number);
     const privateAddress = parts.length === 4 && parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255) && (parts[0] === 10 || parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31 || parts[0] === 192 && parts[1] === 168);
+    const consoleName = /^codex-[a-z0-9]{8,64}\.local$/.test(url.hostname);
     const validQuery = !url.search || url.search === "?tab=transfer";
-    if (url.protocol !== "http:" || !privateAddress || url.username || url.password || !validQuery || url.hash || !["/", "/mobile.html"].includes(url.pathname)) throw new Error("请使用电脑显示的同 Wi-Fi 手机地址。");
-    return url.origin + "/?tab=transfer";
+    let pairing = "";
+    if (url.hash && allowPairing) {
+      const params = new URLSearchParams(url.hash.slice(1)), entries = [...params];
+      if (entries.length === 1 && entries[0][0] === "qrToken" && /^[A-Za-z0-9_-]{32,128}$/.test(entries[0][1])) pairing = `#qrToken=${entries[0][1]}`;
+      else if (entries.length === 1 && entries[0][0] === "pair" && /^\d{6}$/.test(entries[0][1])) pairing = `#pair=${entries[0][1]}`;
+      else throw new Error("二维码连接信息无效，请扫描电脑 Console 显示的新二维码。");
+    }
+    if (url.protocol !== "http:" || !(privateAddress || consoleName) || url.username || url.password || !validQuery || (url.hash && !allowPairing) || !["/", "/mobile.html"].includes(url.pathname)) throw new Error("请使用电脑 Console 的同 Wi-Fi 连接二维码或地址。");
+    return { address: url.origin + "/?tab=transfer", pairing };
+  }
+  function transferAddress(value) { return parseTransferAddress(value).address; }
+  function renderTransferConnection(address) {
+    rememberedTransferAddress = address; el("transferAddress").value = address;
+    el("transferRemembered").hidden = !address; el("transferForget").hidden = !address;
+    el("transferComputerName").textContent = address ? `已保存电脑入口 · ${new URL(address).hostname}` : "";
+    el("transferScan").textContent = address ? "扫描新的电脑二维码" : "扫码连接电脑";
   }
   async function restoreTransferConnection() {
     try {
       const saved = await PhoneStore.get("settings", "transferConnection");
-      if (saved?.address) { el("transferAddress").value = transferAddress(saved.address); el("transferForget").hidden = false; }
+      if (saved?.address) renderTransferConnection(transferAddress(saved.address));
     } catch { /* A remembered address is optional; private offline data stays independent. */ }
   }
-  async function openTransferConnection() {
+  async function saveTransferConnection(address) {
+    try { await PhoneStore.put("settings", { id: "transferConnection", address }); } catch { /* Opening works even when preferences cannot be saved. */ }
+    renderTransferConnection(address);
+  }
+  async function openTransferConnection(useRemembered = false) {
     try {
-      const address = transferAddress(el("transferAddress").value);
-      try { await PhoneStore.put("settings", { id: "transferConnection", address }); } catch { /* Opening works even when preferences cannot be saved. */ }
+      const address = transferAddress(useRemembered ? rememberedTransferAddress : el("transferAddress").value);
+      transferScanner?.stop(); await saveTransferConnection(address);
       window.location.href = address;
     } catch (error) { failure(error, "transferNotice"); }
   }
+  async function acceptTransferQr(value) {
+    const parsed = parseTransferAddress(value, true);
+    transferScanner?.stop(); await saveTransferConnection(parsed.address);
+    if (el("transferQrDialog").open) el("transferQrDialog").close();
+    window.location.href = parsed.address + parsed.pairing;
+  }
+  function scanTransferConnection() {
+    if (!transferScanner) { notice("transferNotice", "扫码组件尚未加载，请检查程序更新；也可以从备用入口选择二维码照片或填写地址。", true); return; }
+    if (!el("transferQrDialog").open) el("transferQrDialog").showModal();
+    void transferScanner.start();
+  }
   async function forgetTransferConnection() {
     try {
-      await PhoneStore.remove("settings", "transferConnection"); el("transferAddress").value = ""; el("transferForget").hidden = true;
-      notice("transferNotice", "地址已清除，收发内容仍保存在电脑。");
+      await PhoneStore.remove("settings", "transferConnection"); renderTransferConnection("");
+      notice("transferNotice", "电脑入口已清除。要撤销手机配对，可在电脑的连接设置中忘记设备。");
     } catch (error) { failure(error, "transferNotice"); }
   }
   function supportsTaskSync(address) {
@@ -1030,6 +1063,13 @@
   }
   el("backupButton").addEventListener("click", () => void backupLibrary());
   el("transferConnectForm").addEventListener("submit", event => { event.preventDefault(); void openTransferConnection(); });
+  el("transferRememberedOpen").addEventListener("click", () => void openTransferConnection(true));
+  el("transferScan").addEventListener("click", scanTransferConnection);
+  el("transferQrRetry").addEventListener("click", scanTransferConnection);
+  el("transferQrClose").addEventListener("click", () => el("transferQrDialog").close());
+  el("transferQrDialog").addEventListener("close", () => transferScanner?.stop());
+  for (const id of ["transferQrPhoto", "transferQrPhotoInDialog"]) el(id).addEventListener("click", () => { transferScanner?.stop(); el("transferQrFile").click(); });
+  el("transferQrFile").addEventListener("change", () => { const file = el("transferQrFile").files?.[0]; el("transferQrFile").value = ""; if (!file || !transferScanner) return; if (!el("transferQrDialog").open) el("transferQrDialog").showModal(); void transferScanner.readFile(file); });
   el("transferForget").addEventListener("click", () => void forgetTransferConnection());
   el("restoreButton").addEventListener("click", async () => { if (state.busy) return; setBusy(true); try { await disconnectTaskSync(false); await libraryMutationQueue; const previous = await PhoneStore.get("records", "previousImport"); if (!previous) return; const next = mergeLibrary({ ...previous, id: "library", importedAt: new Date().toISOString() }, state.library); await PhoneStore.replaceLibrary(next); state.library = next; closeReader(false); await refreshDashboard(); notice("settingsNotice", "已恢复上次导入的资料，本机进度仍然保留。"); } catch (error) { failure(error, "settingsNotice"); } finally { setBusy(false); } });
   el("checkUpdate").addEventListener("click", () => void checkUpdate());

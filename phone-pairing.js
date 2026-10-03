@@ -10,6 +10,9 @@
   const renew = byId('phoneCompanionRenew');
   const stop = byId('phoneCompanionStop');
   const qr = byId('phoneCompanionQr');
+  const devices = byId('phoneCompanionDevices');
+  const qrIp = byId('phoneCompanionQrIp');
+  let useIpQr = false;
   qr?.addEventListener('error', () => { qr.hidden = true; });
   let current = null;
   let busy = false;
@@ -41,25 +44,38 @@
     status.textContent = value.enabled ? '手机入口已开启，可以配对后使用互传和任务同步。' : addresses.length ? '手机入口已关闭，需要使用时再开启。' : '没有找到已连接的 Wi‑Fi 或网线，请先连接网络。';
     const link = byId('phoneCompanionUrl');
     if (value.enabled) {
-      const transferUrl = new URL(value.url);
+      const transferUrl = new URL(useIpQr ? value.url : value.connectionUrl || value.url);
       transferUrl.searchParams.set('tab', 'transfer');
       link.href = transferUrl.href;
       link.textContent = transferUrl.href;
-      if (qr && qr.dataset.url !== value.url) {
-        qr.dataset.url = value.url;
+      const qrKey = `${value.qrGeneration || value.url}|${useIpQr ? 'ip' : 'stable'}`;
+      if (qr && qr.dataset.url !== qrKey) {
+        qr.dataset.url = qrKey;
         qr.hidden = false;
-        qr.src = `/api/phone-companion/qr.png?version=${encodeURIComponent(value.url)}`;
+        qr.src = `/api/phone-companion/qr.png?version=${encodeURIComponent(value.qrGeneration || value.url)}${useIpQr ? '&address=ip' : ''}`;
       }
       const expiry = Date.parse(value.pairingExpiresAt);
       const active = Boolean(value.pairingCode) && Number.isFinite(expiry) && expiry > Date.now();
       byId('phoneCompanionCode').textContent = active ? value.pairingCode : '点击“新配对码”';
-      byId('phoneCompanionExpiry').textContent = active ? `有效至 ${new Date(expiry).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}，仅可使用一次。` : '旧配对码已使用或过期；手机需要重新连接时，生成一个新码。';
+      byId('phoneCompanionExpiry').textContent = active ? `备用配对码有效至 ${new Date(expiry).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}，仅可使用一次。` : '备用配对码已使用或过期。连接新手机时可刷新二维码。';
       byId('phoneCompanionPeers').textContent = `已配对 ${Number(value.pairedCount) || 0} 个连接。`;
     } else {
       link.removeAttribute('href');
       link.textContent = '';
       if (qr) { qr.hidden = true; qr.removeAttribute('src'); delete qr.dataset.url; }
       byId('phoneCompanionCode').textContent = '';
+    }
+    if (qrIp) { qrIp.hidden = !value.enabled || !value.discovery?.available; qrIp.textContent = useIpQr ? '改回固定电脑入口' : '二维码打不开？改用 IP 入口'; }
+    if (devices) {
+      devices.replaceChildren();
+      const remembered = Array.isArray(value.rememberedDevices) ? value.rememberedDevices : [];
+      if (!remembered.length) { const empty = document.createElement('p'); empty.textContent = '还没有记住的手机。首次扫码会自动连接并记住。'; devices.append(empty); }
+      for (const device of remembered) {
+        const row = document.createElement('div'); row.className = 'phone-remembered-device';
+        const label = document.createElement('span'); label.textContent = device.name || '手机';
+        const forget = document.createElement('button'); forget.type = 'button'; forget.className = 'status-button'; forget.textContent = '忘记设备'; forget.disabled = busy;
+        forget.addEventListener('click', () => act('forget-device', { id: device.id })); row.append(label, forget); devices.append(row);
+      }
     }
   }
   async function request(action, payload = {}) {
@@ -110,4 +126,5 @@
   start.addEventListener('click', () => act('start', {host:select.value}));
   renew.addEventListener('click', () => act('pair-code', {}));
   stop.addEventListener('click', () => act('stop', {}));
+  qrIp?.addEventListener('click', () => { useIpQr = !useIpQr; if (current) render(current); });
 })();

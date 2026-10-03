@@ -150,7 +150,12 @@ class StaticBuildChecks(unittest.TestCase):
         phone = self.project / "phone"
         phone.mkdir()
         for name in builder.PHONE_ASSETS:
-            (phone / name).write_text("// __CONSOLE_PHONE_VERSION__ / __CONSOLE_PHONE_BUILD__\n", encoding="utf-8")
+            source = phone / name
+            source.parent.mkdir(parents=True, exist_ok=True)
+            if name.startswith("vendor/"):
+                source.write_bytes((PROJECT / "phone" / name).read_bytes())
+            else:
+                source.write_text("// __CONSOLE_PHONE_VERSION__ / __CONSOLE_PHONE_BUILD__\n", encoding="utf-8")
         (phone / "index.html").write_text('<!doctype html><title>__CONSOLE_PHONE_VERSION__</title><link href="./styles.css"><script src="./app.js"></script>', encoding="utf-8")
         (phone / "manifest.webmanifest").write_text(json.dumps({"name": "Codex Console", "start_url": "./index.html", "scope": "./", "icons": [{"src": "./phone-icon-192.png"}]}), encoding="utf-8")
         (phone / "private-plan.json").write_text("PRIVATE PLAN", encoding="utf-8")
@@ -209,6 +214,49 @@ class StaticBuildChecks(unittest.TestCase):
             builder.build_static(self.project, self.output)
         self.assertEqual((self.output / "important.txt").read_text(encoding="utf-8"), "Keep me")
         self.assertFalse((self.output / "index.html").exists())
+
+    def test_vendor_assets_and_actual_license_are_preserved_in_directory_and_archive(self):
+        vendor = self.project / "phone/vendor"
+        (vendor / "private-config.js").write_text("PRIVATE VENDOR CONFIG", encoding="utf-8")
+        result = builder.build_static(self.project, self.output, make_zip=True)
+        license_data = (PROJECT / "phone/vendor/jsQR.LICENSE").read_bytes()
+        self.assertIn(b"Apache License", license_data)
+        self.assertIn(b"Version 2.0", license_data)
+        self.assertEqual((self.output / "vendor/jsQR.LICENSE").read_bytes(), license_data)
+        self.assertEqual((self.output / "vendor/jsQR.js").read_bytes(), (PROJECT / "phone/vendor/jsQR.js").read_bytes())
+        self.assertTrue((self.output / "connection-qr.js").is_file())
+        self.assertFalse((self.output / "vendor/private-config.js").exists())
+        with zipfile.ZipFile(result["archive"]) as archive:
+            self.assertEqual(archive.read("vendor/jsQR.LICENSE"), license_data)
+            self.assertIn("vendor/jsQR.js", archive.namelist())
+            self.assertIn("connection-qr.js", archive.namelist())
+            self.assertNotIn("vendor/private-config.js", archive.namelist())
+
+    def test_unknown_vendor_output_file_rejected_without_modifying_existing_bundle(self):
+        builder.build_static(self.project, self.output)
+        sentinel = self.output / "vendor/unlisted.js"
+        sentinel.write_text("Keep my unknown vendor file", encoding="utf-8")
+        before = {path: hashlib.sha256(path.read_bytes()).hexdigest()
+                  for path in self.output.rglob("*") if path.is_file()}
+        with self.assertRaisesRegex(ValueError, "unknown files"):
+            builder.build_static(self.project, self.output)
+        self.assertEqual(before, {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in before})
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "Keep my unknown vendor file")
+
+    def test_linked_vendor_source_directory_or_asset_is_rejected_before_output_creation(self):
+        vendor = self.project / "phone/vendor"
+        before = {path: hashlib.sha256(path.read_bytes()).hexdigest()
+                  for path in vendor.iterdir() if path.is_file()}
+        for classification in ("is_symlink", "is_junction"):
+            original = getattr(Path, classification, lambda path: False)
+            for linked in (vendor, vendor / "jsQR.js", vendor / "jsQR.LICENSE"):
+                with self.subTest(classification=classification, linked=str(linked)):
+                    with patch.object(Path, classification,
+                                      lambda path: path == linked or original(path), create=True):
+                        with self.assertRaisesRegex(ValueError, "linked"):
+                            builder.build_static(self.project, self.output)
+                    self.assertFalse(self.output.exists())
+        self.assertEqual(before, {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in before})
 
     def test_existing_output_with_parent_components_rebuilds_after_normalization(self):
         first = builder.build_static(self.project, self.output)
