@@ -200,6 +200,8 @@ if ($BuildApplication) {
   @{ Source = "mobile.html"; Destination = "." },
   @{ Source = "mobile.js"; Destination = "." },
   @{ Source = "mobile.css"; Destination = "." },
+  @{ Source = "transfer-panel.js"; Destination = "." },
+  @{ Source = "transfer-panel.css"; Destination = "." },
   @{ Source = "mobile.webmanifest"; Destination = "." },
   @{ Source = "phone-pairing.js"; Destination = "." },
   @{ Source = "phone-offline-export.js"; Destination = "." },

@@ -78,6 +78,8 @@ $PythonSources = @(
   "document_library.py",
   "workspace_plan.py",
   "phone_companion.py",
+  "phone_connection_qr.py",
+  "transfer_store.py",
   "phone_offline.py",
   "device_library.py",
   "download_map.py",
@@ -109,6 +111,8 @@ $PythonChecks = @(
   "tools/check-document-references.py",
   "tools/check-workspace-plan.py",
   "tools/check-phone-companion.py",
+  "tools/check-phone-connection-qr.py",
+  "tools/check-transfer.py",
   "tools/check-phone-offline.py",
   "tools/test_device_library.py",
   "tools/check-external-app-launcher.py",
@@ -179,6 +183,8 @@ try {
   Invoke-QualityStep "Offline phone UI" { & $Node tools/check-phone-offline-ui.mjs }
   Invoke-QualityStep "Mobile JavaScript syntax" { & $Node --check mobile.js }
   Invoke-QualityStep "Mobile companion UI" { & $Node tools/check-mobile-ui.mjs }
+  Invoke-QualityStep "Transfer JavaScript syntax" { & $Node --check transfer-panel.js }
+  Invoke-QualityStep "Bidirectional transfer UI" { & $Node tools/check-transfer-ui.mjs }
   Invoke-QualityStep "Document reader JavaScript syntax" { & $Node --check document-reader.js }
   Invoke-QualityStep "Document reader opening" { & $Node tools/check-document-reader.mjs }
   Invoke-QualityStep "Document reader page behavior" { & $Node tools/check-document-reader-page.mjs }

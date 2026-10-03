@@ -45,7 +45,7 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.19";
+const consoleUiVersion = "1.0.20";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -2350,6 +2350,7 @@ let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) ===
 let tutorialMode = localStorage.getItem(storageKeys.tutorialMode) === "true";
 const requestedConsoleView = new URLSearchParams(window.location.search).get("consoleView");
 let activeConsoleView = normalizeConsoleWorkspaceView(requestedConsoleView);
+let desktopTransferPanel = null;
 const documentLibrary = {
   loaded: false, busy: false, root: "", exists: false, path: "", file: "",
   entries: [], sample: { status: "idle" }, sampleTimer: 0, sampleErrors: 0,
@@ -2805,6 +2806,7 @@ function ensureModuleDataLoaded(id = activeModuleId) {
 
 function syncRuntimeActivity(options = {}) {
   if (!runtimeActivityReady) return;
+  syncConsoleTransferActivity();
 
   if (!document.hidden) {
     ensureModuleDataLoaded(activeModuleId);
@@ -2882,12 +2884,14 @@ function applyModuleHistory(id) {
 
 function normalizeConsoleWorkspaceView(value) {
   if (value === "document") return "document";
+  if (value === "transfer") return "transfer";
   if (value === "collaboration" || value === "downloads") return "collaboration";
   return "common";
 }
 
 async function loadActiveConsoleWorkspaceViewData() {
   if (!runtimeActivityReady || !isModuleForeground("workspace")) return true;
+  if (activeConsoleView === "transfer") { syncConsoleTransferActivity(); return true; }
   if (activeConsoleView === "document") return loadDocumentLibrary();
   if (activeConsoleView !== "collaboration") return true;
   const requests = [];
@@ -2927,6 +2931,7 @@ function setConsoleWorkspaceView(value, options = {}) {
     view.hidden = !active;
     view.classList.toggle("active", active);
   }
+  syncConsoleTransferActivity();
 
   if (runtimeActivityReady && isModuleForeground("workspace") && ["collaboration", "document"].includes(activeConsoleView)) {
     void loadActiveConsoleWorkspaceViewData();
@@ -3055,6 +3060,16 @@ function appendDocumentImage(parent, label, target) {
     wrapper.textContent = `${documentText("图片无法显示，请核对文件和 1 MiB 大小限制", "Image unavailable; check the file and 1 MiB limit")}：${label}`;
   }, { once: true });
   image.src = url.href; anchor.appendChild(image); wrapper.appendChild(anchor); parent.appendChild(wrapper);
+}
+
+function syncConsoleTransferActivity() {
+  desktopTransferPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "transfer");
+}
+
+function bindConsoleTransfer() {
+  desktopTransferPanel = window.CodexTransferPanel?.create(document.getElementById("desktopTransferPanel"), {
+    onConnection: () => document.getElementById("phoneCompanionOpen")?.click()
+  }) || null;
 }
 
 function appendDocumentInline(parent, source, depth = 0) {
@@ -21323,6 +21338,7 @@ if (hasMusic) {
 applyConsoleEdition(consoleEdition, { activate: false, forceRender: true });
 applyInstallModePolicy();
 bindDocumentLibrary();
+bindConsoleTransfer();
 bindBlenderDocuments();
 startConsoleWindowSession();
 applyLanguage();

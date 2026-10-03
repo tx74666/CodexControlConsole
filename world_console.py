@@ -17,6 +17,7 @@ import queue
 import re
 import shutil
 import socket
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -54,6 +55,7 @@ from external_app_launcher import launch_or_focus_executable
 from reference_views import ReferenceViewSetService
 from document_library import DocumentLibraryService
 from phone_companion import PhoneCompanionService
+from transfer_store import TransferStore, TransferError, read_transfer_request, send_transfer_attachment
 from phone_offline import build_phone_export
 from workspace_plan import (
     MAX_PLAN_BYTES, PlanStateConflict,
@@ -136,12 +138,16 @@ CACHE_DIR = USER_DATA_DIR / "cache" if USER_DATA_DIR != APP_DIR else APP_DIR / "
 INSTALLATION_STATE_FILE = CACHE_DIR / "installation.json"
 MEDIA_CONFIG_FILE = USER_DATA_DIR / "media.json"
 DOCUMENT_LIBRARY = DocumentLibraryService(CACHE_DIR / "documents.json")
+_transfer_local_data = Path(os.environ.get("LOCALAPPDATA", "").strip() or Path.home() / "AppData" / "Local")
+TRANSFER_STORE = TransferStore(lambda: DOCUMENT_LIBRARY.state().get("root", ""),
+                              _transfer_local_data / "CodexControlConsole" / "transfers", public_root=APP_DIR)
 PHONE_COMPANION = PhoneCompanionService(
     DOCUMENT_LIBRARY, lambda: read_actual_workspace_plan(USER_DATA_DIR), APP_DIR, APP_VERSION,
     device_getter=DOCUMENT_LIBRARY.overview,
     music_getter=lambda: phone_music_catalog(),
     music_file_getter=lambda path: music_path_from_relative(path),
     music_lyrics_getter=lambda path, language="": lyrics_path_from_music_relative(path, language),
+    transfer_store=TRANSFER_STORE,
 )
 _local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
 PUBLISHER_STATE_FILE = Path(
@@ -1436,6 +1442,21 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith("/api/transfer/"):
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            try:
+                if parsed.path == "/api/transfer/messages":
+                    self.send_json(TRANSFER_STORE.list(parsed.query))
+                elif parsed.path == "/api/transfer/attachment":
+                    send_transfer_attachment(self, TRANSFER_STORE.attachment(parsed.query))
+                else:
+                    self.send_json({"error": "互传接口不存在。"}, status=404)
+            except TransferError as error:
+                self.send_json({"error": str(error)}, status=error.status)
+            except (OSError, sqlite3.Error):
+                self.send_json({"error": "互传资料暂时无法读取，请在电脑上检查。"}, status=503)
+            return
         if parsed.path == "/api/workspace-plan/state":
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
@@ -1448,6 +1469,23 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
             self.send_json(PHONE_COMPANION.state())
+            return
+        if parsed.path == "/api/phone-companion/qr.png":
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            if (len(parsed.query) > 600 or set(query) - {"version"}
+                    or any(len(value) != 1 for value in query.values())
+                    or len(query.get("version", [""])[0]) > 180):
+                self.send_json({"error": "手机连接二维码请求无效。"}, status=400)
+                return
+            try:
+                from phone_connection_qr import connection_qr_png
+                self.send_bytes_response(connection_qr_png(PHONE_COMPANION.state(False)), "image/png")
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=409)
+            except (ImportError, OSError, RuntimeError):
+                self.send_json({"error": "二维码暂时无法显示，请打开电脑显示的手机地址。"}, status=503)
             return
         if parsed.path in ("/api/workspace-plan", "/api/workspace-plan.js"):
             if not self.require_local_request() or not self.require_trusted_post_context():
@@ -1786,6 +1824,12 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def do_HEAD(self):
+        if urllib.parse.urlparse(self.path).path.startswith("/api/transfer/"):
+            self.do_GET()
+            return
+        super().do_HEAD()
+
     def do_POST(self):
         try:
             self._dispatch_POST()
@@ -1796,6 +1840,24 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if not self.require_trusted_post_context():
             return
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith("/api/transfer/"):
+            if not self.require_local_request():
+                return
+            try:
+                if parsed.query:
+                    raise TransferError("互传请求地址无效。")
+                if parsed.path == "/api/transfer/messages":
+                    with read_transfer_request(self.headers, self.rfile) as (fields, files):
+                        self.send_json(TRANSFER_STORE.send(fields, files, "desktop"))
+                elif parsed.path == "/api/transfer/open":
+                    self.send_json(TRANSFER_STORE.open_attachment(self.read_json_body(max_bytes=1024)))
+                else:
+                    self.send_json({"error": "互传接口不存在。"}, status=404)
+            except (TransferError, RequestBodyError) as error:
+                self.send_json({"error": str(error)}, status=error.status)
+            except (OSError, sqlite3.Error):
+                self.send_json({"error": "内容未发送，请检查电脑磁盘或资料库后重试。"}, status=503)
+            return
         if parsed.path == "/api/workspace-plan/state":
             if not self.require_local_request():
                 return

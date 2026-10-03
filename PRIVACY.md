@@ -1,8 +1,12 @@
 # Codex Console Privacy Notice
 
-Last updated: August 1, 2026
+Last updated: October 3, 2026
 
 Codex Console is a local Windows control center. Music, wallpapers, desktop layouts, Blender project settings, and other workspace data stay on the device unless the user explicitly opens or synchronizes content with a third-party service.
+
+## Same-Wi-Fi text and image transfer
+
+The optional phone connection sends selected text and images directly between the paired phone and this computer. Transfer history and original attachments are stored locally in the selected document library's `互传/.console-transfer` folder, or the application's local data directory when no library is selected. They are not uploaded to GitHub, the public phone website, or the feedback service. Closing the phone connection revokes access; transfer history remains available on the computer. The local HTTP connection is intended for a trusted local network.
 
 ## Feedback reports
 

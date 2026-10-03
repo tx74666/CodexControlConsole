@@ -4,6 +4,13 @@
   const el = id => document.getElementById(id);
   const state = { paired: false, generation: 0, busy: false, tab: "tasks", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, search: "", folder: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
   const livePlan = { snapshot: null, timer: null, busy: false, controller: null };
+  const transferPanel = window.CodexTransferPanel?.create(el("phoneTransferPanel"), {
+    phone: true,
+    onConnectionState: connected => updateConnectionState(connected),
+    onAuth: () => showPair("配对已过期或已断开，请输入电脑显示的新配对码。")
+  }) || null;
+  const initialTab = new URL(window.location.href).searchParams.get("tab") || new URL(window.location.href).searchParams.get("view");
+  if (initialTab === "transfer") state.tab = "transfer";
   const node = (tag, text = "", className = "") => {
     const result = document.createElement(tag);
     if (text) result.textContent = String(text);
@@ -11,6 +18,11 @@
     return result;
   };
   function notice(id, message = "", error = false) { el(id).textContent = message; el(id).dataset.error = String(error); }
+  function updateConnectionState(connected) {
+    if (!state.paired) return;
+    el("connectionLabel").textContent = connected ? "已连接" : "连接中断";
+    el("connectionLabel").dataset.connected = String(Boolean(connected));
+  }
   function date(value) {
     if (!value) return "尚未记录";
     const parsed = new Date(value);
@@ -68,6 +80,7 @@
   }
 
   function clearPrivate() {
+    transferPanel?.clear();
     window.clearTimeout(livePlan.timer); livePlan.timer = null; livePlan.busy = false; livePlan.controller?.abort(); livePlan.controller = null;
     state.generation += 1; state.paired = false; state.dashboard = null;
     clearMusic();
@@ -133,9 +146,10 @@
     finally { setBusy(false); }
   }
   function selectTab(value) {
-    if (!["tasks", "music", "device", "documents"].includes(value)) return;
+    if (!["transfer", "tasks", "music", "device", "documents"].includes(value)) return;
     state.tab = value;
-    for (const tab of ["tasks", "music", "device", "documents"]) el(`${tab}Panel`).hidden = tab !== value;
+    for (const tab of ["transfer", "tasks", "music", "device", "documents"]) el(`${tab}Panel`).hidden = tab !== value;
+    transferPanel?.setActive(value === "transfer" && state.paired);
     for (const button of document.querySelectorAll("[data-tab]")) button.setAttribute("aria-pressed", String(button.dataset.tab === value));
     if (value === "music" && state.paired && !state.music.loaded) void loadMusic();
   }
@@ -338,12 +352,19 @@
     if (!state.paired || document.hidden || livePlan.busy) return;
     const generation = state.generation; livePlan.busy = true;
     try {
-      const snapshot = validateLivePlan(await api("plan")); if (generation !== state.generation) return;
-      el("connectionLabel").textContent = "已连接"; el("connectionLabel").dataset.connected = "true";
+      const value = await api("plan"); if (generation !== state.generation) return;
+      updateConnectionState(true);
+      const snapshot = validateLivePlan(value);
       if (!livePlan.snapshot || snapshot.hash !== livePlan.snapshot.hash || snapshot.computerId !== livePlan.snapshot.computerId) { livePlan.snapshot = snapshot; try { localStorage.setItem("codexPhone.planSnapshot.v1", JSON.stringify(snapshot)); } catch { /* The current plan remains readable in memory. */ } renderPlan({ plan: snapshot.plan, label: `电脑 → 手机 · 已同步 ${date(snapshot.updatedAt)}。修改请在电脑完成。` }); }
       el("planNotice").textContent = `电脑 → 手机 · 已同步 ${date(snapshot.updatedAt)}。修改请在电脑完成。`;
       el("savePlanSnapshot").disabled = false; notice("appNotice");
-    } catch (error) { if (generation !== state.generation || error.auth || error.cancelled) return; el("connectionLabel").textContent = "计划未更新"; el("connectionLabel").dataset.connected = "false"; el("planNotice").textContent = livePlan.snapshot ? `上次同步 · ${date(livePlan.snapshot.updatedAt)}。暂时连不上电脑，计划已保留。` : "电脑任务暂时不可读取，正在等待重连。"; }
+    } catch (error) {
+      if (generation !== state.generation || error.auth || error.cancelled) return;
+      if (error.offline) updateConnectionState(false);
+      el("planNotice").textContent = livePlan.snapshot
+        ? `上次同步 · ${date(livePlan.snapshot.updatedAt)}。${error.offline ? "暂时连不上电脑" : "电脑任务暂时无法更新"}，计划已保留。`
+        : error.offline ? "电脑任务暂时不可读取，正在等待重连。" : "电脑任务暂时不可读取，请在电脑检查计划；其他功能仍可使用。";
+    }
     finally { if (generation === state.generation) { livePlan.busy = false; window.clearTimeout(livePlan.timer); if (state.paired && !document.hidden) livePlan.timer = window.setTimeout(() => { livePlan.timer = null; void pollLivePlan(); }, 5000); } }
   }
   function savePlanSnapshot() {

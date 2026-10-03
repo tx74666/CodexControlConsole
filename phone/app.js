@@ -123,7 +123,7 @@
     try {
       state.library = await PhoneStore.get("records", "library") || null;
       try { const response = await fetch("./music-catalog.json"); if (response.ok) { const payload = await response.json(); state.catalog = Array.isArray(payload.tracks) ? payload.tracks : []; } } catch { /* Imported data works even if the first public catalog download is incomplete. */ }
-      await refreshDashboard(); await updateStorageNotice();
+      await refreshDashboard(); await updateStorageNotice(); await restoreTransferConnection();
       el("restoreButton").hidden = !await PhoneStore.get("records", "previousImport");
       if (TASK_SYNC_ENABLED) await restoreTaskSync();
     } catch (error) { failure(error); }
@@ -143,11 +143,11 @@
     catch (error) { failure(error); } finally { setBusy(false); }
   }
   function selectTab(value) {
-    if (!["tasks", "music", "device", "documents"].includes(value)) return;
+    if (!["tasks", "music", "device", "documents", "transfer"].includes(value)) return;
     state.tab = value;
     el("appToolbar").hidden = value === "music";
     el("taskSyncSection").hidden = !TASK_SYNC_ENABLED;
-    for (const tab of ["tasks", "music", "device", "documents"]) el(`${tab}Panel`).hidden = tab !== value;
+    for (const tab of ["tasks", "music", "device", "documents", "transfer"]) el(`${tab}Panel`).hidden = tab !== value;
     for (const button of document.querySelectorAll("[data-tab]")) button.setAttribute("aria-pressed", String(button.dataset.tab === value));
     if (value === "music" && state.ready && !state.music.loaded) void loadMusic();
   }
@@ -276,6 +276,33 @@
     const parts = url.hostname.split(".").map(Number), privateAddress = parts.length === 4 && parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255) && (parts[0] === 10 || parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31 || parts[0] === 192 && parts[1] === 168);
     if (url.protocol !== "http:" || !privateAddress || url.username || url.password || url.search || url.hash || !["/", "/mobile.html"].includes(url.pathname)) throw new Error("请使用电脑显示的同 Wi-Fi 手机地址，不要使用公网、localhost 或其他网页地址。");
     return url.origin;
+  }
+  function transferAddress(value) {
+    let url; try { url = new URL(String(value).trim()); } catch { throw new Error("请输入电脑显示的完整手机地址。"); }
+    const parts = url.hostname.split(".").map(Number);
+    const privateAddress = parts.length === 4 && parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255) && (parts[0] === 10 || parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31 || parts[0] === 192 && parts[1] === 168);
+    const validQuery = !url.search || url.search === "?tab=transfer";
+    if (url.protocol !== "http:" || !privateAddress || url.username || url.password || !validQuery || url.hash || !["/", "/mobile.html"].includes(url.pathname)) throw new Error("请使用电脑显示的同 Wi-Fi 手机地址。");
+    return url.origin + "/?tab=transfer";
+  }
+  async function restoreTransferConnection() {
+    try {
+      const saved = await PhoneStore.get("settings", "transferConnection");
+      if (saved?.address) { el("transferAddress").value = transferAddress(saved.address); el("transferForget").hidden = false; }
+    } catch { /* A remembered address is optional; private offline data stays independent. */ }
+  }
+  async function openTransferConnection() {
+    try {
+      const address = transferAddress(el("transferAddress").value);
+      try { await PhoneStore.put("settings", { id: "transferConnection", address }); } catch { /* Opening works even when preferences cannot be saved. */ }
+      window.location.href = address;
+    } catch (error) { failure(error, "transferNotice"); }
+  }
+  async function forgetTransferConnection() {
+    try {
+      await PhoneStore.remove("settings", "transferConnection"); el("transferAddress").value = ""; el("transferForget").hidden = true;
+      notice("transferNotice", "地址已清除，收发内容仍保存在电脑。");
+    } catch (error) { failure(error, "transferNotice"); }
   }
   function supportsTaskSync(address) {
     if (!TASK_SYNC_ENABLED) return false;
@@ -1002,6 +1029,8 @@
     el("syncDisconnect").addEventListener("click", () => { void disconnectTaskSync().catch(error => failure(error, "syncNotice")); });
   }
   el("backupButton").addEventListener("click", () => void backupLibrary());
+  el("transferConnectForm").addEventListener("submit", event => { event.preventDefault(); void openTransferConnection(); });
+  el("transferForget").addEventListener("click", () => void forgetTransferConnection());
   el("restoreButton").addEventListener("click", async () => { if (state.busy) return; setBusy(true); try { await disconnectTaskSync(false); await libraryMutationQueue; const previous = await PhoneStore.get("records", "previousImport"); if (!previous) return; const next = mergeLibrary({ ...previous, id: "library", importedAt: new Date().toISOString() }, state.library); await PhoneStore.replaceLibrary(next); state.library = next; closeReader(false); await refreshDashboard(); notice("settingsNotice", "已恢复上次导入的资料，本机进度仍然保留。"); } catch (error) { failure(error, "settingsNotice"); } finally { setBusy(false); } });
   el("checkUpdate").addEventListener("click", () => void checkUpdate());
   el("applyUpdate").addEventListener("click", () => { if (!state.registration?.waiting && !state.updatePending) return; state.applyingUpdate = true; el("musicAudio").pause(); prepareWaitingUpdate(); void maybeReloadUpdate(); });

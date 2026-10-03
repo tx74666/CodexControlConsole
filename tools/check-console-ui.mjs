@@ -260,7 +260,11 @@ function staticChecks() {
       && !consoleHtml.includes('id="collaborationDownloadsTab"')
       && !consoleHtml.includes('id="consoleDownloadsTab"')
       && !consoleHtml.includes('id="consoleDownloadsView"')
-      && consoleHtml.match(/data-console-view-target=/g)?.length === 3
+      && consoleHtml.match(/data-console-view-target=/g)?.length === 4
+      && consoleHtml.includes('id="consoleTransferTab"')
+      && consoleHtml.includes('id="desktopTransferPanel"')
+      && consoleHtml.includes('src="transfer-panel.js?')
+      && appSource.includes("bindConsoleTransfer();")
       && consoleHtml.includes('id="consoleDocumentView"')
       && consoleHtml.includes('id="documentCollect"')
       && consoleHtml.indexOf('id="consoleCommonTab"') < consoleHtml.indexOf('id="consoleDocumentTab"')

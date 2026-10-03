@@ -12,6 +12,8 @@
   <link rel="apple-touch-icon" href="/codex-resource-icon-256.png">
   <link rel="icon" href="/codex-resource-icon-128.png" type="image/png">
   <link rel="stylesheet" href="/mobile.css">
+  <link rel="stylesheet" href="/transfer-panel.css?v=console-transfer-1">
+  <script src="/transfer-panel.js?v=console-transfer-1" defer></script>
   <script src="/mobile.js" defer></script>
 </head>
 <body>
@@ -23,7 +25,7 @@
     <section id="pairScreen" class="pair-screen" aria-labelledby="pairTitle">
       <div class="pair-symbol" aria-hidden="true">⌘</div>
       <h2 id="pairTitle">连接你的电脑</h2>
-      <p class="muted">让 iPhone 和电脑连接同一 Wi-Fi，在电脑的 Console「常用 → 内置资源 → 手机任务同步」开启连接，输入它显示的配对码。</p>
+      <p class="muted">让 iPhone 和电脑连接同一 Wi-Fi，在电脑的 Console「互传 → 连接手机」开启连接，输入它显示的配对码。</p>
       <form id="pairForm">
         <label for="pairCode">配对码</label>
         <input id="pairCode" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="6 位数字" aria-describedby="pairNotice">
@@ -42,6 +44,9 @@
     <div id="appScreen" hidden>
       <div class="toolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
       <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
+      <section id="transferPanel" class="tab-panel" hidden aria-label="手机和电脑互传">
+        <div id="phoneTransferPanel"></div>
+      </section>
       <section id="tasksPanel" class="tab-panel" aria-labelledby="tasksTitle">
         <div class="section-title"><div><p class="eyebrow">当前重要计划</p><h2 id="tasksTitle">计划清单</h2></div><span class="pill">只读</span></div>
         <p id="planNotice" class="muted small">电脑 → 手机，每 5 秒更新；修改请在电脑完成。</p>
@@ -85,6 +90,7 @@
     </div>
   </main>
   <nav id="bottomNav" class="bottom-nav" hidden aria-label="主要页面">
+    <button type="button" data-tab="transfer" aria-pressed="false"><span aria-hidden="true">⇄</span>互传</button>
     <button type="button" data-tab="tasks" aria-pressed="true"><span aria-hidden="true">◫</span>任务</button>
     <button type="button" data-tab="music" aria-pressed="false"><span aria-hidden="true">♫</span>音乐</button>
     <button type="button" data-tab="device" aria-pressed="false"><span aria-hidden="true">▣</span>设备</button>

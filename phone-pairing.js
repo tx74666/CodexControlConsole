@@ -9,6 +9,8 @@
   const start = byId('phoneCompanionStart');
   const renew = byId('phoneCompanionRenew');
   const stop = byId('phoneCompanionStop');
+  const qr = byId('phoneCompanionQr');
+  qr?.addEventListener('error', () => { qr.hidden = true; });
   let current = null;
   let busy = false;
   let timer = 0;
@@ -36,11 +38,18 @@
     renew.disabled = busy;
     stop.disabled = busy;
     byId('phoneCompanionDetails').hidden = !value.enabled;
-    status.textContent = value.enabled ? '手机任务同步入口已开启。' : addresses.length ? '任务同步入口已关闭，需要使用时再开启。' : '没有找到已连接的 Wi‑Fi 或网线，请先连接网络。';
+    status.textContent = value.enabled ? '手机入口已开启，可以配对后使用互传和任务同步。' : addresses.length ? '手机入口已关闭，需要使用时再开启。' : '没有找到已连接的 Wi‑Fi 或网线，请先连接网络。';
     const link = byId('phoneCompanionUrl');
     if (value.enabled) {
-      link.href = value.url;
-      link.textContent = value.url;
+      const transferUrl = new URL(value.url);
+      transferUrl.searchParams.set('tab', 'transfer');
+      link.href = transferUrl.href;
+      link.textContent = transferUrl.href;
+      if (qr && qr.dataset.url !== value.url) {
+        qr.dataset.url = value.url;
+        qr.hidden = false;
+        qr.src = `/api/phone-companion/qr.png?version=${encodeURIComponent(value.url)}`;
+      }
       const expiry = Date.parse(value.pairingExpiresAt);
       const active = Boolean(value.pairingCode) && Number.isFinite(expiry) && expiry > Date.now();
       byId('phoneCompanionCode').textContent = active ? value.pairingCode : '点击“新配对码”';
@@ -49,6 +58,7 @@
     } else {
       link.removeAttribute('href');
       link.textContent = '';
+      if (qr) { qr.hidden = true; qr.removeAttribute('src'); delete qr.dataset.url; }
       byId('phoneCompanionCode').textContent = '';
     }
   }

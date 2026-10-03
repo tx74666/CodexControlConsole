@@ -17,7 +17,7 @@
 </head>
 <body>
   <header class="app-header" id="appHeader">
-    <div><p class="eyebrow">随身计划、音乐与阅读</p><h1>Codex Console</h1></div>
+    <div><p class="eyebrow">随身计划、音乐、阅读与互传</p><h1>Codex Console</h1></div>
     <span id="connectionLabel" class="connection-label">本机离线</span>
   </header>
   <main id="main">
@@ -69,6 +69,19 @@
         <details class="document-section"><summary>参考资料 <span class="muted small">给人看</span></summary><div id="referenceList" class="card-stack"></div></details>
         <details class="document-section"><summary>AI 原始记录 <span class="muted small">需要时展开</span></summary><div id="recordList" class="card-stack"></div></details>
       </section>
+      <section id="transferPanel" class="tab-panel" hidden aria-labelledby="transferTitle">
+        <div class="section-title"><div><p class="eyebrow">手机 ↔ 电脑</p><h2 id="transferTitle">文字与图片互传</h2></div></div>
+        <div class="card transfer-launcher">
+          <p>在电脑 Console 的「互传」页面开启手机连接，然后填写电脑显示的地址。连接后，两边都能发送文字和图片。</p>
+          <form id="transferConnectForm">
+            <label for="transferAddress">电脑显示的手机地址</label>
+            <input id="transferAddress" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.10:8899/" required>
+            <div class="settings-actions"><button id="transferOpen" type="submit" class="primary">打开互传</button><button id="transferForget" type="button" class="text-button" hidden>忘记地址</button></div>
+          </form>
+          <p id="transferNotice" class="notice small" role="status" aria-live="polite"></p>
+          <p class="muted small">两端接入同一可信 Wi-Fi，电脑保持开机并运行 Console。首次进入输入电脑上的配对码；这个地址会保存在手机，收发内容保存在电脑。</p>
+        </div>
+      </section>
       <details class="session-settings"><summary>资料与更新 <span class="muted small">v__CONSOLE_PHONE_VERSION__</span></summary>
         <p class="muted small">Safari 分享 → 添加到主屏幕。已保存的内容可离线使用。</p>
         <div class="settings-actions"><button id="importButton" type="button" class="secondary">导入电脑资料</button><button id="backupButton" type="button" class="secondary">备份资料</button><button id="restoreButton" type="button" class="text-button" hidden>恢复上次导入</button></div>
@@ -84,6 +97,7 @@
     <button type="button" data-tab="music" aria-pressed="false"><span aria-hidden="true">♫</span>音乐</button>
     <button type="button" data-tab="device" aria-pressed="false"><span aria-hidden="true">▣</span>设备</button>
     <button type="button" data-tab="documents" aria-pressed="false"><span aria-hidden="true">▤</span>文档</button>
+    <button type="button" data-tab="transfer" aria-pressed="false"><span aria-hidden="true">⇄</span>互传</button>
   </nav>
   <section id="readerScreen" class="reader-screen" hidden aria-labelledby="readerTitle" tabindex="-1">
     <header class="reader-toolbar"><button id="readerBack" type="button" class="text-button">‹ 返回</button><div class="reader-font"><button id="fontSmaller" type="button" aria-label="缩小文字">A−</button><button id="fontLarger" type="button" aria-label="放大文字">A+</button></div></header>

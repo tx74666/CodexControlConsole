@@ -639,6 +639,17 @@ h2 {
   display: none !important;
 }
 
+.phone-pair-qr {
+  display: block;
+  width: 180px;
+  height: 180px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  margin: 12px 0;
+}
+
 .document-shell, .document-controls, .document-sampling {
   display: grid;
   gap: 12px;
@@ -918,7 +929,7 @@ h2 {
 }
 
 .console-subnav {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .blender-subnav::before,
@@ -959,7 +970,7 @@ h2 {
 }
 
 .console-subtab-drop {
-  width: calc((100% - 24px) / 3);
+  width: calc((100% - 32px) / 4);
 }
 
 .blender-subtab,

@@ -144,6 +144,14 @@ The iPhone app is available at [https://tx74666.github.io/CodexControlConsole/](
 
 Safari 当前未普遍启用让 HTTPS 网页直接访问 HTTP 局域网电脑的 Local Network Access 能力，所以不能保证原主屏幕 App 内直接更新。上面的同源局域网页面是兼容入口；它与原 App 使用不同的储存区，不能自动修改原 App 的离线副本。后台或锁屏时轮询暂停，回到前台立即重读。电脑需开机、保持 Console 运行，两端接入同一可信 Wi-Fi。每个用户配对自己的电脑；个人任务、配对码与会话凭证不会上传 GitHub。电脑重启、网络地址变化、配对过期或切换资料库后需重新连接。
 
+### 文字与图片互传（Windows 1.0.20 / iPhone 1.0.24）
+
+电脑打开 **互传 → 连接手机**，开启同 Wi-Fi 入口。手机扫描电脑二维码，或在原主屏幕 Console 的 **互传** 页填写电脑显示的地址，点 **打开互传**，输入六位配对码。地址会保存在原手机 App，后续可直接打开；电脑地址变化或配对过期时重新连接。
+
+两端可以输入文字、选择最多四张图片并发送，查看同一份收发记录。电脑可直接打开收到的原图，手机可查看及保存附件。发送成功后才清空输入；失败时保留文字和所选图片。原图按原始字节保存，HEIC 可以收发与下载，不保证电脑浏览器能预览。每张图片最多 12 MiB，每次请求最多 24 MiB，文字最多 20,000 字。
+
+互传历史保存在当前电脑资料库的 `互传/.console-transfer`，未选资料库时使用应用本地数据目录；不会进入公开 GitHub、手机发布包或反馈服务。二维码和配对沿用受限手机入口，任务同步仍保持关闭。原 HTTPS 离线 App 通过打开电脑的局域网页面使用互传；两者储存区独立，手机原有文档、音乐和阅读进度继续保留。电脑须保持开机并运行 Console，首次连接仅在可信 Wi-Fi 使用。后台与锁屏期间停止收发列表轮询，回到前台再刷新。
+
 ### Optional local companion (same Wi-Fi)
 
 The earlier limited Wi-Fi companion remains available through the local `/api/phone-companion/*` interfaces for compatibility, with a one-time pairing code and a physical LAN address. It is not the offline app and has no desktop top-bar entry. Its local HTTP page requires the computer to remain awake.

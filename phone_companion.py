@@ -19,6 +19,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import sqlite3
 import stat
 import subprocess
 import threading
@@ -26,6 +27,7 @@ import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from workspace_plan import MAX_PLAN_BYTES, normalize_actual_plan
+from transfer_store import TransferError, read_transfer_request, send_transfer_attachment
 
 
 PAIR_TTL = 300
@@ -45,6 +47,7 @@ NETWORK_WARNING = "只在你信任的同一 Wi-Fi 内使用。当前连接未加
 ASSETS = {
     "/": "mobile.html", "/mobile.html": "mobile.html",
     "/mobile.css": "mobile.css", "/mobile.js": "mobile.js",
+    "/transfer-panel.js": "transfer-panel.js", "/transfer-panel.css": "transfer-panel.css",
     "/mobile.webmanifest": "mobile.webmanifest",
     "/codex-resource-icon-32.png": "codex-resource-icon-32.png",
     "/codex-resource-icon-128.png": "codex-resource-icon-128.png",
@@ -149,7 +152,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         if cookie:
             self.send_header("Set-Cookie", cookie)
         if getattr(self, "_plan_sync_cors", False):
@@ -293,7 +296,21 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 self._send({"paired": companion.is_paired(self._token(), self.client_address[0])})
                 return
             session = companion.session(self._token(), self.client_address[0])
-            if parsed.path == "/api/phone/dashboard":
+            if parsed.path.startswith("/api/phone/transfer/"):
+                if companion.transfer_store is None:
+                    raise PhoneRequestError("电脑端互传组件尚未更新。", 503)
+                token, peer = self._token(), self.client_address[0]
+                authorize = lambda: companion.session(token, peer)
+                if parsed.path == "/api/phone/transfer/messages":
+                    result = companion.transfer_store.list(parsed.query, prefix="/api/phone/transfer")
+                    authorize()
+                    self._send(result)
+                elif parsed.path == "/api/phone/transfer/attachment":
+                    item = companion.transfer_store.attachment(parsed.query)
+                    send_transfer_attachment(self, item, authorize=authorize)
+                else:
+                    raise PhoneRequestError("手机入口没有此功能。", 404)
+            elif parsed.path == "/api/phone/dashboard":
                 self._send(companion.dashboard(session))
             elif parsed.path == "/api/phone/plan":
                 if parsed.query:
@@ -324,7 +341,9 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 raise PhoneRequestError("手机入口没有此功能。", 404)
         except PhoneRequestError as error:
             self._send({"error": str(error)}, error.status, headers=error.headers)
-        except (ValueError, OSError, RuntimeError):
+        except TransferError as error:
+            self._send({"error": str(error)}, error.status)
+        except (ValueError, OSError, RuntimeError, sqlite3.Error):
             self._send({"error": "暂时无法读取，请回到电脑检查资料库。"}, 400)
 
     def do_HEAD(self):
@@ -399,6 +418,15 @@ class _PhoneHandler(BaseHTTPRequestHandler):
             companion = self._context(post=True)
             if parsed.query:
                 raise PhoneRequestError("请求地址无效。")
+            if parsed.path == "/api/phone/transfer/messages":
+                token, peer = self._token(), self.client_address[0]
+                companion.session(token, peer)
+                if companion.transfer_store is None:
+                    raise PhoneRequestError("电脑端互传组件尚未更新。", 503)
+                with read_transfer_request(self.headers, self.rfile) as (fields, files):
+                    self._send(companion.transfer_store.send(fields, files, "phone",
+                        prefix="/api/phone/transfer", authorize=lambda: companion.session(token, peer)))
+                return
             body = self._body()
             if parsed.path == "/api/phone/pair":
                 if set(body) != {"code"}:
@@ -421,14 +449,16 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 raise PhoneRequestError("手机入口没有此功能。", 404)
         except PhoneRequestError as error:
             self._send({"error": str(error)}, error.status)
-        except (ValueError, OSError, RuntimeError):
+        except TransferError as error:
+            self._send({"error": str(error)}, error.status)
+        except (ValueError, OSError, RuntimeError, sqlite3.Error):
             self._send({"error": "操作未完成，请刷新后重试。"}, 400)
 
 
 class PhoneCompanionService:
     def __init__(self, document_library, plan_getter, app_dir, version, device_getter=None,
                  *, clock=None, interface_getter=None, music_getter=None,
-                 music_file_getter=None, music_lyrics_getter=None, computer_id=None):
+                 music_file_getter=None, music_lyrics_getter=None, computer_id=None, transfer_store=None):
         self.documents = document_library
         self.plan_getter = plan_getter
         self.device_getter = device_getter or document_library.overview
@@ -456,6 +486,7 @@ class PhoneCompanionService:
         self.music_getter = music_getter
         self.music_file_getter = music_file_getter
         self.music_lyrics_getter = music_lyrics_getter
+        self.transfer_store = transfer_store
         self._music_lock = threading.RLock()
         self._music_cache = None
         self._music_checked_at = 0

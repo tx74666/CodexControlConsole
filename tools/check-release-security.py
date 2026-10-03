@@ -95,6 +95,8 @@ def main():
     require("action-gh-release" not in store_audit_workflow, "Store audit must not publish a release")
 
     locked_packages = {
+        "colorama==0.4.6",
+        "qrcode==8.2",
         "altgraph==0.17.5",
         "packaging==26.2",
         "pefile==2024.8.26",

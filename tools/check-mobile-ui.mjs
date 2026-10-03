@@ -42,7 +42,7 @@ function harness(script = source) {
   audio.pause = () => { audio.paused = true; audio.pauseCalls++; mediaEvents.push("pause"); };
   audio.load = () => { audio.loadCalls++; audio.duration = NaN; audio.currentTime = 0; mediaEvents.push("load"); };
   audio.play = () => { audio.playCalls++; mediaEvents.push("play"); if (audio.playError) return Promise.reject(audio.playError); audio.paused = false; return Promise.resolve(); };
-  const tabs = ["tasks", "music", "device", "documents"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
+  const tabs = ["transfer", "tasks", "music", "device", "documents"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const documentEvents = new Map(), windowEvents = new Map();
   const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
@@ -58,10 +58,10 @@ function harness(script = source) {
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
 
-await test("iPhone install entry, safe areas, touch sizes and four real tabs", () => {
+await test("iPhone install entry, safe areas, touch sizes and five real tabs", () => {
   assert.equal(manifest.start_url, "/mobile.html"); assert.equal(manifest.scope, "/"); assert.equal(manifest.display, "standalone");
   assert.match(html, /apple-mobile-web-app-capable/); assert.match(html, /apple-touch-icon[^>]+256/); assert.match(html, /viewport-fit=cover/);
-  assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["tasks", "music", "device", "documents"]);
+  assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["transfer", "tasks", "music", "device", "documents"]);
   assert.match(css, /env\(safe-area-inset-bottom\)/); assert.match(css, /min-height:44px/); assert.match(css, /font-size:24px/); assert.match(css, /reader-table-scroll\{overflow-x:auto/);
   assert.doesNotMatch(source, /serviceWorker|\.innerHTML|document\.cookie/); assert.doesNotMatch(html, /onclick=|<script[^>]*>\s*[^<\s]/);
   const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
@@ -262,11 +262,16 @@ await test("saved task JSON contains no session token or documents and malformed
 });
 await test("connection failure is visible and an unchanged recovered plan clears the stale warning", async () => {
   const h = harness(); h.ready(); h.respond(snapshot()); await h.api.pollLivePlan();
-  h.answers.push(Promise.reject(new Error("unavailable"))); await h.api.pollLivePlan();
-  assert.equal(h.get("connectionLabel").textContent, "计划未更新"); assert.equal(h.get("connectionLabel").dataset.connected, "false");
+  h.answers.push(Promise.reject(new TypeError("unavailable"))); await h.api.pollLivePlan();
+  assert.equal(h.get("connectionLabel").textContent, "连接中断"); assert.equal(h.get("connectionLabel").dataset.connected, "false");
   assert.match(h.get("planNotice").textContent, /计划已保留/);
   h.respond(snapshot()); await h.api.pollLivePlan();
   assert.equal(h.get("connectionLabel").textContent, "已连接"); assert.equal(h.get("connectionLabel").dataset.connected, "true");
   assert.match(h.get("planNotice").textContent, /已同步/); assert.doesNotMatch(h.get("planNotice").textContent, /暂时连不上/);
+});
+await test("invalid task data never marks working transfer disconnected", async () => {
+  const h = harness(); h.ready(); h.api.selectTab("transfer"); h.respond({}); await h.api.pollLivePlan();
+  assert.equal(h.get("connectionLabel").textContent, "已连接"); assert.equal(h.get("connectionLabel").dataset.connected, "true");
+  assert.match(h.get("planNotice").textContent, /其他功能仍可使用/); assert.equal(h.api.state.paired, true); assert.equal(h.get("transferPanel").hidden, false);
 });
 console.log(`PASS phone UI ${count} checks`);

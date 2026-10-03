@@ -43,7 +43,7 @@ function harness({ syncEnabled = false } = {}) {
   audio.pause = () => { audio.paused = true; audio.pauseCalls++; mediaEvents.push("pause"); };
   audio.load = () => { audio.loadCalls++; audio.duration = NaN; audio.currentTime = 0; mediaEvents.push("load"); };
   audio.play = () => { audio.playCalls++; mediaEvents.push("play"); if (audio.playError) return Promise.reject(audio.playError); audio.paused = false; return Promise.resolve(); };
-  const tabs = ["tasks", "music", "device", "documents"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
+  const tabs = ["tasks", "music", "device", "documents", "transfer"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const musicTabs = ["", "first", "second", "third"].map(tier => { const button = new Element("button"); button.dataset.musicTier = tier; return button; });
   const documentEvents = new Map(), windowEvents = new Map(), workerEvents = new Map(), registrationEvents = new Map(), registrations = [], reloads = [];
@@ -63,7 +63,7 @@ function harness({ syncEnabled = false } = {}) {
   };
   const registration = { waiting: null, installing: null, updateCalls: 0, addEventListener(name, callback) { registrationEvents.set(name, callback); }, async update() { this.updateCalls++; if (this.updateError) throw this.updateError; if (this.onUpdate) await this.onUpdate(); } };
   const runtime = { URL, URLSearchParams, AbortController, TypeError, Request, document, history, navigator: { onLine: true, serviceWorker: { controller: {}, ready: Promise.resolve(registration), register: async (...args) => { registrations.push(args); return registration; }, addEventListener(name, callback) { workerEvents.set(name, callback); } } }, PhoneStore, Blob, atob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html", reload() { reloads.push(true); } }, addEventListener(name, callback) { addEvent(windowEvents, name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
-  const names = "state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
+  const names = "transferAddress,restoreTransferConnection,openTransferConnection,forgetTransferConnection,state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
   assert.ok(source.includes("  void bootstrap();\n})();"), "test export insertion must match only bootstrap footer");
   // Exercise deferred sync explicitly in isolated tests; production stays offline by default.
   const testSource = syncEnabled ? source.replace("const TASK_SYNC_ENABLED = false;", "const TASK_SYNC_ENABLED = true;") : source;
@@ -114,9 +114,36 @@ function workerHarness({ active = true, clients = [], installError = null } = {}
 }
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
-await test("relative project installation has four tabs and no PC connection requirement", () => {
+await test("transfer remembers a LAN address without changing private offline records", async () => {
+  const h = harness(); h.ready(); const before = JSON.stringify(h.stores.get("records").get("library"));
+  h.get("transferAddress").value = "http://192.168.1.10:8899/";
+  await h.api.openTransferConnection();
+  assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=transfer");
+  assert.equal(h.stores.get("settings").get("transferConnection").address, h.runtime.window.location.href);
+  h.get("transferAddress").value = ""; await h.api.restoreTransferConnection();
+  assert.equal(h.get("transferAddress").value, h.runtime.window.location.href); assert.equal(h.get("transferForget").hidden, false);
+  h.api.selectTab("transfer"); assert.equal(h.get("transferPanel").hidden, false); assert.equal(h.get("documentsPanel").hidden, true);
+  await h.api.forgetTransferConnection(); assert.equal(h.stores.get("settings").has("transferConnection"), false);
+  assert.equal(JSON.stringify(h.stores.get("records").get("library")), before); assert.equal(h.calls.length, 0);
+});
+await test("transfer refuses public addresses, credentials, arbitrary paths and bearer links", async () => {
+  const h = harness();
+  for (const value of ["https://example.com/", "http://example.com/", "http://127.0.0.1:8899/", "http://192.168.1.10:8899/other", "http://user:secret@192.168.1.10:8899/", "http://192.168.1.10:8899/?token=x", "javascript:alert(1)", "http://192.168.1.10:8899/#token"])
+    assert.throws(() => h.api.transferAddress(value));
+  assert.equal(h.api.transferAddress("http://172.16.0.8:8899/mobile.html?tab=transfer"), "http://172.16.0.8:8899/?tab=transfer");
+  assert.equal(h.api.transferAddress("http://10.1.2.3:8899/"), "http://10.1.2.3:8899/?tab=transfer");
+  const before = h.runtime.window.location.href; h.get("transferAddress").value = "http://example.com/"; await h.api.openTransferConnection();
+  assert.equal(h.runtime.window.location.href, before); assert.equal(h.stores.get("settings").has("transferConnection"), false);
+  assert.equal(h.get("transferNotice").dataset.error, "true"); assert.equal(h.calls.length, 0);
+});
+await test("transfer can open even when optional address preferences cannot be saved", async () => {
+  const h = harness(); h.PhoneStore.failWrites = true; h.get("transferAddress").value = "http://192.168.1.10:8899/";
+  await h.api.openTransferConnection(); assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=transfer");
+});
+
+await test("relative project installation has five tabs and optional transfer connection", () => {
   assert.equal(manifest.start_url, "./index.html"); assert.equal(manifest.scope, "./");
-  assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["tasks", "music", "device", "documents"]);
+  assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["tasks", "music", "device", "documents", "transfer"]);
   assert.doesNotMatch(html, /pairCode|pairForm|offlineScreen|logoutButton/); assert.doesNotMatch(source, /clearPrivate|showOffline|showPair/);
   for (const match of source.matchAll(/\/api\/phone\/([^"']+)/g)) assert.ok(match[1].startsWith("plan-sync/"), "optional PC access must be limited to plan sync");
   for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.ok(!match[1].startsWith("/"), "project assets must remain relative");
