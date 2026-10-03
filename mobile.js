@@ -12,15 +12,27 @@
   }
 
   const el = id => document.getElementById(id);
-  const state = { paired: false, generation: 0, busy: false, tab: "tasks", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, search: "", folder: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
+  const MUSIC_TIERS = [{ value: "first", number: "1", suffix: "st" }, { value: "second", number: "2", suffix: "nd" }, { value: "third", number: "3", suffix: "rd" }];
+  const state = { paired: false, generation: 0, busy: false, tab: "work", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
   const livePlan = { snapshot: null, timer: null, busy: false, controller: null };
   const transferPanel = window.CodexTransferPanel?.create(el("phoneTransferPanel"), {
     phone: true,
     onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期或已断开，请输入电脑显示的新配对码。")
   }) || null;
+  const workflowPanel = window.CodexWorkflowPanel?.create(el("phoneWorkflowPanel"), {
+    phone: true,
+    onConnectionState: connected => updateConnectionState(connected),
+    onAuth: () => showPair("配对已过期或已断开，请输入电脑显示的新配对码。")
+  }) || null;
+  const incubatorPanel = window.CodexIncubatorPanel?.create(el("phoneIncubatorPanel"), {
+    phone: true,
+    onConnectionState: connected => updateConnectionState(connected),
+    onAuth: () => showPair("配对已过期，请重新连接电脑。")
+  }) || null;
+  el("phoneWorkflowDetails")?.addEventListener("toggle", () => workflowPanel?.setActive(state.tab === "work" && state.paired && Boolean(el("phoneWorkflowDetails").open)));
   const initialTab = new URL(window.location.href).searchParams.get("tab") || new URL(window.location.href).searchParams.get("view");
-  if (initialTab === "transfer") state.tab = "transfer";
+  if (["work", "transfer"].includes(initialTab)) state.tab = initialTab;
   const node = (tag, text = "", className = "") => {
     const result = document.createElement(tag);
     if (text) result.textContent = String(text);
@@ -28,6 +40,10 @@
     return result;
   };
   function notice(id, message = "", error = false) { el(id).textContent = message; el(id).dataset.error = String(error); }
+  function renderVersion(version) {
+    el("versionLabel").textContent = typeof version === "string" && /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)
+      ? `电脑版 v${version}` : "电脑版 · 版本暂不可读";
+  }
   function updateConnectionState(connected) {
     if (!state.paired) return;
     el("connectionLabel").textContent = connected ? "已连接" : "连接中断";
@@ -91,6 +107,9 @@
 
   function clearPrivate() {
     transferPanel?.clear();
+    workflowPanel?.clear();
+    incubatorPanel?.clear();
+    document.body.dataset.phoneTab = "unpaired";
     window.clearTimeout(livePlan.timer); livePlan.timer = null; livePlan.busy = false; livePlan.controller?.abort(); livePlan.controller = null;
     state.generation += 1; state.paired = false; state.dashboard = null;
     clearMusic();
@@ -132,8 +151,9 @@
     setBusy(true);
     try {
       const status = await api("status");
+      if (status.version) renderVersion(status.version);
       if (status.paired && (!launchPairing || status.remembered)) {
-        if (launchPairing) state.tab = "transfer";
+        if (launchPairing) state.tab = initialTab === "transfer" ? "transfer" : "work";
         launchPairing = null;
         await refreshDashboard(); void pollLivePlan(); return;
       }
@@ -142,7 +162,7 @@
         if (pairing.invalid) { showPair("二维码无效，请重新扫描电脑 Console 的连接二维码，或使用配对码。"); return; }
         notice("pairNotice", "正在连接并记住这台手机…");
         await api("pair", { ...pairing, remember: Boolean(el("pairRemember").checked), deviceName: phoneDeviceName() });
-        state.tab = "transfer";
+        state.tab = initialTab === "transfer" ? "transfer" : "work";
         await refreshDashboard(); void pollLivePlan(); return;
       }
       if (!status.paired) { showPair(); return; }
@@ -159,6 +179,7 @@
     if (!data || typeof data !== "object" || !data.documents || !data.device) throw new Error("电脑返回的页面数据不完整，请重试。");
     closeReader(false);
     state.dashboard = data; state.paired = true;
+    renderVersion(data.version);
     el("pairScreen").hidden = true; el("offlineScreen").hidden = true; el("appScreen").hidden = false; el("bottomNav").hidden = false;
     el("connectionLabel").textContent = "已连接"; el("connectionLabel").dataset.connected = "true";
     el("updatedLabel").textContent = `页面读取于 ${date(new Date().toISOString())}`;
@@ -171,10 +192,17 @@
     finally { setBusy(false); }
   }
   function selectTab(value) {
-    if (!["transfer", "tasks", "music", "device", "documents"].includes(value)) return;
+    if (value === "tasks") value = "work";
+    if (value === "device") value = "documents";
+    if (!["work", "transfer", "music", "documents"].includes(value)) return;
     state.tab = value;
-    for (const tab of ["transfer", "tasks", "music", "device", "documents"]) el(`${tab}Panel`).hidden = tab !== value;
+    document.body.dataset.phoneTab = value;
+    for (const tab of ["work", "transfer", "music", "documents"]) el(`${tab}Panel`).hidden = tab !== value;
+    el("tasksPanel").hidden = value !== "work";
+    el("devicePanel").hidden = value !== "documents";
     transferPanel?.setActive(value === "transfer" && state.paired);
+    incubatorPanel?.setActive(value === "work" && state.paired);
+    workflowPanel?.setActive(value === "work" && state.paired && Boolean(el("phoneWorkflowDetails").open));
     for (const button of document.querySelectorAll("[data-tab]")) button.setAttribute("aria-pressed", String(button.dataset.tab === value));
     if (value === "music" && state.paired && !state.music.loaded) void loadMusic();
   }
@@ -189,38 +217,42 @@
       const path = pathValue(item?.path);
       if (!path || path !== item.path || seen.has(path)) continue;
       seen.add(path);
-      tracks.push({ path, name: String(item.name || path.split("/").at(-1)).slice(0, 500), type: String(item.type || "").slice(0, 12), size: item.size,
+      tracks.push({ path, name: String(item.name || path.split("/").at(-1)).slice(0, 500), type: String(item.type || "").slice(0, 12), size: item.size, tier: musicTier(item),
         folder: path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "", lyrics: Boolean(item.lyrics), lyricsLanguage: String(item.lyricsLanguage || ""),
         lyricsLanguages: (Array.isArray(item.lyricsLanguages) ? item.lyricsLanguages : []).filter(option => typeof option.code === "string" && /^[A-Za-z][A-Za-z0-9-]{0,23}$/.test(option.code)).map(option => ({ code: option.code, label: option.code === "zh" ? "中文" : String(option.label || option.code).slice(0, 40) })) });
     }
     return tracks;
   }
   function filteredMusic() {
-    const query = state.music.search.trim().toLocaleLowerCase();
-    return state.music.tracks.filter(track => (!state.music.folder || track.folder === state.music.folder) && (!query || `${track.name} ${track.folder}`.toLocaleLowerCase().includes(query)));
+    return MUSIC_TIERS.flatMap(tier => state.music.tracks.filter(track => musicTier(track) === tier.value && (!state.music.tier || tier.value === state.music.tier)));
+  }
+  function musicTier(track) { return track.tier === "first" || track.tier === "second" ? track.tier : "third"; }
+  function renderMusicTierLabel(container, tier) {
+    const item = MUSIC_TIERS.find(item => item.value === tier);
+    container.replaceChildren();
+    if (item) { container.textContent = item.number; container.append(node("sup", item.suffix)); }
+    else container.textContent = "全部";
+  }
+  function renderMusicTierTabs() {
+    for (const button of document.querySelectorAll("button[data-music-tier]")) {
+      renderMusicTierLabel(button, button.dataset.musicTier); button.setAttribute("aria-pressed", String(state.music.tier === button.dataset.musicTier));
+    }
   }
   function renderMusicTracks() {
-    const tracks = filteredMusic(), container = el("musicTracks"); container.replaceChildren();
+    const tracks = filteredMusic(), container = el("musicTracks"); container.replaceChildren(); renderMusicTierTabs(); let previousTier = "", groupTracks;
     tracks.slice(0, state.music.visible).forEach((track, index) => {
+      const tier = musicTier(track);
+      if (tier !== previousTier) { const section = node("section", "", `music-tier-section music-tier-${tier}`), heading = node("h3", "", "music-group-heading"); section.dataset.musicTier = tier; renderMusicTierLabel(heading, tier); groupTracks = node("div", "", "music-group-tracks"); section.append(heading, groupTracks); container.append(section); previousTier = tier; }
       const button = node("button", "", "music-track"); button.type = "button";
       button.setAttribute("aria-pressed", String(track.path === state.music.selected?.path));
       button.append(node("span", track.path === state.music.selected?.path ? "♫" : String(index + 1), "music-track-number"));
       const label = node("span", "", "music-track-label"); label.append(node("span", track.name, "music-track-name"));
-      label.append(node("span", [track.type.toUpperCase(), track.folder.split("/").at(-1) || "我的音乐", track.lyrics ? "有歌词" : ""].filter(Boolean).join(" · "), "music-track-meta")); button.append(label);
+      button.append(label);
       // Audio starts within this tap's call stack; no network await precedes play().
-      button.addEventListener("click", () => selectMusicTrack(track.path)); container.append(button);
+      button.addEventListener("click", () => selectMusicTrack(track.path)); groupTracks.append(button);
     });
-    if (!tracks.length) container.append(node("p", state.music.loaded ? state.music.tracks.length ? "没有找到匹配的音乐。" : "电脑曲库暂时没有可播放的音乐。" : "点「音乐」读取电脑曲库。", "empty-state"));
-    el("musicListMeta").textContent = state.music.loaded ? `${tracks.length} 首音乐${state.music.truncated ? " · 电脑仅返回了部分曲目" : ""}` : "";
+    if (!tracks.length) container.append(node("p", state.music.loaded ? "这个分类还没有音乐。" : "点「音乐」读取电脑曲库。", "empty-state"));
     el("musicMore").hidden = tracks.length <= state.music.visible;
-  }
-  function renderMusicFolders() {
-    const select = el("musicFolder"), folders = [...new Set(state.music.tracks.map(track => track.folder).filter(Boolean))].sort();
-    select.replaceChildren(); const all = node("option", "全部文件夹"); all.value = ""; select.append(all);
-    for (const folder of folders) { const option = node("option", folder.split("/").at(-1)); option.value = folder; select.append(option); }
-    if (!folders.includes(state.music.folder)) state.music.folder = "";
-    select.value = state.music.folder;
-    select.hidden = !folders.length;
   }
   async function loadMusic(force = false) {
     const music = state.music;
@@ -233,7 +265,7 @@
         const current = tracks.find(track => track.path === music.selected.path);
         if (!current) stopMusicPlayback(); else { music.selected = current; el("musicTrackTitle").textContent = current.name; }
       }
-      renderMusicFolders(); renderMusicTracks(); updateMusicControls(); notice("musicNotice", data.error || "");
+      renderMusicTracks(); updateMusicControls(); notice("musicNotice", data.error || (music.truncated ? "电脑仅返回了部分曲目。" : ""));
     } catch (error) { if (sequence === music.sequence) failure(error, "musicNotice"); }
     finally { if (sequence === music.sequence) { music.loading = false; el("musicRefresh").disabled = false; } }
   }
@@ -251,8 +283,8 @@
   }
   function clearMusic() {
     stopMusicPlayback();
-    state.music.sequence += 1; state.music.tracks = []; state.music.loaded = false; state.music.loading = false; state.music.search = ""; state.music.folder = ""; state.music.visible = 60; state.music.truncated = false;
-    el("musicSearch").value = ""; el("musicFolder").replaceChildren(); el("musicTracks").replaceChildren(); el("musicListMeta").textContent = ""; el("musicMore").hidden = true; el("musicRefresh").disabled = false; notice("musicNotice");
+    state.music.sequence += 1; state.music.tracks = []; state.music.loaded = false; state.music.loading = false; state.music.tier = ""; state.music.visible = 60; state.music.truncated = false;
+    renderMusicTierTabs(); el("musicTracks").replaceChildren(); el("musicMore").hidden = true; el("musicRefresh").disabled = false; notice("musicNotice");
   }
   function updateMusicControls() {
     const audio = el("musicAudio"), selected = state.paired && Boolean(state.music.selected);
@@ -676,8 +708,7 @@
   el("musicPrevious").addEventListener("click", () => advanceMusic(-1));
   el("musicNext").addEventListener("click", () => advanceMusic(1));
   el("musicRepeat").addEventListener("click", () => { state.music.repeat = state.music.repeat === "all" ? "one" : state.music.repeat === "one" ? "off" : "all"; updateMusicControls(); });
-  el("musicSearch").addEventListener("input", () => { state.music.search = el("musicSearch").value; state.music.visible = 60; renderMusicTracks(); });
-  el("musicFolder").addEventListener("change", () => { state.music.folder = el("musicFolder").value; state.music.visible = 60; renderMusicTracks(); });
+  for (const button of document.querySelectorAll("button[data-music-tier]")) button.addEventListener("click", () => { state.music.tier = button.dataset.musicTier; state.music.visible = 60; renderMusicTracks(); });
   el("musicMore").addEventListener("click", () => { state.music.visible += 60; renderMusicTracks(); });
   el("musicSeek").addEventListener("input", () => { const audio = el("musicAudio"); if (state.music.selected && Number.isFinite(audio.duration) && audio.duration > 0) { audio.currentTime = audio.duration * Math.min(1000, Math.max(0, Number(el("musicSeek").value) || 0)) / 1000; updateMusicPosition(); } });
   for (const event of ["play", "pause", "loadedmetadata", "durationchange"]) el("musicAudio").addEventListener(event, updateMusicControls);

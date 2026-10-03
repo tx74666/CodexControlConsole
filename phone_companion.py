@@ -1,7 +1,8 @@
 """Explicitly enabled, limited same-Wi-Fi companion for Codex Console.
 
 This server is separate from the desktop control server. It never forwards
-requests, selects a library, executes a program, or exposes an arbitrary file.
+requests, selects a library, or exposes an arbitrary file. Paired phones can
+submit work only through the computer's explicitly configured project permissions.
 PIN sessions are temporary; explicitly remembered phones use hashed local credentials.
 """
 from __future__ import annotations
@@ -29,6 +30,9 @@ from workspace_plan import MAX_PLAN_BYTES, normalize_actual_plan
 from transfer_store import TransferError, read_transfer_request, send_transfer_attachment
 from phone_device_store import DeviceStoreError, REMEMBER_TTL, TOKEN_PATTERN
 from phone_discovery import discover_lan_interfaces
+from workflow_service import WorkflowError
+from workflow_models import WorkflowModelError
+from workflow_http import workflow_get, workflow_post
 
 
 PAIR_TTL = 300
@@ -50,7 +54,12 @@ ASSETS = {
     "/": "mobile.html", "/mobile.html": "mobile.html",
     "/mobile.css": "mobile.css", "/mobile.js": "mobile.js",
     "/transfer-panel.js": "transfer-panel.js", "/transfer-panel.css": "transfer-panel.css",
+    "/workflow-panel.js": "workflow-panel.js", "/workflow-panel.css": "workflow-panel.css",
+    "/incubator-panel.js": "incubator-panel.js", "/incubator-panel.css": "incubator-panel.css",
     "/mobile.webmanifest": "mobile.webmanifest",
+    "/phone/phone-icon-180.png": "phone/phone-icon-180.png",
+    "/phone/phone-icon-192.png": "phone/phone-icon-192.png",
+    "/phone/phone-icon-512.png": "phone/phone-icon-512.png",
     "/codex-resource-icon-32.png": "codex-resource-icon-32.png",
     "/codex-resource-icon-128.png": "codex-resource-icon-128.png",
     "/codex-resource-icon-256.png": "codex-resource-icon-256.png",
@@ -126,7 +135,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         # Cross-origin links still receive no Referer with this policy.
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         if cookie:
             for value in cookie if isinstance(cookie, (list, tuple)) else [cookie]:
                 self.send_header("Set-Cookie", value)
@@ -215,7 +224,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         except PhoneRequestError as error:
             self._send({"error": str(error)}, error.status)
 
-    def _body(self):
+    def _body(self, maximum=MAX_BODY):
         if self.headers.get("Transfer-Encoding"):
             raise PhoneRequestError("不支持此请求格式。")
         lengths = self.headers.get_all("Content-Length", [])
@@ -225,7 +234,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
             size = int(lengths[0])
         except ValueError:
             raise PhoneRequestError("请求长度无效。")
-        if not 0 <= size <= MAX_BODY:
+        if not 0 <= size <= maximum:
             raise PhoneRequestError("请求内容过大。", 413)
         if self.headers.get_content_type() != "application/json":
             raise PhoneRequestError("请使用 JSON 请求。", 415)
@@ -287,7 +296,20 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                     self._send(result)
                 return
             session = companion.session(self._token(), self.client_address[0])
-            if parsed.path.startswith("/api/phone/transfer/"):
+            if parsed.path.startswith("/api/phone/workflow/"):
+                if companion.workflow_service is None:
+                    raise PhoneRequestError("电脑端工作组件尚未更新。", 503)
+                token, peer = self._token(), self.client_address[0]
+                authorize = lambda: companion.session(token, peer)
+                action = parsed.path.removeprefix("/api/phone/workflow/")
+                if action == "attachment":
+                    with companion.workflow_service.read_attachment(parsed.query, authorize=authorize) as item:
+                        send_transfer_attachment(self, item, authorize=authorize)
+                else:
+                    result = workflow_get(companion.workflow_service, action, parsed.query, prefix="/api/phone/workflow")
+                    authorize()
+                    self._send(result)
+            elif parsed.path.startswith("/api/phone/transfer/"):
                 if companion.transfer_store is None:
                     raise PhoneRequestError("电脑端互传组件尚未更新。", 503)
                 token, peer = self._token(), self.client_address[0]
@@ -297,8 +319,8 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                     authorize()
                     self._send(result)
                 elif parsed.path == "/api/phone/transfer/attachment":
-                    item = companion.transfer_store.attachment(parsed.query)
-                    send_transfer_attachment(self, item, authorize=authorize)
+                    with companion.transfer_store.read_attachment(parsed.query, authorize=authorize) as item:
+                        send_transfer_attachment(self, item, authorize=authorize)
                 else:
                     raise PhoneRequestError("手机入口没有此功能。", 404)
             elif parsed.path == "/api/phone/dashboard":
@@ -332,8 +354,8 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 raise PhoneRequestError("手机入口没有此功能。", 404)
         except PhoneRequestError as error:
             self._send({"error": str(error)}, error.status, headers=error.headers)
-        except (TransferError, DeviceStoreError) as error:
-            self._send({"error": str(error)}, error.status)
+        except (TransferError, DeviceStoreError, WorkflowError, WorkflowModelError) as error:
+            self._send({"error": str(error), "code": getattr(error, "code", "invalid_request")}, error.status)
         except (ValueError, OSError, RuntimeError, sqlite3.Error):
             self._send({"error": "暂时无法读取，请回到电脑检查资料库。"}, 400)
 
@@ -409,6 +431,27 @@ class _PhoneHandler(BaseHTTPRequestHandler):
             companion = self._context(post=True)
             if parsed.query:
                 raise PhoneRequestError("请求地址无效。")
+            if parsed.path.startswith("/api/phone/workflow/"):
+                token, peer = self._token(), self.client_address[0]
+                authorize = lambda: companion.session(token, peer)
+                authorize()
+                if companion.workflow_service is None:
+                    raise PhoneRequestError("电脑端工作组件尚未更新。", 503)
+                action = parsed.path.removeprefix("/api/phone/workflow/")
+                if action == "upload":
+                    with read_transfer_request(self.headers, self.rfile, allowed_fields={"requestId", "recordId"}) as (fields, files):
+                        authorize()
+                        result = companion.workflow_service.upload(fields, files, prefix="/api/phone/workflow", authorize=authorize)
+                elif action in {"create", "message", "submit", "discuss", "transcribe", "retry",
+                                "incubator/create", "incubator/update", "incubator/publish"}:
+                    body = self._body(maximum=128 * 1024)
+                    authorize()
+                    result = workflow_post(companion.workflow_service, action, body, prefix="/api/phone/workflow", authorize=authorize)
+                else:
+                    raise PhoneRequestError("手机入口没有此功能。", 404)
+                authorize()
+                self._send(result)
+                return
             if parsed.path == "/api/phone/transfer/messages":
                 token, peer = self._token(), self.client_address[0]
                 companion.session(token, peer)
@@ -437,7 +480,13 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 return
             token = self._token()
             session = companion.session(token, self.client_address[0])
-            if parsed.path == "/api/phone/inbox/move":
+            if parsed.path in {"/api/phone/transfer/star", "/api/phone/transfer/delete", "/api/phone/transfer/clear"}:
+                if companion.transfer_store is None:
+                    raise PhoneRequestError("电脑端互传组件尚未更新。", 503)
+                peer = self.client_address[0]
+                self._send(companion.transfer_store.mutate(parsed.path.rsplit("/", 1)[-1], body,
+                    prefix="/api/phone/transfer", authorize=lambda: companion.session(token, peer)))
+            elif parsed.path == "/api/phone/inbox/move":
                 if set(body) != {"id", "status"}:
                     raise PhoneRequestError("阅读状态无效。")
                 self._send(companion.move_report(session, body["id"], body["status"]))
@@ -450,8 +499,8 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 raise PhoneRequestError("手机入口没有此功能。", 404)
         except PhoneRequestError as error:
             self._send({"error": str(error)}, error.status)
-        except (TransferError, DeviceStoreError) as error:
-            self._send({"error": str(error)}, error.status)
+        except (TransferError, DeviceStoreError, WorkflowError, WorkflowModelError) as error:
+            self._send({"error": str(error), "code": getattr(error, "code", "invalid_request")}, error.status)
         except (ValueError, OSError, RuntimeError, sqlite3.Error):
             self._send({"error": "操作未完成，请刷新后重试。"}, 400)
 
@@ -460,7 +509,7 @@ class PhoneCompanionService:
     def __init__(self, document_library, plan_getter, app_dir, version, device_getter=None,
                  *, clock=None, interface_getter=None, music_getter=None,
                  music_file_getter=None, music_lyrics_getter=None, computer_id=None, transfer_store=None,
-                 device_store=None, announcer=None, monitor_interval=60):
+                 device_store=None, announcer=None, monitor_interval=60, workflow_service=None):
         self.documents = document_library
         self.plan_getter = plan_getter
         self.device_getter = device_getter or document_library.overview
@@ -489,6 +538,7 @@ class PhoneCompanionService:
         self.music_file_getter = music_file_getter
         self.music_lyrics_getter = music_lyrics_getter
         self.transfer_store = transfer_store
+        self.workflow_service = workflow_service
         self.device_store = device_store
         self.announcer = announcer
         self._network_fingerprint = ""
@@ -850,8 +900,9 @@ class PhoneCompanionService:
         name = ASSETS.get(path)
         if not name:
             raise PhoneRequestError("手机入口没有此文件。", 404)
-        target = (self.app_dir / name).resolve()
-        if target.parent != self.app_dir or not target.is_file():
+        requested = self.app_dir / name
+        target = requested.resolve()
+        if target != requested or self.app_dir not in target.parents or not target.is_file():
             raise PhoneRequestError("手机入口文件缺失，请更新电脑端。", 404)
         with target.open("rb") as source:
             content = source.read(MAX_ASSET + 1)
@@ -987,6 +1038,7 @@ class PhoneCompanionService:
                 language = item.get("lyricsLanguage", "")
                 language = language if isinstance(language, str) and re.fullmatch(r"[a-z]{2}(?:-[a-z]{2,8})?", language) else ""
                 normalized.append({"name": name, "path": path, "type": Path(path).suffix.lower()[1:],
+                    "tier": item.get("tier") if item.get("tier") in ("first", "second", "third") else "third",
                     "size": item.get("size") if type(item.get("size")) is int and item["size"] >= 0 else 0,
                     "modified": item.get("modified", "")[:120] if isinstance(item.get("modified", ""), str) else "",
                     "lyrics": item.get("lyrics") is True, "lyricsLanguage": language, "lyricsLanguages": languages,

@@ -260,14 +260,18 @@ function staticChecks() {
       && !consoleHtml.includes('id="collaborationDownloadsTab"')
       && !consoleHtml.includes('id="consoleDownloadsTab"')
       && !consoleHtml.includes('id="consoleDownloadsView"')
-      && consoleHtml.match(/data-console-view-target=/g)?.length === 4
+      && consoleHtml.match(/data-console-view-target=/g)?.length === 5
+      && consoleHtml.includes('id="consoleWorkTab"')
+      && consoleHtml.includes('id="desktopWorkflowPanel"')
+      && consoleHtml.includes('src="workflow-panel.js?')
       && consoleHtml.includes('id="consoleTransferTab"')
       && consoleHtml.includes('id="desktopTransferPanel"')
       && consoleHtml.includes('src="transfer-panel.js?')
       && appSource.includes("bindConsoleTransfer();")
       && consoleHtml.includes('id="consoleDocumentView"')
       && consoleHtml.includes('id="documentCollect"')
-      && consoleHtml.indexOf('id="consoleCommonTab"') < consoleHtml.indexOf('id="consoleDocumentTab"')
+      && consoleHtml.indexOf('id="consoleWorkTab"') < consoleHtml.indexOf('id="consoleDocumentTab"')
+      && consoleHtml.includes('id="desktopIncubatorPanel"')
       && !consoleHtml.includes('data-collaboration-view-target=')
       && !consoleHtml.includes('data-collaboration-view=')
       && !appSource.includes("setCollaborationWorkspaceView")
@@ -292,7 +296,7 @@ function staticChecks() {
   );
   assert(
     consoleHtml.includes('id="documentUnreadBadge"')
-      && consoleHtml.indexOf('id="consoleCommonTab"') < consoleHtml.indexOf('id="consoleDocumentTab"')
+      && consoleHtml.indexOf('id="consoleWorkTab"') < consoleHtml.indexOf('id="consoleDocumentTab"')
       && consoleHtml.indexOf('id="consoleDocumentTab"') < consoleHtml.indexOf('id="consoleCollaborationTab"')
       && consoleHtml.indexOf('class="candidate-strip workspace-todos"') < consoleHtml.indexOf('class="panel desktop-layout-panel')
       && consoleHtml.includes('id="documentInboxTabs"')
@@ -1250,7 +1254,7 @@ async function runBrowserChecks(client) {
       && consoleCommonState.documentVisible
       && !consoleCommonState.commonVisible
       && consoleCommonState.collaborationHidden
-      && consoleCommonState.tabs === 3
+      && consoleCommonState.tabs === 5
       && consoleCommonState.collaborationTabs === 0,
     `Console device overview is not the stable default: ${JSON.stringify(consoleCommonState)}`
   );

@@ -1,7 +1,7 @@
 """Private, persistent same-LAN text/image inbox; never executes uploaded content."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from email.parser import HeaderParser
 from email.utils import collapse_rfc2231_value
@@ -92,8 +92,11 @@ class IncomingFile:
 
 
 @contextmanager
-def read_transfer_request(headers, stream):
+def read_transfer_request(headers, stream, *, allowed_fields=None):
     """Bounded multipart spool, strict fields, no decoded/base64 image copies."""
+    field_names = frozenset({"text", "requestId"} if allowed_fields is None else allowed_fields)
+    if not field_names or "requestId" not in field_names or not field_names <= {"text", "requestId", "recordId"}:
+        raise ValueError("Unsupported multipart fields")
     if not UPLOAD_SLOTS.acquire(blocking=False):
         raise TransferError("正在接收其他图片，请稍后重试。", 429)
     spool = None
@@ -133,7 +136,7 @@ def read_transfer_request(headers, stream):
             parts = 0
             while True:
                 parts += 1
-                if parts > MAX_FILES + 2:
+                if parts > MAX_FILES + len(field_names):
                     raise TransferError("一次最多上传 4 张图片。", 413)
                 header_end = body.find(b"\r\n\r\n", position, min(len(body), position + 4096))
                 if header_end < 0:
@@ -181,7 +184,7 @@ def read_transfer_request(headers, stream):
                     if len(files) >= MAX_FILES or not 0 < length <= MAX_FILE_BYTES:
                         raise TransferError("一次最多 4 张图片，每张不能超过 12 MB。", 413)
                     files.append(IncomingFile(spool, content_start, length, _filename(filename), part.get_content_type()))
-                elif name in {"text", "requestId"} and filename is None:
+                elif name in field_names and filename is None:
                     if name in fields or length > MAX_TEXT_CHARS * 4:
                         raise TransferError("上传文字过长或包含重复内容。", 413)
                     try:
@@ -280,6 +283,7 @@ class TransferStore:
         self.fallback_dir = Path(fallback_dir)
         self.public_root = Path(public_root).resolve() if public_root is not None else None
         self._lock = threading.RLock()
+        self._readers = {}
 
     def _location(self):
         selected = self.root_getter()
@@ -304,8 +308,11 @@ class TransferStore:
         return folder, private, label
 
     @contextmanager
-    def _database(self):
-        folder, private, label = self._location()
+    def _database(self, location=None):
+        folder, private, label = location if location is not None else self._location()
+        if location is not None and (folder.resolve() != folder or not folder.is_dir()
+                or private != _safe_child(folder, ".console-transfer") or not private.is_dir()):
+            raise TransferError("互传目录已变化，请重新读取记录。", 403)
         database = _safe_child(private, "history.sqlite3")
         connection = sqlite3.connect(database, timeout=15)
         connection.row_factory = sqlite3.Row
@@ -313,12 +320,25 @@ class TransferStore:
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, request_id TEXT NOT NULL,
                     sender TEXT NOT NULL, created_at TEXT NOT NULL, text TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL, UNIQUE(sender, request_id));
+                    fingerprint TEXT NOT NULL, starred INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(sender, request_id));
                 CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, message_id TEXT NOT NULL,
                     name TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL,
                     size INTEGER NOT NULL, preview INTEGER NOT NULL);
                 CREATE INDEX IF NOT EXISTS attachment_messages ON attachments(message_id);
+                CREATE TABLE IF NOT EXISTS history_state (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL);
+                INSERT OR IGNORE INTO history_state VALUES (1, 0);
+                CREATE TABLE IF NOT EXISTS deleted_requests (sender TEXT NOT NULL, request_id TEXT NOT NULL,
+                    PRIMARY KEY(sender, request_id));
+                CREATE TABLE IF NOT EXISTS attachment_cleanup (id TEXT PRIMARY KEY, filename TEXT NOT NULL,
+                    preview INTEGER NOT NULL);
             """)
+            # Upgrade existing private histories without rebuilding their records.
+            connection.execute("BEGIN IMMEDIATE")
+            if "starred" not in {row["name"] for row in connection.execute("PRAGMA table_info(messages)")}:
+                connection.execute("ALTER TABLE messages ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+            connection.commit()
+            self._cleanup_attachments(connection, folder, private)
             yield connection, folder, private, label
         finally:
             connection.close()
@@ -335,9 +355,34 @@ class TransferStore:
                 attachment["path"] = str(_safe_child(folder, item["filename"]))
             attachments.append(attachment)
         return {"id": row["id"], "requestId": row["request_id"], "sender": row["sender"],
-                "createdAt": row["created_at"], "text": row["text"], "attachments": attachments}
+                "createdAt": row["created_at"], "text": row["text"], "starred": bool(row["starred"]),
+                "attachments": attachments}
 
-    def list(self, query="", prefix="/api/transfer"):
+    @staticmethod
+    def _change_revision(db):
+        db.execute("UPDATE history_state SET revision=revision+1 WHERE id=1")
+
+    def _cleanup_attachments(self, db, folder, private):
+        """Retry only registered owned files; live downloads keep their handles."""
+        for row in db.execute("SELECT * FROM attachment_cleanup").fetchall():
+            try:
+                identifier = _identifier(row["id"])
+                if not re.fullmatch(re.escape(identifier) + r"\.(?:jpg|png|gif|webp|heic)", row["filename"]):
+                    continue
+                paths = [_safe_child(folder, row["filename"])]
+                if row["preview"]:
+                    paths.append(_safe_child(private, identifier + ".preview.jpg"))
+                if any(self._readers.get(str(path), 0) for path in paths):
+                    continue
+                for path in paths:
+                    path.unlink(missing_ok=True)
+            except (OSError, TransferError):
+                # A busy file or redirected path is left for a later safe retry.
+                continue
+            db.execute("DELETE FROM attachment_cleanup WHERE id=?", (identifier,))
+        db.commit()
+
+    def list(self, query="", prefix="/api/transfer", location=None):
         params = parse_qs(query, keep_blank_values=True)
         if (len(query) > 512 or set(params) - {"limit", "before", "revision"}
                 or any(len(v) != 1 for v in params.values())
@@ -355,9 +400,9 @@ class TransferStore:
         before = params.get("before", [""])[0]
         if before:
             _identifier(before)
-        with self._lock, self._database() as (db, folder, private, label):
-            latest = db.execute("SELECT id FROM messages ORDER BY rowid DESC LIMIT 1").fetchone()
-            revision = hashlib.sha256(str(private).encode()).hexdigest()[:12] + ":" + (latest["id"] if latest else "0")
+        with self._lock, self._database(location) as (db, folder, private, label):
+            sequence = db.execute("SELECT revision FROM history_state WHERE id=1").fetchone()["revision"]
+            revision = hashlib.sha256(str(private).encode()).hexdigest()[:12] + ":" + str(sequence)
             result = {"revision": revision, "limits": LIMITS, "storageLabel": label}
             if not before and params.get("revision", [""])[0] == revision:
                 return {**result, "unchanged": True}
@@ -424,11 +469,13 @@ class TransferStore:
                     if authorize:
                         authorize()
                     return {"message": self._public(db, existing, prefix, folder), "duplicate": True}
+                if db.execute("SELECT 1 FROM deleted_requests WHERE sender=? AND request_id=?", (sender, request_id)).fetchone():
+                    raise TransferError("这次发送记录已删除，请重新发送。", 409)
                 if authorize:
                     authorize()  # Expired/stopped/revoked pairing never writes a message.
                 identifier = uuid.uuid4().hex
                 db.execute("BEGIN IMMEDIATE")
-                db.execute("INSERT INTO messages VALUES (?,?,?,?,?,?)", (identifier, request_id, sender,
+                db.execute("INSERT INTO messages (id,request_id,sender,created_at,text,fingerprint) VALUES (?,?,?,?,?,?)", (identifier, request_id, sender,
                            datetime.now(timezone.utc).isoformat(), text, fingerprint))
                 for aid, name, filename, mime_type, size, preview, incoming, thumb in metadata:
                     original = _safe_child(folder, filename)
@@ -441,6 +488,7 @@ class TransferStore:
                     db.execute("INSERT INTO attachments VALUES (?,?,?,?,?,?,?)", (aid, identifier, name, filename, mime_type, size, int(preview)))
                 if authorize:
                     authorize()
+                self._change_revision(db)
                 db.commit()
                 committed = True
                 row = db.execute("SELECT * FROM messages WHERE id=?", (identifier,)).fetchone()
@@ -455,14 +503,73 @@ class TransferStore:
                     path.unlink()
                 stage.rmdir()
 
-    def attachment(self, query):
+    def mutate(self, action, body, prefix="/api/transfer", authorize=None):
+        """Strict shared-history operations; normal clear preserves every star."""
+        if not isinstance(body, dict):
+            raise TransferError("互传操作内容无效。")
+        if action == "star":
+            if set(body) != {"id", "starred"} or type(body["starred"]) is not bool:
+                raise TransferError("标星操作无效。")
+            identifier = _identifier(body["id"])
+        elif action == "delete":
+            if set(body) != {"id"}:
+                raise TransferError("删除操作无效。")
+            identifier = _identifier(body["id"])
+        elif action == "clear":
+            if set(body) != {"mode"} or not isinstance(body["mode"], str) or body["mode"] not in {"unstarred", "all"}:
+                raise TransferError("请明确选择清空未标星或全部清空。")
+        else:
+            raise TransferError("互传操作不存在。", 404)
+        if authorize:
+            authorize()
+        with self._lock, self._database() as (db, folder, private, label):
+            db.execute("BEGIN IMMEDIATE")
+            removed = 0
+            try:
+                if authorize:
+                    authorize()
+                if action in {"star", "delete"}:
+                    row = db.execute("SELECT * FROM messages WHERE id=?", (identifier,)).fetchone()
+                    if row is None:
+                        raise TransferError("该互传记录不存在，请刷新。", 404)
+                if action == "star":
+                    changed = bool(row["starred"]) != body["starred"]
+                    if changed:
+                        db.execute("UPDATE messages SET starred=? WHERE id=?", (int(body["starred"]), identifier))
+                else:
+                    where, arguments = ("id=?", (identifier,)) if action == "delete" else (
+                        ("starred=0", ()) if body["mode"] == "unstarred" else ("1=1", ()))
+                    removed = db.execute("SELECT COUNT(*) FROM messages WHERE " + where, arguments).fetchone()[0]
+                    changed = removed > 0
+                    db.execute("INSERT OR IGNORE INTO attachment_cleanup SELECT id,filename,preview FROM attachments "
+                               "WHERE message_id IN (SELECT id FROM messages WHERE " + where + ")", arguments)
+                    db.execute("DELETE FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE " + where + ")", arguments)
+                    db.execute("INSERT OR IGNORE INTO deleted_requests SELECT sender,request_id FROM messages WHERE " + where, arguments)
+                    db.execute("DELETE FROM messages WHERE " + where, arguments)
+                if authorize:
+                    authorize()
+                if changed:
+                    self._change_revision(db)
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+            self._cleanup_attachments(db, folder, private)
+            preserved = db.execute("SELECT COUNT(*) FROM messages WHERE starred=1").fetchone()[0]
+            result = {**self.list(prefix=prefix, location=(folder, private, label)),
+                      "removedCount": removed, "preservedStarredCount": preserved}
+            if authorize:
+                authorize()
+            return result
+
+    def attachment(self, query, location=None):
         params = parse_qs(query, keep_blank_values=True)
         if (set(params) - {"id", "preview", "download"} or "id" not in params
                 or any(len(v) != 1 for v in params.values())
                 or any(params.get(key, ["0"])[0] not in {"0", "1"} for key in ("preview", "download"))):
             raise TransferError("图片请求无效。")
         identifier = _identifier(params["id"][0])
-        with self._lock, self._database() as (db, folder, private, _):
+        with self._lock, self._database(location) as (db, folder, private, _):
             row = db.execute("SELECT * FROM attachments WHERE id=?", (identifier,)).fetchone()
             if row is None:
                 raise TransferError("图片不存在。", 404)
@@ -477,20 +584,48 @@ class TransferStore:
                     "name": identifier + ".jpg" if preview else row["name"],
                     "download": params.get("download", ["0"])[0] == "1"}
 
+    @contextmanager
+    def read_attachment(self, query, authorize=None):
+        """Open under the same lock as deletion, then stream without blocking writes."""
+        with self._lock:
+            if authorize:
+                authorize()
+            location = self._location()
+            item = self.attachment(query, location=location)
+            source = item["path"].open("rb")
+            key = str(item["path"])
+            self._readers[key] = self._readers.get(key, 0) + 1
+        try:
+            yield {**item, "source": source}
+        finally:
+            source.close()
+            with self._lock:
+                remaining = self._readers[key] - 1
+                if remaining:
+                    self._readers[key] = remaining
+                else:
+                    self._readers.pop(key, None)
+                try:
+                    with self._database(location):
+                        pass
+                except (OSError, sqlite3.Error, TransferError):
+                    pass  # Persisted cleanup retries at the next history access.
+
     def open_attachment(self, body):
         if not isinstance(body, dict) or set(body) - {"id", "folder"} or not isinstance(body.get("folder", False), bool):
             raise TransferError("打开互传文件请求无效。")
-        item = self.attachment(urlencode({"id": _identifier(body.get("id"))}))
-        if os.name != "nt":
-            raise TransferError("当前系统无法打开本机文件，请下载后使用。", 503)
-        target = item["path"].parent if body.get("folder") else item["path"]
-        os.startfile(str(target))
+        with self._lock:
+            item = self.attachment(urlencode({"id": _identifier(body.get("id"))}))
+            if os.name != "nt":
+                raise TransferError("当前系统无法打开本机文件，请下载后使用。", 503)
+            target = item["path"].parent if body.get("folder") else item["path"]
+            os.startfile(str(target))
         return {"opened": True}
 
 
 def send_transfer_attachment(handler, item, *, authorize=None):
     """Stream only a registered, contained attachment, including authenticated HEAD."""
-    with item["path"].open("rb") as source:
+    with (nullcontext(item["source"]) if "source" in item else item["path"].open("rb")) as source:
         if authorize:
             authorize()
         size = os.fstat(source.fileno()).st_size

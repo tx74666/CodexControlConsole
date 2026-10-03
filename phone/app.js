@@ -8,10 +8,12 @@
   const IMAGE_MIME_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
 
   const el = id => document.getElementById(id);
-  const state = { ready: true, generation: 0, busy: false, tab: "tasks", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), library: null, catalog: [], saved: new Set(), pendingImport: null, registration: null, applyingUpdate: false, downloadController: null, music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
+  const state = { ready: true, generation: 0, busy: false, tab: "work", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), library: null, catalog: [], saved: new Set(), pendingImport: null, registration: null, applyingUpdate: false, downloadController: null, music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
   const MUSIC_TIERS = [{ value: "first", number: "1", suffix: "st" }, { value: "second", number: "2", suffix: "nd" }, { value: "third", number: "3", suffix: "rd" }];
   const taskSync = { generation: 0, controller: null, timer: null, config: null, busy: false, connected: false };
   let rememberedTransferAddress = "";
+  let phoneIncubator = null;
+  let incubatorSaving = 0;
   const transferScanner = window.CodexPhoneQrScanner?.create({ video: el("transferQrVideo"), canvas: el("transferQrCanvas"), onResult: acceptTransferQr, onNotice: (message, error) => notice("transferQrNotice", message, error) }) || null;
   const node = (tag, text = "", className = "") => {
     const result = document.createElement(tag);
@@ -105,6 +107,67 @@
     }
     throw new Error("离线版没有这个操作。");
   }
+  const IDEA_FIELDS = ["title", "body", "stage", "priority", "parentId", "targetKind", "targetThreadId", "targetName"];
+  const IDEA_UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  function incubatorError(message, status = 400, code = "invalid_idea", idea = null) {
+    return Object.assign(new Error(message), { status, data: { error: message, code, ...(idea ? { idea } : {}) } });
+  }
+  function cleanPhoneIdea(value, ideas, identifier) {
+    const text = (name, fallback, limit) => { const raw = Object.hasOwn(value, name) ? value[name] : fallback; if (typeof raw !== "string" || raw.length > limit || /\u0000/.test(raw)) throw incubatorError("想法内容的格式或长度无效。"); return raw; };
+    const result = { title: text("title", "新想法", 160).trim(), body: text("body", "", 20000), stage: Object.hasOwn(value, "stage") ? value.stage : "vague", priority: Object.hasOwn(value, "priority") ? value.priority : "normal", parentId: value.parentId === "" || value.parentId === undefined ? null : value.parentId, targetKind: Object.hasOwn(value, "targetKind") ? value.targetKind : "none", targetThreadId: text("targetThreadId", "", 128).trim(), targetName: text("targetName", "", 120).trim() };
+    if (!result.title || !["vague", "thinking", "ready", "queued", "published"].includes(result.stage) || !["high", "normal", "low"].includes(result.priority) || !["none", "codex", "chatgpt"].includes(result.targetKind)) throw incubatorError("请填写标题并选择有效的阶段、优先级和平台。");
+    const seen = new Set(); let parent = result.parentId;
+    while (parent !== null) {
+      if (typeof parent !== "string" || parent === identifier || seen.has(parent)) throw incubatorError("父想法不能形成循环。", 409, "idea_cycle");
+      seen.add(parent); const found = ideas.find(idea => idea.id === parent);
+      if (!found) throw incubatorError("找不到归属想法。", 404, "idea_not_found"); parent = found.parentId;
+    }
+    if (result.targetKind === "none") result.targetThreadId = result.targetName = "";
+    else if (result.targetThreadId) {
+      if (result.targetKind === "codex" && !IDEA_UUID.test(result.targetThreadId) || result.targetKind === "chatgpt" && !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(result.targetThreadId)) throw incubatorError("目标聊天标识无效。");
+      if (result.targetKind === "codex") result.targetThreadId = result.targetThreadId.toLowerCase();
+    }
+    return result;
+  }
+  async function incubatorApi(path, payload) {
+    if (path === "incubator" && payload === undefined) {
+      const saved = await PhoneStore.get("records", "incubator");
+      return { ideas: saved?.ideas || [], revision: String(saved?.revision || 0) };
+    }
+    if (!["incubator/create", "incubator/update"].includes(path) || !payload || typeof payload !== "object" || Array.isArray(payload)) throw incubatorError("此手机工作区只保存想法；不会发送到聊天。");
+    const update = path === "incubator/update", allowed = new Set([...IDEA_FIELDS, "requestId", ...(update ? ["id", "expectedRevision"] : [])]);
+    if (Object.keys(payload).some(name => !allowed.has(name)) || !IDEA_UUID.test(payload.requestId || "")) throw incubatorError("保存请求无效。");
+    if (update && (typeof payload.id !== "string" || !Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 1 || !IDEA_FIELDS.some(name => Object.hasOwn(payload, name)))) throw incubatorError("修改想法须提供当前版本与内容。");
+    const signature = JSON.stringify(Object.fromEntries(Object.keys(payload).sort().map(name => [name, payload[name]]))), receiptId = path + ":" + payload.requestId;
+    let duplicate = false, ideaId;
+    incubatorSaving++;
+    try {
+      const stored = await PhoneStore.mutateRecord("records", "incubator", previous => {
+        const next = structuredClone(previous || { id: "incubator", ideas: [], receipts: {}, revision: 0 }), old = next.receipts[receiptId];
+        if (old) {
+          if (old.signature !== signature) throw incubatorError("同一保存请求不能换成不同内容。", 409, "request_conflict");
+          duplicate = true; ideaId = old.ideaId; return next;
+        }
+        if (Object.keys(next.receipts).length >= 4096 || !update && next.ideas.length >= 1000) throw incubatorError("此手机保存的想法较多，请先导出备份，当前内容仍保留。", 409, "local_limit");
+        const existing = update ? next.ideas.find(idea => idea.id === payload.id) : null;
+        if (update && !existing) throw incubatorError("找不到此手机里的想法。", 404, "idea_not_found");
+        if (existing && existing.revision !== payload.expectedRevision) throw incubatorError("想法已在另一页修改；当前草稿保留，请刷新后合并。", 409, "revision_conflict", existing);
+        ideaId = existing?.id || (globalThis.crypto?.randomUUID?.() || "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, character => { const value = Math.floor(Math.random() * 16); return (character === "x" ? value : (value & 3) | 8).toString(16); })).replaceAll("-", "");
+        const now = new Date().toISOString(), idea = { ...cleanPhoneIdea({ ...existing, ...payload }, next.ideas, ideaId), id: ideaId, revision: (existing?.revision || 0) + 1, createdAt: existing?.createdAt || now, updatedAt: now };
+        next.ideas = [idea, ...next.ideas.filter(item => item.id !== ideaId)]; next.revision++;
+        next.receipts[receiptId] = { signature, ideaId }; return next;
+      });
+      return { idea: stored.ideas.find(idea => idea.id === ideaId), revision: String(stored.revision), duplicate };
+    } finally { incubatorSaving--; window.setTimeout(() => void maybeReloadUpdate(), 0); }
+  }
+  function ensurePhoneIncubator() {
+    if (!phoneIncubator) phoneIncubator = window.CodexIncubatorPanel?.create(el("phoneIncubator"), { phone: true, offline: true, storageKey: "codexIncubator.phone.v1", endpoint: incubatorApi }) || null;
+    return phoneIncubator;
+  }
+  async function openComputerWork() {
+    if (rememberedTransferAddress) { await openTransferConnection(true, "work"); return; }
+    selectTab("transfer"); notice("transferNotice", "先扫描电脑 Console 的连接二维码，或填写电脑显示的手机地址；配对后打开电脑工作区。");
+  }
   function mutateLibrary(change) {
     const pending = libraryMutationQueue.then(async () => { if (!state.library) throw new Error("请先导入资料。"); const next = structuredClone(state.library); change(next); await PhoneStore.put("records", next); state.library = next; state.dashboard = next.dashboard; return next; });
     libraryMutationQueue = pending.catch(() => {}); return pending;
@@ -145,14 +208,16 @@
     catch (error) { failure(error); } finally { setBusy(false); }
   }
   function selectTab(value) {
+    value = ({ tasks: "work", device: "materials", documents: "materials" })[value] || value;
     if (value !== "transfer") transferScanner?.stop();
-    if (!["tasks", "music", "device", "documents", "transfer"].includes(value)) return;
+    if (!["work", "music", "materials", "transfer"].includes(value)) return;
     state.tab = value;
     el("appToolbar").hidden = value === "music";
     el("taskSyncSection").hidden = !TASK_SYNC_ENABLED;
-    for (const tab of ["tasks", "music", "device", "documents", "transfer"]) el(`${tab}Panel`).hidden = tab !== value;
+    for (const tab of ["work", "music", "materials", "transfer"]) el(`${tab}Panel`).hidden = tab !== value;
     for (const button of document.querySelectorAll("[data-tab]")) button.setAttribute("aria-pressed", String(button.dataset.tab === value));
     if (value === "music" && state.ready && !state.music.loaded) void loadMusic();
+    ensurePhoneIncubator()?.setActive(value === "work");
   }
   function validateImport(data) {
     const text = (value, limit, label) => { if (typeof value !== "string" || value.length > limit) throw new Error(`${label}格式或大小不正确。`); return value; };
@@ -301,6 +366,7 @@
     rememberedTransferAddress = address; el("transferAddress").value = address;
     el("transferRemembered").hidden = !address; el("transferForget").hidden = !address;
     el("transferComputerName").textContent = address ? `已保存电脑入口 · ${new URL(address).hostname}` : "";
+    el("computerWorkOpen").textContent = address ? "打开电脑工作区" : "连接电脑工作区";
     el("transferScan").textContent = address ? "扫描新的电脑二维码" : "扫码连接电脑";
   }
   async function restoreTransferConnection() {
@@ -313,11 +379,13 @@
     try { await PhoneStore.put("settings", { id: "transferConnection", address }); } catch { /* Opening works even when preferences cannot be saved. */ }
     renderTransferConnection(address);
   }
-  async function openTransferConnection(useRemembered = false) {
+  async function openTransferConnection(useRemembered = false, view = "transfer") {
     try {
       const address = transferAddress(useRemembered ? rememberedTransferAddress : el("transferAddress").value);
       transferScanner?.stop(); await saveTransferConnection(address);
-      window.location.href = address;
+      const target = new URL(address);
+      if (view === "work") target.searchParams.set("tab", "work");
+      window.location.href = target.href;
     } catch (error) { failure(error, "transferNotice"); }
   }
   async function acceptTransferQr(value) {
@@ -464,7 +532,7 @@
   }
   async function requestPersistence() { try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch { /* Storage availability is checked on every write. */ } }
   function updateIsIdle() {
-    return !state.busy && !state.mutationBusy && !state.mediaSaving && !state.reviewingImport && !state.downloadController && !state.pendingImport && !state.pendingSnapshot && el("musicAudio").paused;
+    return !state.busy && !state.mutationBusy && !incubatorSaving && (phoneIncubator?.canReload?.() ?? true) && !state.mediaSaving && !state.reviewingImport && !state.downloadController && !state.pendingImport && !state.pendingSnapshot && el("musicAudio").paused;
   }
   async function maybeReloadUpdate() {
     if (!state.updatePending || state.reloadingUpdate) return;
@@ -1052,6 +1120,7 @@
   }
 
   el("refreshButton").addEventListener("click", () => void refresh());
+  el("computerWorkOpen").addEventListener("click", () => void openComputerWork());
   el("importButton").addEventListener("click", () => el("dataFile").click());
   el("dataFile").addEventListener("change", async () => { try { await reviewImport(el("dataFile").files[0]); } catch (error) { failure(error, "settingsNotice"); } finally { el("dataFile").value = ""; } });
   el("importConfirm").addEventListener("click", () => void commitImport());
@@ -1063,7 +1132,9 @@
   }
   el("backupButton").addEventListener("click", () => void backupLibrary());
   el("transferConnectForm").addEventListener("submit", event => { event.preventDefault(); void openTransferConnection(); });
+  el("transferWorkOpen").addEventListener("click", () => void openTransferConnection(false, "work"));
   el("transferRememberedOpen").addEventListener("click", () => void openTransferConnection(true));
+  el("workRememberedOpen").addEventListener("click", () => void openTransferConnection(true, "work"));
   el("transferScan").addEventListener("click", scanTransferConnection);
   el("transferQrRetry").addEventListener("click", scanTransferConnection);
   el("transferQrClose").addEventListener("click", () => el("transferQrDialog").close());

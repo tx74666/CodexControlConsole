@@ -45,7 +45,7 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.27";
+const consoleUiVersion = "1.0.31";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -56,6 +56,7 @@ function refreshForNewConsoleVersion(version) {
   const next = version.split(".").map(Number);
   const difference = next.findIndex((part, index) => part !== current[index]);
   if (difference < 0 || next[difference] < current[difference]) return;
+  if (desktopTransferPanel?.hasDraft() || desktopWorkflowPanel?.hasDraft() || desktopIncubatorPanel?.hasDraft()) return;
   saveWorkspaceTodoDraft();
   consoleVersionReloadPending = true;
   window.location.reload();
@@ -81,7 +82,7 @@ function consoleWindowSessionId() {
 }
 
 function sendConsoleWindowSession(action, options = {}) {
-  const body = JSON.stringify({ action, sessionId: consoleWindowSessionId() });
+  const body = JSON.stringify({ action, sessionId: consoleWindowSessionId(), uiVersion: consoleUiVersion });
   if (options.beacon && navigator.sendBeacon) {
     const payload = new Blob([body], { type: "application/json" });
     if (navigator.sendBeacon("/api/console/window-session", payload)) return;
@@ -242,6 +243,9 @@ const musicPlayerIcons = {
 
 const i18n = {
   zh: {
+    consolePhoneMessages: "手机传话",
+    consolePhoneMessagesHint: "打开 Transfer，接收手机文字后复制到 Codex 聊天",
+    consoleUiVersionLabel: "当前界面版本",
     referenceViewSectionLabel: "Character Designer",
     referenceViewTitle: "\u53c2\u8003\u89c6\u56fe\u96c6",
     referenceViewSetLabel: "\u89c6\u56fe\u96c6",
@@ -329,7 +333,7 @@ const i18n = {
     tutorialModeToggle: "æ•™ç¨‹æ¨¡å¼",
     tutorialModeOn: "æ•™ç¨‹æ¨¡å¼å·²æ‰“å¼€ï¼šæ˜¾ç¤ºè¯´æ˜Žå’Œè¾…åŠ©å…¥å£",
     tutorialModeOff: "æ•™ç¨‹æ¨¡å¼å·²å…³é—­ï¼šåªä¿ç•™å…³é”®å…¥å£",
-    consoleCommonTab: "\u5e38\u7528",
+    consoleCommonTab: "工具",
     consoleCollaborationTab: "\u534f\u4f5c",
     documentTitle: "本地资料库",
     documentDeviceTitle: "设备概况",
@@ -1064,6 +1068,7 @@ const i18n = {
     todoCommunityDevelop: "å‘å±•ç¤¾ç¾¤",
     todoEmptyGroup: "è¿™ä¸€ç»„å…ˆç©ºç€",
     todoDeleteLabel: name => `删除 ${name}`,
+    todoExpandHint: "单击展开／收起；Ctrl、Shift 或 Alt + 单击展开全部",
     downloadIntakeLabel: "è¯»å– Downloads",
     openDownloads: "æ‰“å¼€ Downloads",
     downloadsOpened: "å·²æ‰“å¼€ Downloadsã€‚",
@@ -1090,6 +1095,9 @@ const i18n = {
     materialImportFailed: message => `å¯¼å…¥å¤±è´¥ï¼š${message}`
   },
   en: {
+    consolePhoneMessages: "Phone relay",
+    consolePhoneMessagesHint: "Open Transfer, then copy phone messages into the Codex chat",
+    consoleUiVersionLabel: "Current UI version",
     referenceViewSectionLabel: "Character Designer",
     referenceViewTitle: "Reference View Set",
     referenceViewSetLabel: "Set",
@@ -1177,7 +1185,7 @@ const i18n = {
     tutorialModeToggle: "Tutorial Mode",
     tutorialModeOn: "Tutorial mode is on: showing guidance and helper actions",
     tutorialModeOff: "Tutorial mode is off: showing only key actions",
-    consoleCommonTab: "Common",
+    consoleCommonTab: "Tools",
     consoleCollaborationTab: "Collaboration",
     documentTitle: "Local document library",
     documentDeviceTitle: "Device overview",
@@ -1912,6 +1920,7 @@ const i18n = {
     todoCommunityDevelop: "Grow the community",
     todoEmptyGroup: "Nothing here yet",
     todoDeleteLabel: name => `Delete ${name}`,
+    todoExpandHint: "Click to expand or collapse; Ctrl, Shift or Alt + click expands all",
     downloadIntakeLabel: "Read Downloads",
     openDownloads: "Open Downloads",
     downloadsOpened: "Downloads opened.",
@@ -2114,6 +2123,8 @@ const els = {
   updateProductConsoleBadge: document.getElementById("updateProductConsoleBadge"),
   updateProductWorldBadge: document.getElementById("updateProductWorldBadge"),
   consoleUpdateCurrent: document.getElementById("consoleUpdateCurrent"),
+  consoleUiVersionBadge: document.getElementById("consoleUiVersionBadge"),
+  consolePhoneMessages: document.getElementById("consolePhoneMessages"),
   consoleUpdateStatus: document.getElementById("consoleUpdateStatus"),
   consoleUpdateRelease: document.getElementById("consoleUpdateRelease"),
   consoleUpdateAuto: document.getElementById("consoleUpdateAuto"),
@@ -2249,6 +2260,7 @@ let tracks = [];
 let selectedWallpaperPath = localStorage.getItem(storageKeys.selectedWallpaper) || "";
 let wallpaperOrder = loadWallpaperOrder();
 let selectedTrackPath = localStorage.getItem(storageKeys.selectedTrack) || "";
+if (els.consoleUiVersionBadge) els.consoleUiVersionBadge.textContent = `v${consoleUiVersion}`;
 let language = normalizeUiLanguage(localStorage.getItem(storageKeys.language));
 let theme = normalizeTheme(localStorage.getItem(storageKeys.theme));
 let pendingDeletePath = "";
@@ -2351,6 +2363,8 @@ let tutorialMode = localStorage.getItem(storageKeys.tutorialMode) === "true";
 const requestedConsoleView = new URLSearchParams(window.location.search).get("consoleView");
 let activeConsoleView = normalizeConsoleWorkspaceView(requestedConsoleView);
 let desktopTransferPanel = null;
+let desktopWorkflowPanel = null;
+let desktopIncubatorPanel = null;
 const documentLibrary = {
   loaded: false, busy: false, root: "", exists: false, path: "", file: "",
   entries: [], sample: { status: "idle" }, sampleTimer: 0, sampleErrors: 0,
@@ -2436,6 +2450,7 @@ let steamworkThumbsEnabled = false;
 let activeWorkspacePlan = null;
 let workspaceTodoPersonalMode = false;
 let workspaceTodoNoticeKey = "";
+const workspaceTodoExpandedItems = new Set();
 const workspacePlanSync = { ready: false, loading: false, hash: null, blocked: false, dirty: 0, saving: false, timer: 0, legacyCacheChecked: false, hadLocalTasks: false };
 let workspaceTodoGroups = loadWorkspaceTodos();
 let randomRealmArtContext = loadRandomRealmArtContext();
@@ -2882,16 +2897,23 @@ function applyModuleHistory(id) {
   activateModule(id, false, { allowArchived: true, replaceUrl: true });
 }
 
+function openConsolePhoneMessages() {
+  activateModule("workspace", true, { allowArchived: true });
+  setConsoleWorkspaceView("transfer");
+}
+
 function normalizeConsoleWorkspaceView(value) {
+  if (value === "work") return "work";
   if (value === "document") return "document";
   if (value === "transfer") return "transfer";
   if (value === "collaboration" || value === "downloads") return "collaboration";
-  return "common";
+  if (value === "common") return "common";
+  return "work";
 }
 
 async function loadActiveConsoleWorkspaceViewData() {
   if (!runtimeActivityReady || !isModuleForeground("workspace")) return true;
-  if (activeConsoleView === "transfer") { syncConsoleTransferActivity(); return true; }
+  if (["work", "transfer"].includes(activeConsoleView)) { syncConsoleTransferActivity(); return true; }
   if (activeConsoleView === "document") return loadDocumentLibrary();
   if (activeConsoleView !== "collaboration") return true;
   const requests = [];
@@ -3064,9 +3086,16 @@ function appendDocumentImage(parent, label, target) {
 
 function syncConsoleTransferActivity() {
   desktopTransferPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "transfer");
+  desktopIncubatorPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work");
+  desktopWorkflowPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && Boolean(document.getElementById("desktopWorkflowDetails")?.open));
 }
 
 function bindConsoleTransfer() {
+  desktopIncubatorPanel = window.CodexIncubatorPanel?.create(document.getElementById("desktopIncubatorPanel")) || null;
+  document.getElementById("desktopWorkflowDetails")?.addEventListener("toggle", syncConsoleTransferActivity);
+  desktopWorkflowPanel = window.CodexWorkflowPanel?.create(document.getElementById("desktopWorkflowPanel"), {
+    onConnection: () => document.getElementById("phoneCompanionOpen")?.click()
+  }) || null;
   desktopTransferPanel = window.CodexTransferPanel?.create(document.getElementById("desktopTransferPanel"), {
     onConnection: () => document.getElementById("phoneCompanionOpen")?.click()
   }) || null;
@@ -17982,6 +18011,23 @@ function renderWorkspaceTodoCategoryOptions(selectedId = "") {
   }
 }
 
+function setWorkspaceTodoExpanded(row, expanded) {
+  row.classList.toggle("expanded", expanded);
+  row.querySelector(".todo-text").setAttribute("aria-expanded", String(expanded));
+  if (expanded) workspaceTodoExpandedItems.add(row.dataset.todoExpansionKey);
+  else workspaceTodoExpandedItems.delete(row.dataset.todoExpansionKey);
+}
+
+function toggleWorkspaceTodoExpansion(event, row) {
+  if (event.ctrlKey || event.shiftKey || event.altKey) {
+    for (const itemRow of els.workspaceTodoList.querySelectorAll(".todo-item")) {
+      setWorkspaceTodoExpanded(itemRow, true);
+    }
+    return;
+  }
+  setWorkspaceTodoExpanded(row, !row.classList.contains("expanded"));
+}
+
 function renderWorkspaceTodos() {
   if (!hasWorkspace || !els.workspaceTodoList) return;
   const pruned = pruneEmptyWorkspaceTodoGroups();
@@ -18037,6 +18083,7 @@ function renderWorkspaceTodos() {
     for (const item of group.items) {
       const row = document.createElement("div");
       row.className = `todo-item ${item.done ? "done" : ""}`;
+      row.dataset.todoExpansionKey = JSON.stringify([group.id, item.id]);
 
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
@@ -18045,10 +18092,14 @@ function renderWorkspaceTodos() {
       checkbox.addEventListener("change", () => toggleWorkspaceTodo(group.id, item.id, checkbox.checked));
       row.appendChild(checkbox);
 
-      const label = document.createElement("span");
+      const label = document.createElement("button");
       label.className = "todo-text";
+      label.type = "button";
       label.textContent = workspaceTodoItemText(item);
+      label.title = text("todoExpandHint");
+      label.addEventListener("click", event => toggleWorkspaceTodoExpansion(event, row));
       row.appendChild(label);
+      setWorkspaceTodoExpanded(row, workspaceTodoExpandedItems.has(row.dataset.todoExpansionKey));
 
       const deleteButton = document.createElement("button");
       deleteButton.className = "todo-delete";
@@ -21221,6 +21272,9 @@ if (els.consoleUninstall) {
 }
 if (els.consoleUpdateTop) {
   els.consoleUpdateTop.addEventListener("click", handleProductUpdateTop);
+}
+if (els.consolePhoneMessages) {
+  els.consolePhoneMessages.addEventListener("click", openConsolePhoneMessages);
 }
 if (els.updateProductConsole) {
   els.updateProductConsole.addEventListener("click", () => selectUpdateProduct("console"));

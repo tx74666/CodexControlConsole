@@ -32,7 +32,9 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --only-binary=:all: qrcode==8.2
           python tools/check-release-security.py
+          python tools/check-phone-offline.py
           node tools/check-phone-offline-ui.mjs
+          node tools/check-incubator-ui.mjs
           node tools/check-connection-qr-ui.mjs
       - name: Build public phone application
         run: python tools/build-phone-static.py --output-dir dist-phone/site

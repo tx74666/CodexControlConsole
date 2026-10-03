@@ -1,5 +1,11 @@
 # Codex Console
 
+Work is the task incubator: keep ideas private, refine them, arrange parent and child tasks, set priority, then explicitly confirm publication. Saving or moving an idea between stages never sends it to a model or chat.
+
+The paired phone Work page edits the same computer database and refreshes in the foreground. The public home-screen app keeps a separate offline collection on that phone; use “Connect computer workspace” for shared work, or export an idea and explicitly import it into the computer workspace. Existing music and phone data remain in place when the app updates.
+
+The local publication outbox can be consumed by an authorized Codex thread heartbeat using App Tools. It supports new local Codex chats and selected existing Codex or ChatGPT chats. Creating a normal new ChatGPT chat is not currently supported. This channel needs no model API key but still uses the signed-in account's plan allowance. The outbox does not directly control the App or claim a queued message has been sent. Results are linked to the unique publication marker and the matching completed turn; uncertain delivery needs review and is never silently resent.
+
 A Windows control console for music, wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.
 
 ## Download / 下载
@@ -42,6 +48,22 @@ Submitted to-dos retain their existing storage key. An unfinished to-do input is
 
 ## Per-device Data
 
+### Phone work records (1.0.29)
+
+Open **Work** on the computer or **工作** on the paired phone. A record keeps its original pictures, feedback, model discussion, submitted jobs and returned images together. The phone offers image-first, image with text, image-only and text layouts; its editor has separate **讨论** and **交给电脑** actions. A whole suggestion, selected text or one model option opens an editable dispatch form with the computer, project and action shown before submission. The computer stores accepted work in its own SQLite queue and runs one job at a time, independently of Codex/Work and the phone page.
+
+In **模型与项目设置** on the computer, configure a Responses or Chat Completions compatible endpoint, model and optional transcription model. Keys use an explicitly named environment variable or a write-only Windows DPAPI store. Phone configuration is read-only. Until a model is configured, model-dependent jobs remain waiting with a reason. Explicit screenshots, configured commands and existing-result imports can work without a model. Only the Console project is enabled initially, with screenshot/result-import permissions; other projects and generated scripts require explicit local configuration.
+
+On the existing LAN HTTP page, iPhone voice input uses system keyboard dictation: tap **麦克风**, then the keyboard's dictation button, inspect the resulting text and choose discussion or dispatch. The web recording path uses MediaRecorder only where the browser provides a secure context and microphone permission, and stops at three minutes. Open the folded **电脑与模型** or desktop **模型与项目设置** section to **导入录音并转写** from an existing WAV, MP3, M4A, MP4, WebM or OGG file. A missing transcription model preserves the recording and shows a waiting task; configuring a model does not silently retry it. Recording or transcription never sends an execution request automatically.
+
+The dispatch review for **导入项目结果** accepts one to four project-relative image paths, one per line. The paths are saved with the review draft and checked against the configured project by the backend. Choosing another record clears its temporary message selection while retaining each record's drafts. A lost connection preserves records and requests; after reconnecting, inspect the actual job state because a backend restart may require an explicit retry.
+
+Work records, attached media, model settings and job outputs live under `workflow-private` in the existing per-device data directory. They are excluded from source/release bundles and blocked from static HTTP reads. Undelivered requests keep their request IDs and drafts in the browser; accepted jobs survive phone lock/disconnection. Retries reuse an undelivered request's ID or create an explicit new attempt after failure/waiting/interruption. A process interrupted while executing is recorded as interrupted and is not silently replayed. Keeping the phone entry enabled, or enabling **电脑后台接收任务**, lets the backend remain active after the last Console window closes. This does not start Console automatically after Windows restarts.
+
+Configured preview commands must use an absolute executable path and write a UTF-8 JSON result manifest to the path in `CONSOLE_WORKFLOW_RESULT_MANIFEST`. The output directory is `CONSOLE_WORKFLOW_OUTPUT_DIR`; a manifest has `{"text":"brief actual result","files":["preview.png"]}` with up to four images inside that directory. Fixed command arguments can use `{outputDir}`, `{resultManifest}` and `{instruction}`. Generated Python/PowerShell scripts use configured runners, the authorized project as working directory and the same result contract. These are ordinary processes under the signed-in Windows user's permissions; selecting a project is not an OS sandbox. Tasks fail visibly when no verifiable result is produced.
+
+Video-compatible media roles are reserved; the first release focuses on images, text and audio. A physical-phone round with a real configured model is a separate acceptance check from browser fixtures and simulated model tests.
+
 Each Windows account keeps its own settings, indexes, cookies, desktop layouts, downloaded music, and update files under:
 
 ```text
@@ -52,7 +74,7 @@ No personal desktop layout or local media is included in the source repository o
 
 ## Device Documents / 電腦與工作環境資料庫
 
-The desktop/Start menu launcher opens **Common** with the current task board, even if the previous session used another module. Console tabs are ordered **Common → Document → Collaboration**; explicit Document links and `--document-root` still open Document. Document provides a compact device overview and reading list. A small **Library** entry opens a separate dialog with **Reading highlights** for concise, curated human summaries and **AI records** for the full technical archive. The file browser and document body stay closed on startup; opening the library starts with highlights, and the original file tree loads only when requested. Closing the dialog returns to the uncluttered overview.
+The desktop/Start menu launcher opens **Common** with the current task board, even if the previous session used another module. Console tabs are ordered **Common → Document → Work → Transfer → Collaboration**; explicit Work/Document links and `--document-root` still select their intended view. Document provides a compact device overview and reading list. A small **Library** entry opens a separate dialog with **Reading highlights** for concise, curated human summaries and **AI records** for the full technical archive. The file browser and document body stay closed on startup; opening the library starts with highlights, and the original file tree loads only when requested. Closing the dialog returns to the uncluttered overview.
 
 The overview reads current Windows physical memory once when opened or refreshed; it does not start background monitoring. Saved hardware details and sample metrics retain their own collection time. Folder selection and sampling tools are inside the library dialog. Choose **Open folder** or paste a local folder path to browse UTF-8 Markdown, JSON and text. The selected folder persists in per-device settings; a missing folder prompts reselection without deleting its files. Document reads relative links inside the selected folder and never executes document content.
 
@@ -87,6 +109,8 @@ Readers should send the selected absolute `expectedRoot` with `GET /api/document
 `POST /api/documents/inbox/move` accepts `{id, status, expectedRoot}` with `status` set to `inbox`, `later`, or `archive`. `POST /api/documents/inbox/archive/clear` accepts `{expectedRoot}` and returns `clearedCount` plus `undoToken`; `POST /api/documents/inbox/archive/restore` accepts `{undoToken, expectedRoot}`. All return the updated visible entries and counts. The legacy `read` fields remain compatible: Inbox and Later are unread, Archive is read. `unreadCount` includes Later for existing API clients, while `inboxCount`, `laterCount` and `archiveCount` describe the three tabs. Legacy entries without `status` are interpreted from `read` without rewriting the registry during a GET.
 
 Common puts the task board first. **Desktop Layout** and **Built-in Resources** start collapsed below it.
+
+Click a task's text to expand its full contents or collapse it back to one line. Ctrl, Shift, or Alt + click expands every task across all groups. Checking or deleting tasks keeps the remaining expansion states during the current session; these controls retain their own actions. The text buttons also work with Enter or Space.
 
 A private `workspace-plan.json` in the per-device Console data directory can seed exactly four task groups. It is never included in the application bundle. The read-only `/api/workspace-plan` and `/api/workspace-plan.js` endpoints validate version 1, a revision ID, four groups with unique IDs, and globally unique task IDs. Each group has a title, optional summary and items (`id`, `text`, boolean `done`). The first personal plan replaces generic defaults after backing up the browser task list and draft. Later revisions compare the new seed with the previous cached seed and merge only seed changes into the current list: unchanged tasks retain user progress and deletions, custom tasks and their order are kept, new seed tasks are added, and retired seed tasks are removed. An invalid previous cache or saved list leaves the original state intact. Every migration backs up the list and draft before committing; eligible unfinished drafts survive revision changes. For the same revision, checkbox changes, additions, deletions and empty groups are retained. A cached valid plan keeps the four categories available if the local seed cannot load. Reset uses the personal plan when present; other installations without a personal plan retain generic defaults.
 
@@ -131,7 +155,7 @@ The iPhone app is available at [https://tx74666.github.io/CodexControlConsole/](
 
 手机 **1.0.22** 将主屏幕图标改回白底，原云形图案从66%稍放大到画布宽度约72%，保留四周留白及180、192、512三种尺寸。联网打开、恢复前台或重新联网时自动检查程序更新；新版完整保存后自动切换，正在播放音乐、下载或保存资料时延后重开。旧版1.0.16的页面没有自动重开处理，新程序提供一次兼容重开，已保存的资料与音乐继续使用。离线时保留已保存版本；「检查程序更新」也继续可用。桌面图标不变。**1.0.20** 的离线查看模式和 **1.0.19** 精简的音乐页继续保留：任务同步入口收起，不会恢复旧的电脑连接。电脑修改不会自动更新手机资料；私人计划与设备资料仍通过「资料与更新」保存在手机，不会上传到公开 GitHub。iOS 主屏幕的既有图标可能仍显示旧图案，程序更新不保证系统立即替换它；不要为换图标删除包含离线资料的主屏幕 App。
 
-`dist-phone/CodexConsole-iPhone-1.0.27.zip` 是用于部署的网页包，不能直接在 iPhone 上当作安装包打开。手机资料备份不包含音频，请保留音乐原文件。
+`dist-phone/CodexConsole-iPhone-1.0.28.zip` 是用于部署的网页包，不能直接在 iPhone 上当作安装包打开。手机资料备份不包含音频，请保留音乐原文件。
 
 ### 电脑 → 手机任务同步（后续功能，当前手机版不启用）
 
@@ -144,7 +168,13 @@ The iPhone app is available at [https://tx74666.github.io/CodexControlConsole/](
 
 Safari 当前未普遍启用让 HTTPS 网页直接访问 HTTP 局域网电脑的 Local Network Access 能力，所以不能保证原主屏幕 App 内直接更新。上面的同源局域网页面是兼容入口；它与原 App 使用不同的储存区，不能自动修改原 App 的离线副本。后台或锁屏时轮询暂停，回到前台立即重读。电脑需开机、保持 Console 运行，两端接入同一可信 Wi-Fi。每个用户配对自己的电脑；个人任务、配对码与会话凭证不会上传 GitHub。电脑重启、网络地址变化、配对过期或切换资料库后需重新连接。
 
-### 文字与图片互传（电脑与手机统一 1.0.27）
+### 文字与图片互传（电脑与手机统一 1.0.28）
+
+电脑 **Transfer** 支持直接粘贴图片：复制图片后，在发送框按 **Ctrl+V**，或点击 **粘贴图片**。图片先加入待发送预览，保留已有文字和所选图片；确认后点击 **上传并发送**。剪贴板读取不可用时，按钮会提示在输入框使用 Ctrl+V。数量和大小限制沿用文件选择。
+
+每条互传记录可点击 **☆** 标星、再次点击 **★** 取消，也可单条删除。**清空记录** 默认清空所有未标星消息，包括较早记录；星标保留。另可明确选择 **全部清空**，确认后删除包括星标的全部消息及附件。手机与电脑共享同一份持久星标和历史。清理记录不会清空未发送草稿。
+
+连接电脑的手机音乐页同样显示 **全部 / 1st / 2nd / 3rd**，沿用金色、银色、薄荷色及电脑保存的组内排序。原离线 App 的曲库、下载与阅读资料继续保留。升级保留旧窗口，未发送的互传内容阻止新版客户端自动刷新；旧客户端由用户手动刷新进入新版。
 
 电脑打开 **互传 → 连接手机**，首次开启同 Wi-Fi 入口。手机 Console 打开 **互传 → 扫码连接电脑**，扫描电脑二维码，即可完成配对并记住手机；之后点击已保存电脑的 **打开互传**。扫码只在手机本地识别，也可选择二维码图片。手填地址与六位配对码收在备用入口。
 
@@ -160,7 +190,7 @@ Safari 当前未普遍启用让 HTTPS 网页直接访问 HTTP 局域网电脑的
 
 The earlier limited Wi-Fi companion remains available through the local `/api/phone-companion/*` interfaces for compatibility, with a one-time pairing code and a physical LAN address. It is not the offline app and has no desktop top-bar entry. Its local HTTP page requires the computer to remain awake.
 
-The mobile companion has **Tasks / Music / Device / Documents / Transfer** tabs: saved task groups and actual desktop progress, direct phone playback of the computer's local music library, a compact computer overview, document highlights and registered references, a focused reader, and bidirectional text/image transfer. **Read / Later / Archive** uses the existing desktop document registry. Task snapshots are read-only on the phone and refresh every five seconds in the foreground; other tabs are not sampled by the task poll.
+The mobile companion has **Work / Transfer / Tasks / Music / Device / Documents** tabs: linked work results, feedback and dispatch; bidirectional text/image transfer; saved task groups and actual desktop progress; direct phone playback of the computer's local music library; a compact computer overview; and document highlights, registered references and a focused reader. **Read / Later / Archive** uses the existing desktop document registry. Task snapshots are read-only on the phone and refresh every five seconds in the foreground; other tabs are not sampled by the task poll.
 
 Music loads on demand and plays through the phone's own audio output after tapping a track or Play. Search, previous/next, seeking, repeat modes, and existing local lyrics with available language variants are supported. It uses authenticated byte-range streaming from registered tracks, without downloading new songs, modifying the desktop playlist, or controlling computer speakers. Playback stops and private media is cleared on logout or a detected lost connection. Safari format support and background playback must be checked on the user's actual iPhone; no offline download is provided.
 

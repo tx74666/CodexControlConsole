@@ -33,13 +33,17 @@ const saved = (h, key) => h.stored.get(storageKeys[key]);
 let passed = 0;
 function test(name, action) { action(); console.log(`PASS ${name}`); passed += 1; }
 
-test("Common is the default, explicit document links still work, and task panel comes first", () => {
+test("Work is the default, explicit tool and document links remain, and tasks share Work", () => {
   const h = boot();
-  for (const value of [null, undefined, "", "wrong", "common"]) assert.equal(h.context.normalizeConsoleWorkspaceView(value), "common");
+  for (const value of [null, undefined, "", "wrong", "work"]) assert.equal(h.context.normalizeConsoleWorkspaceView(value), "work");
+  assert.equal(h.context.normalizeConsoleWorkspaceView("common"), "common");
   assert.equal(h.context.normalizeConsoleWorkspaceView("document"), "document"); assert.equal(h.context.normalizeConsoleWorkspaceView("collaboration"), "collaboration");
-  assert.ok(html.indexOf('id="consoleCommonTab"') < html.indexOf('id="consoleDocumentTab"'));
+  assert.ok(html.indexOf('id="consoleWorkTab"') < html.indexOf('id="consoleDocumentTab"'));
   assert.ok(html.indexOf('class="candidate-strip workspace-todos"') < html.indexOf('class="panel desktop-layout-panel'));
-  assert.match(html, /id="consoleCommonView"[^>]+class="[^"]*active"/);
+  assert.doesNotMatch(html.match(/<section id="consoleWorkView"[^>]*>/)[0], /\bhidden\b/);
+  assert.match(html, /id="consoleCommonView"[^>]+hidden/);
+  assert.ok(html.indexOf('id="consoleWorkView"') < html.indexOf('class="candidate-strip workspace-todos"'));
+  assert.ok(html.indexOf('class="candidate-strip workspace-todos"') < html.indexOf('id="consoleTransferView"'));
   assert.match(html, /id="consoleDocumentView"[^>]+hidden/);
   for (const name of ["index.html", "workspace.html", "music.html"]) {
     const entry = readFileSync(new URL(`../${name}`, import.meta.url), "utf8");

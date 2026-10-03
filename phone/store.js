@@ -38,8 +38,25 @@
       transaction.objectStore("music").put(metadata); transaction.objectStore("media").put(media);
     });
   }
+  async function mutateRecord(name, id, change) {
+    const db = await database();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(name, "readwrite"), store = transaction.objectStore(name); let value, failure;
+      transaction.oncomplete = () => resolve(value);
+      transaction.onerror = () => reject(failure || transaction.error || new Error("手机资料暂时无法保存。"));
+      transaction.onabort = () => reject(failure || transaction.error || new Error("保存已中断，原内容保留。"));
+      const request = store.get(id);
+      request.onsuccess = () => {
+        try {
+          value = change(request.result);
+          if (!value || value.id !== id || typeof value.then === "function") throw new Error("本机保存内容无效。");
+          store.put(value);
+        } catch (error) { failure = error; transaction.abort(); }
+      };
+    });
+  }
   scope.PhoneStore = {
-    database, replaceLibrary, putTrack,
+    database, replaceLibrary, putTrack, mutateRecord,
     get: (name, id) => operation(name, "readonly", store => store.get(id)),
     put: (name, value) => operation(name, "readwrite", store => store.put(value)),
     remove: (name, id) => operation(name, "readwrite", store => store.delete(id)),

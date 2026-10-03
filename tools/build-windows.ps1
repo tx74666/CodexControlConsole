@@ -44,6 +44,42 @@ function Resolve-BuildVersion {
   return $ManifestVersion
 }
 
+function Assert-UiBuildVersion {
+  param(
+    [Parameter(Mandatory = $true)]
+    [AllowEmptyString()]
+    [string]$Source,
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedVersion,
+    [hashtable]$EntrySources = @{}
+  )
+
+  $UiVersions = [regex]::Matches($Source, '(?m)^\s*const consoleUiVersion = "(\d+\.\d+\.\d+)";\s*$')
+  if ($UiVersions.Count -ne 1) {
+    throw "app.js must declare exactly one semantic consoleUiVersion."
+  }
+  $UiVersion = $UiVersions[0].Groups[1].Value
+  if ($UiVersion -ne $ExpectedVersion) {
+    throw "app.js consoleUiVersion $UiVersion does not match app-manifest.json version $ExpectedVersion. Update the UI version before building the Application stage."
+  }
+  $CacheVersions = @()
+  foreach ($EntryName in $EntrySources.Keys) {
+    $EntrySource = [string]$EntrySources[$EntryName]
+    $AppCacheVersion = [regex]::Match($EntrySource, 'app\.js\?v=([^"'']+)').Groups[1].Value
+    $CssCacheVersion = [regex]::Match($EntrySource, 'styles\.css\?v=([^"'']+)').Groups[1].Value
+    if (-not $AppCacheVersion -or -not $CssCacheVersion -or $AppCacheVersion -ne $CssCacheVersion) {
+      throw "$EntryName must use the same nonempty CSS and app.js cache version."
+    }
+    if ($AppCacheVersion -notmatch ('(?:^|[^\d.])' + [regex]::Escape($ExpectedVersion) + '(?:$|[^\d.])')) {
+      throw "$EntryName app.js cache version $AppCacheVersion does not include app-manifest.json version $ExpectedVersion."
+    }
+    $CacheVersions += $AppCacheVersion
+  }
+  if (@($CacheVersions | Select-Object -Unique).Count -gt 1) {
+    throw "HTML entry points must share one CSS and app.js cache version."
+  }
+}
+
 function Assert-BundledBuildVersion {
   param(
     [Parameter(Mandatory = $true)]
@@ -73,6 +109,14 @@ $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $BuildRoot = Join-Path $ProjectRoot "build\console-installer"
 $BuildApplication = $Stage -in @("All", "Application")
 $BuildInstaller = $Stage -in @("All", "Installer")
+if ($BuildApplication) {
+  $UiSource = Get-Content -LiteralPath (Join-Path $ProjectRoot "app.js") -Raw -Encoding UTF8
+  $UiEntrySources = @{}
+  foreach ($EntryName in @("index.html", "music.html", "workspace.html")) {
+    $UiEntrySources[$EntryName] = Get-Content -LiteralPath (Join-Path $ProjectRoot $EntryName) -Raw -Encoding UTF8
+  }
+  Assert-UiBuildVersion -Source $UiSource -ExpectedVersion $Version -EntrySources $UiEntrySources
+}
 if ($BuildInstaller -and $InstallMode -eq "store") {
   throw "Store application bundles must be packaged with tools/build-store-msix.ps1, not Inno Setup."
 }
@@ -202,7 +246,14 @@ if ($BuildApplication) {
   @{ Source = "mobile.css"; Destination = "." },
   @{ Source = "transfer-panel.js"; Destination = "." },
   @{ Source = "transfer-panel.css"; Destination = "." },
+  @{ Source = "workflow-panel.js"; Destination = "." },
+  @{ Source = "workflow-panel.css"; Destination = "." },
+  @{ Source = "incubator-panel.js"; Destination = "." },
+  @{ Source = "incubator-panel.css"; Destination = "." },
   @{ Source = "mobile.webmanifest"; Destination = "." },
+  @{ Source = "phone\phone-icon-180.png"; Destination = "phone" },
+  @{ Source = "phone\phone-icon-192.png"; Destination = "phone" },
+  @{ Source = "phone\phone-icon-512.png"; Destination = "phone" },
   @{ Source = "phone-pairing.js"; Destination = "." },
   @{ Source = "phone-offline-export.js"; Destination = "." },
   @{ Source = "styles.css"; Destination = "." },

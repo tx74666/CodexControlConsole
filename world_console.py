@@ -53,11 +53,14 @@ from console_window_launcher import launch_or_focus as launch_or_focus_console_w
 from download_map import DownloadMapService
 from external_app_launcher import launch_or_focus_executable
 from reference_views import ReferenceViewSetService
-from document_library import DocumentLibraryService
+from document_library import DocumentLibraryService, current_memory
 from phone_companion import PhoneCompanionService
 from phone_device_store import PhoneDeviceStore
 from phone_discovery import DiscoveryAnnouncer
 from transfer_store import TransferStore, TransferError, read_transfer_request, send_transfer_attachment
+from workflow_service import WorkflowError, WorkflowService
+from workflow_models import WorkflowModels, WorkflowModelError
+from workflow_http import workflow_get, workflow_post
 from phone_offline import build_phone_export
 from workspace_plan import (
     MAX_PLAN_BYTES, PlanStateConflict,
@@ -362,6 +365,41 @@ with StartupLock(USER_DATA_DIR, DEFAULT_PORT):
 # Keep the plan source stable across restarts; pairing sessions still expire.
 PHONE_COMPANION.computer_id = INSTALLATION_STATE["installationId"]
 
+
+def capture_workflow_screen(output_path):
+    from PIL import ImageGrab
+    if os.name != "nt":
+        raise WorkflowError("当前系统无法截取电脑画面。", 503)
+    with ImageGrab.grab(all_screens=True) as image:
+        image.save(output_path, format="PNG")
+    return output_path
+
+
+def allow_workflow_execution(action, project):
+    if action not in {"command", "generated_script"}:
+        return True
+    memory = current_memory()
+    available = memory.get("availableBytes")
+    return not isinstance(available, (int, float)) or available >= 200 * 1024 * 1024
+
+
+def workflow_job_finished():
+    CONSOLE_WINDOW_SESSIONS.reconsider_shutdown()
+
+
+WORKFLOW_DATA_DIR = USER_DATA_DIR / "workflow-private"
+WORKFLOW_MODELS = WorkflowModels(WORKFLOW_DATA_DIR)
+WORKFLOW_SERVICE = WorkflowService(
+    WORKFLOW_DATA_DIR, models=WORKFLOW_MODELS,
+    callbacks={"capture_screen": capture_workflow_screen, "before_execute": allow_workflow_execution,
+               "work_finished": workflow_job_finished},
+    computer_id=INSTALLATION_STATE["installationId"],
+    projects=[{"id": "console", "name": "Codex Console", "root": str(APP_DIR),
+               "capabilities": ["capture_screen", "result_import"],
+               "allowGeneratedScripts": False}],
+)
+PHONE_COMPANION.workflow_service = WORKFLOW_SERVICE
+
 WORLD_CACHE = CACHE_DIR / "world.geojson"
 TRANSLATION_CACHE = CACHE_DIR / "translations.json"
 WALLPAPER_DIR = media_directory("wallpapers", {".jpg", ".jpeg", ".png", ".bmp", ".webp"})
@@ -593,7 +631,13 @@ def retire_console_instance(payload):
     return {"accepted": True, "version": APP_VERSION}
 
 
-CONSOLE_WINDOW_SESSIONS = ConsoleWindowSessionService(shutdown_active_server)
+def shutdown_if_no_background_work():
+    if PHONE_COMPANION.enabled or WORKFLOW_SERVICE.background_enabled or WORKFLOW_SERVICE.has_pending_jobs():
+        return
+    shutdown_active_server()
+
+
+CONSOLE_WINDOW_SESSIONS = ConsoleWindowSessionService(shutdown_if_no_background_work)
 CONSOLE_UPDATE = ConsoleUpdateService(
     APP_DIR,
     USER_DATA_DIR,
@@ -1449,6 +1493,21 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self._private_phone_path():
             self.send_error(404)
             return
+        if parsed.path.startswith("/api/workflow/"):
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            try:
+                action = parsed.path.removeprefix("/api/workflow/")
+                if action == "attachment":
+                    with WORKFLOW_SERVICE.read_attachment(parsed.query) as item:
+                        send_transfer_attachment(self, item)
+                else:
+                    self.send_json(workflow_get(WORKFLOW_SERVICE, action, parsed.query))
+            except (WorkflowError, WorkflowModelError, TransferError) as error:
+                self.send_json({"error": str(error), "code": getattr(error, "code", "invalid_request")}, status=error.status)
+            except (OSError, sqlite3.Error):
+                self.send_json({"error": "工作记录暂时无法读取，请在电脑上检查。"}, status=503)
+            return
         if parsed.path.startswith("/api/transfer/"):
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
@@ -1456,7 +1515,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if parsed.path == "/api/transfer/messages":
                     self.send_json(TRANSFER_STORE.list(parsed.query))
                 elif parsed.path == "/api/transfer/attachment":
-                    send_transfer_attachment(self, TRANSFER_STORE.attachment(parsed.query))
+                    with TRANSFER_STORE.read_attachment(parsed.query) as item:
+                        send_transfer_attachment(self, item)
                 else:
                     self.send_json({"error": "互传接口不存在。"}, status=404)
             except TransferError as error:
@@ -1837,7 +1897,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self._private_phone_path():
             self.send_error(404)
             return
-        if urllib.parse.urlparse(self.path).path.startswith("/api/transfer/"):
+        if urllib.parse.urlparse(self.path).path.startswith(("/api/transfer/", "/api/workflow/")):
             self.do_GET()
             return
         super().do_HEAD()
@@ -1845,7 +1905,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     def _private_phone_path(self):
         try:
             target = Path(self.translate_path(self.path)).resolve()
-            return target.is_relative_to(PHONE_DEVICE_STORE.directory)
+            return target.is_relative_to(PHONE_DEVICE_STORE.directory) or target.is_relative_to(WORKFLOW_DATA_DIR)
         except (OSError, ValueError):
             return True
 
@@ -1859,6 +1919,26 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if not self.require_trusted_post_context():
             return
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith("/api/workflow/"):
+            if not self.require_local_request():
+                return
+            try:
+                if parsed.query:
+                    raise WorkflowError("工作请求地址无效。")
+                action = parsed.path.removeprefix("/api/workflow/")
+                if action == "upload":
+                    with read_transfer_request(self.headers, self.rfile, allowed_fields={"requestId", "recordId"}) as (fields, files):
+                        self.send_json(WORKFLOW_SERVICE.upload(fields, files))
+                else:
+                    self.send_json(workflow_post(WORKFLOW_SERVICE, action,
+                        self.read_json_body(max_bytes=128 * 1024), desktop=True))
+                if action == "background":
+                    CONSOLE_WINDOW_SESSIONS.reconsider_shutdown()
+            except (WorkflowError, WorkflowModelError, TransferError, RequestBodyError) as error:
+                self.send_json({"error": str(error), "code": getattr(error, "code", "invalid_request")}, status=error.status)
+            except (OSError, sqlite3.Error):
+                self.send_json({"error": "工作内容未送达，请检查电脑磁盘后重试。"}, status=503)
+            return
         if parsed.path.startswith("/api/transfer/"):
             if not self.require_local_request():
                 return
@@ -1870,6 +1950,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                         self.send_json(TRANSFER_STORE.send(fields, files, "desktop"))
                 elif parsed.path == "/api/transfer/open":
                     self.send_json(TRANSFER_STORE.open_attachment(self.read_json_body(max_bytes=1024)))
+                elif parsed.path in {"/api/transfer/star", "/api/transfer/delete", "/api/transfer/clear"}:
+                    self.send_json(TRANSFER_STORE.mutate(parsed.path.rsplit("/", 1)[-1],
+                                                        self.read_json_body(max_bytes=1024)))
                 else:
                     self.send_json({"error": "互传接口不存在。"}, status=404)
             except (TransferError, RequestBodyError) as error:
@@ -1921,6 +2004,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     result = PHONE_COMPANION.start(host=payload.get("host"))
                 elif parsed.path == "/api/phone-companion/stop":
                     result = PHONE_COMPANION.stop()
+                    CONSOLE_WINDOW_SESSIONS.reconsider_shutdown()
                 elif parsed.path == "/api/phone-companion/pair-code":
                     result = PHONE_COMPANION.renew_pairing()
                 elif parsed.path == "/api/phone-companion/forget-device":
@@ -2049,7 +2133,12 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/console/window-session":
                 if not self.require_local_request():
                     return
-                self.send_json({**CONSOLE_WINDOW_SESSIONS.update(payload), "version": APP_VERSION})
+                result = CONSOLE_WINDOW_SESSIONS.update(payload)
+                # Legacy pages have no transfer-draft reload guard. Keep their
+                # window alive until the user refreshes instead of losing drafts.
+                if isinstance(payload.get("uiVersion"), str) and re.fullmatch(r"\d+\.\d+\.\d+", payload["uiVersion"]):
+                    result["version"] = APP_VERSION
+                self.send_json(result)
                 return
             if parsed.path == "/api/console/retire":
                 if not self.require_local_request():
@@ -9367,6 +9456,14 @@ def phone_music_catalog():
     if MUSIC_LIBRARY_FILE.is_file():
         for library in list_music_libraries():
             tracks.extend(library.get("tracks") or [])
+    arrangement = read_music_state()
+    tiers = arrangement.get("tiers", {})
+    order = {path: index for index, path in enumerate(arrangement.get("order", []))}
+    for track in tracks:
+        tier = tiers.get(track.get("path"), "third")
+        track["tier"] = tier if tier in {"first", "second", "third"} else "third"
+    # Saved order remains stable within each tier; newly added tracks keep their order.
+    tracks.sort(key=lambda item: order.get(item.get("path"), len(order)))
     return {"tracks": tracks}
 
 
@@ -9505,11 +9602,11 @@ def write_console_state(payload):
 
 
 def console_start_url(port):
-    # The daily launcher opens Common's current tasks. Module order and saved
+    # The daily launcher opens Work's task incubator. Module order and saved
     # layouts remain untouched; explicit page links still open their module.
     query = console_edition_query()
     if console_module_allowed("workspace"):
-        return f"http://127.0.0.1:{port}/workspace.html{query}{'&' if query else '?'}consoleView=common"
+        return f"http://127.0.0.1:{port}/workspace.html{query}{'&' if query else '?'}consoleView=work"
     href = read_console_state().get("href") or "index.html"
     if href not in CONSOLE_MODULE_HREFS.values() or not console_module_allowed(console_module_id_from_href(href)):
         href = CONSOLE_MODULE_HREFS["wallpaper"]
@@ -11988,6 +12085,7 @@ def main():
                 "port": port, "instanceId": RUNTIME_INSTANCE_ID,
             })
             server_thread.start()
+            WORKFLOW_SERVICE.start()
             threading.Thread(target=PHONE_COMPANION.restore, name="console-phone-startup-restore", daemon=True).start()
             # Keep the gate until the browser window is registered; the pending
             # record also suppresses duplicates during a slow Edge cold start.
@@ -12016,6 +12114,7 @@ def main():
     except KeyboardInterrupt:
         server.shutdown()
     finally:
+        WORKFLOW_SERVICE.shutdown()
         PHONE_COMPANION.shutdown()
         CONSOLE_WINDOW_SESSIONS.stop()
         server.server_close()

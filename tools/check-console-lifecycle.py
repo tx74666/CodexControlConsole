@@ -218,6 +218,14 @@ def check_live_server(*, retire=False):
                 {"action": "open", "sessionId": "integration-window"},
             )
             require(opened["activeSessions"] == 1, "live server did not register the window")
+            require("version" not in opened, "legacy window would reload and discard an unsent transfer draft")
+            current = post_json(endpoint + "/api/console/window-session",
+                                {"action": "heartbeat", "sessionId": "integration-window", "uiVersion": "1.0.28"})
+            require(current.get("version") == json.loads((ROOT / "app-manifest.json").read_text(encoding="utf-8"))["version"],
+                    "draft-aware window did not receive the real update version")
+            malformed = post_json(endpoint + "/api/console/window-session",
+                                  {"action": "heartbeat", "sessionId": "integration-window", "uiVersion": {"invalid": True}})
+            require("version" not in malformed, "malformed UI identity enabled an automatic reload")
             post_json(
                 endpoint + "/api/console/window-session",
                 {"action": "close", "sessionId": "integration-window"},
@@ -243,8 +251,8 @@ def check_device_overview_startup():
         for edition in ("developer", "public"):
             with mock.patch.dict(world_console.CONSOLE_CONFIG, {"edition": edition}):
                 url = world_console.console_start_url(8898)
-                require("/workspace.html?" in url and "consoleView=common" in url,
-                        f"{edition} daily entry did not open current tasks")
+                require("/workspace.html?" in url and "consoleView=work" in url,
+                        f"{edition} daily entry did not open task incubator")
         with mock.patch.dict(world_console.CONSOLE_CONFIG, {"edition": "lite"}):
             require("/music.html?edition=lite" in world_console.console_start_url(8898),
                     "lite edition lost its supported saved module")
@@ -304,6 +312,7 @@ def check_main_older_handoff():
             server = stack.enter_context(mock.patch.object(world_console, "ConsoleHTTPServer"))
             thread = stack.enter_context(mock.patch.object(world_console.threading, "Thread"))
             companion = stack.enter_context(mock.patch.object(world_console, "PHONE_COMPANION"))
+            workflow = stack.enter_context(mock.patch.object(world_console, "WORKFLOW_SERVICE"))
             backend_thread = mock.Mock()
             backend_thread.is_alive.return_value = False
             restore_thread = mock.Mock()
@@ -339,6 +348,8 @@ def check_main_older_handoff():
                 restore_thread.start.assert_called_once_with()
                 companion.restore.assert_not_called()
                 companion.shutdown.assert_called_once_with()
+                workflow.start.assert_called_once_with()
+                workflow.shutdown.assert_called_once_with()
                 require(world_console.ACTIVE_SERVER is None, "finished backend left ACTIVE_SERVER registered")
             else:
                 server.assert_not_called()

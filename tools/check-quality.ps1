@@ -82,6 +82,9 @@ $PythonSources = @(
   "phone_discovery.py",
   "phone_connection_qr.py",
   "transfer_store.py",
+  "workflow_service.py",
+  "workflow_http.py",
+  "workflow_models.py",
   "phone_offline.py",
   "device_library.py",
   "download_map.py",
@@ -117,6 +120,11 @@ $PythonChecks = @(
   "tools/check-phone-discovery.py",
   "tools/check-phone-connection-qr.py",
   "tools/check-transfer.py",
+  "tools/check-incubator.py",
+  "tools/check-workflow.py",
+  "tools/check-workflow-http.py",
+  "tools/check-workflow-desktop.py",
+  "tools/check-workflow-models.py",
   "tools/check-phone-offline.py",
   "tools/test_device_library.py",
   "tools/check-external-app-launcher.py",
@@ -194,6 +202,10 @@ try {
   Invoke-QualityStep "Mobile JavaScript syntax" { & $Node --check mobile.js }
   Invoke-QualityStep "Mobile companion UI" { & $Node tools/check-mobile-ui.mjs }
   Invoke-QualityStep "Transfer JavaScript syntax" { & $Node --check transfer-panel.js }
+  Invoke-QualityStep "Task incubator JavaScript syntax" { & $Node --check incubator-panel.js }
+  Invoke-QualityStep "Task incubator UI" { & $Node tools/check-incubator-ui.mjs }
+  Invoke-QualityStep "Workflow JavaScript syntax" { & $Node --check workflow-panel.js }
+  Invoke-QualityStep "Workflow UI" { & $Node tools/check-workflow-ui.mjs }
   Invoke-QualityStep "Bidirectional transfer UI" { & $Node tools/check-transfer-ui.mjs }
   Invoke-QualityStep "Document reader JavaScript syntax" { & $Node --check document-reader.js }
   Invoke-QualityStep "Document reader opening" { & $Node tools/check-document-reader.mjs }

@@ -149,6 +149,34 @@ class PhoneCompanionChecks(unittest.TestCase):
             self.assertNotIn("NOT REGISTERED", str(data))
         self.assertEqual(self.service.state(False)["pairedCount"], 0)
 
+    def test_phone_icons_use_exact_public_assets_without_opening_phone_directory(self):
+        source_root = Path(__file__).resolve().parents[1]
+        folder = self.assets / "phone"
+        folder.mkdir()
+        originals = {}
+        for size in (180, 192, 512):
+            name = "phone-icon-" + str(size) + ".png"
+            originals[name] = (source_root / "phone" / name).read_bytes()
+            (folder / name).write_bytes(originals[name])
+        (folder / "app.js").write_text("NOT REGISTERED PHONE SOURCE", encoding="utf-8")
+        (folder / "private.png").write_bytes(b"NOT REGISTERED PHONE IMAGE")
+        self.assertEqual({key: value for key, value in phone.ASSETS.items() if key.startswith("/phone/")},
+                         {"/phone/" + name: "phone/" + name for name in originals})
+        for name, original in originals.items():
+            status, payload, headers = self.request("/phone/" + name + "?v=phone-white-72")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload, original)
+            self.assertEqual(headers["Content-Type"], "image/png")
+            status, payload, headers = self.request("/phone/" + name, "HEAD")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload, b"")
+            self.assertEqual(int(headers["Content-Length"]), len(original))
+        self.pair()
+        for path in ("/phone/", "/phone/app.js", "/phone/private.png", "/phone/../mobile.html", "/phone/%2e%2e/mobile.html"):
+            status, payload, _ = self.request(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotIn("NOT REGISTERED", str(payload))
+
     def test_host_origin_and_cross_site_guards_apply_before_pairing(self):
         self.assertEqual(self.request("/", headers={"Host": "attacker.test"})[0], 403)
         self.assertEqual(self.request("/", headers={"Sec-Fetch-Site": "cross-site"})[0], 403)

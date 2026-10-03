@@ -12,21 +12,28 @@
   <link rel="apple-touch-icon" href="./phone-icon-180.png?v=__CONSOLE_PHONE_BUILD__" sizes="180x180">
   <link rel="icon" href="./phone-icon-192.png?v=__CONSOLE_PHONE_BUILD__" type="image/png">
   <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./incubator-panel.css">
   <script src="./store.js" defer></script>
   <script src="./vendor/jsQR.js" defer></script>
   <script src="./connection-qr.js" defer></script>
+  <script src="./incubator-panel.js" defer></script>
   <script src="./app.js" defer></script>
 </head>
 <body>
   <header class="app-header" id="appHeader">
-    <div><p class="eyebrow">随身计划、音乐、阅读与互传</p><h1>Codex Console</h1></div>
-    <span id="connectionLabel" class="connection-label">本机离线</span>
+    <div><p class="eyebrow">工作、音乐与随身资料</p><h1>Codex Console</h1></div>
+    <div class="phone-app-status"><span class="phone-version">v__CONSOLE_PHONE_VERSION__ · 此手机</span><span id="connectionLabel" class="connection-label">本机离线</span></div>
   </header>
   <main id="main">
     <div id="appScreen">
       <div class="toolbar" id="appToolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
       <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
-      <section id="tasksPanel" class="tab-panel" aria-labelledby="tasksTitle">
+      <section id="workPanel" class="tab-panel" aria-labelledby="workTitle">
+        <div class="section-title"><h2 id="workTitle">Work</h2><span class="pill">此手机</span></div>
+        <div class="card phone-workspace"><p>想法与草稿保存在此手机，可以离线编辑。打开电脑工作区并完成配对后，可直接查看和修改电脑里的同一批工作。</p><button id="computerWorkOpen" type="button" class="secondary">连接电脑工作区</button><p id="computerWorkNotice" class="muted small">此手机的想法不会自动带到电脑；可导出选中的想法，再到电脑工作区导入。</p></div>
+        <div id="phoneIncubator"></div>
+        <details class="document-section saved-plans"><summary>已保存的计划</summary>
+      <section id="tasksPanel" aria-labelledby="tasksTitle">
         <div class="section-title"><div><p class="eyebrow">已保存的计划</p><h2 id="tasksTitle">计划清单</h2></div><span id="planMode" class="pill" hidden>本机保存</span></div>
         <p id="planNotice" class="muted small" hidden></p>
         <div id="taskGroups" class="card-stack"></div>
@@ -35,6 +42,8 @@
           <form id="syncForm"><label for="syncAddress">电脑显示的手机地址</label><input id="syncAddress" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.10:8899/" required><label for="syncCode">配对码</label><input id="syncCode" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="6 位数字" required><div class="settings-actions"><button id="syncConnect" type="submit" class="secondary">连接并自动更新</button><button id="syncDisconnect" type="button" class="text-button" hidden>断开同步</button></div></form>
           <p id="syncNotice" class="notice small" role="status" aria-live="polite"></p><a id="syncFallback" class="task-sync-link" hidden rel="noopener noreferrer">打开实时计划</a><p id="syncFallbackHelp" class="muted small" hidden>如果浏览器不支持直接同步，打开电脑的实时计划页面；该页面需要电脑保持开机。保存计划快照后，可在这里导入离线查看。</p>
           <p class="muted small">连接中每 5 秒检查计划；离线时保留最后一次同步。首次连接仅在你信任的 Wi-Fi 使用，局域网连接未加密。</p>
+        </details>
+      </section>
         </details>
       </section>
       <section id="musicPanel" class="tab-panel" hidden aria-labelledby="musicTitle">
@@ -53,13 +62,9 @@
         <details id="musicLyricsSection" class="music-lyrics-section" hidden><summary>歌词</summary><div id="musicLyricLanguages" class="reader-languages" hidden></div><p id="musicLyricsNotice" class="muted small"></p><div id="musicLyrics" class="music-lyrics" aria-label="本地歌词"></div></details>
         <div id="musicTracks" class="music-track-list"></div><button id="musicMore" type="button" class="secondary music-more" hidden>显示更多</button>
       </section>
-      <section id="devicePanel" class="tab-panel" hidden aria-labelledby="deviceTitle">
-        <div class="section-title"><div><p class="eyebrow">上次导入</p><h2 id="deviceTitle">设备资料</h2></div></div>
-        <div id="memoryCard" class="card memory-card"></div>
-        <div id="hardwareCard" class="card hardware-card"></div>
-        <p class="muted small">这是导入时保存的电脑资料，不是电脑当前状态。</p>
-      </section>
-      <section id="documentsPanel" class="tab-panel" hidden aria-labelledby="documentsTitle">
+      <section id="materialsPanel" class="tab-panel" hidden aria-labelledby="materialsTitle">
+        <div class="section-title"><h2 id="materialsTitle">资料</h2></div>
+      <section id="documentsPanel" aria-labelledby="documentsTitle">
         <div class="section-title"><div><p class="eyebrow">重点先看，记录收好</p><h2 id="documentsTitle">文档</h2></div></div>
         <div class="segment" id="inboxTabs" aria-label="阅读清单">
           <button type="button" data-inbox="inbox" aria-pressed="true">待阅读 <span id="inboxCount">0</span></button>
@@ -71,17 +76,26 @@
         <details class="document-section"><summary>参考资料 <span class="muted small">给人看</span></summary><div id="referenceList" class="card-stack"></div></details>
         <details class="document-section"><summary>AI 原始记录 <span class="muted small">需要时展开</span></summary><div id="recordList" class="card-stack"></div></details>
       </section>
+        <details class="document-section"><summary>电脑设备资料 <span class="muted small">上次导入</span></summary>
+      <section id="devicePanel" aria-labelledby="deviceTitle">
+        <div class="section-title"><div><p class="eyebrow">上次导入</p><h2 id="deviceTitle">设备资料</h2></div></div>
+        <div id="memoryCard" class="card memory-card"></div>
+        <div id="hardwareCard" class="card hardware-card"></div>
+        <p class="muted small">这是导入时保存的电脑资料，不是电脑当前状态。</p>
+      </section>
+        </details>
+      </section>
       <section id="transferPanel" class="tab-panel" hidden aria-labelledby="transferTitle">
         <div class="section-title"><div><p class="eyebrow">手机 ↔ 电脑</p><h2 id="transferTitle">文字与图片互传</h2></div></div>
         <div class="card transfer-launcher">
           <p>电脑 Console → 互传 → 连接手机，开启后用这里扫码。首次连接会记住手机，以后直接打开互传。</p>
           <button id="transferScan" type="button" class="primary">扫码连接电脑</button>
-          <div id="transferRemembered" class="transfer-remembered" hidden><p id="transferComputerName" class="muted small"></p><div class="settings-actions"><button id="transferRememberedOpen" type="button" class="primary">打开已记住电脑的互传</button><button id="transferForget" type="button" class="text-button">忘记电脑入口</button></div></div>
+          <div id="transferRemembered" class="transfer-remembered" hidden><p id="transferComputerName" class="muted small"></p><div class="settings-actions"><button id="workRememberedOpen" type="button" class="primary">打开电脑工作记录</button><button id="transferRememberedOpen" type="button">打开已记住电脑的互传</button><button id="transferForget" type="button" class="text-button">忘记电脑入口</button></div></div>
           <details id="transferManual"><summary>备用：手填地址或选择二维码照片</summary><button id="transferQrPhoto" type="button" class="secondary">选择二维码照片</button><input id="transferQrFile" type="file" accept="image/*" hidden>
           <form id="transferConnectForm">
             <label for="transferAddress">电脑显示的手机地址</label>
             <input id="transferAddress" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.10:8899/" required>
-            <div class="settings-actions"><button id="transferOpen" type="submit" class="secondary">用地址打开</button></div>
+            <div class="settings-actions"><button id="transferOpen" type="submit" class="secondary">用地址打开互传</button><button id="transferWorkOpen" type="button" class="secondary">用地址打开电脑工作区</button></div>
           </form>
           </details>
           <p id="transferNotice" class="notice small" role="status" aria-live="polite"></p>
@@ -93,16 +107,15 @@
         <div class="settings-actions"><button id="importButton" type="button" class="secondary">导入电脑资料</button><button id="backupButton" type="button" class="secondary">备份资料</button><button id="restoreButton" type="button" class="text-button" hidden>恢复上次导入</button></div>
         <input id="dataFile" type="file" accept=".json,application/json" hidden>
         <div id="importReview" class="card" hidden><h3>确认导入内容</h3><p id="importCounts" class="small"></p><p id="importReviewHelp" class="muted small">更新资料并保留这台手机的任务勾选与阅读状态。不会上传到 GitHub。</p><button id="importConfirm" type="button" class="primary">导入到手机</button><button id="importCancel" type="button">取消</button></div>
-        <p id="settingsNotice" class="notice" role="status" aria-live="polite"></p><p id="storageNotice" class="muted small"></p><p class="muted small">资料备份不含音频。请保留音乐原文件；清除网站数据会移除手机里的资料。</p>
+        <p id="settingsNotice" class="notice" role="status" aria-live="polite"></p><p id="storageNotice" class="muted small"></p><p class="muted small">资料备份不含音频；想法在 Work 中单独导出。请保留音乐原文件；清除网站数据会移除手机里的资料与想法。</p>
         <button id="checkUpdate" type="button" class="secondary">检查程序更新</button><button id="applyUpdate" type="button" class="primary" hidden>更新并重开</button><p id="updateNotice" class="notice" role="status"></p>
       </details>
     </div>
   </main>
   <nav id="bottomNav" class="bottom-nav" aria-label="主要页面">
-    <button type="button" data-tab="tasks" aria-pressed="true"><span aria-hidden="true">◫</span>任务</button>
+    <button type="button" data-tab="work" aria-pressed="true"><span aria-hidden="true">◫</span>Work</button>
     <button type="button" data-tab="music" aria-pressed="false"><span aria-hidden="true">♫</span>音乐</button>
-    <button type="button" data-tab="device" aria-pressed="false"><span aria-hidden="true">▣</span>设备</button>
-    <button type="button" data-tab="documents" aria-pressed="false"><span aria-hidden="true">▤</span>文档</button>
+    <button type="button" data-tab="materials" aria-pressed="false"><span aria-hidden="true">▤</span>资料</button>
     <button type="button" data-tab="transfer" aria-pressed="false"><span aria-hidden="true">⇄</span>互传</button>
   </nav>
   <dialog id="transferQrDialog" class="transfer-qr-dialog" aria-labelledby="transferQrTitle"><div class="section-title"><h2 id="transferQrTitle">扫码连接电脑</h2><button id="transferQrClose" type="button" class="text-button">关闭</button></div><video id="transferQrVideo" playsinline muted></video><canvas id="transferQrCanvas" hidden></canvas><p id="transferQrNotice" class="notice" role="status" aria-live="polite"></p><div class="settings-actions"><button id="transferQrRetry" type="button" class="secondary">重新扫码</button><button id="transferQrPhotoInDialog" type="button" class="text-button">选择二维码照片</button></div></dialog>

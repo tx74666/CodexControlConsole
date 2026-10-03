@@ -81,6 +81,16 @@ $BundleVersionFunction = $BuildAst.Find(
 )
 Require ($null -ne $BundleVersionFunction) "build-windows.ps1 is missing Assert-BundledBuildVersion"
 Invoke-Expression $BundleVersionFunction.Extent.Text
+$UiVersionFunction = $BuildAst.Find(
+  {
+    param($Node)
+    $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+      $Node.Name -eq "Assert-UiBuildVersion"
+  },
+  $true
+)
+Require ($null -ne $UiVersionFunction) "build-windows.ps1 is missing Assert-UiBuildVersion"
+Invoke-Expression $UiVersionFunction.Extent.Text
 
 $Manifest = Get-Content -LiteralPath (Join-Path $ProjectRoot "app-manifest.json") -Raw -Encoding UTF8 |
   ConvertFrom-Json
@@ -107,6 +117,44 @@ Assert-BundledBuildVersion `
 Require-Failure `
   { Assert-BundledBuildVersion -Manifest ([pscustomobject]@{ version = $Mismatch }) -ExpectedVersion $ManifestVersion } `
   "Application bundle version $Mismatch does not match app-manifest.json version $ManifestVersion"
+
+$UiSource = Get-Content -LiteralPath (Join-Path $ProjectRoot "app.js") -Raw -Encoding UTF8
+$UiEntrySources = @{}
+foreach ($EntryName in @("index.html", "music.html", "workspace.html")) {
+  $UiEntrySources[$EntryName] = Get-Content -LiteralPath (Join-Path $ProjectRoot $EntryName) -Raw -Encoding UTF8
+}
+Assert-UiBuildVersion -Source $UiSource -ExpectedVersion $ManifestVersion -EntrySources $UiEntrySources
+Require-Failure `
+  { Assert-UiBuildVersion -Source ('const consoleUiVersion = "' + $Mismatch + '";') -ExpectedVersion $ManifestVersion } `
+  "does not match app-manifest.json"
+foreach ($InvalidSource in @('', 'const consoleUiVersion = "invalid";', ($UiSource + "`n" + $UiSource))) {
+  Require-Failure `
+    { Assert-UiBuildVersion -Source $InvalidSource -ExpectedVersion $ManifestVersion } `
+    "must declare exactly one semantic consoleUiVersion"
+}
+$LegacyCacheFixture = @{
+  'index.html' = '<link href="styles.css?v=console-connect-1.0.29-work-20261004"><script src="app.js?v=console-connect-1.0.29-work-20261004"></script>'
+}
+Require-Failure `
+  { Assert-UiBuildVersion -Source 'const consoleUiVersion = "1.0.30";' -ExpectedVersion '1.0.30' -EntrySources $LegacyCacheFixture } `
+  "does not include app-manifest.json version 1.0.30"
+$MismatchCacheFixture = @{
+  'index.html' = '<link href="styles.css?v=console-connect-1.0.30-a"><script src="app.js?v=console-connect-1.0.30-b"></script>'
+}
+Require-Failure `
+  { Assert-UiBuildVersion -Source 'const consoleUiVersion = "1.0.30";' -ExpectedVersion '1.0.30' -EntrySources $MismatchCacheFixture } `
+  "must use the same nonempty CSS and app.js cache version"
+$UiGuardCall = $BuildAst.Find(
+  { param($Node) $Node -is [System.Management.Automation.Language.CommandAst] -and $Node.GetCommandName() -eq 'Assert-UiBuildVersion' },
+  $true
+)
+$RemoveBuildCall = $BuildAst.Find(
+  { param($Node) $Node -is [System.Management.Automation.Language.CommandAst] -and $Node.GetCommandName() -eq 'Remove-SafeBuildDirectory' },
+  $true
+)
+Require ($null -ne $UiGuardCall -and $null -ne $RemoveBuildCall -and
+  $UiGuardCall.Extent.StartOffset -lt $RemoveBuildCall.Extent.StartOffset) `
+  "UI version preflight must reject drift before removing the existing Application build"
 
 Require-EmptyVersionDefault $BuildAst "build-windows.ps1"
 Require ($BuildSource.Contains('"/DAppVersion=$Version"')) `

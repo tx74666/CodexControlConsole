@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 const swSource = readFileSync(new URL("../phone/sw.js", import.meta.url), "utf8");
 const storeSource = readFileSync(new URL("../phone/store.js", import.meta.url), "utf8");
+const incubatorSource = readFileSync(new URL("../incubator-panel.js", import.meta.url), "utf8");
 
 const source = readFileSync(new URL("../phone/app.js", import.meta.url), "utf8").replace(/\r\n?/g, "\n");
 const html = readFileSync(new URL("../phone/index.html", import.meta.url), "utf8");
@@ -20,9 +21,9 @@ const inbox = () => ({ entries: [
 ] });
 const dashboard = () => ({ version: "1.0.14", plan: plan(), device: { currentMemory: { status: "available", usedPercent: 91, availableBytes: 1024 ** 3, totalBytes: 16 * 1024 ** 3, readAt: "2026-10-01T11:00:00+08:00" }, model: "Dell fixture", cpuModel: "CPU", gpuModels: ["GPU"], sampledAt: "2026-09-27T11:00:00+08:00", installedMemoryBytes: 16 * 1024 ** 3 }, documents: { inbox: inbox(), guide: { items: [{ title: "阅读重点", path: "human.md", highlights: ["重点"] }] }, references: { items: [{ id: "nodes", defaultLanguage: "zh-CN", variants: [{ language: "zh-CN", label: "中文", title: "节点参考", path: "nodes.zh.md", available: true }, { language: "en", label: "English", title: "Nodes", path: "nodes.en.md", available: true }] }] } } });
 const playlist = () => ({ playback: "phone", tracks: [{ name: "<script>One</script>", path: "local/one.mp3", type: "mp3", size: 100 }, { name: "Two", path: "album/two.m4a", type: "m4a", size: 200 }, { name: "三首", path: "album/three.mp3", type: "mp3", lyrics: true, lyricsLanguage: "zh", lyricsLanguages: [{ code: "zh", label: "Chinese" }, { code: "en", label: "English" }] }], truncated: false });
-function harness({ syncEnabled = false } = {}) {
+function harness({ syncEnabled = false, withIncubator = false, storage = null, storeData = null } = {}) {
   class Element {
-    constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.style = { setProperty(key, value) { this[key] = value; } }; }
+    constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.classList = { add() {} }; this.style = { setProperty(key, value) { this[key] = value; } }; }
     append(...items) { this.children.push(...items); }
     appendChild(item) { this.append(item); return item; }
     replaceChildren(...items) { this.children = items; this._text = ""; }
@@ -33,24 +34,27 @@ function harness({ syncEnabled = false } = {}) {
     removeAttribute(key) { delete this.attributes[key]; if (key === "src") this.src = ""; }
     addEventListener(key, fn) { this.listeners.set(key, fn); }
     focus() { this.focused = true; }
+    select() { this.selected = true; }
+    setSelectionRange(start, end) { this.selection = [start, end]; }
     scrollIntoView() { this.scrolled = true; }
     click() { this.clicked = true; }
     remove() { this.removed = true; }
   }
-  const nodes = new Map(), calls = [], answers = [], saved = new Map(), timers = new Map(); let nextTimer = 1;
+  const nodes = new Map(), calls = [], answers = [], saved = storage || new Map(), timers = new Map(); let nextTimer = 1;
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const audio = get("musicAudio"); audio.paused = true; audio.currentTime = 0; audio.duration = NaN; audio.src = ""; audio.playCalls = 0; audio.pauseCalls = 0; audio.loadCalls = 0; const mediaEvents = [];
   audio.pause = () => { audio.paused = true; audio.pauseCalls++; mediaEvents.push("pause"); };
   audio.load = () => { audio.loadCalls++; audio.duration = NaN; audio.currentTime = 0; mediaEvents.push("load"); };
   audio.play = () => { audio.playCalls++; mediaEvents.push("play"); if (audio.playError) return Promise.reject(audio.playError); audio.paused = false; return Promise.resolve(); };
-  const tabs = ["tasks", "music", "device", "documents", "transfer"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
+  const tabs = ["work", "music", "materials", "transfer"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const musicTabs = ["", "first", "second", "third"].map(tier => { const button = new Element("button"); button.dataset.musicTier = tier; return button; });
   const documentEvents = new Map(), windowEvents = new Map(), workerEvents = new Map(), registrationEvents = new Map(), registrations = [], reloads = [];
   const addEvent = (events, name, callback) => { const previous = events.get(name); events.set(name, (...args) => { previous?.(...args); return callback(...args); }); };
   const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : selector === "button[data-music-tier]" ? musicTabs : [], addEventListener(name, callback) { addEvent(documentEvents, name, callback); } };
   const history = { state: null, pushState(value) { this.state = value; }, back() { this.state = null; } };
-  const stores = new Map(["records", "music", "media", "settings"].map(name => [name, new Map()]));
+  const stores = storeData || new Map(["records", "music", "media", "settings"].map(name => [name, new Map()]));
+  let recordQueue = Promise.resolve();
   const PhoneStore = {
     failWrites: false,
     async get(name, id) { return structuredClone(stores.get(name).get(id)); },
@@ -58,16 +62,18 @@ function harness({ syncEnabled = false } = {}) {
     async keys(name) { return [...stores.get(name).keys()]; },
     async remove(name, id) { if (this.failWrites) throw new Error("quota"); stores.get(name).delete(id); },
     async put(name, value) { if (this.failWrites) throw Object.assign(new Error("quota"), { name: "QuotaExceededError" }); stores.get(name).set(value.id, structuredClone(value)); },
+    mutateRecord(name, id, change) { const pending = recordQueue.then(async () => { const value = change(structuredClone(stores.get(name).get(id))); await this.put(name, value); return value; }); recordQueue = pending.catch(() => {}); return pending; },
     async putTrack(metadata, media) { if (this.failWrites) throw Object.assign(new Error("quota"), { name: "QuotaExceededError" }); stores.get("music").set(metadata.id, structuredClone(metadata)); stores.get("media").set(media.id, structuredClone(media)); },
     async replaceLibrary(value) { if (this.failWrites) throw new Error("quota"); const old = stores.get("records").get("library"); if (old) stores.get("records").set("previousImport", structuredClone({ ...old, id: "previousImport" })); stores.get("records").set("library", structuredClone(value)); }
   };
   const registration = { waiting: null, installing: null, updateCalls: 0, addEventListener(name, callback) { registrationEvents.set(name, callback); }, async update() { this.updateCalls++; if (this.updateError) throw this.updateError; if (this.onUpdate) await this.onUpdate(); } };
   const runtime = { URL, URLSearchParams, AbortController, TypeError, Request, document, history, navigator: { onLine: true, serviceWorker: { controller: {}, ready: Promise.resolve(registration), register: async (...args) => { registrations.push(args); return registration; }, addEventListener(name, callback) { workerEvents.set(name, callback); } } }, PhoneStore, Blob, atob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html", reload() { reloads.push(true); } }, addEventListener(name, callback) { addEvent(windowEvents, name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
-  const names = "parseTransferAddress,acceptTransferQr,transferAddress,restoreTransferConnection,openTransferConnection,forgetTransferConnection,state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
+  const names = "incubatorApi,ensurePhoneIncubator,openComputerWork,updateIsIdle,parseTransferAddress,acceptTransferQr,transferAddress,restoreTransferConnection,openTransferConnection,forgetTransferConnection,state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
   assert.ok(source.includes("  void bootstrap();\n})();"), "test export insertion must match only bootstrap footer");
   // Exercise deferred sync explicitly in isolated tests; production stays offline by default.
   const testSource = syncEnabled ? source.replace("const TASK_SYNC_ENABLED = false;", "const TASK_SYNC_ENABLED = true;") : source;
   if (syncEnabled) assert.notEqual(testSource, source, "deferred sync tests must enable the source flag in memory");
+  if (withIncubator) runInNewContext(incubatorSource, runtime);
   runInNewContext(testSource.replace("  void bootstrap();\n})();", `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
   return { api, stores, PhoneStore, runtime, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, timers, documentEvents, windowEvents, workerEvents, registrationEvents, registration, registrations, reloads, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
@@ -122,7 +128,7 @@ await test("transfer remembers a LAN address without changing private offline re
   assert.equal(h.stores.get("settings").get("transferConnection").address, h.runtime.window.location.href);
   h.get("transferAddress").value = ""; await h.api.restoreTransferConnection();
   assert.equal(h.get("transferAddress").value, h.runtime.window.location.href); assert.equal(h.get("transferForget").hidden, false);
-  h.api.selectTab("transfer"); assert.equal(h.get("transferPanel").hidden, false); assert.equal(h.get("documentsPanel").hidden, true);
+  h.api.selectTab("transfer"); assert.equal(h.get("transferPanel").hidden, false); assert.equal(h.get("materialsPanel").hidden, true);
   await h.api.forgetTransferConnection(); assert.equal(h.stores.get("settings").has("transferConnection"), false);
   assert.equal(JSON.stringify(h.stores.get("records").get("library")), before); assert.equal(h.calls.length, 0);
 });
@@ -140,6 +146,15 @@ await test("transfer can open even when optional address preferences cannot be s
   const h = harness(); h.PhoneStore.failWrites = true; h.get("transferAddress").value = "http://192.168.1.10:8899/";
   await h.api.openTransferConnection(); assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=transfer");
 });
+await test("remembered computer opens work records without exporting phone data or credentials", async () => {
+  const h = harness(); h.ready(); const privateBefore = JSON.stringify([...h.stores.get("records")]);
+  h.get("transferAddress").value = "http://192.168.1.10:8899/";
+  await h.api.openTransferConnection();
+  await h.api.openTransferConnection(true, "work");
+  assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=work");
+  assert.equal(h.stores.get("settings").get("transferConnection").address, "http://192.168.1.10:8899/?tab=transfer");
+  assert.equal(JSON.stringify([...h.stores.get("records")]), privateBefore); assert.equal(h.calls.length, 0);
+});
 await test("PWA QR saves only stable computer address and one click reopens without any token", async () => {
   const h = harness(); h.ready(); const privateBefore = JSON.stringify([...h.stores.get("records")]);
   const token = "a".repeat(43), stable = "http://codex-0123456789abcdef.local:8899/?tab=transfer";
@@ -156,9 +171,10 @@ await test("PWA rejects public credential arbitrary fragment and forged local QR
   assert.equal(h.api.parseTransferAddress("http://10.1.2.3:8899/#pair=123456", true).pairing, "#pair=123456");
 });
 
-await test("relative project installation has five tabs and optional transfer connection", () => {
+await test("relative project installation has Work Music materials transfer and private offline incubator", () => {
   assert.equal(manifest.start_url, "./index.html"); assert.equal(manifest.scope, "./");
-  assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["tasks", "music", "device", "documents", "transfer"]);
+  assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["work", "music", "materials", "transfer"]);
+  assert.match(html, /id="phoneIncubator"/); assert.match(html, /此手机的想法不会自动带到电脑/); assert.match(html, /\.\/incubator-panel\.js/);
   assert.doesNotMatch(html, /pairCode|pairForm|offlineScreen|logoutButton/); assert.doesNotMatch(source, /clearPrivate|showOffline|showPair/);
   for (const match of source.matchAll(/\/api\/phone\/([^"']+)/g)) assert.ok(match[1].startsWith("plan-sync/"), "optional PC access must be limited to plan sync");
   for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.ok(!match[1].startsWith("/"), "project assets must remain relative");
@@ -486,5 +502,104 @@ await test("default offline boot refresh and foreground events ignore old PC tok
   assert.deepEqual(h.stores.get("settings").get("taskSync"), oldConnection); assert.equal(await h.stores.get("media").get("saved-song").blob.text(), "original audio");
   assert.equal(h.stores.get("music").get("saved-song").offlineLyrics[0].content, "[00:01]Saved lyrics"); assert.equal(h.api.state.library.planSync.readonly, true);
   assert.ok(h.all(h.get("taskGroups"), "input").every(input => input.disabled)); assert.equal(h.api.state.library.files.length, 6);
+});
+const requestId = index => `12345678-1234-4123-8123-${String(index).padStart(12, "0")}`;
+await test("offline ideas create edit and reopen without touching imported library music or old tokens", async () => {
+  const h = harness(); h.ready(); const before = JSON.stringify(h.stores.get("records").get("library"));
+  h.stores.get("settings").set("taskSync", { id: "taskSync", token: "OLD_READONLY_TOKEN" }); h.stores.get("media").set("song", { id: "song", blob: new Blob(["saved music"]) });
+  const created = await h.api.incubatorApi("incubator/create", { requestId: requestId(1), title: "离线想法", body: "先记下来", priority: "high" });
+  const updated = await h.api.incubatorApi("incubator/update", { requestId: requestId(2), id: created.idea.id, expectedRevision: 1, body: "继续整理", stage: "thinking" });
+  assert.equal(updated.idea.revision, 2); assert.equal(updated.idea.priority, "high");
+  const reopened = harness(); reopened.stores.get("records").set("incubator", structuredClone(h.stores.get("records").get("incubator")));
+  const listing = await reopened.api.incubatorApi("incubator"); assert.equal(listing.ideas[0].body, "继续整理"); assert.equal(listing.ideas[0].targetKind, "none");
+  assert.equal(h.calls.length, 0); assert.equal(reopened.calls.length, 0); assert.equal(JSON.stringify(h.stores.get("records").get("library")), before); assert.equal(await h.stores.get("media").get("song").blob.text(), "saved music"); assert.equal(h.stores.get("settings").get("taskSync").token, "OLD_READONLY_TOKEN");
+});
+await test("offline lost response retries the same request and refuses repurposed request IDs", async () => {
+  const h = harness(), payload = { requestId: requestId(3), title: "保存一次", body: "原内容" };
+  const first = await h.api.incubatorApi("incubator/create", payload), second = await h.api.incubatorApi("incubator/create", payload);
+  assert.equal(second.duplicate, true); assert.equal(second.idea.id, first.idea.id); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 1);
+  await assert.rejects(h.api.incubatorApi("incubator/create", { ...payload, body: "替换内容" }), error => error.status === 409 && error.data.code === "request_conflict");
+});
+await test("offline concurrent editors accept one revision and return the current idea on conflict", async () => {
+  const h = harness(), original = (await h.api.incubatorApi("incubator/create", { requestId: requestId(4), title: "一起编辑" })).idea;
+  const outcomes = await Promise.allSettled([5, 6].map(index => h.api.incubatorApi("incubator/update", { requestId: requestId(index), id: original.id, expectedRevision: 1, body: `edit-${index}` })));
+  assert.equal(outcomes.filter(item => item.status === "fulfilled").length, 1); const rejected = outcomes.find(item => item.status === "rejected").reason;
+  assert.equal(rejected.data.code, "revision_conflict"); assert.equal(rejected.data.idea.revision, 2); assert.equal((await h.api.incubatorApi("incubator")).ideas[0].body, "edit-5");
+});
+await test("offline tree rejects cycles and unknown parents without changing saved ideas", async () => {
+  const h = harness(), parent = (await h.api.incubatorApi("incubator/create", { requestId: requestId(7), title: "父想法" })).idea;
+  const child = (await h.api.incubatorApi("incubator/create", { requestId: requestId(8), title: "子想法", parentId: parent.id })).idea;
+  await assert.rejects(h.api.incubatorApi("incubator/update", { requestId: requestId(9), id: parent.id, expectedRevision: 1, parentId: child.id }), error => error.data.code === "idea_cycle");
+  await assert.rejects(h.api.incubatorApi("incubator/create", { requestId: requestId(10), title: "未知归属", parentId: "missing" }), error => error.status === 404);
+  assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 2); assert.equal(h.calls.length, 0);
+});
+await test("offline ideas reject backend publish requests invalid targets and execution flags", async () => {
+  const h = harness();
+  for (const path of ["incubator/publish", "targets", "dispatches", "execute"]) await assert.rejects(h.api.incubatorApi(path, { requestId: requestId(11), title: "不会执行" }));
+  await assert.rejects(h.api.incubatorApi("incubator/create", { requestId: requestId(12), title: "bad target", targetKind: "codex", targetThreadId: "not-a-uuid" }));
+  await assert.rejects(h.api.incubatorApi("incubator/create", { requestId: requestId(13), title: "too long", body: "x".repeat(20001) }));
+  await assert.rejects(h.api.incubatorApi("incubator/create", { requestId: requestId(14), title: "bad action", execute: true }));
+  await assert.rejects(h.api.incubatorApi("incubator/create", { requestId: requestId(18), title: "invalid stage", stage: null }));
+  await assert.rejects(h.api.incubatorApi("incubator/create", { requestId: requestId(19), title: "invalid parent", parentId: false }));
+  assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 0); assert.equal(h.calls.length, 0);
+});
+await test("offline quota failures preserve accepted ideas and allow the original unsent save retry", async () => {
+  const h = harness(), original = (await h.api.incubatorApi("incubator/create", { requestId: requestId(15), title: "已保存" })).idea;
+  const next = { requestId: requestId(16), id: original.id, expectedRevision: 1, body: "未确认的编辑" }; h.PhoneStore.failWrites = true;
+  await assert.rejects(h.api.incubatorApi("incubator/update", next)); assert.equal((await h.api.incubatorApi("incubator")).ideas[0].revision, 1);
+  h.PhoneStore.failWrites = false; assert.equal((await h.api.incubatorApi("incubator/update", next)).idea.body, "未确认的编辑");
+});
+await test("Work adapter identifies this phone and reload waits for unsafe drafts or active saves", () => {
+  const h = harness(); let active, safe = false, supplied;
+  h.runtime.window.CodexIncubatorPanel = { create(root, options) { supplied = options; return { setActive(value) { active = value; }, canReload: () => safe }; } };
+  h.api.selectTab("work"); assert.equal(active, true); assert.equal(supplied.offline, true); assert.equal(typeof supplied.endpoint, "function"); assert.equal(supplied.storageKey, "codexIncubator.phone.v1");
+  h.api.state.updatePending = true; assert.equal(h.api.updateIsIdle(), false); safe = true; assert.equal(h.api.updateIsIdle(), true);
+  h.api.selectTab("materials"); assert.equal(active, false); assert.equal(h.get("materialsPanel").hidden, false); assert.equal(h.get("workPanel").hidden, true);
+});
+await test("computer Work entry navigates only after a saved LAN address and never uploads offline ideas", async () => {
+  const h = harness(); await h.api.openComputerWork(); assert.equal(h.api.state.tab, "transfer"); assert.match(h.get("transferNotice").textContent, /配对后打开电脑工作区/);
+  h.stores.get("settings").set("transferConnection", { id: "transferConnection", address: "http://codex-0123456789abcdef.local:8899/?tab=transfer" }); await h.api.restoreTransferConnection();
+  await h.api.incubatorApi("incubator/create", { requestId: requestId(17), title: "不会自动上传" }); await h.api.openComputerWork();
+  assert.equal(h.runtime.window.location.href, "http://codex-0123456789abcdef.local:8899/?tab=work"); assert.equal(h.calls.length, 0); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 1);
+});
+await test("PhoneStore commits atomic record transforms and aborts without overwriting existing private stores", async () => {
+  const saved = new Map([["library", { id: "library", privateText: "original library" }]]), self = {}; let opens = 0;
+  const db = { close() {}, transaction(name, mode) {
+    assert.equal(name, "records"); assert.equal(mode, "readwrite");
+    const transaction = { aborted: false, abort() { this.aborted = true; queueMicrotask(() => this.onabort?.()); }, objectStore() { return {
+      get(id) { const request = {}; queueMicrotask(() => { request.result = structuredClone(saved.get(id)); request.onsuccess?.(); }); return request; },
+      put(value) { const staged = structuredClone(value); queueMicrotask(() => { if (!transaction.aborted) { saved.set(staged.id, staged); transaction.oncomplete?.(); } }); }
+    }; } }; return transaction;
+  } };
+  const indexedDB = { open(name, version) { opens++; assert.equal(name, "codex-console-phone-v1"); assert.equal(version, 1); const request = { result: db }; queueMicrotask(() => request.onsuccess?.()); return request; } };
+  runInNewContext(storeSource, { self, indexedDB, structuredClone });
+  const result = await self.PhoneStore.mutateRecord("records", "incubator", old => ({ ...(old || {}), id: "incubator", ideas: [{ title: "saved privately" }] }));
+  assert.equal(result.ideas[0].title, "saved privately"); assert.equal(saved.get("incubator").ideas.length, 1);
+  await assert.rejects(self.PhoneStore.mutateRecord("records", "incubator", () => { throw new Error("reject transform"); }), /reject transform/);
+  await assert.rejects(self.PhoneStore.mutateRecord("records", "incubator", () => ({ id: "library", privateText: "replace" })), /本机保存内容无效/);
+  assert.equal(saved.get("library").privateText, "original library"); assert.equal(saved.get("incubator").ideas.length, 1); assert.equal(opens, 1);
+});
+await test("actual shared component uses the PhoneStore adapter and keeps an unsaved phone draft after reload", async () => {
+  const h = harness({ withIncubator: true }); h.api.selectTab("work"); await settle(); const root = h.get("phoneIncubator");
+  const click = text => { const button = h.all(root, "button").find(item => item.textContent === text); assert.ok(button, text); assert.equal(Boolean(button.disabled), false, text); return button.listeners.get("click")(); };
+  click("＋ 新建想法"); const title = h.all(root, "input").find(item => item.placeholder === "一句话记下想法"), body = h.all(root, "textarea").find(item => item.placeholder?.startsWith("想解决什么"));
+  title.value = "真实组件离线保存"; title.listeners.get("input")(); body.value = "不会上传"; body.listeners.get("input")();
+  assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 0); click("保存到此手机"); await settle();
+  const accepted = await h.api.incubatorApi("incubator"); assert.equal(accepted.ideas[0].title, "真实组件离线保存"); assert.match(root.textContent, /已保存到此手机/); assert.doesNotMatch(root.textContent, /已保存到电脑/);
+  body.value = "更新前的未保存编辑"; body.listeners.get("input")(); assert.equal(h.api.updateIsIdle(), true, "persisted draft must not block automatic app updates forever");
+  const next = harness({ withIncubator: true, storage: h.saved, storeData: h.stores }); next.api.selectTab("work"); await settle();
+  assert.equal(next.all(next.get("phoneIncubator"), "textarea").find(item => item.placeholder?.startsWith("想解决什么")).value, "更新前的未保存编辑");
+  assert.equal((await next.api.incubatorApi("incubator")).ideas[0].body, "不会上传"); assert.equal(h.calls.length, 0); assert.equal(next.calls.length, 0);
+  assert.ok(!h.all(root, "button").some(item => item.textContent === "发布到目标聊天"));
+});
+await test("actual phone component imports one exported idea as a fresh editable draft and never publishes", async () => {
+  const h = harness({ withIncubator: true }); h.api.selectTab("work"); await settle(); const root = h.get("phoneIncubator");
+  const click = text => h.all(root, "button").find(item => item.textContent === text).listeners.get("click")();
+  click("导入想法 JSON"); const input = h.all(root, "textarea").find(item => item.placeholder?.includes("另一工作区"));
+  input.value = JSON.stringify({ format: "codex-incubator-idea", version: 1, idea: { title: "从电脑带来", body: "原来的发布内容", stage: "published", priority: "high", parentId: "old-parent", targetKind: "none", targetThreadId: "", targetName: "" } });
+  await click("导入为新草稿"); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 0); assert.match(root.textContent, /没有发布到任何聊天/);
+  click("保存到此手机"); await settle(); const idea = (await h.api.incubatorApi("incubator")).ideas[0]; assert.equal(idea.parentId, null); assert.equal(idea.stage, "ready"); assert.equal(idea.priority, "high");
+  click("带到另一工作区"); const exported = JSON.parse(h.all(root, "textarea").find(item => item.attributes["aria-label"] === "此想法的导出 JSON").value);
+  assert.equal(exported.idea.title, "从电脑带来"); assert.equal(exported.idea.id, undefined); assert.equal(exported.targets, undefined); assert.equal(exported.dispatches, undefined); assert.equal(h.calls.length, 0);
 });
 console.log(`PASS offline phone UI ${count} checks`);

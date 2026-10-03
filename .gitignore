@@ -1,5 +1,7 @@
 # Local runtime state
 cache/
+workflow-private/
+work/
 .console-startup.lock
 feedback-admin.json
 __pycache__/

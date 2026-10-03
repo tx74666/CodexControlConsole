@@ -156,6 +156,8 @@ class StaticBuildChecks(unittest.TestCase):
                 source.write_bytes((PROJECT / "phone" / name).read_bytes())
             else:
                 source.write_text("// __CONSOLE_PHONE_VERSION__ / __CONSOLE_PHONE_BUILD__\n", encoding="utf-8")
+        for name in builder.SHARED_PHONE_ASSETS:
+            (self.project / name).write_text("// shared phone component\n", encoding="utf-8")
         (phone / "index.html").write_text('<!doctype html><title>__CONSOLE_PHONE_VERSION__</title><link href="./styles.css"><script src="./app.js"></script>', encoding="utf-8")
         (phone / "manifest.webmanifest").write_text(json.dumps({"name": "Codex Console", "start_url": "./index.html", "scope": "./", "icons": [{"src": "./phone-icon-192.png"}]}), encoding="utf-8")
         (phone / "private-plan.json").write_text("PRIVATE PLAN", encoding="utf-8")
@@ -185,7 +187,7 @@ class StaticBuildChecks(unittest.TestCase):
         self.assertEqual(result["version"], "1.0.16")
         self.assertEqual(result["musicTracks"], 16)
         files = {item.relative_to(self.output).as_posix() for item in self.output.rglob("*") if item.is_file()}
-        self.assertEqual(len(files), len(builder.PHONE_ASSETS) + len(builder.ICONS) + 16 + 4 + 2)
+        self.assertEqual(len(files), len(builder.PHONE_ASSETS) + len(builder.SHARED_PHONE_ASSETS) + len(builder.ICONS) + 16 + 4 + 2)
         self.assertFalse(any("private" in item for item in files))
         self.assertFalse((self.output / "music/libraries").exists())
         for file in files:
@@ -206,6 +208,23 @@ class StaticBuildChecks(unittest.TestCase):
             self.assertTrue((self.output / item["source"]).is_file())
         with zipfile.ZipFile(result["archive"]) as archive:
             self.assertEqual(set(archive.namelist()), files)
+
+    def test_shared_incubator_code_changes_shell_and_never_packages_runtime_ideas_or_targets(self):
+        private = self.project / "workflow-private"
+        private.mkdir()
+        (private / "ideas.sqlite3").write_text("PRIVATE IDEAS", encoding="utf-8")
+        (self.project / "targets.json").write_text("PRIVATE TARGETS", encoding="utf-8")
+        (self.project / "incubator-panel-private.js").write_text("PRIVATE EXTRA CODE", encoding="utf-8")
+        first = builder.build_static(self.project, self.output)
+        for name in builder.SHARED_PHONE_ASSETS:
+            self.assertTrue((self.output / name).is_file())
+        (self.project / "incubator-panel.js").write_text("// changed shared component\n", encoding="utf-8")
+        second = builder.build_static(self.project, self.output)
+        self.assertNotEqual(first["buildId"], second["buildId"])
+        self.assertEqual(first["version"], second["version"])
+        for path in self.output.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(b"PRIVATE ", path.read_bytes())
 
     def test_unknown_output_file_rejected_without_delete_or_overwrite(self):
         self.output.mkdir()

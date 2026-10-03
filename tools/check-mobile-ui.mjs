@@ -43,10 +43,11 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
   audio.pause = () => { audio.paused = true; audio.pauseCalls++; mediaEvents.push("pause"); };
   audio.load = () => { audio.loadCalls++; audio.duration = NaN; audio.currentTime = 0; mediaEvents.push("load"); };
   audio.play = () => { audio.playCalls++; mediaEvents.push("play"); if (audio.playError) return Promise.reject(audio.playError); audio.paused = false; return Promise.resolve(); };
-  const tabs = ["transfer", "tasks", "music", "device", "documents"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
+  const tabs = ["work", "transfer", "tasks", "music", "device", "documents"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
+  const tierTabs = ["", "first", "second", "third"].map(tier => { const button = new Element("button"); button.dataset.musicTier = tier; return button; });
   const documentEvents = new Map(), windowEvents = new Map();
-  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
+  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "[data-inbox]" ? listTabs : selector === "button[data-music-tier]" ? tierTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
   const replacedUrls = [];
   const history = { state: null, replaceState(value, unused, url) { this.state = value; replacedUrls.push(url); runtime.window.location.href = url; }, pushState(value) { this.state = value; }, back() { this.state = null; } };
   const runtime = { URL, URLSearchParams, AbortController, TypeError, Blob, structuredClone, document, history, navigator: {}, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: initialUrl }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
@@ -55,19 +56,49 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
   assert.equal(normalized.split(footer).length, 2, "test export insertion must match only bootstrap footer");
   runInNewContext(normalized.replace(footer, `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
-  return { api, runtime, get, document, calls, answers, saved, history, replacedUrls, tabs, listTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.paired = true; api.state.dashboard = dashboard(); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
+  return { api, runtime, get, document, calls, answers, saved, history, replacedUrls, tabs, listTabs, tierTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.paired = true; api.state.dashboard = dashboard(); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
 }
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
 
-await test("iPhone install entry, safe areas, touch sizes and five real tabs", () => {
+await test("visible version follows the connected computer and rejects malformed values", async () => {
+  const h = harness(); h.respond(dashboard()); await h.api.refreshDashboard();
+  assert.equal(h.get("versionLabel").textContent, "电脑版 v1.0.14");
+  const changed = dashboard(); changed.version = "1.0.30";
+  h.respond(changed); await h.api.refreshDashboard();
+  assert.equal(h.get("versionLabel").textContent, "电脑版 v1.0.30");
+  const malformed = dashboard(); malformed.version = "<script>30</script>";
+  h.respond(malformed); await h.api.refreshDashboard();
+  assert.equal(h.get("versionLabel").textContent, "电脑版 · 版本暂不可读");
+});
+
+await test("iPhone install entry, safe areas, touch sizes and four grouped tabs", () => {
   assert.equal(manifest.start_url, "/mobile.html"); assert.equal(manifest.scope, "/"); assert.equal(manifest.display, "standalone");
-  assert.match(html, /apple-mobile-web-app-capable/); assert.match(html, /apple-touch-icon[^>]+256/); assert.match(html, /viewport-fit=cover/);
-  assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["transfer", "tasks", "music", "device", "documents"]);
+  assert.match(html, /apple-mobile-web-app-capable/); assert.match(html, /apple-touch-icon[^>]+phone-icon-180/); assert.match(html, /viewport-fit=cover/);
+  assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["work", "transfer", "music", "documents"]);
+  assert.match(html, /id="phoneIncubatorPanel"/);
   assert.match(css, /env\(safe-area-inset-bottom\)/); assert.match(css, /min-height:44px/); assert.match(css, /font-size:24px/); assert.match(css, /reader-table-scroll\{overflow-x:auto/);
   assert.doesNotMatch(source, /serviceWorker|\.innerHTML|document\.cookie/); assert.doesNotMatch(html, /onclick=|<script[^>]*>\s*[^<\s]/);
   const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
   for (const match of source.matchAll(/\bel\("([^"]+)"\)/g)) assert.ok(ids.has(match[1]), `Missing phone element ${match[1]}`);
+});
+await test("LAN home-screen icons reuse only the canonical phone PWA assets with padding", () => {
+  const canonicalHtml = readFileSync(new URL("../phone/index.html", import.meta.url), "utf8");
+  const canonicalManifest = JSON.parse(readFileSync(new URL("../phone/manifest.webmanifest", import.meta.url), "utf8"));
+  assert.match(html, /rel="apple-touch-icon" href="\/phone\/phone-icon-180\.png\?v=phone-white-72" sizes="180x180"/);
+  assert.match(html, /rel="icon" href="\/phone\/phone-icon-192\.png\?v=phone-white-72"/);
+  assert.match(canonicalHtml, /rel="apple-touch-icon" href="\.\/phone-icon-180\.png/);
+  assert.deepEqual(manifest.icons, [192, 512].map(size => ({ src: `/phone/phone-icon-${size}.png?v=phone-white-72`, sizes: `${size}x${size}`, type: "image/png", purpose: "any" })));
+  assert.deepEqual(manifest.icons.map(item => item.src.split("/").at(-1).split("?")[0]), canonicalManifest.icons.map(item => item.src.replace("./", "").split("?")[0]));
+  assert.doesNotMatch(html.match(/<head>[\s\S]*?<\/head>/)[0], /codex-resource-icon/);
+  for (const size of [180, 192, 512]) {
+    const bytes = readFileSync(new URL(`../phone/phone-icon-${size}.png`, import.meta.url));
+    assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(bytes.readUInt32BE(16), size); assert.equal(bytes.readUInt32BE(20), size);
+  }
+  const build = readFileSync(new URL("./build-windows.ps1", import.meta.url), "utf8");
+  const entries = [...build.matchAll(/Source = "([^"]+)"; Destination = "([^"]+)"/g)].map(match => ({ source: match[1], destination: match[2] })).filter(item => /^phone(?:[\\/]|$)/.test(item.source));
+  assert.deepEqual(entries, [180, 192, 512].map(size => ({ source: `phone\\phone-icon-${size}.png`, destination: "phone" })));
 });
 await test("LF and Windows CRLF sources inject one test footer without starting the application", async () => {
   for (const script of [source, source.replace(/\n/g, "\r\n")]) {
@@ -167,14 +198,14 @@ await test("offline clears private data and saves only font preference", () => {
 await test("music loads lazily without autoplay and existing tabs remain available", async () => {
   const h = harness(); h.ready(); h.api.selectTab("tasks"); h.api.selectTab("device"); h.api.selectTab("documents"); assert.equal(h.calls.length, 0);
   h.respond(playlist()); h.api.selectTab("music"); await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url, "/api/phone/music"); assert.equal(h.audio.playCalls, 0); assert.equal(h.audio.src, ""); assert.equal(h.get("musicTracks").children.length, 3);
+  assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url, "/api/phone/music"); assert.equal(h.audio.playCalls, 0); assert.equal(h.audio.src, ""); assert.equal(h.all(h.get("musicTracks"), "button").length, 3);
   assert.equal(h.all(h.get("musicTracks"), "script").length, 0); assert.match(h.get("musicTracks").textContent, /<script>One<\/script>/);
   h.api.selectTab("tasks"); assert.equal(h.get("tasksPanel").hidden, false); assert.equal(h.get("musicPanel").hidden, true); h.api.selectTab("device"); assert.equal(h.get("devicePanel").hidden, false);
   assert.match(html, /<audio id="musicAudio" preload="none" playsinline>/);
 });
 await test("tapping a registered track plays directly before any lyric request", async () => {
   const h = harness(); h.ready(); h.respond(playlist()); await h.api.loadMusic(); h.mediaEvents.length = 0;
-  h.respond({ path: "album/three.mp3", content: "[00:01]歌词", format: "lrc", language: "zh" }); h.get("musicTracks").children[2].listeners.get("click")();
+  h.respond({ path: "album/three.mp3", content: "[00:01]歌词", format: "lrc", language: "zh" }); h.all(h.get("musicTracks"), "button")[2].listeners.get("click")();
   assert.equal(h.audio.playCalls, 1); assert.equal(h.audio.src, "/api/phone/music/audio?path=album%2Fthree.mp3"); assert.ok(h.mediaEvents.indexOf("play") < h.mediaEvents.findIndex(event => event.startsWith("fetch:")));
   await new Promise(resolve => setTimeout(resolve, 0)); assert.match(h.get("musicLyrics").textContent, /歌词/); assert.equal(h.get("musicPlay").textContent, "暂停");
   const playCount = h.audio.playCalls; h.api.selectMusicTrack("https://evil.invalid/audio"); assert.equal(h.audio.playCalls, playCount);
@@ -223,11 +254,24 @@ await test("401 logout and offline stop audio detach the source and clear track 
     assert.equal(h.audio.paused, true); assert.equal(h.audio.src, ""); assert.ok(h.audio.loadCalls >= 2); assert.equal(h.api.state.music.selected, null); assert.equal(h.get("musicTracks").textContent, ""); assert.equal(h.get("musicLyrics").textContent, "");
   }
 });
-await test("search folder filters and paging operate locally on the registered list", async () => {
+await test("category filters and paging operate locally without changing playback", async () => {
   const h = harness(); h.ready(); const data = playlist(); data.tracks.push(...Array.from({ length: 70 }, (_, index) => ({ name: `Extra ${index}`, path: `extras/${index}.mp3`, type: "mp3" }))); h.respond(data); await h.api.loadMusic();
-  assert.equal(h.get("musicTracks").children.length, 60); assert.equal(h.get("musicMore").hidden, false); h.get("musicMore").listeners.get("click")(); assert.equal(h.get("musicTracks").children.length, 73);
-  h.get("musicSearch").value = "Two"; h.get("musicSearch").listeners.get("input")(); assert.equal(h.get("musicTracks").children.length, 1); assert.match(h.get("musicTracks").textContent, /Two/);
-  h.get("musicSearch").value = ""; h.get("musicSearch").listeners.get("input")(); h.get("musicFolder").value = "album"; h.get("musicFolder").listeners.get("change")(); assert.equal(h.get("musicTracks").children.length, 2); assert.equal(h.calls.length, 1);
+  assert.equal(h.all(h.get("musicTracks"), "button").length, 60); assert.equal(h.get("musicMore").hidden, false); h.get("musicMore").listeners.get("click")(); assert.equal(h.all(h.get("musicTracks"), "button").length, 73);
+  h.api.selectMusicTrack("local/one.mp3"); const count = h.audio.playCalls;
+  h.tierTabs[1].listeners.get("click")(); assert.equal(h.all(h.get("musicTracks"), "button").length, 0); assert.match(h.get("musicTracks").textContent, /这个分类还没有音乐/); assert.equal(h.get("musicMore").hidden, true);
+  h.tierTabs[3].listeners.get("click")(); assert.equal(h.all(h.get("musicTracks"), "button").length, 60); assert.equal(h.audio.playCalls, count); assert.equal(h.api.state.music.selected.path, "local/one.mp3"); assert.equal(h.calls.length, 1);
+});
+await test("phone categories preserve within-tier order and mirror saved ordinal colors", async () => {
+  const h = harness(); h.ready(); const data = playlist(); data.tracks[0].tier = "third"; data.tracks[1].tier = "second"; data.tracks[2].tier = "first"; data.tracks[2].lyrics = false;
+  data.tracks.push({ path: "first/next.mp3", name: "Next first", tier: "first" }, { path: "other/invalid.mp3", name: "Unclassified", tier: "unknown" }); h.respond(data); await h.api.loadMusic();
+  const sections = h.get("musicTracks").children;
+  assert.deepEqual(sections.map(section => section.dataset.musicTier), ["first", "second", "third"]); assert.deepEqual(h.all(h.get("musicTracks"), "button").map(button => button.textContent.slice(1)), ["三首", "Next first", "Two", "<script>One</script>", "Unclassified"]);
+  assert.deepEqual(h.tierTabs.map(button => button.textContent), ["全部", "1st", "2nd", "3rd"]); assert.equal(h.tierTabs[0].attributes["aria-pressed"], "true");
+  h.tierTabs[1].listeners.get("click")(); assert.equal(h.tierTabs[1].attributes["aria-pressed"], "true"); assert.equal(h.all(h.get("musicTracks"), "button").length, 2);
+  h.api.selectMusicTrack("album/three.mp3"); h.get("musicNext").listeners.get("click")(); assert.equal(h.api.state.music.selected.path, "first/next.mp3"); h.get("musicNext").listeners.get("click")(); assert.equal(h.api.state.music.selected.path, "album/three.mp3");
+  const count = h.audio.playCalls; h.respond(data); await h.api.loadMusic(true); assert.equal(h.api.state.music.tier, "first"); assert.equal(h.audio.playCalls, count);
+  h.api.showPair(); assert.equal(h.api.state.music.tier, ""); assert.equal(h.tierTabs[0].attributes["aria-pressed"], "true");
+  assert.match(css, /--tier-accent:#ebcd88/); assert.match(css, /--tier-accent:#d4e0eb/); assert.match(css, /--tier-accent:#91dcc9/); assert.doesNotMatch(html, /id="music(Search|Folder|ListMeta)"/);
 });
 await test("untrusted catalog URLs cannot direct playback outside the phone endpoint", () => {
   const h = harness(); const data = playlist(); data.tracks.push({ name: "unsafe", path: "../../secret.mp3", url: "https://evil.invalid/audio" }); data.tracks[0].url = "https://evil.invalid/audio";

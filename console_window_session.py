@@ -101,3 +101,11 @@ class ConsoleWindowSessionService:
             self._stopped = True
             self._sessions.clear()
             self._cancel_shutdown_locked()
+
+    def reconsider_shutdown(self):
+        """Revisit a deferred close after accepted work or background settings change."""
+        with self._lock:
+            if self._stopped or not self._ever_opened or self._sessions or self._launches:
+                return
+            self._shutdown_requested = False
+            self._schedule_shutdown_locked()

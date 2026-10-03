@@ -9,16 +9,20 @@
   <meta name="apple-mobile-web-app-title" content="Codex Console">
   <title>Codex Console · iPhone</title>
   <link rel="manifest" href="/mobile.webmanifest">
-  <link rel="apple-touch-icon" href="/codex-resource-icon-256.png">
-  <link rel="icon" href="/codex-resource-icon-128.png" type="image/png">
-  <link rel="stylesheet" href="/mobile.css">
-  <link rel="stylesheet" href="/transfer-panel.css?v=console-transfer-1">
-  <script src="/transfer-panel.js?v=console-transfer-1.0.27" defer></script>
-  <script src="/mobile.js" defer></script>
+  <link rel="apple-touch-icon" href="/phone/phone-icon-180.png?v=phone-white-72" sizes="180x180">
+  <link rel="icon" href="/phone/phone-icon-192.png?v=phone-white-72" type="image/png">
+  <link rel="stylesheet" href="/mobile.css?v=console-incubator-1.0.31-20261004">
+  <link rel="stylesheet" href="/transfer-panel.css?v=console-transfer-1.0.30-phone-message-20261004">
+  <script src="/transfer-panel.js?v=console-transfer-1.0.30-phone-message-20261004" defer></script>
+  <link rel="stylesheet" href="/workflow-panel.css?v=console-work-1.0.29-ai-settings">
+  <script src="/workflow-panel.js?v=console-work-1.0.29-ai-settings" defer></script>
+  <link rel="stylesheet" href="/incubator-panel.css?v=console-incubator-1.0.31-20261004">
+  <script src="/incubator-panel.js?v=console-incubator-1.0.31-20261004" defer></script>
+  <script src="/mobile.js?v=console-incubator-1.0.31-20261004" defer></script>
 </head>
 <body>
   <header class="app-header" id="appHeader">
-    <div><p class="eyebrow">你的电脑，随手查看</p><h1>Codex Console</h1></div>
+    <div><p class="eyebrow">你的电脑，随手查看</p><h1>Codex Console</h1><p id="versionLabel" class="muted small">电脑版 · 连接后显示版本</p></div>
     <span id="connectionLabel" class="connection-label">未连接</span>
   </header>
   <main id="main">
@@ -45,15 +49,23 @@
     <div id="appScreen" hidden>
       <div class="toolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
       <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
-      <section id="transferPanel" class="tab-panel" hidden aria-label="手机和电脑互传">
-        <div id="phoneTransferPanel"></div>
-      </section>
-      <section id="tasksPanel" class="tab-panel" aria-labelledby="tasksTitle">
+      <section id="workPanel" class="tab-panel" hidden aria-label="工作记录">
+        <div id="phoneIncubatorPanel"></div>
+        <p class="muted small">电脑工作区 · 保存后电脑和已配对手机会同步。想法保存在这里，点确认发布才会交给聊天。</p>
+        <details class="document-section"><summary>执行清单</summary>
+      <section id="tasksPanel" aria-labelledby="tasksTitle">
         <div class="section-title"><div><p class="eyebrow">当前重要计划</p><h2 id="tasksTitle">计划清单</h2></div><span class="pill">只读</span></div>
         <p id="planNotice" class="muted small">电脑 → 手机，每 5 秒更新；修改请在电脑完成。</p>
         <div id="taskGroups" class="card-stack"></div>
         <button id="savePlanSnapshot" type="button" class="text-button" disabled>保存计划快照</button><p class="muted small">此页面连接电脑读取计划。保存快照后，可在离线 App「资料与更新」导入；不会自动改写离线 App 的资料。</p>
       </section>
+        </details>
+        <details id="phoneWorkflowDetails" class="document-section"><summary>工作记录与电脑执行</summary><div id="phoneWorkflowPanel"></div></details>
+      </section>
+      <section id="transferPanel" class="tab-panel" hidden aria-label="手机和电脑互传">
+        <div id="phoneTransferPanel"></div>
+      </section>
+
       <section id="musicPanel" class="tab-panel" hidden aria-labelledby="musicTitle">
         <div class="section-title"><div><p class="eyebrow">电脑曲库，在手机播放</p><h2 id="musicTitle">音乐</h2></div><button id="musicRefresh" type="button" class="text-button">刷新曲库</button></div>
         <p id="musicNotice" class="notice" role="status" aria-live="polite"></p>
@@ -65,17 +77,20 @@
           <div class="music-timing"><span id="musicElapsed">0:00</span><span id="musicDuration">0:00</span><button id="musicRepeat" type="button" class="text-button" aria-label="切换循环模式">列表循环</button></div>
         </div>
         <details id="musicLyricsSection" class="music-lyrics-section" hidden><summary>歌词</summary><div id="musicLyricLanguages" class="reader-languages" hidden></div><p id="musicLyricsNotice" class="muted small"></p><div id="musicLyrics" class="music-lyrics" aria-label="本地歌词"></div></details>
-        <div class="music-library-tools"><label class="visually-hidden" for="musicSearch">搜索音乐</label><input id="musicSearch" type="search" placeholder="搜索音乐" autocomplete="off" spellcheck="false"><label class="visually-hidden" for="musicFolder">音乐文件夹</label><select id="musicFolder" aria-label="音乐文件夹"><option value="">全部文件夹</option></select></div>
-        <p id="musicListMeta" class="muted small"></p><div id="musicTracks" class="music-track-list"></div><button id="musicMore" type="button" class="secondary music-more" hidden>显示更多</button>
+        <div id="musicTierTabs" class="segment music-tier-tabs" aria-label="音乐分类"><button type="button" data-music-tier="" aria-pressed="true">全部</button><button type="button" data-music-tier="first" aria-pressed="false">1<sup>st</sup></button><button type="button" data-music-tier="second" aria-pressed="false">2<sup>nd</sup></button><button type="button" data-music-tier="third" aria-pressed="false">3<sup>rd</sup></button></div>
+        <div id="musicTracks" class="music-track-list"></div><button id="musicMore" type="button" class="secondary music-more" hidden>显示更多</button>
         <p class="muted small music-footnote">音乐来自电脑已登记的曲库。电脑需保持开机与连接，手机播放不会控制电脑扬声器。</p>
       </section>
-      <section id="devicePanel" class="tab-panel" hidden aria-labelledby="deviceTitle">
+
+      <section id="documentsPanel" class="tab-panel" hidden aria-labelledby="documentsTitle">
+        <details class="document-section"><summary>设备概况</summary>
+      <section id="devicePanel" aria-labelledby="deviceTitle">
         <div class="section-title"><div><p class="eyebrow">按需读取</p><h2 id="deviceTitle">电脑状态</h2></div></div>
         <div id="memoryCard" class="card memory-card"></div>
         <div id="hardwareCard" class="card hardware-card"></div>
         <p class="muted small">记忆体只在打开页面或按刷新时读取；硬件信息来自保存的采样。</p>
       </section>
-      <section id="documentsPanel" class="tab-panel" hidden aria-labelledby="documentsTitle">
+        </details>
         <div class="section-title"><div><p class="eyebrow">重点先看，记录收好</p><h2 id="documentsTitle">文档</h2></div></div>
         <div class="segment" id="inboxTabs" aria-label="阅读清单">
           <button type="button" data-inbox="inbox" aria-pressed="true">待阅读 <span id="inboxCount">0</span></button>
@@ -91,11 +106,10 @@
     </div>
   </main>
   <nav id="bottomNav" class="bottom-nav" hidden aria-label="主要页面">
-    <button type="button" data-tab="transfer" aria-pressed="false"><span aria-hidden="true">⇄</span>互传</button>
-    <button type="button" data-tab="tasks" aria-pressed="true"><span aria-hidden="true">◫</span>任务</button>
+    <button type="button" data-tab="work" aria-pressed="true"><span aria-hidden="true">▧</span>工作</button>
+    <button type="button" data-tab="transfer" aria-pressed="false"><span aria-hidden="true">⇄</span>Transfer</button>
     <button type="button" data-tab="music" aria-pressed="false"><span aria-hidden="true">♫</span>音乐</button>
-    <button type="button" data-tab="device" aria-pressed="false"><span aria-hidden="true">▣</span>设备</button>
-    <button type="button" data-tab="documents" aria-pressed="false"><span aria-hidden="true">▤</span>文档</button>
+    <button type="button" data-tab="documents" aria-pressed="false"><span aria-hidden="true">▤</span>资料</button>
   </nav>
   <section id="readerScreen" class="reader-screen" hidden aria-labelledby="readerTitle" tabindex="-1">
     <header class="reader-toolbar"><button id="readerBack" type="button" class="text-button">‹ 返回</button><div class="reader-font"><button id="fontSmaller" type="button" aria-label="缩小文字">A−</button><button id="fontLarger" type="button" aria-label="放大文字">A+</button></div></header>

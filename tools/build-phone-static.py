@@ -11,6 +11,7 @@ import zipfile
 
 PROJECT = Path(__file__).resolve().parents[1]
 PHONE_ASSETS = ("index.html", "styles.css", "app.js", "store.js", "sw.js", "manifest.webmanifest", "connection-qr.js", "vendor/jsQR.js", "vendor/jsQR.LICENSE")
+SHARED_PHONE_ASSETS = ("incubator-panel.js", "incubator-panel.css")
 ICONS = ("phone-icon-180.png", "phone-icon-192.png", "phone-icon-512.png")
 PUBLIC_TRACKS = (
     "Airborne.mp3", "Around the World.mp3", "Dancin.mp3", "Final Step.mp3", "Fire Inside.mp3",
@@ -171,6 +172,7 @@ def build_static(project_dir, output_dir, make_zip=False, version=None):
     version = _build_version(project, phone_dir, version)
     music_defaults = _public_music_defaults(project)
     assets = {name: _source_file(phone_dir, name) for name in PHONE_ASSETS}
+    assets.update({name: _source_file(project, name) for name in SHARED_PHONE_ASSETS})
     # Include all small code assets, not the large public audio files. A rebuilt
     # shell can then refresh even when a maintenance build keeps its app version.
     build_digest = hashlib.sha256(version.encode("utf-8"))
@@ -178,7 +180,7 @@ def build_static(project_dir, output_dir, make_zip=False, version=None):
     build_digest.update(json.dumps(music_defaults, ensure_ascii=False, sort_keys=True,
                                   separators=(",", ":")).encode("utf-8"))
     phone_text = {}
-    for name in PHONE_ASSETS:
+    for name in (*PHONE_ASSETS, *SHARED_PHONE_ASSETS):
         source_bytes = assets[name].read_bytes()
         phone_text[name] = source_bytes.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
         _check_relative_assets(name, phone_text[name])
@@ -236,7 +238,7 @@ def build_static(project_dir, output_dir, make_zip=False, version=None):
         if target.exists() and target.resolve() != target:
             raise ValueError("A build destination is a linked path.")
         target.parent.mkdir(parents=True, exist_ok=True)
-        if relative in PHONE_ASSETS and not relative.startswith("vendor/"):
+        if relative in (*PHONE_ASSETS, *SHARED_PHONE_ASSETS) and not relative.startswith("vendor/"):
             text = (phone_text[relative].replace("__CONSOLE_PHONE_VERSION__", version)
                     .replace("__CONSOLE_PHONE_BUILD__", build_id))
             target.write_text(text, encoding="utf-8", newline="\n")

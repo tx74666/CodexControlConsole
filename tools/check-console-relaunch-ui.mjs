@@ -20,6 +20,9 @@ const context = {
   els: { workspaceTodoInput: { value: '' }, workspaceTodoCategory: { value: 'work' } },
   workspaceTodoGroups: [{ id: 'work' }, { id: 'home' }],
   workspaceTodoPersonalMode: false, activeWorkspacePlan: null,
+  desktopTransferPanel: { hasDraft() { return false; } },
+  desktopWorkflowPanel: { hasDraft() { return false; } },
+  desktopIncubatorPanel: { hasDraft() { return false; } },
   localStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) },
   window: { location: { reload() { reloads++; } } }
 };
@@ -45,6 +48,18 @@ assert.equal(stored.get('existing-todos'), '[{"text":"keep existing"}]');
 for (const version of [buildVersion, '0.9.9', 'bad', '999.bad']) context.refreshForNewConsoleVersion(version);
 assert.equal(reloads, 0, 'same/older/invalid server must not reload a page');
 context.els.workspaceTodoInput.value = 'new draft';
+context.desktopTransferPanel.hasDraft = () => true;
+context.refreshForNewConsoleVersion('99.0.0');
+assert.equal(reloads, 0, 'a transfer draft or active upload must block automatic reload');
+context.desktopTransferPanel.hasDraft = () => false;
+context.desktopWorkflowPanel.hasDraft = () => true;
+context.refreshForNewConsoleVersion('99.0.0');
+assert.equal(reloads, 0, 'a workflow draft must block automatic reload');
+context.desktopWorkflowPanel.hasDraft = () => false;
+context.desktopIncubatorPanel.hasDraft = () => true;
+context.refreshForNewConsoleVersion('99.0.0');
+assert.equal(reloads, 0, 'an unsaved incubator idea must block automatic reload');
+context.desktopIncubatorPanel.hasDraft = () => false;
 context.refreshForNewConsoleVersion('99.0.0');
 context.refreshForNewConsoleVersion('99.0.0');
 assert.equal(reloads, 1, 'newer server must reload once');

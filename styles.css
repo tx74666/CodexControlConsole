@@ -485,6 +485,22 @@ h2 {
   width: auto;
 }
 
+.console-ui-version {
+  align-self: center;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.console-phone-messages {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .time-stack {
   position: relative;
   width: 102px;
@@ -929,7 +945,7 @@ h2 {
 }
 
 .console-subnav {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .blender-subnav::before,
@@ -970,7 +986,7 @@ h2 {
 }
 
 .console-subtab-drop {
-  width: calc((100% - 32px) / 4);
+  width: calc((100% - 40px) / 5);
 }
 
 .blender-subtab,
@@ -5528,13 +5544,38 @@ button.blender-hub-card:active {
 }
 
 .todo-text {
+  display: block;
+  width: 100%;
   min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
   overflow: hidden;
   color: var(--text);
   font-size: 13px;
   font-weight: 650;
+  line-height: 1.6;
+  cursor: pointer;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.todo-text:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.todo-item.expanded {
+  align-items: start;
+}
+
+.todo-item.expanded .todo-text {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .todo-item.done .todo-text {
@@ -8965,3 +9006,10 @@ body.music-track-dragging .delete-track-button {
 .phone-pair-dialog details { margin-top: 20px; font-size: 13px; }
 .phone-pair-dialog summary { min-height: 30px; cursor: pointer; }
 .phone-remembered-device{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 0;border-bottom:1px solid var(--line)}.phone-remembered-settings{margin:14px 0}.phone-remembered-settings summary{cursor:pointer}
+
+.work-secondary { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px; min-width: 0; }
+.work-secondary > summary { cursor: pointer; padding: 8px 0; color: var(--muted); }
+.work-secondary[open] > summary { margin-bottom: 12px; }
+#consoleWorkView { display: block; }
+#consoleWorkView[hidden] { display: none; }
+.console-subnav [data-console-view-target="common"], .console-subnav [data-console-view-target="collaboration"] { font-size: 12px; }
