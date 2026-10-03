@@ -121,7 +121,10 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
+        # Same-origin POSTs need their real Origin for the CSRF check. Browsers
+        # serialize it as null under no-referrer with fetch mode same-origin.
+        # Cross-origin links still receive no Referer with this policy.
+        self.send_header("Referrer-Policy", "same-origin")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         if cookie:

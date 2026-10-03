@@ -66,7 +66,7 @@
     const timer = window.setTimeout(() => controller.abort(), 15000);
     try {
       const response = await fetch(`/api/phone/${endpoint}`, {
-        method: payload === undefined ? "GET" : "POST", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal,
+        method: payload === undefined ? "GET" : "POST", credentials: "same-origin", mode: "same-origin", referrerPolicy: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal,
         headers: { Accept: "application/json", "X-Codex-Phone": "1", ...(payload === undefined ? {} : { "Content-Type": "application/json" }) },
         ...(payload === undefined ? {} : { body: JSON.stringify(payload) })
       });

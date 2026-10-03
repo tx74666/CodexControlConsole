@@ -155,11 +155,14 @@ class PhoneCompanionChecks(unittest.TestCase):
         self.assertEqual(self.request("/api/phone/status", headers={"Origin": "http://attacker.test"})[0], 403)
         code = self.service.state(False)["pairingCode"]
         self.assertEqual(self.request("/api/phone/pair", "POST", {"code": code}, headers={"Origin": ""})[0], 403)
+        self.assertEqual(self.request("/api/phone/pair", "POST", {"code": code}, headers={"Origin": "null"})[0], 403)
+        self.assertEqual(self.request("/api/phone/pair", "POST", {"code": code}, headers={"Origin": "http://attacker.test"})[0], 403)
         self.assertEqual(self.request("/api/phone/pair", "POST", {"code": code}, headers={"X-Codex-Phone": ""})[0], 403)
         self.assertEqual(self.service.state(False)["pairingCode"], code)
 
     def test_pairing_single_use_cookie_expiry_and_peer_binding(self):
         code, headers = self.pair()
+        self.assertEqual(headers["Referrer-Policy"], "same-origin")
         cookie = headers["Set-Cookie"]
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)

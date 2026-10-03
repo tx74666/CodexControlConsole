@@ -77,7 +77,7 @@ await test("no automatic requests until a paired transfer page becomes active", 
   const h = harness(); assert.equal(h.calls.length, 0); assert.equal(h.button("发送").disabled, true);
   h.respond({ messages: [], revision: "r1", hasMore: false }); h.panel.setActive(true); await settle();
   assert.equal(h.calls.length, 1); assert.match(h.calls[0].url, /^\/api\/phone\/transfer\/messages\?/);
-  assert.equal(h.calls[0].options.credentials, "same-origin"); assert.equal(h.calls[0].options.redirect, "error"); assert.equal(h.calls[0].options.headers["X-Codex-Phone"], "1");
+  assert.equal(h.calls[0].options.credentials, "same-origin"); assert.equal(h.calls[0].options.referrerPolicy, "same-origin"); assert.equal(h.calls[0].options.redirect, "error"); assert.equal(h.calls[0].options.headers["X-Codex-Phone"], "1");
   assert.ok([...h.timers.values()].some(timer => timer.delay === 4000));
   h.panel.setActive(false); assert.equal(h.timers.size, 0);
 });
@@ -85,7 +85,7 @@ await test("photos and text upload together, preserving original file and immedi
   const h = harness(); const file = photo(); h.select(file); h.type("  图片说明\n第二行  ");
   assert.equal(h.previews.length, 1); assert.equal(h.button("上传并发送").disabled, false);
   h.respond({ message: message() }); await h.send();
-  const call = h.calls[0]; assert.equal(call.url, "/api/phone/transfer/messages"); assert.equal(call.options.method, "POST");
+  const call = h.calls[0]; assert.equal(call.url, "/api/phone/transfer/messages"); assert.equal(call.options.method, "POST"); assert.equal(call.options.referrerPolicy, "same-origin");
   assert.equal(call.options.body.get("text"), "  图片说明\n第二行  "); assert.equal(call.options.body.getAll("files").length, 1); assert.equal(call.options.body.get("files").name, "photo.png");
   assert.match(call.options.body.get("requestId"), /^[0-9a-f-]{36}$/); assert.equal(call.options.headers["Content-Type"], undefined);
   assert.equal(h.text.value, ""); assert.deepEqual(h.revoked, ["blob:0"]); assert.match(h.root.textContent, /已传到电脑/);

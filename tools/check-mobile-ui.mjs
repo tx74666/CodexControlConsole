@@ -87,7 +87,7 @@ await test("unpaired bootstrap never requests or displays private content", asyn
 });
 await test("authenticated requests use no-store, same-origin cookies, CSRF header and no redirect", async () => {
   const h = harness(); h.respond({ paired: true }); await h.api.api("status"); h.respond({ paired: true }); await h.api.api("pair", { code: "123456" });
-  for (const call of h.calls) { assert.equal(call.options.cache, "no-store"); assert.equal(call.options.credentials, "same-origin"); assert.equal(call.options.mode, "same-origin"); assert.equal(call.options.redirect, "error"); assert.equal(call.options.headers["X-Codex-Phone"], "1"); }
+  for (const call of h.calls) { assert.equal(call.options.cache, "no-store"); assert.equal(call.options.credentials, "same-origin"); assert.equal(call.options.mode, "same-origin"); assert.equal(call.options.referrerPolicy, "same-origin"); assert.equal(call.options.redirect, "error"); assert.equal(call.options.headers["X-Codex-Phone"], "1"); }
   assert.equal(h.calls[1].options.method, "POST"); assert.equal(h.calls[1].options.headers["Content-Type"], "application/json"); assert.deepEqual(JSON.parse(h.calls[1].options.body), { code: "123456" }); assert.equal(h.saved.size, 0);
 });
 await test("four readonly plan groups preserve literal content and explain saved status", () => {

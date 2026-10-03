@@ -150,7 +150,7 @@
               open.addEventListener("click", async () => {
                 if (open.disabled) return; open.disabled = true;
                 try {
-                  const response = await fetch("/api/transfer/open", { method: "POST", credentials: "same-origin", mode: "same-origin", redirect: "error", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: attachment.id, folder }) });
+                  const response = await fetch("/api/transfer/open", { method: "POST", credentials: "same-origin", mode: "same-origin", referrerPolicy: "same-origin", redirect: "error", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: attachment.id, folder }) });
                   const result = await response.json(); if (!response.ok) throw new Error(result.error || "无法打开，请重试。");
                   status(folder ? "已在电脑打开文件夹。" : "已在电脑打开文件。");
                 } catch (error) { status(error.message || "无法打开，请重试。", true); }
@@ -170,7 +170,7 @@
       const ticket = generation;
       if (!body) controller = abort; else uploadController = abort;
       try {
-        const response = await fetch(`${endpoint}/${path}`, { method: body ? "POST" : "GET", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", signal: abort.signal, headers: { Accept: "application/json", ...(phone ? { "X-Codex-Phone": "1" } : {}) }, ...(body ? { body } : {}) });
+        const response = await fetch(`${endpoint}/${path}`, { method: body ? "POST" : "GET", credentials: "same-origin", mode: "same-origin", referrerPolicy: "same-origin", cache: "no-store", redirect: "error", signal: abort.signal, headers: { Accept: "application/json", ...(phone ? { "X-Codex-Phone": "1" } : {}) }, ...(body ? { body } : {}) });
         if (ticket !== generation) throw Object.assign(new Error("旧连接已取消。"), { cancelled: true });
         options.onConnectionState?.(true);
         let result;
