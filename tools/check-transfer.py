@@ -128,7 +128,8 @@ class TransferChecks(unittest.TestCase):
         desktop = self.direct_send("电脑→手机", [("中文照片.png", original, "image/png")])["message"]
         self.assertEqual(desktop["attachments"][0]["name"], "中文照片.png")
         self.assertTrue(Path(desktop["attachments"][0]["path"]).is_file())
-        self.assertTrue(str(self.library / "互传") in desktop["attachments"][0]["path"])
+        self.assertEqual(Path(desktop["attachments"][0]["path"]).parent.resolve(),
+                         (self.library / "互传").resolve())
         self.pair()
         status, data, _ = self.send("手机→电脑 <script>alert(1)</script>", [("验证图片.jpg", image_bytes("JPEG"), "image/jpeg")])
         self.assertEqual(status, 200, data)
