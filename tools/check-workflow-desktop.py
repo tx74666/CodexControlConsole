@@ -43,7 +43,7 @@ class DesktopWorkflowChecks(unittest.TestCase):
         if "world_console" in sys.modules:
             raise RuntimeError("Run this isolated test as its own Python process; world_console must not be imported earlier.")
         cls.runtime = tempfile.TemporaryDirectory(prefix="codex-workflow-desktop-import-")
-        root = Path(cls.runtime.name)
+        root = Path(cls.runtime.name).resolve()
         data = root / "data"
         data.mkdir()
         # Prevent importing any legacy source cache/user data into this test.
@@ -85,7 +85,7 @@ class DesktopWorkflowChecks(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="codex-workflow-desktop-http-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.assets = self.root / "app"
         self.assets.mkdir()
         (self.assets / "index.html").write_text("<!doctype html><title>Isolated desktop</title>", encoding="utf-8")
