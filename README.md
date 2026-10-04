@@ -48,7 +48,7 @@ Submitted to-dos retain their existing storage key. An unfinished to-do input is
 
 ## Per-device Data
 
-### Phone work records (1.0.37)
+### Phone work records (1.0.38)
 
 The connected phone workspace compares the computer version with its loaded UI assets. A newer workspace reloads automatically only after local drafts and original attachment files are verified saved and recording, uploads, editing, and music playback are idle. After this page has connected successfully, it can reconnect through its existing trusted session without a saved task snapshot or replaying publications and accepted work. If the computer is already offline when the page is first opened, use its reconnect button. Pages loaded before 1.0.37 receive this behavior when they are next opened; the public home-screen app already checks its own updates automatically.
 
@@ -59,6 +59,10 @@ Open **Work → 看图与派工** on the computer or paired phone; `?consoleView
 The phone picture view starts with the image and keeps the execution checklist below the record. Its compact editor grows for longer feedback, keeps the microphone and two send actions reachable, and reveals the selected image when focusing the editor or resizing for the keyboard would obscure it. Scrolling does not pull the reader back. The current discussion notice follows that exact job; completion is shown only after its actual answer is stored in the same record.
 
 Completed App discussions can also supply Python or PowerShell script proposals. Open **审核并执行** to inspect the complete read-only code, its original discussion pictures, and the configured computer, project directory and runner. Edit the task description, then separately confirm execution. The Console backend executes only that selected proposal and returns its real result to the same record; this path needs no model API. A proposal never grants project permissions: generated scripts and the language's runner must already be enabled locally. Changed execution settings, source answers or pictures stop the request for review. To change the code, continue the discussion and review the new proposal.
+
+Ordinary App discussions can offer several separate computer actions. Choose one proposal, inspect its source pictures and project, then confirm that single action. For a whole answer, selected passage or your own instruction that has no executable proposal yet, use **让 App 准备执行方案** to ask the shown destination to prepare one. Preparing a plan does not execute it. Completed proposals use only the capabilities and fixed commands that were configured when that discussion was sent; the result returns to the same record after a separate execution confirmation. Unavailable model actions remain visibly unavailable when no model service is configured.
+
+Each action proposal is one complete fenced `console-action` JSON object with `version:1`, `label`, `instruction` and `action`. The supported actions are `capture_screen`, `command` with a configured `commandId`, and `result_import` with `args.paths` containing project-relative image paths. Multiple options use separate blocks. Arbitrary prose, incomplete blocks and extra execution parameters are not executable proposals. Source answers, original picture hashes and execution settings are checked again when submitting and executing. Accepted fixed commands bind their directory, arguments and timeout; a changed configuration requires a new confirmation, including for older queued commands that did not save this binding.
 
 App scripts use the same result contract as configured commands: read the selected context from `CONSOLE_WORKFLOW_INPUT_FILE`, write images inside `CONSOLE_WORKFLOW_OUTPUT_DIR`, and write a UTF-8 JSON result to `CONSOLE_WORKFLOW_RESULT_MANIFEST`. No verifiable result means the task is not reported as completed. App availability is needed to obtain a new proposal; execution of an accepted proposal belongs to Console's persistent computer queue.
 

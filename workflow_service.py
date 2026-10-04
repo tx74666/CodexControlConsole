@@ -21,7 +21,7 @@ import uuid
 from transfer_store import IncomingFile, TransferError, _image, _filename, _safe_child, MAX_FILE_BYTES
 from workflow_process import WorkflowProcess
 from workflow_transcription import LocalTranscriptionError, local_transcribe, local_transcription_config
-from workflow_script_proposals import script_blocks
+from workflow_script_proposals import script_blocks, action_blocks
 
 MAX_TEXT = 20000
 MAX_UPLOAD = 24 * 1024 * 1024
@@ -324,10 +324,15 @@ class WorkflowService:
                 "status": app_dispatch["status"], "targetKind": app_dispatch["target_kind"],
                 "targetMode": app_dispatch["target_mode"], "targetThreadId": app_dispatch["target_thread_id"],
                 "targetName": app_dispatch["target_name"], "error": app_dispatch["error"]}
+        if "purpose" in payload:
+            value["purpose"] = payload["purpose"]
         if payload.get("appScript"):
             script = payload["appScript"]
             value["scriptProposal"] = {key: script[key] for key in
                 ("sourceMessageId", "blockIndex", "language", "codeSha256", "executionAuthorizationSha256")}
+        if payload.get("appAction"):
+            value["actionProposal"] = {key: payload["appAction"][key] for key in
+                ("sourceMessageId", "blockIndex", "actionSha256", "executionAuthorizationSha256")}
         return value
 
     def _job_public(self, db, row):
@@ -349,6 +354,7 @@ class WorkflowService:
             for message in messages:
                 if message["role"] == "assistant":
                     message["scriptProposals"] = self._script_proposals(db, identifier, message["id"])
+                    message["actionProposals"] = self._action_proposals(db, identifier, message["id"])
             jobs = [self._job_public(db, item) for item in db.execute("SELECT * FROM jobs WHERE record_id=? ORDER BY rowid", (identifier,))]
             record = self._public_record(row)
             previous = db.execute("""SELECT * FROM idea_dispatches WHERE json_extract(snapshot,'$.origin')='workflow_discussion'
@@ -1393,6 +1399,148 @@ class WorkflowService:
             raise WorkflowError("已确认的脚本上下文发生变化。", 409, "script_context_mismatch")
         return self._project(db, grant["projectId"])
 
+    @staticmethod
+    def _action_grant(project, action, command_id=""):
+        command = next((item for item in project["commands"] if item["id"] == command_id), None) if action == "command" else None
+        return {"projectId": project["id"], "projectName": project["name"], "root": project["root"],
+            "action": action, "capabilityGranted": action in project["capabilities"] and (action != "command" or command is not None),
+            "commandId": command_id if action == "command" else "", "argv": list(command["argv"]) if command else [],
+            "timeout": command["timeout"] if command else 0}
+
+    def _action_catalog(self, project):
+        actions = sorted(set(project["capabilities"]) & {"capture_screen", "command", "result_import"})
+        commands = [{"id": item["id"], "name": item["name"]} for item in project["commands"]] if "command" in actions else []
+        grants = [self._action_grant(project, action) for action in actions if action != "command"]
+        grants.extend(self._action_grant(project, "command", item["id"]) for item in commands)
+        return {"version": 1, "allowedActions": actions, "commands": commands, "authorizations": grants}
+
+    def _action_source(self, db, record_id, message_id):
+        try:
+            source = self._script_source(db, record_id, message_id)
+        except WorkflowError as error:
+            raise WorkflowError("方案来源不是当前记录已完成且准确绑定的 App 回答。", 409, "action_source_invalid") from error
+        catalog = source["payload"]["appFrozen"].get("actionPlanning")
+        snapshot = json.loads(self._dispatch(db, source["source"]["dispatchId"])["snapshot"])
+        if (not isinstance(catalog, dict) or catalog.get("version") != 1 or
+                snapshot.get("actionPlanningSha256") != hashlib.sha256(_json(catalog).encode("utf-8")).hexdigest()):
+            raise WorkflowError("这轮历史回答没有冻结执行能力；请用原上下文重新准备方案。", 409, "action_source_invalid")
+        return source
+
+    def _action_authorization(self, db, source, block):
+        action, command_id = block["action"], block.get("commandId", "")
+        catalog = source["payload"]["appFrozen"]["actionPlanning"]
+        grant = next((item for item in catalog["authorizations"] if item["action"] == action and item["commandId"] == command_id), None)
+        if grant is None:
+            grant = {"projectId": source["payload"]["projectId"], "projectName": source["payload"]["appFrozen"]["projectName"],
+                "root": "", "action": action, "capabilityGranted": False, "commandId": command_id, "argv": [], "timeout": 0}
+            reason = "原讨论未授权此执行能力或指定命令；请先在电脑配置后重新准备方案。"
+        else:
+            try:
+                project = self._project(db, grant["projectId"])
+                if self._action_grant(project, action, command_id) != grant:
+                    raise WorkflowError("项目执行授权已变更；请重新准备并审核方案。", 403, "permission_changed")
+                if action == "capture_screen" and self.callbacks.get("capture_screen") is None:
+                    raise WorkflowError("电脑截图能力尚未配置。", 503)
+                if action == "result_import":
+                    for name in block["args"]["paths"]:
+                        self._contained(Path(project["root"]), name)
+            except (WorkflowError, OSError) as error:
+                reason = str(error)
+            else:
+                reason = ""
+        return grant, hashlib.sha256(_json(grant).encode("utf-8")).hexdigest(), reason
+
+    def _action_proposals(self, db, record_id, message_id):
+        try:
+            source = self._action_source(db, record_id, message_id)
+        except WorkflowError:
+            return []
+        blocks = action_blocks(source["text"])
+        if not blocks:
+            return []
+        try:
+            self._script_images(db, record_id, source)
+            image_error = ""
+        except (WorkflowError, TransferError, OSError) as error:
+            image_error = str(error)
+        result = []
+        for block in blocks:
+            grant, digest, reason = self._action_authorization(db, source, block)
+            reason = image_error or reason
+            result.append({**block, "sourceMessageId": message_id, "projectId": source["payload"]["projectId"],
+                "attachmentIds": list(source["payload"]["context"]["attachmentIds"]), "executionAuthorization": grant,
+                "executionAuthorizationSha256": digest, "executable": not bool(reason), "unavailableReason": reason})
+        return result
+
+    def _freeze_action_proposal(self, db, record, payload):
+        reference = payload.get("actionProposal")
+        fields = {"sourceMessageId", "blockIndex", "actionSha256", "executionAuthorizationSha256"}
+        if (not isinstance(reference, dict) or set(reference) != fields or
+                type(reference.get("blockIndex")) is not int or reference["blockIndex"] < 0 or
+                any(not isinstance(reference.get(key), str) or not re.fullmatch(r"[a-f0-9]{64}", reference[key])
+                    for key in ("actionSha256", "executionAuthorizationSha256"))):
+            raise WorkflowError("请选择已审核的完整执行方案。", 400, "action_reference_invalid")
+        source = self._action_source(db, record["id"], reference["sourceMessageId"])
+        block = next((item for item in action_blocks(source["text"]) if item["blockIndex"] == reference["blockIndex"]), None)
+        if block is None or block["actionSha256"] != reference["actionSha256"]:
+            raise WorkflowError("执行方案内容已变更，请重新打开并审核。", 409, "action_source_changed")
+        if payload["projectId"] != source["payload"]["projectId"]:
+            raise WorkflowError("执行方案不属于所选项目。", 403, "action_project_mismatch")
+        grant, digest, reason = self._action_authorization(db, source, block)
+        if digest != reference["executionAuthorizationSha256"] or reason:
+            raise WorkflowError(reason or "项目执行授权已变更，请重新准备并审核方案。", 403, "permission_changed")
+        expected = {"sourceMessageId": reference["sourceMessageId"],
+                    "attachmentIds": list(source["payload"]["context"]["attachmentIds"])}
+        context = payload["context"]
+        if (set(context) - {"sourceMessageId", "attachmentIds", "selectedText", "referenceIds"} or
+                context.get("sourceMessageId") != expected["sourceMessageId"] or context.get("attachmentIds") != expected["attachmentIds"] or
+                context.get("selectedText") or context.get("referenceIds")):
+            raise WorkflowError("执行方案只能使用原回答及原讨论图片。", 403, "action_context_mismatch")
+        images = self._script_images(db, record["id"], source)
+        payload["context"] = {**expected, "selectedText": "", "referenceIds": []}
+        payload["action"], payload["args"] = block["action"], block.get("args", {})
+        if block["action"] == "command":
+            payload["commandId"] = block["commandId"]
+        payload["appAction"] = {**reference, "proposal": block, "executionAuthorization": grant,
+            "source": source["source"], "images": images, "sourceText": source["text"]}
+
+    def _check_frozen_action(self, db, record_id, payload):
+        frozen = payload["appAction"]
+        source = self._action_source(db, record_id, frozen["sourceMessageId"])
+        block = next((item for item in action_blocks(source["text"]) if item["blockIndex"] == frozen["blockIndex"]), None)
+        if (block is None or block != frozen["proposal"] or source["source"] != frozen["source"] or
+                source["text"] != frozen["sourceText"] or block["actionSha256"] != frozen["actionSha256"]):
+            raise WorkflowError("已确认的执行方案来源发生变化；未继续执行。", 409, "action_source_changed")
+        grant, digest, reason = self._action_authorization(db, source, block)
+        if (reason or grant != frozen["executionAuthorization"] or digest != frozen["executionAuthorizationSha256"] or
+                payload["projectId"] != grant["projectId"]):
+            raise WorkflowError(reason or "项目执行授权已变更；请重新确认后派工。", 403, "permission_changed")
+        expected = {"sourceMessageId": frozen["sourceMessageId"], "attachmentIds": [item["id"] for item in frozen["images"]],
+                    "selectedText": "", "referenceIds": []}
+        if (payload["context"] != expected or payload.get("action") != block["action"] or
+                payload.get("args", {}) != block.get("args", {}) or
+                payload.get("commandId", "") != block.get("commandId", "")):
+            raise WorkflowError("已确认的执行方案或上下文发生变化。", 409, "action_context_mismatch")
+        if self._script_images(db, record_id, source) != frozen["images"]:
+            raise WorkflowError("原讨论图片已变更；方案未继续执行。", 409, "context_changed")
+        return self._project(db, grant["projectId"])
+
+    def _freeze_command(self, project, payload):
+        grant = self._action_grant(project, "command", payload["commandId"])
+        payload["commandAuthorization"] = grant
+        payload["commandAuthorizationSha256"] = hashlib.sha256(_json(grant).encode("utf-8")).hexdigest()
+
+    def _check_frozen_command(self, db, payload):
+        grant = payload.get("commandAuthorization")
+        if not isinstance(grant, dict):
+            raise WorkflowError("历史指定命令未冻结执行环境；请重新审核并提交，不能直接重试。", 403, "permission_changed")
+        current = self._project(db, payload["projectId"])
+        if (payload.get("action") != "command" or not grant.get("capabilityGranted") or
+                hashlib.sha256(_json(grant).encode("utf-8")).hexdigest() != payload.get("commandAuthorizationSha256") or
+                self._action_grant(current, "command", payload.get("commandId", "")) != grant):
+            raise WorkflowError("项目执行授权已变更；任务未继续执行，请重新确认后派工。", 403, "permission_changed")
+        return current
+
     def _receipt(self, db, kind, body, response=None):
         try:
             request_id = str(uuid.UUID(body.get("requestId", "")))
@@ -1551,7 +1699,8 @@ class WorkflowService:
                 history.append({"role": "selected", "content": _text(item.get("text", ""))})
         if sum(len(item["content"]) for item in history) > 65000:
             raise WorkflowError("所选上下文过长，请缩小引用范围。")
-        return {"recordTitle": record["title"], "projectName": project["name"], "history": history, "images": images}
+        return {"recordTitle": record["title"], "projectName": project["name"], "history": history, "images": images,
+                "actionPlanning": self._action_catalog(project)}
 
     @staticmethod
     def _file_digest(path):
@@ -1573,6 +1722,24 @@ class WorkflowService:
         target, frozen = payload["appTarget"], payload["appFrozen"]
         snapshot = {"origin": "workflow_discussion", "purpose": "discuss", "recordId": record["id"],
             "jobId": job_id, "title": frozen["recordTitle"], "attachmentIds": payload["context"]["attachmentIds"]}
+        planning = frozen.get("actionPlanning")
+        if planning is not None:
+            snapshot["actionPlanningSha256"] = hashlib.sha256(_json(planning).encode("utf-8")).hexdigest()
+            snapshot["discussionPurpose"] = payload.get("purpose", "discussion")
+        action_contract = ""
+        if planning is not None:
+            action_contract = (
+                "本轮只准备可审核方案，不能实际执行。用户会另行选择一个方案并明确确认。\n" +
+                ("用户本轮明确要求准备电脑执行方案：能在下列已授权能力内完成时，请返回一个或多个独立完整的 console-action 方案。\n"
+                 if payload.get("purpose") == "execution_plan" else
+                 "如果本次讨论得到明确可执行建议，可以附上独立的 console-action 方案；纯讨论无需强行编造方案。\n") +
+                "每个方案使用完整闭合的 ```console-action 围栏，内容是严格 JSON {\"version\":1,\"label\":\"方案名称\","
+                "\"instruction\":\"单项执行要求\",\"action\":\"capture_screen\"}；指定命令仅额外添加 \"commandId\":\"下列已授权 ID\"；"
+                "导入结果则 action 为 result_import 且仅额外添加 \"args\":{\"paths\":[\"已知项目内相对图片路径\"]}（最多4张）。\n"
+                "不得添加任意 argv、代码、脚本、绝对路径、root、运行程序、超时或其他字段；不得把多个方案合并执行。"
+                "只能选择下列 allowedActions 与 commands 中的能力和 ID；命令名称用于解释，不可当成任意参数。"
+                "命令执行只调用电脑已配置的固定命令，其结果必须遵循 text/files 结果清单契约。"
+                "若没有可用能力、缺必要项目细节或图片路径，请说明缺口，不臆造命令或执行对象。\n\n")
         prompt = (f"[Codex Console 发布编号：{identifier}]\n\n"
             "这是用户在 Console 当前工作记录上明确确认的一轮讨论。只分析问题、阅读明确选定的图片并给出建议。\n"
             "禁止执行修改、运行脚本或命令、发送消息、建立其他聊天、读取其他工作记录、凭据或私人文件。\n"
@@ -1586,9 +1753,10 @@ class WorkflowService:
             "把可判断效果的图片写到该目录；向 CONSOLE_WORKFLOW_RESULT_MANIFEST 指向的文件写 JSON "
             "{\"text\":真实结果说明,\"files\":[输出目录内相对图片路径]}。无实际说明和有效图片不能声称完成。\n"
             "提案不扩大项目授权，不读取凭据或无关私人文件，不关闭其他应用。若缺少必要工程信息或运行条件，"
-            "先说明缺口；不要臆造工程对象、路径或可用能力。代码只有在用户看清项目、运行程序与完整代码并另行确认后才可能运行。\n\n" +
+            "先说明缺口；不要臆造工程对象、路径或可用能力。代码只有在用户看清项目、运行程序与完整代码并另行确认后才可能运行。\n\n" + action_contract +
             _json({"recordTitle": frozen["recordTitle"], "projectName": frozen["projectName"],
-                "question": payload["text"], "history": frozen["history"], "selectedImages": frozen["images"]}))
+                "question": payload["text"], "history": frozen["history"], "selectedImages": frozen["images"],
+                **({"allowedActions": planning["allowedActions"], "commands": planning["commands"]} if planning is not None else {})}))
         db.execute("INSERT INTO idea_dispatches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, "", str(uuid.UUID(request_id)), _json(snapshot), prompt, target["kind"],
              target["mode"], target["threadId"] or None, target["name"], "normal", "pending", "{}", "", None, now, now, now))
@@ -1597,7 +1765,7 @@ class WorkflowService:
     def _discuss_app(self, body, authorize=None):
         if authorize:
             authorize()
-        allowed = {"requestId", "recordId", "text", "computerId", "projectId", "context", "appTarget"}
+        allowed = {"requestId", "recordId", "text", "computerId", "projectId", "context", "appTarget", "purpose"}
         if not isinstance(body, dict) or set(body) - allowed:
             raise WorkflowError("App 讨论内容无效。")
         with self._db() as db:
@@ -1622,7 +1790,10 @@ class WorkflowService:
                 if "attachmentIds" not in context:
                     context["attachmentIds"] = [record["primary_attachment_id"]] if record["primary_attachment_id"] else []
                     context = self._context(db, record["id"], context)
-                payload = {"computerId": computer["id"], "projectId": project["id"], "text": text, "context": context}
+                purpose = body.get("purpose", "discussion")
+                if not isinstance(purpose, str) or purpose not in {"discussion", "execution_plan"}:
+                    raise WorkflowError("App 讨论用途无效。")
+                payload = {"computerId": computer["id"], "projectId": project["id"], "text": text, "context": context, "purpose": purpose}
                 payload["appTarget"] = self._app_target(db, body["appTarget"], bool(context["attachmentIds"]))
                 payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, project)
                 job_id, now = uuid.uuid4().hex, _now()
@@ -1643,7 +1814,7 @@ class WorkflowService:
             authorize()
         allowed = {"requestId", "recordId", "text", "computerId", "projectId", "action", "commandId", "context", "attachmentId", "args"}
         if kind == "execute":
-            allowed.add("scriptProposal")
+            allowed.update({"scriptProposal", "actionProposal"})
         if kind == "transcribe":
             allowed.add("transcriptionSource")
         if not isinstance(body, dict) or set(body) - allowed:
@@ -1664,11 +1835,13 @@ class WorkflowService:
                 payload["projectId"] = project["id"]
                 payload["text"] = _text(body.get("text", ""))
                 context = body.get("context", json.loads(record["context"]))
-                if "scriptProposal" in body and "context" not in body:
-                    reference = body["scriptProposal"]
+                reference_kind = "actionProposal" if "actionProposal" in body else "scriptProposal" if "scriptProposal" in body else None
+                if reference_kind and "context" not in body:
+                    reference = body[reference_kind]
                     if not isinstance(reference, dict):
-                        raise WorkflowError("请选择已审核的完整脚本提案。", 400, "script_reference_invalid")
-                    source = self._script_source(db, record["id"], reference.get("sourceMessageId"))
+                        raise WorkflowError("请选择已审核的完整提案。", 400, "action_reference_invalid" if reference_kind == "actionProposal" else "script_reference_invalid")
+                    reader = self._action_source if reference_kind == "actionProposal" else self._script_source
+                    source = reader(db, record["id"], reference.get("sourceMessageId"))
                     context = {"sourceMessageId": reference["sourceMessageId"],
                                "attachmentIds": list(source["payload"]["context"]["attachmentIds"])}
                 payload["context"] = self._context(db, record["id"], context)
@@ -1678,7 +1851,11 @@ class WorkflowService:
                     payload["context"]["attachmentIds"] = [record["primary_attachment_id"]] if record["primary_attachment_id"] else []
                     payload["context"] = self._context(db, record["id"], payload["context"])
                 if kind == "execute":
-                    action = body.get("action", "auto")
+                    if "actionProposal" in body:
+                        if set(body) & {"action", "commandId", "args", "attachmentId", "scriptProposal"}:
+                            raise WorkflowError("执行方案只能提交已审核的引用，不能覆盖执行参数。", 400, "action_reference_invalid")
+                        self._freeze_action_proposal(db, record, payload)
+                    action = payload.get("action", "auto")
                     if not isinstance(action, str) or action not in ACTIONS:
                         raise WorkflowError("执行能力无效。")
                     payload["action"] = action
@@ -1686,15 +1863,19 @@ class WorkflowService:
                         raise WorkflowError("此项目未授权该能力。", 403)
                     if action == "generated_script" and not project["allowGeneratedScripts"]:
                         raise WorkflowError("此项目未授权生成脚本。", 403)
-                    if action == "command" and not any(c["id"] == body.get("commandId") for c in project["commands"]):
+                    if action == "command" and not any(c["id"] == payload.get("commandId") for c in project["commands"]):
                         raise WorkflowError("指定脚本未授权。", 403)
-                    args = body.get("args", {})
+                    args = payload.get("args", {})
                     if not isinstance(args, dict) or len(_json(args)) > 4096:
                         raise WorkflowError("任务参数无效。")
                     if "scriptProposal" in body:
                         if action != "generated_script" or args or "commandId" in body or "attachmentId" in body:
                             raise WorkflowError("脚本提案只能执行已审核的那一段代码。", 400, "script_reference_invalid")
                         self._freeze_script_proposal(db, record, payload)
+                    if action == "command":
+                        if set(args) - {"commandId"} or ("commandId" in args and args["commandId"] != payload["commandId"]):
+                            raise WorkflowError("指定脚本不接受未经授权的命令参数。", 403)
+                        self._freeze_command(project, payload)
                 if kind in {"execute", "discuss"} and not payload["text"].strip():
                     raise WorkflowError("请填写明确评价或任务要求。")
                 if kind == "transcribe":
@@ -1746,6 +1927,10 @@ class WorkflowService:
                 self._context(db, parent["record_id"], payload.get("context", {}))
                 if payload.get("appScript"):
                     self._check_frozen_script(db, parent["record_id"], payload)
+                if payload.get("appAction"):
+                    self._check_frozen_action(db, parent["record_id"], payload)
+                if payload.get("action") == "command":
+                    self._check_frozen_command(db, payload)
                 job_id, now = uuid.uuid4().hex, _now()
                 status, error = "queued", ""
                 if payload.get("appDispatchId"):
@@ -2051,6 +2236,10 @@ class WorkflowService:
             project = self._project(db, payload["projectId"])
             if payload.get("appScript"):
                 project = self._check_frozen_script(db, row["record_id"], payload)
+            if payload.get("appAction"):
+                project = self._check_frozen_action(db, row["record_id"], payload)
+            if payload.get("action") == "command":
+                project = self._check_frozen_command(db, payload)
         if row["kind"] == "transcribe":
             with self._db() as db:
                 item = db.execute("SELECT * FROM attachments WHERE id=? AND record_id=?", (payload["attachmentId"], row["record_id"])).fetchone()
@@ -2077,13 +2266,15 @@ class WorkflowService:
                     "provider": result.get("provider", "model_api"), "language": result.get("language", "")}, "", []
         action = payload.get("action", "auto")
         app_script = payload.get("appScript")
+        app_action = payload.get("appAction")
         needs_model = row["kind"] == "discuss" or (action in {"auto", "generated_script"} and not app_script)
         if needs_model:
             self._require_model()
-        if app_script:
+        frozen_app = app_script or app_action
+        if frozen_app:
             model_input = {"text": payload["text"],
-                "images": [{"path": Path(item["path"]), "mimeType": item["mimeType"]} for item in app_script["images"]],
-                "context": [{"role": "assistant", "content": app_script["sourceText"]}]}
+                "images": [{"path": Path(item["path"]), "mimeType": item["mimeType"]} for item in frozen_app["images"]],
+                "context": [{"role": "assistant", "content": frozen_app["sourceText"]}]}
         else:
             model_input = self._model_input(row, payload, project, for_model=needs_model)
         if row["kind"] == "discuss":
@@ -2130,6 +2321,8 @@ class WorkflowService:
             if callback is None:
                 raise WorkflowError("电脑截图能力尚未配置。", 503)
             with self._db() as db:
+                if app_action:
+                    self._check_frozen_action(db, row["record_id"], payload)
                 self._execution_project(db, project, action)
                 captured = callback(output / "screen.png")
             path = Path(captured) if captured else output / "screen.png"
@@ -2142,6 +2335,8 @@ class WorkflowService:
             if set(args) - {"paths"} or not isinstance(args.get("paths"), list) or not 1 <= len(args["paths"]) <= 4:
                 raise WorkflowError("请提供已授权项目内的结果图片。")
             with self._db() as db:
+                if app_action:
+                    self._check_frozen_action(db, row["record_id"], payload)
                 current = self._execution_project(db, project, action)
                 paths = [self._contained(Path(current["root"]), name) for name in args["paths"]]
             result = {"text": "已导入项目结果。", "files": []}
@@ -2179,7 +2374,9 @@ class WorkflowService:
             argv = [self._replace(arg, replacements) for arg in argv]
             log = self._execute(row, argv, project, job_dir, output, manifest, timeout, payload["text"],
                                 action=action, command_id=command_id, language=language,
-                                app_script_payload=payload if app_script else None)
+                                app_script_payload=payload if app_script else None,
+                                app_action_payload=payload if app_action else None,
+                                command_payload=payload if payload.get("action") == "command" else None)
             if not manifest.is_file() or manifest.stat().st_size > 65536:
                 raise WorkflowError("脚本没有生成有效结果清单；不能确认任务完成。")
             self._contained(output, "result-manifest.json")
@@ -2191,13 +2388,15 @@ class WorkflowService:
                     not isinstance(result.get("files", []), list) or len(result.get("files", [])) > 4):
                 raise WorkflowError("脚本结果清单无效。")
             paths = [self._contained(output, name) for name in result.get("files", [])]
-        result_text = _text(result.get("text", "" if app_script else "任务已完成。"))
+        result_text = _text(result.get("text", "" if frozen_app else "任务已完成。"))
         if not result_text.strip() and not paths:
             raise WorkflowError("没有可验证的任务结果。")
         ids = []
         try:
             with self._db() as db:
                 if action == "result_import":
+                    if app_action:
+                        self._check_frozen_action(db, row["record_id"], payload)
                     current = self._execution_project(db, project, action)
                     paths = [self._contained(Path(current["root"]), name) for name in args["paths"]]
                 for path in paths:
@@ -2232,7 +2431,7 @@ class WorkflowService:
         return path
 
     def _execute(self, row, argv, project, job_dir, output, manifest, timeout, instruction, *, action, command_id=None,
-                 language=None, app_script_payload=None):
+                 language=None, app_script_payload=None, app_action_payload=None, command_payload=None):
         env = self.models.execution_environment(os.environ) if self.models is not None else os.environ.copy()
         env.update({"CONSOLE_WORKFLOW_JOB_DIR": str(job_dir), "CONSOLE_WORKFLOW_OUTPUT_DIR": str(output),
                     "CONSOLE_WORKFLOW_RESULT_MANIFEST": str(manifest), "CONSOLE_WORKFLOW_INSTRUCTION": instruction,
@@ -2249,6 +2448,10 @@ class WorkflowService:
             with self._db() as db:
                 if app_script_payload:
                     self._check_frozen_script(db, row["record_id"], app_script_payload)
+                if app_action_payload:
+                    self._check_frozen_action(db, row["record_id"], app_action_payload)
+                if command_payload:
+                    self._check_frozen_command(db, command_payload)
                 current = self._execution_project(db, project, action, command_id, language)
                 process = WorkflowProcess(argv, cwd=current["root"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                           stdin=subprocess.DEVNULL, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

@@ -133,6 +133,7 @@ $PythonChecks = @(
   "tools/check-workflow.py",
   "tools/check-workflow-app-bridge.py",
   "tools/check-workflow-app-scripts.py",
+  "tools/check-workflow-app-actions.py",
   "tools/check-workflow-transcription.py",
   "tools/check-workflow-process.py",
   "tools/check-workflow-http.py",
