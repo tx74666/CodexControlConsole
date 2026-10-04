@@ -407,11 +407,12 @@ class WorkflowService(NativeWorkMixin):
                 + (value["body"] or "（尚无正文，请先协助明确这个想法。）"))
 
     @staticmethod
-    def _public_idea(row):
+    def _public_idea(db, row):
         value = {"id": row["id"], "title": row["title"], "body": row["body"], "stage": row["stage"],
                 "priority": row["priority"], "parentId": row["parent_id"], "targetKind": row["target_kind"],
                 "targetThreadId": row["target_thread_id"], "targetName": row["target_name"],
-                "revision": row["revision"], "createdAt": row["created_at"], "updatedAt": row["updated_at"]}
+                "revision": row["revision"], "createdAt": row["created_at"], "updatedAt": row["updated_at"],
+                "workflowRecordId": WorkflowService._setting(db, "task-record:" + row["id"])}
         value["publishPrompt"] = WorkflowService._idea_prompt(value)
         return value
 
@@ -461,7 +462,7 @@ class WorkflowService(NativeWorkMixin):
             rows = db.execute("""SELECT * FROM ideas ORDER BY
                 CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,updated_at DESC,id""").fetchall()
             dispatches = db.execute("SELECT * FROM idea_dispatches WHERE COALESCE(json_extract(snapshot,'$.origin'),'idea') NOT IN ('workflow_discussion','workflow_work') ORDER BY created_at DESC,id").fetchall()
-            return {"ideas": [{**self._public_idea(row), "workflowRecordId": self._setting(db, "task-record:" + row["id"])} for row in rows], "revision": revision,
+            return {"ideas": [self._public_idea(db, row) for row in rows], "revision": revision,
                     "dispatches": [self._public_dispatch(row) for row in dispatches],
                     "refinements": [self._public_refinement(row) for row in db.execute("SELECT * FROM idea_refinements ORDER BY created_at DESC,id")],
                     "targets": self._setting(db, "incubator_targets") or []}
@@ -524,7 +525,7 @@ class WorkflowService(NativeWorkMixin):
                     if previous["revision"] != body["expectedRevision"]:
                         raise WorkflowError("想法已在另一端修改；请保留草稿，刷新后再合并。", 409, "revision_conflict")
                     identifier = previous["id"]
-                    clean = self._clean_idea(db, {**self._public_idea(previous), **body}, identifier)
+                    clean = self._clean_idea(db, {**self._public_idea(db, previous), **body}, identifier)
                     now, revision = _now(), previous["revision"] + 1
                     db.execute("""UPDATE ideas SET title=?,body=?,stage=?,priority=?,parent_id=?,target_kind=?,
                         target_thread_id=?,target_name=?,revision=?,updated_at=? WHERE id=?""",
@@ -541,7 +542,7 @@ class WorkflowService(NativeWorkMixin):
                          clean["targetKind"], clean["targetThreadId"], clean["targetName"], 1, now, now))
                 self._receipt(db, kind, body, {"ideaId": identifier})
                 self._revision(db, True)
-            result = {"idea": self._public_idea(self._idea(db, identifier)), "revision": self._revision(db), "duplicate": old is not None}
+            result = {"idea": self._public_idea(db, self._idea(db, identifier)), "revision": self._revision(db), "duplicate": old is not None}
             if authorize:
                 authorize()
             return result
@@ -898,7 +899,7 @@ class WorkflowService(NativeWorkMixin):
             if old:
                 dispatch_id = old["dispatchId"]
             else:
-                idea = self._public_idea(self._idea(db, identifier))
+                idea = self._public_idea(db, self._idea(db, identifier))
                 if idea["revision"] != body["expectedRevision"]:
                     raise WorkflowError("想法已变更；请保留草稿，重新核对发布内容。", 409, "revision_conflict")
                 if db.execute("SELECT 1 FROM idea_dispatches WHERE idea_id=? AND status IN ('pending','claimed','waiting','needs_review')", (identifier,)).fetchone():
@@ -920,7 +921,7 @@ class WorkflowService(NativeWorkMixin):
                 self._receipt(db, "incubator_publish", body, {"dispatchId": dispatch_id})
                 self._revision(db, True)
             result = {"dispatch": self._public_dispatch(self._dispatch(db, dispatch_id)),
-                      "idea": self._public_idea(self._idea(db, identifier)), "revision": self._revision(db), "duplicate": old is not None}
+                      "idea": self._public_idea(db, self._idea(db, identifier)), "revision": self._revision(db), "duplicate": old is not None}
             session_id = result["dispatch"]["refinementId"]
             if session_id:
                 result["refinement"] = self._public_refinement(db.execute("SELECT * FROM idea_refinements WHERE id=?", (session_id,)).fetchone())
@@ -1008,7 +1009,7 @@ class WorkflowService(NativeWorkMixin):
             (thread_id, "completed" if final else "active", now, session["id"]))
         if not final:
             next_round, next_id = snapshot["round"] + 1, uuid.uuid4().hex
-            next_idea = self._public_idea(self._idea(db, idea["id"]))
+            next_idea = self._public_idea(db, self._idea(db, idea["id"]))
             next_snapshot = {key: next_idea[key] for key in ("title", "body", "stage", "priority", "revision")}
             next_snapshot.update(purpose="refine", refinementId=session["id"], round=next_round, roundLimit=session["round_limit"])
             nonce = str(uuid.uuid5(uuid.NAMESPACE_URL, f"console-refinement:{session['id']}:{next_round}"))
@@ -1224,7 +1225,7 @@ class WorkflowService(NativeWorkMixin):
             if snapshot.get("origin") in {"workflow_discussion", "workflow_work"}:
                 response["job"] = self._job_public(db, self._app_dispatch_job(db, row, snapshot))
             else:
-                response["idea"] = self._public_idea(self._idea(db, row["idea_id"]))
+                response["idea"] = self._public_idea(db, self._idea(db, row["idea_id"]))
             refinement_id = response["dispatch"]["refinementId"]
             if refinement_id:
                 response["refinement"] = self._public_refinement(db.execute("SELECT * FROM idea_refinements WHERE id=?", (refinement_id,)).fetchone())

@@ -102,6 +102,42 @@ class IncubatorChecks(unittest.TestCase):
         self.error(lambda: self.service.incubator_update({**update_payload, "requestId": payload["requestId"]}), 409)
         self.assertEqual(self.service.incubator_list()["ideas"], [applied["idea"]])
 
+    def test_task_record_link_is_read_only_and_shared_by_all_idea_responses(self):
+        payload = request(title="Same task across Chat and Work", body="Original task body")
+        first = self.service.incubator_create(payload)
+        self.assertIsNone(first["idea"]["workflowRecordId"])
+        updated = self.update(first["idea"], priority="high")
+        self.assertIsNone(updated["workflowRecordId"])
+        self.assertEqual(self.service.incubator_list()["ideas"], [updated])
+        self.assertEqual(self.service.incubator_create(payload)["idea"], updated)
+        self.assertEqual(self.snapshot(), {name: [] for name in ("records", "messages", "attachments", "jobs")})
+        self.assertEqual(self.service.incubator_dispatches()["dispatches"], [])
+        with self.service._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'task-record:%'").fetchone()[0], 0)
+
+        self.service.configure_projects([{ "id": "console", "name": "Fixture", "root": str(self.root),
+            "capabilities": ["capture_screen"], "allowGeneratedScripts": False}])
+        record_id = self.service.task_record(request(ideaId=updated["id"], expectedRevision=updated["revision"],
+            projectId="console"))["record"]["id"]
+        linked = self.update(updated, body="Revised original task body")
+        self.assertEqual(linked["workflowRecordId"], record_id)
+        self.assertEqual(self.service.incubator_list()["ideas"], [linked])
+        self.assertEqual(self.service.incubator_create(payload)["idea"], linked)
+        self.assertEqual(len(self.service.list()["records"]), 1)
+        self.assertEqual(self.service.incubator_dispatches()["dispatches"], [])
+
+        published = self.publish(linked)
+        self.assertEqual(published["idea"]["workflowRecordId"], record_id)
+        self.assertEqual(self.service.incubator_list()["ideas"], [published["idea"]])
+        claimed = self.service.incubator_claim(request())["dispatch"]
+        done_payload = request(id=claimed["id"], claimToken=claimed["claimToken"], status="completed",
+            targetThreadId=str(uuid.uuid4()), result={"text": "Actual fixture reply", "turnId": "linked-task-turn"})
+        done = self.service.incubator_attach_result(done_payload)
+        self.assertEqual(done["idea"]["workflowRecordId"], record_id)
+        self.assertEqual(self.service.incubator_list()["ideas"], [done["idea"]])
+        self.assertEqual(self.service.incubator_attach_result(done_payload)["idea"], done["idea"])
+        self.assertEqual(len(self.service.list()["records"]), 1)
+
     def test_parent_tree_rejects_self_ancestor_missing_and_invalid_ids(self):
         parent = self.create(title="Parent")
         child = self.create(title="Child", parentId=parent["id"])
