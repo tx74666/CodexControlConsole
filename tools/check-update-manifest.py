@@ -103,6 +103,9 @@ def main():
     assert workflow.index('Defender scan release artifacts') < workflow.index('Build verified updater manifest') < workflow.index('Verify release downloads') < workflow.index('Publish GitHub Release')
     assert 'python tools/build-update-manifest.py --version "$env:RELEASE_VERSION" --directory dist' in workflow
     assert '            "update-manifest.json"' in workflow and '            dist/update-manifest.json' in workflow
+    publisher = (ROOT / 'tools/publish-release.ps1').read_text(encoding='utf-8')
+    expected_assets = publisher.split('$ExpectedAssets = @(', 1)[1].split(')', 1)[0]
+    assert all(f'"{name}"' in expected_assets for name in (*builder.ASSET_NAMES, 'update-manifest.json'))
     print('PASS verified update manifest: fixed release URLs, exact hashes, version/size/link boundaries, unchanged binaries, exclusive output, manifest-first updater and pipeline publication')
 
 

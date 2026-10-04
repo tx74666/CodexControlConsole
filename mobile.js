@@ -39,6 +39,7 @@
   }) || null;
   function selectWorkView(value) {
     workView = ["ideas", "conversations", "workflow"].includes(value) ? value : "ideas";
+    document.body.dataset.workView = workView;
     if (el("phoneWorkIdeas")) el("phoneWorkIdeas").hidden = workView !== "ideas";
     if (el("phoneConversationsPanel")) el("phoneConversationsPanel").hidden = workView !== "conversations";
     const workflow = el("phoneWorkflowDetails"); if (workflow) { workflow.hidden = workView !== "workflow"; if (workView === "workflow") workflow.open = true; }

@@ -48,11 +48,13 @@ Submitted to-dos retain their existing storage key. An unfinished to-do input is
 
 ## Per-device Data
 
-### Phone work records (1.0.34)
+### Phone work records (1.0.35)
 
 Open **Work → 看图与派工** on the computer or paired phone; `?consoleView=work&workView=workflow` on the desktop and `?tab=work&workView=workflow` on the phone open it directly. A record keeps its original pictures, feedback, model discussion, submitted jobs and returned images together. The phone offers image-first, image with text, image-only and text layouts; its editor has separate **讨论** and **交给电脑** actions. A whole suggestion, selected text or one model option opens an editable dispatch form with the computer, project and action shown before submission. The computer stores accepted work in its own SQLite queue and runs one job at a time, independently of Codex/Work and the phone page. Pictures are bound when the task is accepted and remain the same after retries or a later primary-image change.
 
 **讨论** defaults to the signed-in App route, with its destination shown before sending. A new local Codex chat can read only the selected pictures through their private local files; later discussion can reuse that record's verified chat. Existing ChatGPT chats currently accept text only, so they cannot be selected for a picture discussion. The folded discussion settings retain an optional model-service route. App acceptance, an actual answer and computer execution are separate states: the answer returns to this record and never executes a suggestion automatically. App discussion requires the authorized App dispatcher to be available; the Console computer executor and stored results do not depend on that chat remaining connected.
+
+The phone picture view starts with the image and keeps the execution checklist below the record. Its compact editor grows for longer feedback, keeps the microphone and two send actions reachable, and reveals the selected image when focusing the editor or resizing for the keyboard would obscure it. Scrolling does not pull the reader back. The current discussion notice follows that exact job; completion is shown only after its actual answer is stored in the same record.
 
 In **模型与项目设置** on the computer, optional Responses or Chat Completions compatible providers remain available. Keys use an explicitly named environment variable or a write-only Windows DPAPI store. Phone configuration is read-only. Explicit screenshots, configured commands and existing-result imports work without a model API. Only the Console project is enabled initially, with screenshot/result-import permissions; other projects and generated scripts require explicit local configuration.
 

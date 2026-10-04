@@ -166,7 +166,8 @@ while ((Get-Date) -lt $Deadline) {
     $Assets = @($Release.assets)
     $ExpectedAssets = @(
       "CodexControlConsole-Setup-x64.exe",
-      "CodexControlConsole-Windows-x64.zip"
+      "CodexControlConsole-Windows-x64.zip",
+      "update-manifest.json"
     )
     $ActualAssets = @($Assets | ForEach-Object { $_.name } | Sort-Object)
     if (($ActualAssets -join "`n") -ne (($ExpectedAssets | Sort-Object) -join "`n")) {

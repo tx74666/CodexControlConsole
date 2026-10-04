@@ -11,16 +11,16 @@
   <link rel="manifest" href="/mobile.webmanifest">
   <link rel="apple-touch-icon" href="/phone/phone-icon-180.png?v=phone-white-72" sizes="180x180">
   <link rel="icon" href="/phone/phone-icon-192.png?v=phone-white-72" type="image/png">
-  <link rel="stylesheet" href="/mobile.css?v=console-workflow-app-1.0.34-20261004">
+  <link rel="stylesheet" href="/mobile.css?v=console-workflow-ui-1.0.35-20261004">
   <link rel="stylesheet" href="/transfer-panel.css?v=console-transfer-1.0.30-phone-message-20261004">
   <script src="/transfer-panel.js?v=console-transfer-1.0.30-phone-message-20261004" defer></script>
-  <link rel="stylesheet" href="/workflow-panel.css?v=console-workflow-app-1.0.34-20261004">
-  <script src="/workflow-panel.js?v=console-workflow-app-1.0.34-20261004" defer></script>
-  <link rel="stylesheet" href="/incubator-panel.css?v=console-workflow-app-1.0.34-20261004">
-  <script src="/incubator-panel.js?v=console-workflow-app-1.0.34-20261004" defer></script>
-  <link rel="stylesheet" href="/conversations-panel.css?v=console-workflow-app-1.0.34-20261004">
-  <script src="/conversations-panel.js?v=console-workflow-app-1.0.34-20261004" defer></script>
-  <script src="/mobile.js?v=console-workflow-app-1.0.34-20261004" defer></script>
+  <link rel="stylesheet" href="/workflow-panel.css?v=console-workflow-ui-1.0.35-20261004">
+  <script src="/workflow-panel.js?v=console-workflow-ui-1.0.35-20261004" defer></script>
+  <link rel="stylesheet" href="/incubator-panel.css?v=console-workflow-ui-1.0.35-20261004">
+  <script src="/incubator-panel.js?v=console-workflow-ui-1.0.35-20261004" defer></script>
+  <link rel="stylesheet" href="/conversations-panel.css?v=console-workflow-ui-1.0.35-20261004">
+  <script src="/conversations-panel.js?v=console-workflow-ui-1.0.35-20261004" defer></script>
+  <script src="/mobile.js?v=console-workflow-ui-1.0.35-20261004" defer></script>
 </head>
 <body>
   <header class="app-header" id="appHeader">
@@ -56,6 +56,7 @@
         <div id="phoneWorkIdeas"><div id="phoneIncubatorPanel"></div></div>
         <div id="phoneConversationsPanel" hidden></div>
         <p id="phoneWorkNotice" class="muted small">电脑工作区 · 保存后电脑和已配对手机会同步。想法保存在这里，点确认发布才会交给聊天。</p>
+        <details id="phoneWorkflowDetails" class="document-section" hidden><summary>工作记录与电脑执行</summary><div id="phoneWorkflowPanel"></div></details>
         <details class="document-section"><summary>执行清单</summary>
       <section id="tasksPanel" aria-labelledby="tasksTitle">
         <div class="section-title"><div><p class="eyebrow">当前重要计划</p><h2 id="tasksTitle">计划清单</h2></div><span class="pill">只读</span></div>
@@ -64,7 +65,6 @@
         <button id="savePlanSnapshot" type="button" class="text-button" disabled>保存计划快照</button><p class="muted small">此页面连接电脑读取计划。保存快照后，可在离线 App「资料与更新」导入；不会自动改写离线 App 的资料。</p>
       </section>
         </details>
-        <details id="phoneWorkflowDetails" class="document-section" hidden><summary>工作记录与电脑执行</summary><div id="phoneWorkflowPanel"></div></details>
       </section>
       <section id="transferPanel" class="tab-panel" hidden aria-label="手机和电脑互传">
         <div id="phoneTransferPanel"></div>
