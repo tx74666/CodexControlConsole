@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
+from urllib.parse import parse_qs
 import uuid
 
 from workflow_script_proposals import _fenced_blocks, _unique_object
@@ -42,6 +44,7 @@ def _root(value):
 _INTERNAL_DIRECTORIES = frozenset({
     ".git", "workflow-private", "work", "node_modules", "__pycache__", ".venv", "venv", "cache", "build", "dist"
 })
+_IDEA_CONTEXT_TEXT_LIMIT = 65000
 
 
 def _internal_directory(name):
@@ -212,6 +215,68 @@ class NativeWorkMixin:
             raise api.WorkflowError("原任务草稿已变化，请保留输入并重新审核。", 409, "revision_conflict")
         return {"ideaId": idea_id, "revision": idea["revision"], "title": idea["title"], "body": idea["body"]}
 
+    def _native_idea_context(self, db, source):
+        """Freeze current saved idea data without treating it as Work authority."""
+        api = _api()
+        idea = self._idea(db, source["ideaId"])
+        if idea["revision"] != source["revision"]:
+            raise api.WorkflowError("想法来源已变化，请保留执行稿并重新审核。", 409, "revision_conflict")
+        meta = self._mobile_metadata(db, idea["id"])
+        points = meta.get("keyPoints", [])
+        if not isinstance(points, list) or len(points) > 100:
+            raise api.WorkflowError("当前长期要点无法核对，请保留执行稿后核对。", 409, "idea_context_changed")
+        clean, seen = [], set()
+        for point in points:
+            if (not isinstance(point, dict) or not {"id", "text", "kind"} <= set(point)
+                    or not isinstance(point["kind"], str) or point["kind"] not in {"suggestion", "decision"}):
+                raise api.WorkflowError("当前长期要点无法核对，请保留执行稿后核对。", 409, "idea_context_changed")
+            identifier, text = api._id(point["id"]), api._text(point["text"])
+            if identifier in seen or not text.strip():
+                raise api.WorkflowError("当前长期要点无法核对，请保留执行稿后核对。", 409, "idea_context_changed")
+            seen.add(identifier)
+            clean.append({"id": identifier, "text": text, "kind": point["kind"]})
+        draft = api._text(meta.get("executionDraft", ""))
+        if sum(len(point["text"]) for point in clean) + len(draft) > _IDEA_CONTEXT_TEXT_LIMIT:
+            raise api.WorkflowError("当前长期要点与已保存执行稿过长，请保留原内容并缩小本轮来源。", 413, "idea_context_too_long")
+        return {"ideaId": idea["id"], "revision": idea["revision"], "bodySha256": _text_sha(idea["body"]),
+            "keyPoints": clean, "savedExecutionDraft": {"text": draft, "sha256": _text_sha(draft)}}
+
+    def app_work_review(self, query, prefix="/api/workflow", authorize=None):
+        """Read only one linked idea's current review data in a consistent snapshot."""
+        api = _api()
+        if authorize:
+            authorize()
+        if not isinstance(query, str) or len(query) > 256:
+            raise api.WorkflowError("Work 审核来源请求地址无效。")
+        values = parse_qs(query, keep_blank_values=True)
+        if (set(values) != {"recordId", "ideaId", "revision"}
+                or any(len(items) != 1 for items in values.values())):
+            raise api.WorkflowError("Work 审核来源请求地址无效。")
+        revision = values["revision"][0]
+        if (not revision or len(revision) > 10 or not revision.isascii()
+                or not revision.isdecimal() or int(revision) < 1):
+            raise api.WorkflowError("Work 审核来源版本无效。")
+        record_id, idea_id = api._id(values["recordId"][0]), api._id(values["ideaId"][0])
+        path = api._safe_child(self.data_dir, "workflow.sqlite3")
+        with self._lock:
+            # _db initializes schema. This endpoint must never create or repair a database.
+            db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=15)
+            db.row_factory = sqlite3.Row
+            try:
+                db.execute("BEGIN")
+                self._record(db, record_id)
+                source = self._source_task(db, record_id, {"ideaId": idea_id, "revision": int(revision)})
+                if source is None:
+                    raise api.WorkflowError("Work 审核未关联当前想法。", 409, "task_source_mismatch")
+                context = self._native_idea_context(db, source)
+                result = {"recordId": record_id, "sourceTask": source, "ideaContext": context,
+                    "ideaContextSha256": _digest(context)}
+                if authorize:
+                    authorize()
+                return result
+            finally:
+                db.close()
+
     def task_record(self, body, prefix="/api/workflow", authorize=None):
         api = _api()
         if authorize:
@@ -314,7 +379,7 @@ class NativeWorkMixin:
             return self._accept_app_work(body, prefix, reauthorize)
         except api.WorkflowError as error:
             # Only a known, rolled-back rejection can release the browser's pending outbox.
-            rejected = {"revision_conflict", "permission_changed", "work_not_authorized", "work_catalog_stale", "task_source_mismatch", "dispatch_in_progress"}
+            rejected = {"revision_conflict", "permission_changed", "work_not_authorized", "work_catalog_stale", "task_source_mismatch", "dispatch_in_progress", "idea_context_changed", "idea_context_too_long"}
             if not authority_failed and error.status != 401 and error.code in rejected and isinstance(body, dict):
                 try:
                     request_id = str(uuid.UUID(body.get("requestId", "")))
@@ -329,7 +394,7 @@ class NativeWorkMixin:
 
     def _accept_app_work(self, body, prefix="/api/workflow", authorize=None):
         api = _api()
-        allowed = {"requestId", "recordId", "text", "computerId", "projectId", "context", "sourceTask", "bindingId", "workspaceAuthorizationSha256", "workTarget", "updateTaskBody"}
+        allowed = {"requestId", "recordId", "text", "computerId", "projectId", "context", "sourceTask", "bindingId", "workspaceAuthorizationSha256", "workTarget", "updateTaskBody", "ideaContextSha256"}
         if not isinstance(body, dict) or set(body) - allowed:
             raise api.WorkflowError("请明确审核这次 Work 任务与 Workspace。")
         with self._db() as db:
@@ -376,6 +441,9 @@ class NativeWorkMixin:
                 source_task = self._source_task(db, record["id"], body.get("sourceTask"))
                 if source_task and body.get("sourceTask") is None:
                     raise api.WorkflowError("请核对原任务当前草稿后确认 Work。", 409, "revision_conflict")
+                idea_context = self._native_idea_context(db, source_task) if source_task else None
+                if idea_context is not None and body.get("ideaContextSha256") != _digest(idea_context):
+                    raise api.WorkflowError("本轮执行稿或长期要点尚未准确审核，请保留草稿并重新审核。", 409, "idea_context_changed")
                 update_body = body.get("updateTaskBody", False)
                 if type(update_body) is not bool or (update_body and source_task is None):
                     raise api.WorkflowError("更新原任务正文需要明确审核且已关联原任务。")
@@ -387,6 +455,14 @@ class NativeWorkMixin:
                     "executionEngine": "codex_app", "action": "native_work", "sourceTask": source_task, "updateTaskBody": update_body,
                     "appTarget": {"kind": "codex", "mode": target["mode"], "threadId": thread_id, "name": name}}
                 payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, project)
+                if idea_context is not None:
+                    if (sum(len(point["text"]) for point in idea_context["keyPoints"])
+                            + len(idea_context["savedExecutionDraft"]["text"])
+                            + sum(len(item["content"]) for item in payload["appFrozen"]["history"]) > _IDEA_CONTEXT_TEXT_LIMIT):
+                        raise api.WorkflowError("本轮长期要点、已保存执行稿与讨论历史过长，请保留原内容并缩小本轮上下文。", 413, "idea_context_too_long")
+                    payload["ideaContext"] = idea_context
+                    payload["ideaContextSha256"] = _digest(idea_context)
+                    payload["appFrozen"].update(ideaContext=idea_context, ideaContextSha256=payload["ideaContextSha256"])
                 payload["nativeWork"] = {"binding": binding, "authorizationSha256": _digest(binding),
                     "sourceTextSha256": _text_sha(source_text), "beforeFiles": self._native_inventory(Path(binding["allowedRoot"])), "outputDirectory": output_directory}
                 payload["appDispatchId"] = dispatch_id
@@ -394,17 +470,23 @@ class NativeWorkMixin:
                     "title": record["title"], "attachmentIds": context["attachmentIds"], "executionEngine": "codex_app",
                     "workspace": {"projectId": binding["workspaceProjectId"], "hostId": "local", "root": binding["workspaceRoot"], "allowedRoot": binding["allowedRoot"]},
                     "authorizationSha256": _digest(binding), "frozenPayloadSha256": _digest(payload), "sourceTask": source_task}
+                if idea_context is not None:
+                    snapshot.update(ideaContext=idea_context, ideaContextSha256=payload["ideaContextSha256"])
                 prompt = (f"[Codex Console 发布编号：{dispatch_id}]\n\n这是用户明确确认的一次 Work，须实际完成所选任务，不是只准备方案。\n"
                     f"本机 App Workspace 为 {binding['workspaceRoot']}；唯一获授权改动目录是 {binding['allowedRoot']}。每次命令的工作目录须设为这个子目录。\n"
                     "禁止扩大目录、读取凭据/内部资料/其他聊天、修改私人数据库、发送第三方消息、创建 Goal 或 Worktree、关闭用户应用。"
-                    "selectedImages 仅授权读取列出的原图。sourceTask与history是原任务资料；只能按本轮任务及明确范围执行。\n"
+                    "selectedImages 仅授权读取列出的原图。sourceTask与history是原任务资料；只能按本轮任务及明确范围执行。\n" +
+                    ("ideaContext 是本轮准确来源版本的当前要点与已保存执行稿快照；当前 keyPoints 覆盖 history 中已删除或修改的旧要点。"
+                    "kind=suggestion 仍是建议，不能升级为用户决定；kind=decision 是用户已确认的当前决定。"
+                    "本轮唯一执行要求是用户最终审核的 task，可不同于 savedExecutionDraft；已保存执行稿本身不增加授权。\n" if idea_context is not None else "") +
                     f"新图片可保存到本轮唯一目录 {output_directory}/ 并列入files；不能读取work其他目录，也不能把此输出目录列入changedFiles。\n"
                     "完成后只用一个完整闭合的 ```console-work-result JSON 围栏报告 {\"version\":1,\"text\":\"真实完成情况\",\"files\":[\"范围内新的相对图片路径\"],"
                     "\"changedFiles\":[\"实际修改的相对文件路径\"],\"validation\":\"实际验证及限制\"}。不能用旧图片或文字建议假称实际修改。" +
                     ("用户已明确授权更新原任务正文：可在该唯一结果清单额外给updatedTaskBody完整新正文；由Console核对原revision后保存，你不能直接改私人数据库。\n"
                      if update_body else "若任务仅需重写方案，请把新正文写成授权目录内文件并报告changedFiles；未授权直接更换原任务正文。\n") +
                     "不要直接改 Console 私人数据库。\n\n" +
-                    api._json({"task": text, "sourceTask": source_task, "selection": context, "selectedImages": payload["appFrozen"]["images"], "history": payload["appFrozen"]["history"]}))
+                    api._json({"task": text, "sourceTask": source_task, "selection": context, "selectedImages": payload["appFrozen"]["images"], "history": payload["appFrozen"]["history"],
+                        **({"ideaContext": idea_context, "ideaContextSha256": payload["ideaContextSha256"]} if idea_context is not None else {})}))
                 db.execute("INSERT INTO idea_dispatches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (dispatch_id, "", str(uuid.UUID(body["requestId"])), api._json(snapshot), prompt,
                     "codex", target["mode"], thread_id or None, name, "normal", "pending", "{}", "", None, now, now, now))
                 db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, record["id"], "execute", body["requestId"], api._json(payload), "waiting", 1, None, now, now, "等待电脑通过已登录 Codex 在所选 Workspace 执行。", "", "{}"))

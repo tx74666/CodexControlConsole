@@ -19,9 +19,14 @@ def workflow_upload_dialogue(service, fields, files, *, prefix="/api/workflow", 
     return operation(fields, files, prefix=prefix, authorize=authorize)
 
 
-def workflow_get(service, action, query, *, prefix="/api/workflow"):
+def workflow_get(service, action, query, *, prefix="/api/workflow", authorize=None):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    if action == "app-work-review":
+        operation = getattr(service, "app_work_review", None)
+        if not callable(operation):
+            raise WorkflowError("电脑端工作组件尚未更新。", 503)
+        return operation(query, prefix=prefix, authorize=authorize)
     mobile = {"mobile/dialogue": "mobile_dialogue_get", "mobile/ideas": "mobile_ideas", "mobile/idea": "mobile_idea"}
     if action in mobile:
         return getattr(service, mobile[action])(query, prefix=prefix)

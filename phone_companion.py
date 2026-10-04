@@ -309,7 +309,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                     with companion.workflow_service.read_attachment(parsed.query, authorize=authorize) as item:
                         send_transfer_attachment(self, item, authorize=authorize)
                 else:
-                    result = workflow_get(companion.workflow_service, action, parsed.query, prefix="/api/phone/workflow")
+                    result = workflow_get(companion.workflow_service, action, parsed.query, prefix="/api/phone/workflow", authorize=authorize)
                     authorize()
                     self._send(result)
             elif parsed.path.startswith("/api/phone/transfer/"):

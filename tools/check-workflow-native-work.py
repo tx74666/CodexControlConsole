@@ -9,12 +9,15 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from urllib.parse import urlencode
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PIL import Image
 from transfer_store import IncomingFile
 from workflow_service import WorkflowService, WorkflowError
+from workflow_http import workflow_get
 import workflow_native_work as native_work
 
 
@@ -65,8 +68,207 @@ class NativeWorkChecks(unittest.TestCase):
 
     def body(self, **fields):
         binding = self.service.config()["appWork"]["bindings"][0]
-        return request(recordId=self.record, text="Actually modify only the chosen source", sourceTask={"ideaId": self.idea["id"], "revision": self.idea["revision"]},
-            context={"attachmentIds": []}, bindingId=binding["id"], workspaceAuthorizationSha256=binding["executionAuthorizationSha256"], workTarget={"mode": "new", "name": "Precise Work target"}, **fields)
+        data = dict(recordId=self.record, text="Actually modify only the chosen source", sourceTask={"ideaId": self.idea["id"], "revision": self.idea["revision"]},
+            context={"attachmentIds": []}, bindingId=binding["id"], workspaceAuthorizationSha256=binding["executionAuthorizationSha256"],
+            workTarget={"mode": "new", "name": "Precise Work target"}, ideaContextSha256=self.review()["ideaContextSha256"])
+        data.update(fields)
+        return request(**data)
+
+    def review(self, **fields):
+        query = {"recordId": self.record, "ideaId": self.idea["id"], "revision": self.idea["revision"], **fields}
+        return self.service.app_work_review(urlencode(query))
+
+    def update_mobile_idea(self, **fields):
+        self.idea = self.service.mobile_idea_update(request(id=self.idea["id"], expectedRevision=self.idea["revision"], **fields))["idea"]
+        return self.idea
+
+    def assert_empty_queue(self):
+        with self.service._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM idea_dispatches").fetchone()[0], 0)
+
+    def test_review_exact_current_saved_idea_context_is_read_only_and_authorized(self):
+        decision, suggestion = uuid.uuid4().hex, uuid.uuid4().hex
+        self.update_mobile_idea(executionDraft="已保存的执行稿 🧵", keyPoints=[
+            {"id": decision, "text": "保留用户原图", "kind": "decision"},
+            {"id": suggestion, "text": "可以试用新布局", "kind": "suggestion"}])
+        database = self.service.data_dir / "workflow.sqlite3"
+        before_bytes, before_time = database.read_bytes(), database.stat().st_mtime_ns
+        calls, connections = [], []
+        original_connect = native_work.sqlite3.connect
+        def connect(*args, **kwargs):
+            connections.append((args, kwargs))
+            return original_connect(*args, **kwargs)
+        query = urlencode({"recordId": self.record, "ideaId": self.idea["id"], "revision": self.idea["revision"]})
+        with patch.object(native_work.sqlite3, "connect", side_effect=connect):
+            result = workflow_get(self.service, "app-work-review", query, authorize=lambda: calls.append(1))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(connections), 1)
+        self.assertTrue(connections[0][1]["uri"])
+        self.assertTrue(connections[0][0][0].endswith("?mode=ro"))
+        self.assertEqual(database.read_bytes(), before_bytes)
+        self.assertEqual(database.stat().st_mtime_ns, before_time)
+        self.assertEqual(set(result), {"recordId", "sourceTask", "ideaContext", "ideaContextSha256"})
+        self.assertEqual(set(result["sourceTask"]), {"ideaId", "revision", "title", "body"})
+        self.assertEqual(result["sourceTask"], self.service.detail(self.record)["sourceTask"])
+        context = result["ideaContext"]
+        self.assertEqual(set(context), {"ideaId", "revision", "bodySha256", "keyPoints", "savedExecutionDraft"})
+        self.assertEqual(context["bodySha256"], hashlib.sha256(self.idea["body"].encode()).hexdigest())
+        self.assertEqual(context["keyPoints"], [{"id": decision, "text": "保留用户原图", "kind": "decision"},
+            {"id": suggestion, "text": "可以试用新布局", "kind": "suggestion"}])
+        self.assertEqual(context["savedExecutionDraft"], {"text": "已保存的执行稿 🧵", "sha256": hashlib.sha256("已保存的执行稿 🧵".encode()).hexdigest()})
+        self.assertEqual(result["ideaContextSha256"], native_work._digest(context))
+        self.assert_empty_queue()
+
+    def test_review_wrong_source_malformed_query_and_authorization_revocation_never_return_data(self):
+        self.error(lambda: self.review(ideaId=uuid.uuid4().hex), "task_source_mismatch")
+        self.error(lambda: self.review(revision=self.idea["revision"] + 1), "revision_conflict")
+        plain = self.service.create(request(title="Unlinked record", projectId="console"))["record"]["id"]
+        self.error(lambda: self.review(recordId=plain), "task_source_mismatch")
+        other = self.service.incubator_create(request(title="Other idea", body="Other source"))["idea"]
+        other_record = self.service.task_record(request(ideaId=other["id"], expectedRevision=other["revision"]))["record"]["id"]
+        self.error(lambda: self.review(recordId=other_record), "task_source_mismatch")
+        for revision in ("１", "١", "1\u200b", "-1"):
+            self.error(lambda value=revision: self.review(revision=value))
+        query = urlencode({"recordId": self.record, "ideaId": self.idea["id"], "revision": self.idea["revision"]})
+        for invalid in (query + "&revision=1", query + "&other=1", query.replace("revision=1", "revision=0"), query.replace("revision=1", "revision=1.0"), "x" * 257):
+            self.error(lambda value=invalid: self.service.app_work_review(value))
+        def deny():
+            raise WorkflowError("Pairing expired", 403)
+        with patch.object(native_work.sqlite3, "connect", side_effect=AssertionError("Denied read must not open the database")):
+            self.error(lambda: self.service.app_work_review(query, authorize=deny))
+        calls = []
+        def revoke():
+            calls.append(1)
+            if len(calls) == 2:
+                deny()
+        self.error(lambda: self.service.app_work_review(query, authorize=revoke))
+        self.assertEqual(len(calls), 2)
+        self.assert_empty_queue()
+
+    def test_new_linked_confirmation_requires_exact_review_digest_and_keeps_queue_empty(self):
+        for digest in (None, "", "a" * 64, 9, "A" * 64):
+            body = self.body()
+            if digest is None:
+                body.pop("ideaContextSha256")
+            else:
+                body["ideaContextSha256"] = digest
+            with self.assertRaises(WorkflowError) as caught:
+                self.service.app_work(body)
+            self.assertEqual(caught.exception.code, "idea_context_changed")
+            self.assertEqual(caught.exception.status, 409)
+            self.assertIs(caught.exception.queueAccepted, False)
+            self.assert_empty_queue()
+
+    def test_current_points_and_saved_draft_freeze_once_while_final_task_can_differ(self):
+        decision, suggestion, deleted = (uuid.uuid4().hex for _ in range(3))
+        self.update_mobile_idea(executionDraft="已保存稿", keyPoints=[
+            {"id": decision, "text": "当前决定", "kind": "decision"},
+            {"id": suggestion, "text": "当前建议", "kind": "suggestion"},
+            {"id": deleted, "text": "准备删除的旧决定", "kind": "decision"}])
+        with self.service._db() as db:
+            self.service._message(db, self.record, "assistant", "历史：准备删除的旧决定；当前决定旧文")
+        self.update_mobile_idea(keyPoints=[{"id": decision, "text": "更新后的决定", "kind": "decision"},
+            {"id": suggestion, "text": "当前建议", "kind": "suggestion"}])
+        review = self.review()
+        body = self.body(text="用户在最终审核框明确修改后的执行要求")
+        accepted = self.service.app_work(body)
+        dispatch_id = accepted["job"]["appDispatch"]["id"]
+        with self.service._db() as db:
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone()[0])
+            dispatch = self.service._dispatch(db, dispatch_id)
+            original_snapshot, original_prompt = json.loads(dispatch["snapshot"]), dispatch["prompt"]
+        self.assertEqual(payload["text"], body["text"])
+        self.assertNotEqual(payload["text"], payload["ideaContext"]["savedExecutionDraft"]["text"])
+        self.assertEqual(payload["ideaContext"], review["ideaContext"])
+        self.assertEqual(payload["appFrozen"]["ideaContext"], review["ideaContext"])
+        self.assertEqual(original_snapshot["ideaContext"], review["ideaContext"])
+        self.assertEqual(original_snapshot["ideaContextSha256"], review["ideaContextSha256"])
+        prompt_data = json.loads(original_prompt[original_prompt.rfind("\n\n") + 2:])
+        self.assertEqual(prompt_data["ideaContext"], review["ideaContext"])
+        self.assertEqual(prompt_data["task"], body["text"])
+        self.assertIn("当前 keyPoints 覆盖", original_prompt)
+        self.assertIn("不能升级为用户决定", original_prompt)
+        self.assertNotIn(deleted, json.dumps(prompt_data["ideaContext"]))
+        self.assertIn("准备删除的旧决定", json.dumps(prompt_data["history"], ensure_ascii=False))
+        self.update_mobile_idea(executionDraft="下轮稿", keyPoints=[])
+        self.assertEqual(self.review()["ideaContext"]["keyPoints"], [])
+        self.assertNotEqual(self.review()["ideaContextSha256"], review["ideaContextSha256"])
+        replay = self.service.app_work(deepcopy(body))
+        self.assertEqual(replay["job"]["id"], accepted["job"]["id"])
+        with self.service._db() as db:
+            current = self.service._dispatch(db, dispatch_id)
+            self.assertEqual(json.loads(current["snapshot"]), original_snapshot)
+            self.assertEqual(current["prompt"], original_prompt)
+
+    def test_body_or_saved_draft_revision_changes_reject_old_review_before_acceptance(self):
+        for changes in ({"body": "新版原正文"}, {"executionDraft": "新版已保存稿"}, {"keyPoints": [{"id": uuid.uuid4().hex, "text": "新要点", "kind": "suggestion"}]}):
+            body = self.body()
+            self.update_mobile_idea(**changes)
+            self.error(lambda: self.service.app_work(body), "revision_conflict")
+            self.assert_empty_queue()
+            refreshed_source = deepcopy(body)
+            refreshed_source["sourceTask"]["revision"] = self.idea["revision"]
+            self.error(lambda: self.service.app_work(refreshed_source), "idea_context_changed")
+            self.assert_empty_queue()
+
+    def test_legacy_accepted_receipt_without_review_digest_replays_without_new_requirements(self):
+        body = self.body()
+        body.pop("ideaContextSha256")
+        # Reproduce an older accepted row without new idea-context fields; never use production receipts.
+        with patch.object(self.service, "_native_idea_context", return_value=None):
+            accepted = self.service.app_work(body)
+        self.update_mobile_idea(executionDraft="New draft must not alter the accepted receipt")
+        replay = self.service.app_work(deepcopy(body))
+        self.assertEqual(replay["job"]["id"], accepted["job"]["id"])
+        with self.service._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
+            snapshot = json.loads(self.service._dispatch(db, accepted["job"]["appDispatch"]["id"])["snapshot"])
+        self.assertNotIn("ideaContext", snapshot)
+        self.error(lambda: self.service.app_work({**body, "ideaContextSha256": self.review()["ideaContextSha256"]}))
+
+    def test_unlinked_work_keeps_existing_scope_contract_without_idea_review(self):
+        record = self.service.create(request(title="Standalone Work record", projectId="console"))["record"]["id"]
+        body = self.body(recordId=record)
+        body.pop("sourceTask")
+        body.pop("ideaContextSha256")
+        accepted = self.service.app_work(body)
+        self.assertEqual(accepted["job"]["recordId"], record)
+        with self.service._db() as db:
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone()[0])
+        self.assertIsNone(payload["sourceTask"])
+        self.assertNotIn("ideaContext", payload)
+
+    def test_review_oversized_points_and_saved_draft_are_rejected_without_truncation(self):
+        points = [{"id": uuid.uuid4().hex, "text": "点" * 15000, "kind": "suggestion"} for _ in range(4)]
+        draft = "稿" * 5001
+        self.update_mobile_idea(keyPoints=points, executionDraft=draft)
+        with self.assertRaises(WorkflowError) as caught:
+            self.review()
+        self.assertEqual(caught.exception.code, "idea_context_too_long")
+        self.assertEqual(caught.exception.status, 413)
+        actual = self.service.mobile_idea(urlencode({"id": self.idea["id"]}))["idea"]
+        self.assertEqual([{key: point[key] for key in ("id", "text", "kind")} for point in actual["keyPoints"]], points)
+        self.assertEqual(actual["executionDraft"], draft)
+        self.assert_empty_queue()
+
+    def test_frozen_points_saved_draft_and_history_total_is_bounded_atomically(self):
+        points = [{"id": uuid.uuid4().hex, "text": "点" * 15000, "kind": "decision"} for _ in range(3)]
+        draft = "稿" * 5000
+        self.update_mobile_idea(keyPoints=points, executionDraft=draft)
+        with self.service._db() as db:
+            for _ in range(2):
+                self.service._message(db, self.record, "assistant", "史" * 10000)
+        body = self.body()
+        with self.assertRaises(WorkflowError) as caught:
+            self.service.app_work(body)
+        self.assertEqual(caught.exception.code, "idea_context_too_long")
+        self.assertEqual(caught.exception.status, 413)
+        self.assertIs(caught.exception.queueAccepted, False)
+        actual = self.service.mobile_idea(urlencode({"id": self.idea["id"]}))["idea"]
+        self.assertEqual([{key: point[key] for key in ("id", "text", "kind")} for point in actual["keyPoints"]], points)
+        self.assertEqual(actual["executionDraft"], draft)
+        self.assert_empty_queue()
 
     def error(self, operation, code=None):
         with self.assertRaises(WorkflowError) as caught:
