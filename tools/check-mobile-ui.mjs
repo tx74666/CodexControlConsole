@@ -51,7 +51,7 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const tierTabs = ["", "first", "second", "third"].map(tier => { const button = new Element("button"); button.dataset.musicTier = tier; return button; });
   const documentEvents = new Map(), windowEvents = new Map();
-  const scripts = ["mobile.js", "mobile-dialogue.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => ({ src: `http://192.0.2.1:8899/${name}?v=console-app-scripts-${loadedVersion}-20261004` })), frames = [], otherMedia = [];
+  const scripts = ["mobile.js", "mobile-dialogue.js", "mobile-handoff.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => ({ src: `http://192.0.2.1:8899/${name}?v=console-app-scripts-${loadedVersion}-20261004` })), frames = [], otherMedia = [];
   const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "script[src]" ? scripts : selector === "iframe" ? frames : selector === "audio,video" ? [audio, ...otherMedia] : selector === "[data-tab]" ? tabs : selector === "#workPanel [data-work-view]" ? workTabs : selector === "[data-inbox]" ? listTabs : selector === "button[data-music-tier]" ? tierTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
   const replacedUrls = [];
   const history = { state: null, replaceState(value, unused, url) { this.state = value; replacedUrls.push(url); runtime.window.location.href = url; }, pushState(value) { this.state = value; }, back() { this.state = null; } };
@@ -434,7 +434,7 @@ await test("invalid task data never marks working transfer disconnected", async 
   assert.equal(h.get("connectionLabel").textContent, "已连接"); assert.equal(h.get("connectionLabel").dataset.connected, "true");
   assert.match(h.get("planNotice").textContent, /其他功能仍可使用/); assert.equal(h.api.state.paired, true); assert.equal(h.get("transferPanel").hidden, false);
 });
-const newShell = (version = "1.0.15") => ["mobile.js", "mobile-dialogue.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => `<script src="/${name}?v=console-app-scripts-${version}-20261004"></script>`).join("\n");
+const newShell = (version = "1.0.15") => ["mobile.js", "mobile-dialogue.js", "mobile-handoff.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => `<script src="/${name}?v=console-app-scripts-${version}-20261004"></script>`).join("\n");
 await test("loaded UI baseline comes from all core cache tags and never from the first newer runtime badge", async () => {
   const h = harness(); h.ready(); h.api.renderVersion("1.0.15");
   assert.equal(h.api.uiUpdate.loaded, "1.0.14"); assert.match(h.get("versionLabel").textContent, /电脑版 v1.0.15.*界面 v1.0.14/);

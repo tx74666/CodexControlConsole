@@ -24,6 +24,7 @@ from workflow_transcription import LocalTranscriptionError, local_transcribe, lo
 from workflow_script_proposals import script_blocks, action_blocks
 from workflow_native_work import NativeWorkMixin
 from workflow_mobile_dialogue import MobileDialogueMixin
+from workflow_mobile_handoff import MobileHandoffMixin
 
 MAX_TEXT = 20000
 MAX_UPLOAD = 24 * 1024 * 1024
@@ -74,7 +75,7 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-class WorkflowService(MobileDialogueMixin, NativeWorkMixin):
+class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
     def __init__(self, data_dir, models=None, callbacks=None, projects=None, *, computer_id=None, computer_name=None, recover_jobs=True):
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)

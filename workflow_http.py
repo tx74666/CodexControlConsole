@@ -3,6 +3,15 @@ from urllib.parse import parse_qs
 from workflow_service import WorkflowError
 
 
+def workflow_import_idea(service, fields, files, *, prefix="/api/workflow", authorize=None):
+    if service is None:
+        raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    operation = getattr(service, "mobile_idea_import", None)
+    if not callable(operation):
+        raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    return operation(fields, files, prefix=prefix, authorize=authorize)
+
+
 def workflow_get(service, action, query, *, prefix="/api/workflow"):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
@@ -52,7 +61,8 @@ def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=Fals
     operations.update({"mobile/dialogue/open": "mobile_dialogue_open", "mobile/dialogue/draft": "mobile_dialogue_draft",
         "mobile/dialogue/clear": "mobile_dialogue_clear", "mobile/dialogue/send": "mobile_dialogue_send",
         "mobile/dialogue/save": "mobile_dialogue_save", "mobile/dialogue/remember": "mobile_dialogue_remember",
-        "mobile/idea/update": "mobile_idea_update", "mobile/idea/archive": "mobile_idea_archive"})
+        "mobile/idea/update": "mobile_idea_update", "mobile/idea/archive": "mobile_idea_archive",
+        "mobile/idea/import-status": "mobile_idea_import_status"})
     if action in operations:
         operation = getattr(service, operations[action], None)
         if not callable(operation):

@@ -14,6 +14,7 @@
   let rememberedTransferAddress = "";
   let phoneIncubator = null;
   let phoneDialogue = null;
+  let phoneHandoff = null;
   let incubatorSaving = 0;
   const transferScanner = window.CodexPhoneQrScanner?.create({ video: el("transferQrVideo"), canvas: el("transferQrCanvas"), onResult: acceptTransferQr, onNotice: (message, error) => notice("transferQrNotice", message, error) }) || null;
   const node = (tag, text = "", className = "") => {
@@ -179,9 +180,18 @@
           section.hidden = false; section.open = true; section.scrollIntoView?.({ block: "start", behavior: "smooth" });
         } else if (value === "conversations") void openComputerWork(); else selectTab(value);
       },
+      onHandoffReserve: () => reserveIdeaHandoff(),
+      onHandoff: (reservation, idea) => phoneHandoff.send(reservation, idea.id, idea.revision, idea.retryPending),
+      onExportPack: async idea => { const exported = await window.CodexPhoneDialogueLocal.buildExport(idea.id, idea.revision, true); return { blob: await window.CodexMobileHandoff.encodePack(exported), fileName: `想法-v${idea.revision}.console-idea` }; },
       onExecution: () => { void openComputerWork(); return false; }
     }) || null;
     return phoneDialogue;
+  }
+  function reserveIdeaHandoff() {
+    if (!rememberedTransferAddress) { selectTab("transfer"); notice("transferNotice", "先扫描电脑 Console 的连接二维码，记住电脑地址；此条想法和图片仍在手机。"); throw new Error("尚未记住电脑入口，想法仍在此手机。"); }
+    if (!window.CodexMobileHandoff || !window.CodexPhoneDialogueLocal?.buildExport) throw new Error("交接组件尚未加载，内容仍在此手机。");
+    phoneHandoff ||= window.CodexMobileHandoff.createSender({ getAddress: () => rememberedTransferAddress, buildExport: window.CodexPhoneDialogueLocal.buildExport, buildPendingExport: window.CodexPhoneDialogueLocal.buildPendingExport, markAttempted: window.CodexPhoneDialogueLocal.markAttempted, saveReceipt: window.CodexPhoneDialogueLocal.saveReceipt, saveRejected: window.CodexPhoneDialogueLocal.saveRejected });
+    return phoneHandoff.reserve();
   }
   async function openComputerWork() {
     if (rememberedTransferAddress) { await openTransferConnection(true, "work"); return; }

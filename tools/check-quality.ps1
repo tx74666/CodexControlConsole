@@ -84,6 +84,7 @@ $PythonSources = @(
   "transfer_store.py",
   "workflow_service.py",
   "workflow_mobile_dialogue.py",
+  "workflow_mobile_handoff.py",
   "workflow_script_proposals.py",
   "workflow_native_work.py",
   "workflow_process.py",
@@ -134,6 +135,7 @@ $PythonChecks = @(
   "tools/check-thread-cache-import.py",
   "tools/check-workflow.py",
   "tools/check-mobile-dialogue.py",
+  "tools/check-mobile-handoff.py",
   "tools/check-workflow-app-bridge.py",
   "tools/check-chat-capture.py",
   "tools/check-workflow-app-scripts.py",
@@ -177,8 +179,10 @@ try {
     "mobile.js",
     "mobile.css",
     "mobile-dialogue.js",
+    "mobile-handoff.js",
     "mobile-dialogue.css",
     "tools/check-mobile-dialogue-ui.mjs",
+    "tools/check-mobile-handoff-ui.mjs",
     "tools/check-mobile-dialogue-local.mjs",
     "mobile.webmanifest",
     "tools/check-mobile-ui.mjs",
@@ -229,6 +233,8 @@ try {
   Invoke-QualityStep "Mobile JavaScript syntax" { & $Node --check mobile.js }
   Invoke-QualityStep "Mobile dialogue syntax" { & $Node --check mobile-dialogue.js }
   Invoke-QualityStep "Mobile dialogue behavior" { & $Node tools/check-mobile-dialogue-ui.mjs }
+  Invoke-QualityStep "Mobile idea handoff syntax" { & $Node --check mobile-handoff.js }
+  Invoke-QualityStep "Mobile idea handoff behavior" { & $Node tools/check-mobile-handoff-ui.mjs }
   Invoke-QualityStep "Mobile companion UI" { & $Node tools/check-mobile-ui.mjs }
   Invoke-QualityStep "Work view navigation and activation" { & $Node tools/check-work-navigation.mjs }
   Invoke-QualityStep "Transfer JavaScript syntax" { & $Node --check transfer-panel.js }

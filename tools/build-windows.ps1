@@ -245,6 +245,7 @@ if ($BuildApplication) {
   @{ Source = "mobile.js"; Destination = "." },
   @{ Source = "mobile-dialogue.js"; Destination = "." },
   @{ Source = "mobile-dialogue.css"; Destination = "." },
+  @{ Source = "mobile-handoff.js"; Destination = "." },
   @{ Source = "mobile.css"; Destination = "." },
   @{ Source = "transfer-panel.js"; Destination = "." },
   @{ Source = "transfer-panel.css"; Destination = "." },

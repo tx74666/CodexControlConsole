@@ -168,5 +168,72 @@
     });
     return hydrate(response);
   }
-  window.CodexPhoneDialogueLocal = { endpoint, uploadAttachments };
+  const exportIdea = idea => ({ title: idea.title, body: idea.body, executionDraft: idea.executionDraft || "", archived: Boolean(idea.archived), keyPoints: (idea.keyPoints || []).map(item => ({ id: item.id, text: item.text, kind: item.kind })) });
+  async function sourceStoreId() {
+    const saved = await PhoneStore.mutateRecord("settings", "mobileIdeaSource", source => {
+      if (source?.sourceStoreId && !UUID.test(source.sourceStoreId)) throw error("手机来源身份无法核对，原资料仍保留。", 409);
+      return source ? { ...source, sourceStoreId: source.sourceStoreId.toLowerCase() } : { id: "mobileIdeaSource", sourceStoreId: crypto.randomUUID() };
+    });
+    return saved.sourceStoreId;
+  }
+  async function buildExport(ideaId, expectedRevision, portable = false) {
+    if (!window.CodexMobileHandoff || !ID.test(ideaId || "") || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw error("请选择已经保存的准确想法版本。");
+    const sourceId = await sourceStoreId(), before = state(await PhoneStore.get("records", "incubator")), original = before.ideas.find(item => item.id === ideaId);
+    if (!original || original.revision !== expectedRevision) throw error("想法已修改，请刷新保存后再带到电脑。", 409, "revision_conflict");
+    const idea = extended(before, original), imageIds = idea.attachmentIds || [], files = [], images = [];
+    for (const id of imageIds) {
+      const item = await PhoneStore.get("media", `dialogue-image:${id}`);
+      if (!ID.test(id || "") || !item?.blob || item.kind !== "dialogue_image" || item.size !== item.blob.size || item.mimeType !== item.blob.type || await window.CodexMobileHandoff.digest(item.blob) !== item.sha256) throw error("已保存图片的实际文件或校验值缺失，未交给电脑。", 409);
+      files.push(item.blob); images.push({ id, name: item.name, mimeType: item.mimeType, size: item.size, sha256: item.sha256 });
+    }
+    const manifest = { format: "codex-console-idea", version: 1, source: { clientId: sourceId, ideaId, revision: expectedRevision }, idea: exportIdea(idea), images }, manifestText = JSON.stringify(manifest);
+    await window.CodexMobileHandoff.verify(manifestText, files);
+    let frozen;
+    await PhoneStore.mutateRecord("records", "incubator", source => {
+      const value = state(source), actual = value.ideas.find(item => item.id === ideaId);
+      if (!actual || actual.revision !== expectedRevision || JSON.stringify(exportIdea(extended(value, actual))) !== JSON.stringify(manifest.idea) || JSON.stringify(extended(value, actual).attachmentIds || []) !== JSON.stringify(imageIds)) throw error("准备交接时想法已修改，请刷新后再试。", 409, "revision_conflict");
+      value.mobile.handoffs ||= {};
+      const entries = value.mobile.handoffs[ideaId] ||= {}, previous = Object.values(entries).find(item => item.status === "pending" && item.source.revision !== expectedRevision);
+      if (previous) throw error("此想法上一版本的导入结果还待核对，请在更多里点「核对上次交接」。", 409);
+      const existing = entries[expectedRevision];
+      if (existing && (existing.text !== manifestText || existing.source.clientId !== sourceId)) throw error("同一想法版本的交接内容不一致，原交接凭据仍保留。", 409);
+      if (portable && existing?.attemptedAt) throw error("这个版本已尝试交接，请先核对原回执，不能生成另一份重送包。", 409);
+      frozen = existing || { requestId: crypto.randomUUID(), text: manifestText, source: manifest.source, imageIds: [...imageIds], status: portable ? "exported" : "prepared", createdAt: stamp() };
+      entries[expectedRevision] = frozen; return value;
+    });
+    return { requestId: frozen.requestId, text: frozen.text, files, source: frozen.source, destinationOrigin: frozen.destinationOrigin || null, attemptedAt: frozen.attemptedAt || null, status: frozen.status };
+  }
+  async function saveReceipt(exported, receipt) {
+    window.CodexMobileHandoff.verifyReceipt(receipt, exported);
+    const source = window.CodexMobileHandoff.decode(exported.text).source;
+    await PhoneStore.mutateRecord("records", "incubator", input => {
+      const value = state(input), frozen = value.mobile.handoffs?.[source.ideaId]?.[source.revision];
+      if (!frozen || frozen.requestId !== exported.requestId || frozen.text !== exported.text || frozen.destinationOrigin && frozen.destinationOrigin !== exported.destinationOrigin || frozen.receipt && frozen.receipt.imported.ideaId !== receipt.imported.ideaId) throw error("导入回执不能替换另一条想法或电脑入口的交接凭据。", 409);
+      frozen.status = "completed"; frozen.receipt = structuredClone(receipt); frozen.receivedAt = stamp(); return value;
+    });
+    return { receipt, localRetained: true };
+  }
+  async function markAttempted(exported, destinationOrigin) {
+    if (window.CodexMobileHandoff.targetAddress(destinationOrigin + "/").origin !== destinationOrigin) throw error("电脑入口无法准确核对，尚未传送。");
+    const source = window.CodexMobileHandoff.decode(exported.text).source;
+    await PhoneStore.mutateRecord("records", "incubator", input => { const value = state(input), frozen = value.mobile.handoffs?.[source.ideaId]?.[source.revision]; if (!frozen || frozen.requestId !== exported.requestId || frozen.text !== exported.text) throw error("交接凭据未完整保存在手机，尚未传送。", 409); if (frozen.destinationOrigin && frozen.destinationOrigin !== destinationOrigin) throw error("原交接已绑定另一台电脑入口，未传送到当前电脑。", 409); frozen.destinationOrigin = destinationOrigin; frozen.attemptedAt ||= stamp(); if (frozen.status !== "completed") frozen.status = "pending"; return value; });
+    exported.destinationOrigin = destinationOrigin;
+    exported.attemptedAt ||= stamp(); if (exported.status !== "completed") exported.status = "pending";
+  }
+  async function buildPendingExport(ideaId) {
+    if (!ID.test(ideaId || "")) throw error("请选择需要核对的准确想法。");
+    const value = state(await PhoneStore.get("records", "incubator")), pending = Object.values(value.mobile.handoffs?.[ideaId] || {}).filter(item => item.status === "pending");
+    if (pending.length !== 1) throw error(pending.length ? "这条想法有多个交接凭据，需先核对来源。" : "这条想法没有待核对的交接。", 409);
+    const frozen = pending[0], manifest = window.CodexMobileHandoff.decode(frozen.text), files = [];
+    if (manifest.source.ideaId !== ideaId || !UUID.test(frozen.requestId) || JSON.stringify(manifest.source) !== JSON.stringify(frozen.source) || JSON.stringify(manifest.images.map(item => item.id)) !== JSON.stringify(frozen.imageIds)) throw error("原交接凭据与想法来源不一致。", 409);
+    for (const image of manifest.images) { const item = await PhoneStore.get("media", `dialogue-image:${image.id}`); if (!item?.blob || item.kind !== "dialogue_image" || item.name !== image.name || item.mimeType !== image.mimeType || item.size !== image.size || item.sha256 !== image.sha256) throw error("上次交接的原图片暂时无法核对，原凭据仍保留。", 409); files.push(item.blob); }
+    await window.CodexMobileHandoff.verify(frozen.text, files);
+    return { requestId: frozen.requestId, text: frozen.text, files, source: manifest.source, destinationOrigin: frozen.destinationOrigin || null, attemptedAt: frozen.attemptedAt || null, status: frozen.status };
+  }
+  async function saveRejected(exported, rejection) {
+    if (!([400, 413, 415, 429].includes(rejection.status) || rejection.status === 409 && ["import_source_conflict", "import_revision_conflict", "import_conflict"].includes(rejection.code))) throw error("不能把未知交接结果标为未导入。", 409);
+    const source = window.CodexMobileHandoff.decode(exported.text).source;
+    await PhoneStore.mutateRecord("records", "incubator", input => { const value = state(input), frozen = value.mobile.handoffs?.[source.ideaId]?.[source.revision]; if (!frozen || frozen.requestId !== exported.requestId || frozen.text !== exported.text || frozen.status === "completed") throw error("拒绝凭据不属于这次待核对交接。", 409); frozen.status = "rejected"; frozen.rejection = { status: rejection.status, code: rejection.code || "rejected", message: String(rejection.message || "电脑明确拒绝导入"), rejectedAt: stamp() }; return value; });
+  }
+  window.CodexPhoneDialogueLocal = { endpoint, uploadAttachments, buildExport, buildPendingExport, markAttempted, saveReceipt, saveRejected };
 })();

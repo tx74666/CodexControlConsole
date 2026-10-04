@@ -4,7 +4,7 @@ const VERSION = "__CONSOLE_PHONE_VERSION__";
 const BUILD = "__CONSOLE_PHONE_BUILD__";
 const PREFIX = "codex-console-phone-shell-" + encodeURIComponent(new URL(self.registration.scope).pathname) + "-";
 const CACHE = PREFIX + VERSION + "-" + BUILD;
-const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./store.js", "./dialogue-local.js", "./mobile-dialogue.js", "./mobile-dialogue.css", "./incubator-panel.js", "./incubator-panel.css", "./connection-qr.js", "./vendor/jsQR.js", "./vendor/jsQR.LICENSE", "./manifest.webmanifest", `./phone-icon-180.png?v=${BUILD}`, `./phone-icon-192.png?v=${BUILD}`, `./phone-icon-512.png?v=${BUILD}`, "./music-catalog.json", "./version.json"];
+const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./store.js", "./dialogue-local.js", "./mobile-dialogue.js", "./mobile-dialogue.css", "./mobile-handoff.js", "./incubator-panel.js", "./incubator-panel.css", "./connection-qr.js", "./vendor/jsQR.js", "./vendor/jsQR.LICENSE", "./manifest.webmanifest", `./phone-icon-180.png?v=${BUILD}`, `./phone-icon-192.png?v=${BUILD}`, `./phone-icon-512.png?v=${BUILD}`, "./music-catalog.json", "./version.json"];
 self.addEventListener("install", event => event.waitUntil((async () => { const cache = await caches.open(CACHE); await cache.addAll(SHELL.map(path => new Request(new URL(path, self.registration.scope), { cache: "reload" }))); await self.skipWaiting(); })()));
 async function refreshExistingClients() {
   if (!self.clients.matchAll) return;

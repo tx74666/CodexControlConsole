@@ -14,7 +14,7 @@
   const el = id => document.getElementById(id);
   const MUSIC_TIERS = [{ value: "first", number: "1", suffix: "st" }, { value: "second", number: "2", suffix: "nd" }, { value: "third", number: "3", suffix: "rd" }];
   const state = { paired: false, generation: 0, busy: false, tab: "work", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
-  const UI_SCRIPTS = ["mobile.js", "mobile-dialogue.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"];
+  const UI_SCRIPTS = ["mobile.js", "mobile-dialogue.js", "mobile-handoff.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"];
   const UPDATE_KEY = "codexPhone.connectedUiUpdate.v1";
   const uiUpdate = { loaded: loadedUiVersion(), actual: "", checking: false, preparing: false, reloading: false, timer: 0, trusted: false, reason: "" };
   const versionNotice = document.createElement("p"); versionNotice.className = "notice"; versionNotice.hidden = true; versionNotice.setAttribute("role", "status"); el("main").prepend(versionNotice);
@@ -54,7 +54,13 @@
     onAuth: () => showPair("配对已过期，请重新连接电脑。"),
     getVersion: () => el("versionLabel")?.textContent || "Codex Console",
     onModule: value => { if (value === "conversations") selectWorkView("conversations"); else if (value === "legacy") selectWorkView("ideas"); else selectTab(value); },
+    onImportPack: async file => { if (!state.paired || !window.CodexMobileHandoff) throw new Error("请先完成电脑配对，手机想法包仍保留。"); const exported = await window.CodexMobileHandoff.decodePack(file); if (!state.paired) throw new Error("配对已断开，未导入。"); try { return await window.CodexMobileHandoff.importExported(exported); } catch (error) { if ([401, 403].includes(error.status)) showPair("配对已断开；导入结果待核对，请重连后用原想法包核对。"); throw error; } },
     onExecution: async idea => { if (incubatorPanel?.closeTask?.() === false) return false; selectWorkView("workflow"); const opened = await workflowPanel?.openTask?.({ ideaId: idea.id, revision: idea.revision, title: idea.title, projectId: idea.projectId, executionDraft: idea.executionDraft, mode: "work" }); if (opened) { el("phoneWorkflowDetails").open = true; window.scrollTo({ top: 0, behavior: "auto" }); } return Boolean(opened); }
+  }) || null;
+  const ideaReceiver = window.CodexMobileHandoff?.createReceiver({
+    isPaired: () => state.paired,
+    onNotice: (message, error) => notice("appNotice", message, error),
+    onImported: async receipt => { selectTab("work"); selectWorkView("dialogue"); await dialoguePanel?.openIdea(receipt.imported.ideaId); }
   }) || null;
   function selectWorkView(value) {
     const next = ["dialogue", "ideas", "conversations", "workflow"].includes(value) ? value : "dialogue";
@@ -123,7 +129,7 @@
       (!transferPanel || typeof transferPanel.hasDraft === "function" && !transferPanel.hasDraft()) &&
       (!incubatorPanel || typeof incubatorPanel.canReload === "function" && incubatorPanel.canReload() && !incubatorPanel.hasDraft?.()) &&
       (!conversationsPanel || typeof conversationsPanel.canReload === "function" && conversationsPanel.canReload()) &&
-      (!dialoguePanel || typeof dialoguePanel.canReload === "function" && dialoguePanel.canReload() && !dialoguePanel.hasDraft?.());
+      (!dialoguePanel || typeof dialoguePanel.canReload === "function" && dialoguePanel.canReload() && !dialoguePanel.hasDraft?.()) && !ideaReceiver?.isBusy();
   }
   function scheduleVersionCheck() {
     window.clearTimeout(uiUpdate.timer); uiUpdate.timer = 0;
@@ -326,6 +332,7 @@
     el("connectionLabel").textContent = "已连接"; el("connectionLabel").dataset.connected = "true";
     el("updatedLabel").textContent = `页面读取于 ${date(new Date().toISOString())}`;
     renderPlan(livePlan.snapshot ? { plan: livePlan.snapshot.plan, label: `电脑 → 手机 · 上次同步 ${date(livePlan.snapshot.updatedAt)}。修改请在电脑完成。` } : data.plan); renderDevice(data.device); renderDocuments(); selectTab(state.tab); notice("appNotice");
+    ideaReceiver?.activate();
   }
   async function refresh() {
     if (state.busy || state.mutationBusy) return;
