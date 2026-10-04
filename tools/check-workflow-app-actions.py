@@ -200,7 +200,28 @@ class ConfirmedAppActionChecks(unittest.TestCase):
             self.assertFalse((self.project / "command-execution-count.txt").exists())
             self.assertEqual(value["executionAuthorization"], {"projectId": "fixture", "projectName": self.projects[0]["name"],
                 "root": str(self.project.resolve()), "action": "command", "capabilityGranted": True,
-                "commandId": "preview", "argv": [str(Path(sys.executable).resolve()), str(self.script.resolve())], "timeout": 5})
+                "commandId": "preview", "argv": [str(Path(sys.executable).resolve()), str(self.script)], "timeout": 5})
+
+    def test_executable_is_canonical_but_fixed_argument_alias_is_preserved_and_runs_once(self):
+        alias_directory = self.project / "aliasdir"
+        alias_directory.mkdir()
+        original_argument = str(alias_directory / ".." / self.script.name)
+        self.assertNotEqual(original_argument, str(Path(original_argument).resolve()))
+        command = {**self.projects[0]["commands"][0], "argv": [sys.executable, original_argument]}
+        self.service.configure_projects({"project": {**self.projects[0], "commands": [command]}})
+        message, _, _ = self.complete()
+        value = message["actionProposals"][0]
+        # Only argv[0] is an executable path. Fixed arguments are exact reviewed
+        # strings, including valid directory aliases; canonicalizing them would
+        # change the command authorization and can change non-path arguments.
+        self.assertEqual(value["executionAuthorization"], {"projectId": "fixture", "projectName": self.projects[0]["name"],
+            "root": str(self.project.resolve()), "action": "command", "capabilityGranted": True,
+            "commandId": "preview", "argv": [str(Path(sys.executable).resolve()), original_argument], "timeout": 5})
+        done = self.execute(value)
+        self.assertEqual(done["status"], "succeeded", done)
+        self.assertEqual((self.project / "command-execution-count.txt").read_text(), "1")
+        actual = self.service.attachment("id=" + done["resultAttachmentIds"][0])
+        self.assertEqual(Image.open(actual["path"]).getpixel((0, 0)), (0, 128, 0))
 
     def test_app_multioption_only_confirmed_command_runs_actual_png_same_record(self):
         message, _, _ = self.complete(fence(proposal(commandId="other")) + fence(proposal()) + fence(proposal("capture_screen")))

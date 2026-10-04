@@ -48,7 +48,7 @@ Submitted to-dos retain their existing storage key. An unfinished to-do input is
 
 ## Per-device Data
 
-### Phone work records (1.0.38)
+### Phone work records (1.0.39)
 
 The connected phone workspace compares the computer version with its loaded UI assets. A newer workspace reloads automatically only after local drafts and original attachment files are verified saved and recording, uploads, editing, and music playback are idle. After this page has connected successfully, it can reconnect through its existing trusted session without a saved task snapshot or replaying publications and accepted work. If the computer is already offline when the page is first opened, use its reconnect button. Pages loaded before 1.0.37 receive this behavior when they are next opened; the public home-screen app already checks its own updates automatically.
 
