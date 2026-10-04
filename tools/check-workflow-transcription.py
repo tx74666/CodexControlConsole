@@ -1,5 +1,6 @@
 """Isolated local speech checks; synthetic speech is not an iPhone/user test."""
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 import wave
 
@@ -52,6 +54,115 @@ class TranscriptionChecks(unittest.TestCase):
                 with self.assertRaises(transcription.LocalTranscriptionError) as error:
                     transcription.local_transcribe(source, root / "job")
                 self.assertEqual(error.exception.code, "transcription_timeout")
+
+    def _assert_empty_decoded_cleanup(self, failure):
+        with tempfile.TemporaryDirectory(prefix="console-speech-empty-decoded-") as directory:
+            root = Path(directory)
+            source = root / "original.m4a"
+            source.write_bytes(b"\0\0\0\x18ftypM4A " + b"fixed container fixture, not encoded speech")
+            original_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+            decoded = []
+            messages = {"transcription_timeout": "decoder timeout; original retained",
+                        "interrupted": "decoder interrupted; original retained",
+                        "invalid_audio": "电脑无法解码此录音；原文件已保留。"}
+
+            def decode(argv, job_directory, log_path, deadline, stop_event=None, **kwargs):
+                normalized = Path(argv[-1])
+                self.assertEqual(normalized.parent, job_directory)
+                normalized.write_bytes(b"")
+                decoded.append(normalized)
+                if failure == "invalid_audio":
+                    return 1, "decoder rejected fixed fixture"
+                raise transcription.LocalTranscriptionError(failure, messages[failure],
+                                                            504 if failure == "transcription_timeout" else 503)
+
+            with patch.object(transcription, "local_transcription_config", return_value={"available": True, "languages": ["zh-CN"]}), patch.object(transcription, "_find_ffmpeg", return_value=Path("fixture-decoder.exe")), patch.object(transcription, "_run_owned", side_effect=decode), patch.object(transcription, "WorkflowProcess", side_effect=AssertionError("No process in empty-output fixture")):
+                with self.assertRaises(transcription.LocalTranscriptionError) as error:
+                    transcription.local_transcribe(source, root / "job")
+            self.assertEqual(len(decoded), 1)
+            self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), original_sha)
+            observed = {"code": error.exception.code, "message": error.exception.message,
+                        "status": error.exception.status,
+                        "decodedCopyRemains": decoded[0].exists()}
+            self.assertEqual(observed, {"code": failure, "message": messages[failure],
+                                        "status": 504 if failure == "transcription_timeout" else 503 if failure == "interrupted" else 400,
+                                        "decodedCopyRemains": False})
+
+    def test_empty_decoded_timeout_preserves_error_and_removes_owned_copy(self):
+        self._assert_empty_decoded_cleanup("transcription_timeout")
+
+    def test_empty_decoded_interruption_preserves_error_and_removes_owned_copy(self):
+        self._assert_empty_decoded_cleanup("interrupted")
+
+    def test_empty_decoded_failure_preserves_reason_and_removes_owned_copy(self):
+        self._assert_empty_decoded_cleanup("invalid_audio")
+
+    def _assert_unsafe_decoded_cleanup(self, kind):
+        with tempfile.TemporaryDirectory(prefix="console-speech-unsafe-decoded-") as directory:
+            root = Path(directory)
+            source = root / "original.m4a"
+            source.write_bytes(b"\0\0\0\x18ftypM4A " + b"fixed container fixture, not encoded speech")
+            original_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+            foreign = root / "foreign-empty.wav"
+            foreign.write_bytes(b"")
+            decoded = []
+            original_lstat, original_resolve = Path.lstat, Path.resolve
+
+            def decode(argv, job_directory, log_path, deadline, stop_event=None, **kwargs):
+                normalized = Path(argv[-1])
+                self.assertEqual(normalized.parent, job_directory)
+                decoded.append(normalized)
+                if kind == "link":
+                    try:
+                        normalized.symlink_to(foreign)
+                    except OSError:
+                        self.skipTest("Symlink creation not granted on this test host")
+                elif kind == "directory":
+                    normalized.mkdir()
+                    (normalized / "foreign-marker.txt").write_bytes(b"must stay")
+                else:
+                    normalized.write_bytes(b"")
+                raise transcription.LocalTranscriptionError("transcription_timeout", "decoder timeout")
+
+            def metadata(path, *args, **kwargs):
+                value = original_lstat(path, *args, **kwargs)
+                if kind == "reparse" and decoded and path == decoded[0]:
+                    return SimpleNamespace(st_mode=value.st_mode, st_file_attributes=0x400)
+                return value
+
+            def resolved(path, *args, **kwargs):
+                if kind == "foreign" and decoded and path == decoded[0]:
+                    return foreign
+                return original_resolve(path, *args, **kwargs)
+
+            with patch.object(transcription, "local_transcription_config", return_value={"available": True, "languages": ["zh-CN"]}), patch.object(transcription, "_find_ffmpeg", return_value=Path("fixture-decoder.exe")), patch.object(transcription, "_run_owned", side_effect=decode), patch.object(transcription, "WorkflowProcess", side_effect=AssertionError("No process in unsafe-output fixture")), patch.object(Path, "lstat", metadata), patch.object(Path, "resolve", resolved):
+                with self.assertRaises(transcription.LocalTranscriptionError) as error:
+                    transcription.local_transcribe(source, root / "job")
+            self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), original_sha)
+            self.assertTrue(foreign.is_file())
+            self.assertEqual(foreign.read_bytes(), b"")
+            self.assertEqual(len(decoded), 1)
+            if kind in {"link", "reparse"}:
+                self.assertEqual(error.exception.code, "invalid_path")
+            if kind == "link":
+                self.assertTrue(decoded[0].is_symlink())
+            elif kind == "directory":
+                self.assertEqual((decoded[0] / "foreign-marker.txt").read_bytes(), b"must stay")
+            else:
+                self.assertTrue(decoded[0].is_file())
+                self.assertEqual(decoded[0].read_bytes(), b"")
+
+    def test_decoded_cleanup_rejects_link_without_deleting_foreign_file(self):
+        self._assert_unsafe_decoded_cleanup("link")
+
+    def test_decoded_cleanup_rejects_reparse_without_deleting_file(self):
+        self._assert_unsafe_decoded_cleanup("reparse")
+
+    def test_decoded_cleanup_preserves_foreign_directory(self):
+        self._assert_unsafe_decoded_cleanup("directory")
+
+    def test_decoded_cleanup_never_unlinks_resolved_foreign_file(self):
+        self._assert_unsafe_decoded_cleanup("foreign")
 
     def test_three_minute_limit_rejects_original_without_creating_outputs(self):
         with tempfile.TemporaryDirectory(prefix="console-speech-bound-") as directory:

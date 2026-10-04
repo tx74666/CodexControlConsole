@@ -3,6 +3,7 @@
 Uses one temporary workflow SQLite database; no model, chat or installed server.
 """
 import http.client
+import io
 import json
 from pathlib import Path
 import socket
@@ -13,12 +14,16 @@ import threading
 import unittest
 from unittest.mock import patch
 import uuid
+import wave
+
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from document_library import DocumentLibraryService
 import phone_companion as phone
 from workflow_http import workflow_get, workflow_post
 from workflow_service import WorkflowError, WorkflowService
+from transfer_store import IncomingFile
 
 
 def request(**fields):
@@ -52,6 +57,86 @@ class IncubatorChecks(unittest.TestCase):
         with self.service._db() as db:
             return {table: [tuple(row) for row in db.execute("SELECT * FROM " + table + " ORDER BY id")]
                     for table in ("records", "messages", "attachments", "jobs")}
+
+    def upload_media(self, record_id, mime="image/png"):
+        stream = io.BytesIO()
+        if mime == "image/png":
+            Image.new("RGB", (12, 8), "blue").save(stream, "PNG")
+            name = "fixture.png"
+        else:
+            with wave.open(stream, "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(16000)
+                output.writeframes(b"\0\0" * 1600)
+            name = "fixture.wav"
+        contents = stream.getvalue()
+        spool = self.root / (uuid.uuid4().hex + ".upload")
+        spool.write_bytes(contents)
+        return self.service.upload(request(recordId=record_id), [IncomingFile(spool, 0, len(contents), name, mime)])
+
+    def test_image_counts_are_exact_readonly_and_ignore_audio_and_other_records(self):
+        self.service.configure_projects([{"id": "console", "name": "Fixture", "root": str(self.root),
+            "capabilities": [], "allowGeneratedScripts": False}])
+        unlinked = self.create(title="No associated record")
+        task = self.create(title="Task with stored pictures", body="Keep this original")
+        linked = self.service.task_record(request(ideaId=task["id"], expectedRevision=task["revision"],
+            projectId="console"))["record"]["id"]
+        foreign = self.service.create(request(projectId="console", title="Other record"))["record"]["id"]
+        audio_only = self.service.create(request(projectId="console", title="Recording only"))["record"]["id"]
+        for _ in range(2):
+            self.upload_media(linked)
+        self.upload_media(linked, "audio/wav")
+        for _ in range(3):
+            self.upload_media(foreign)
+        self.upload_media(audio_only, "audio/wav")
+        with self.service._db() as db:
+            before = tuple(db.iterdump())
+        with patch.object(self.service, "_enqueue", side_effect=AssertionError("Listing pictures must not enqueue")):
+            ideas = {item["id"]: item for item in self.service.incubator_list(prefix="/api/phone/workflow")["ideas"]}
+            records = {item["id"]: item for item in self.service.list(prefix="/api/phone/workflow")["records"]}
+            self.assertEqual(ideas[unlinked["id"]]["imageCount"], 0)
+            self.assertEqual(ideas[task["id"]]["imageCount"], 2)
+            self.assertEqual({identifier: item["imageCount"] for identifier, item in records.items()},
+                             {linked: 2, foreign: 3, audio_only: 0})
+            self.assertEqual(ideas[task["id"]]["workflowRecordId"], linked)
+            self.assertNotIn("thumbnailUrl", ideas[task["id"]])
+            self.assertNotIn(str(self.root), json.dumps(ideas, ensure_ascii=False))
+            self.assertTrue(records[linked]["thumbnailUrl"].startswith("/api/phone/workflow/attachment?"))
+            self.assertIsNone(records[audio_only]["thumbnailUrl"])
+            with self.service._db() as db:
+                self.assertEqual(tuple(db.iterdump()), before)
+        self.assertFalse(self.service.has_pending_jobs())
+        self.assertEqual(self.service.incubator_dispatches()["dispatches"], [])
+
+    def test_image_count_refresh_preserves_task_revision_and_rejects_forged_summary(self):
+        self.service.configure_projects([{"id": "console", "name": "Fixture", "root": str(self.root),
+            "capabilities": [], "allowGeneratedScripts": False}])
+        task = self.create(title="Same picture task", body="Original task body")
+        linked = self.service.task_record(request(ideaId=task["id"], expectedRevision=task["revision"],
+            projectId="console"))["record"]["id"]
+        self.upload_media(linked)
+        before = self.service.incubator_list()
+        self.assertEqual(before["ideas"][0]["imageCount"], 1)
+        self.upload_media(linked)
+        after = self.service.incubator_list("revision=" + before["revision"])
+        self.assertEqual(after["ideas"][0]["imageCount"], 2)
+        self.assertEqual({key: value for key, value in before["ideas"][0].items() if key != "imageCount"},
+                         {key: value for key, value in after["ideas"][0].items() if key != "imageCount"})
+        self.assertEqual(self.service.incubator_list("revision=" + after["revision"]),
+                         {"unchanged": True, "revision": after["revision"]})
+        with self.service._db() as db:
+            unchanged = tuple(db.iterdump())
+        self.error(lambda: self.service.incubator_create(request(title="Forged count", imageCount=999)))
+        self.error(lambda: self.service.incubator_update(request(id=task["id"], expectedRevision=task["revision"],
+            body="Must not be accepted", imageCount=999)))
+        with self.service._db() as db:
+            self.assertEqual(tuple(db.iterdump()), unchanged)
+        edited = self.update(task, body="Explicitly revised task body")
+        self.assertEqual(edited["imageCount"], 2)
+        self.assertEqual(edited["workflowRecordId"], linked)
+        self.assertEqual(edited["revision"], task["revision"] + 1)
+        self.assertFalse(self.service.has_pending_jobs())
 
     def test_defaults_restart_shared_database_and_no_dispatch(self):
         with patch.object(self.service, "_enqueue", side_effect=AssertionError("Saving is not execution")):

@@ -223,7 +223,11 @@
       const renderIdea = (idea, depth, container = list) => {
         if (visited.has(idea.id)) return; visited.add(idea.id);
         const card = button("", () => choose(idea.id), "incubator-idea"); card.dataset.ideaId = idea.id; card.dataset.selected = String(idea.id === state.selectedId); card.style.setProperty("--incubator-depth", String(Math.min(depth, 12))); card.setAttribute("aria-pressed", String(idea.id === state.selectedId));
-        const draft = state.drafts[idea.id]; card.append(make("strong", idea.title || "未命名想法"), make("span", `${stages.find(item => item.id === idea.stage)?.name || "模糊"} · ${priorities.find(item => item.id === idea.priority)?.name || "普通"}${draft && changed(draft) ? " · 本地草稿" : ""}`));
+        const draft = state.drafts[idea.id], metadata = make("span", "", "incubator-idea-meta");
+        metadata.append(make("span", `${stages.find(item => item.id === idea.stage)?.name || "模糊"} · ${priorities.find(item => item.id === idea.priority)?.name || "普通"}${draft && changed(draft) ? " · 本地草稿" : ""}`));
+        const imageCount = serverIdea(idea.id)?.imageCount;
+        if (Number.isSafeInteger(imageCount) && imageCount > 0) metadata.append(make("span", ` ${imageCount} 张图片`, "incubator-media-tag"));
+        card.append(make("strong", idea.title || "未命名想法"), metadata);
         if (state.mode === "tree") {
           const branch = make("div", "", "incubator-tree-node"), children = ideas.filter(item => item.parentId === idea.id); branch.dataset.ideaId = idea.id; branch.append(card); container.append(branch);
           if (children.length) { const lines = make("div", "", "incubator-tree-children"); branch.append(lines); for (const child of children) renderIdea(child, depth + 1, lines); }

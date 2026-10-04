@@ -75,6 +75,16 @@ function harness({ phone = true, ideas = [], server = { ideas, receipts: new Map
 let count = 0;
 async function test(name, action) { await action(); count++; console.log(`PASS ${name}`); }
 
+await test("image badges follow server attachments while local task edits stay intact and unsent", async () => {
+  const h = harness({ ideas: [idea("pictures", { imageCount: 2 }), idea("text", { imageCount: 0 })] }); await h.start();
+  const card = id => h.cards().find(item => item.dataset.ideaId === id);
+  assert.match(card("pictures").textContent, /2 张图片/); assert.doesNotMatch(card("text").textContent, /张图片/);
+  card("pictures").click(); h.type("想法与任务内容", "我正在修改的未发送内容");
+  h.server.ideas.find(item => item.id === "pictures").imageCount = 3; await h.panel.refresh();
+  assert.match(card("pictures").textContent, /3 张图片/); assert.equal(h.field("想法与任务内容").value, "我正在修改的未发送内容");
+  assert.equal(h.calls.filter(call => call.payload).length, 0);
+});
+
 await test("new ideas are prominent, locally durable and never require a model or post automatically", async () => {
   const h = harness(); await h.start(); h.new(); h.type("标题", "还很模糊的想法"); h.type("想法与任务内容", "暂时只记录，不执行");
   assert.equal(h.calls.filter(call => call.options.method === "POST").length, 0); assert.equal(h.panel.hasDraft(), true); assert.match([...h.storage.values()][0], /还很模糊的想法/); assert.equal(h.button("保存想法").disabled, false); assert.ok(h.button("生成发布任务稿"));

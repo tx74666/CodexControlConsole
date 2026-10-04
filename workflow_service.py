@@ -313,6 +313,11 @@ class WorkflowService(NativeWorkMixin):
                 "updatedAt": row["updated_at"], "primaryAttachmentId": row["primary_attachment_id"], "context": json.loads(row["context"])}
 
     @staticmethod
+    def _image_count(db, record_id):
+        return db.execute("SELECT COUNT(*) FROM attachments WHERE record_id=? AND mime_type LIKE 'image/%'",
+                          (record_id,)).fetchone()[0] if record_id else 0
+
+    @staticmethod
     def _public_job(row, app_dispatch=None):
         payload, result = json.loads(row["payload"]), json.loads(row["result"])
         value = {"id": row["id"], "recordId": row["record_id"], "kind": row["kind"], "requestId": row["request_id"],
@@ -393,6 +398,7 @@ class WorkflowService(NativeWorkMixin):
             records = []
             for row in rows[:int(limit)]:
                 item = self._public_record(row)
+                item["imageCount"] = self._image_count(db, row["id"])
                 primary = db.execute("SELECT preview FROM attachments WHERE id=?", (row["primary_attachment_id"],)).fetchone()
                 item["thumbnailUrl"] = prefix + "/attachment?" + urlencode({"id": row["primary_attachment_id"], **({"preview": "1"} if primary and primary["preview"] else {})}) if row["primary_attachment_id"] else None
                 records.append(item)
@@ -413,6 +419,7 @@ class WorkflowService(NativeWorkMixin):
                 "targetThreadId": row["target_thread_id"], "targetName": row["target_name"],
                 "revision": row["revision"], "createdAt": row["created_at"], "updatedAt": row["updated_at"],
                 "workflowRecordId": WorkflowService._setting(db, "task-record:" + row["id"])}
+        value["imageCount"] = WorkflowService._image_count(db, value["workflowRecordId"])
         value["publishPrompt"] = WorkflowService._idea_prompt(value)
         return value
 

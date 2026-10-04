@@ -343,6 +343,9 @@ def local_transcribe(input_path, job_dir, *, stop_event=None, progress_callback=
                 "confidences": result.get("confidences", []), "rejectedSegments": result.get("rejectedSegments", 0),
                 "reviewRequired": True}
     finally:
-        # This unique, verified job child contains our decoded copy only.
+        # Decode failures can leave an empty copy in this unique, verified job child.
         if normalized.exists():
-            _safe_path(normalized, file=True).unlink()
+            decoded = _safe_path(normalized)
+            if decoded.parent != run_dir or not decoded.is_file():
+                _fail("invalid_path", "转写临时录音路径无效。", 403)
+            decoded.unlink()

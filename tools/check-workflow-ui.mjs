@@ -116,6 +116,17 @@ const workflowSaved = h => JSON.parse([...h.storage.entries()].find(([key]) => k
 const assertNoExecution = h => assert.equal(h.calls.some(call => ["discuss", "app-work", "submit", "retry"].includes(call.path)), false);
 const filter = process.argv[2] === "--filter" ? new RegExp(process.argv[3] || "", "i") : null;
 async function test(name, run) { if (filter && !filter.test(name)) return; await run(); console.log(`PASS ${name}`); count++; }
+await test("saved and returned images refresh only their record badge while audio and unsent drafts stay separate", async () => {
+  const h = harness(); h.server.records = [{ ...h.server.detail.record, imageCount: 1 }, { id: "other-record", title: "另一份记录", imageCount: 7 }]; await h.start();
+  const row = title => h.all("button").find(item => item.className.split(/\s+/).includes("workflow-record") && item.textContent.startsWith(title));
+  assert.match(row("工作图片").textContent, /1 张图片/); h.type("这句评价还没有发送");
+  const input = h.all("input").find(item => item.accept === "image/*"); input.files = [photo()]; input.fire("change"); await settle(); h.button("保存图片到记录").click(); await settle();
+  assert.match(row("工作图片").textContent, /2 张图片/); assert.equal(h.draft.value, "这句评价还没有发送");
+  h.server.detail.attachments.push(h.server.asset("returned-image"), h.server.asset("recording", "audio/wav")); h.server.detail.revision = "new-returned-picture"; await h.poll();
+  assert.match(row("工作图片").textContent, /3 张图片/); assert.match(row("另一份记录").textContent, /7 张图片/); assert.equal(h.draft.value, "这句评价还没有发送");
+  assert.equal(h.calls.some(call => ["discuss", "submit", "app-work", "transcribe"].includes(call.path)), false);
+});
+
 await test("task linking verifies exact server association and task modes do not publish or duplicate records", async () => {
   const h = harness(), task = addTask(h.server); await h.start(); h.type("旧记录草稿"); assert.equal(await h.panel.openTask(task), true); assert.equal(h.panel.getTaskContext().ideaId, task.ideaId); assert.equal(h.panel.getTaskContext().recordId, task.recordId); assert.equal(h.panel.getTaskContext().revision, 4); assert.equal(h.root.dataset.task, "true"); assert.equal(h.all("div").find(item => item.className === "workflow-records").hidden, true); assert.equal(h.button("新记录").hidden, true); assert.equal(h.button("Chat").attributes["aria-pressed"], "true"); assert.equal(h.button("Work").attributes["aria-pressed"], "false"); h.button("Work").click(); assert.equal(h.button("Work").attributes["aria-pressed"], "true"); assert.equal(h.button("审核 Work").hidden, false); h.button("Chat").click(); assert.equal(h.button("发送 Chat").hidden, false); assert.equal(h.calls.filter(call => call.options.method === "POST").length, 1); assert.equal(h.calls[0]?.path === "create", false); assert.equal(await h.panel.selectRecord("different-record"), false); assert.equal(h.panel.getTaskContext().recordId, task.recordId); assert.equal(h.draft.value, "旧记录草稿"); assert.equal(h.panel.clearTask(), true); assert.equal(h.panel.getTaskContext(), null); assert.equal(h.button("讨论").hidden, false); assert.equal(h.button("新记录").hidden, false);
 });
