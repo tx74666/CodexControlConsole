@@ -327,7 +327,7 @@ class WorkflowHttpChecks(unittest.TestCase):
             detail = self.detail(identifier)
             self.assertEqual(len(detail['jobs']), 1)
             self.assertEqual(detail['jobs'][0]['appDispatch']['status'], 'pending')
-            private_root = self.base.as_posix().lower()
+            private_root = self.base.resolve().as_posix().lower()
             self.assertNotIn(private_root, json.dumps(accepted).replace('\\\\', '/').lower())
             self.assertNotIn(private_root, json.dumps(detail).replace('\\\\', '/').lower())
             self.assertFalse(any(item['role'] == 'assistant' for item in detail['messages']))
