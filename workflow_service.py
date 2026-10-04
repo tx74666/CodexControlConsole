@@ -124,6 +124,19 @@ class WorkflowService:
                         priority TEXT NOT NULL,status TEXT NOT NULL,result TEXT NOT NULL,error TEXT NOT NULL,
                         claim_token TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,user_confirmed_at TEXT NOT NULL);
                     CREATE INDEX IF NOT EXISTS idea_dispatch_status ON idea_dispatches(status,priority,created_at);
+                    CREATE TABLE IF NOT EXISTS idea_refinements (id TEXT PRIMARY KEY,idea_id TEXT NOT NULL,
+                        state TEXT NOT NULL,round INTEGER NOT NULL,round_limit INTEGER NOT NULL,
+                        target_kind TEXT NOT NULL,target_thread_id TEXT,target_name TEXT NOT NULL,
+                        user_confirmed_at TEXT NOT NULL,error TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+                    CREATE TABLE IF NOT EXISTS conversation_threads (id TEXT PRIMARY KEY,generation INTEGER NOT NULL,
+                        cached_generation INTEGER NOT NULL,fetched_at TEXT,payload TEXT NOT NULL);
+                    CREATE TABLE IF NOT EXISTS conversation_pages (thread_id TEXT NOT NULL,generation INTEGER NOT NULL,
+                        cursor TEXT NOT NULL,fetched_at TEXT NOT NULL,payload TEXT NOT NULL,
+                        PRIMARY KEY(thread_id,generation,cursor));
+                    CREATE TABLE IF NOT EXISTS conversation_requests (id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,
+                        mode TEXT NOT NULL,generation INTEGER NOT NULL,cursor TEXT NOT NULL,status TEXT NOT NULL,
+                        error TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+                    CREATE INDEX IF NOT EXISTS conversation_request_status ON conversation_requests(status,created_at);
                 """)
                 yield db
                 db.commit()
@@ -352,11 +365,14 @@ class WorkflowService:
 
     @staticmethod
     def _public_dispatch(row, private=False):
-        value = {"id": row["id"], "ideaId": row["idea_id"], "snapshot": json.loads(row["snapshot"]),
+        snapshot = json.loads(row["snapshot"])
+        value = {"id": row["id"], "ideaId": row["idea_id"], "snapshot": snapshot,
                  "prompt": row["prompt"], "targetKind": row["target_kind"], "targetMode": row["target_mode"],
                  "targetThreadId": row["target_thread_id"], "targetName": row["target_name"], "status": row["status"],
                  "result": json.loads(row["result"]), "error": row["error"], "createdAt": row["created_at"],
-                 "updatedAt": row["updated_at"], "userConfirmedAt": row["user_confirmed_at"]}
+                 "updatedAt": row["updated_at"], "userConfirmedAt": row["user_confirmed_at"],
+                 "purpose": snapshot.get("purpose", "execute"), "refinementId": snapshot.get("refinementId"),
+                 "round": snapshot.get("round"), "roundLimit": snapshot.get("roundLimit")}
         if private:
             value["claimToken"] = row["claim_token"]
         return value
@@ -390,6 +406,7 @@ class WorkflowService:
             dispatches = db.execute("SELECT * FROM idea_dispatches ORDER BY created_at DESC,id").fetchall()
             return {"ideas": [self._public_idea(row) for row in rows], "revision": revision,
                     "dispatches": [self._public_dispatch(row) for row in dispatches],
+                    "refinements": [self._public_refinement(row) for row in db.execute("SELECT * FROM idea_refinements ORDER BY created_at DESC,id")],
                     "targets": self._setting(db, "incubator_targets") or []}
 
     def _clean_idea(self, db, value, identifier):
@@ -456,6 +473,9 @@ class WorkflowService:
                         target_thread_id=?,target_name=?,revision=?,updated_at=? WHERE id=?""",
                         (clean["title"], clean["body"], clean["stage"], clean["priority"], clean["parentId"],
                          clean["targetKind"], clean["targetThreadId"], clean["targetName"], revision, now, identifier))
+                    for session in db.execute("SELECT * FROM idea_refinements WHERE idea_id=? AND state='active'", (identifier,)).fetchall():
+                        db.execute("UPDATE idea_refinements SET state='needs_review',error='想法已编辑；保留新正文，后续完善已停止。',updated_at=? WHERE id=?", (now, session["id"]))
+                        self._cancel_refinement_pending(db, session["id"], now, "想法已编辑；未发送的完善轮次已取消。")
                 else:
                     identifier, now = uuid.uuid4().hex, _now()
                     clean = self._clean_idea(db, body, identifier)
@@ -484,12 +504,326 @@ class WorkflowService:
         except ValueError:
             raise WorkflowError("目标聊天标识须为 UUID。") from None
 
+    @staticmethod
+    def _source_time(value):
+        try:
+            parsed = datetime.fromisoformat(_text(value, 64).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError()
+            return parsed.astimezone(timezone.utc)
+        except (ValueError, OverflowError):
+            raise WorkflowError("快照时间须为包含时区的 ISO 时间。") from None
+
+    @staticmethod
+    def _conversation_status(value):
+        if isinstance(value, str):
+            return _text(value, 80)
+        if isinstance(value, dict) and not set(value) - {"type", "activeFlags"}:
+            flags = value.get("activeFlags", [])
+            if isinstance(flags, list) and len(flags) <= 16:
+                return {"type": _text(value.get("type", ""), 80), "activeFlags": [_text(flag, 80) for flag in flags]}
+        raise WorkflowError("会话状态快照无效。")
+
+    @staticmethod
+    def _conversation_path(value):
+        # Match source paths without touching files or probing other projects.
+        return value.replace("\\", "/").rstrip("/").casefold()
+
+    def conversations_catalog(self, body):
+        if (not isinstance(body, dict) or set(body) - {"requestId", "fetchedAt", "projects", "threads", "partial"}
+                or not isinstance(body.get("projects"), list) or len(body["projects"]) > 256
+                or not isinstance(body.get("threads"), list) or len(body["threads"]) > 2000):
+            raise WorkflowError("会话目录快照无效。")
+        source_time = self._source_time(body.get("fetchedAt"))
+        partial = body.get("partial", True)
+        if type(partial) is not bool:
+            raise WorkflowError("快照范围标记无效。")
+        projects, threads, seen = [], [], set()
+        for source in body["projects"]:
+            if not isinstance(source, dict) or set(source) - {"id", "label", "path"}:
+                raise WorkflowError("项目快照无效。")
+            item = {"id": _text(source.get("id"), 256), "label": _text(source.get("label"), 256),
+                    "path": _text(source.get("path", ""), 4096)}
+            if not item["id"].strip() or not item["label"].strip() or item["id"] in seen:
+                raise WorkflowError("项目标识或名称无效。")
+            seen.add(item["id"])
+            projects.append(item)
+        seen.clear()
+        for source in body["threads"]:
+            if not isinstance(source, dict) or set(source) - {"id", "title", "kind", "hostId", "projectId", "cwd", "status", "unread", "updatedAt"}:
+                raise WorkflowError("会话快照无效。")
+            item = {"id": self._thread_id(source.get("id")), "title": _text(source.get("title"), 256), "kind": source.get("kind")}
+            if not item["title"].strip() or not isinstance(item["kind"], str) or item["kind"] not in {"codex", "chatgpt"} or item["id"] in seen:
+                raise WorkflowError("会话类型、标题或标识无效。")
+            seen.add(item["id"])
+            for key, limit in (("hostId", 120), ("projectId", 256), ("cwd", 4096)):
+                if source.get(key) is not None:
+                    item[key] = _text(source[key], limit)
+            if "status" in source:
+                item["status"] = self._conversation_status(source["status"])
+            if "unread" in source:
+                if type(source["unread"]) is not bool:
+                    raise WorkflowError("会话未读标记无效。")
+                item["unread"] = source["unread"]
+            if source.get("updatedAt") is not None:
+                self._source_time(source["updatedAt"])
+                item["updatedAt"] = source["updatedAt"]
+            if not item.get("projectId") and item.get("cwd"):
+                cwd = self._conversation_path(item["cwd"])
+                candidates = [p for p in projects if p["path"] and (cwd == self._conversation_path(p["path"])
+                    or cwd.startswith(self._conversation_path(p["path"]) + "/"))]
+                if candidates:
+                    item["projectId"] = max(candidates, key=lambda p: len(self._conversation_path(p["path"])))["id"]
+            threads.append(item)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = self._receipt(db, "conversation_catalog", body)
+            previous = self._setting(db, "conversations_catalog")
+            ignored = previous is not None and source_time < self._source_time(previous["fetchedAt"])
+            if not old:
+                if not ignored:
+                    self._set_setting(db, "conversations_catalog", {"projects": projects, "threads": threads,
+                        "fetchedAt": body["fetchedAt"], "partial": partial})
+                    self._revision(db, True)
+                self._receipt(db, "conversation_catalog", body, {"saved": not ignored})
+        result = self.conversations_list()
+        return {**result, "duplicate": old is not None, "ignored": ignored}
+
+    @staticmethod
+    def _public_fetch(row):
+        return {"id": row["id"], "threadId": row["thread_id"], "mode": row["mode"],
+                "generation": row["generation"], "cursor": row["cursor"], "status": row["status"],
+                "error": row["error"], "createdAt": row["created_at"], "updatedAt": row["updated_at"]}
+
+    def conversations_list(self, query=""):
+        params = parse_qs(query, keep_blank_values=True)
+        if (len(query) > 64 or set(params) - {"revision"} or any(len(v) != 1 for v in params.values())
+                or ("revision" in params and not re.fullmatch(r"[0-9]{1,20}", params["revision"][0]))):
+            raise WorkflowError("会话目录请求无效。")
+        with self._db() as db:
+            db.execute("BEGIN")
+            revision = self._revision(db)
+            if params.get("revision", [None])[0] == revision:
+                return {"unchanged": True, "revision": revision}
+            catalog = self._setting(db, "conversations_catalog") or {"projects": [], "threads": [], "fetchedAt": None, "partial": True}
+            rows = db.execute("SELECT * FROM conversation_requests ORDER BY created_at DESC,id LIMIT 100").fetchall()
+            return {**catalog, "requests": [self._public_fetch(row) for row in rows], "revision": revision}
+
+    @staticmethod
+    def _conversation_state(db, identifier):
+        return db.execute("SELECT * FROM conversation_threads WHERE id=?", (identifier,)).fetchone()
+
+    def _conversation_detail(self, db, identifier):
+        catalog = self._setting(db, "conversations_catalog") or {"threads": []}
+        thread = next((item for item in catalog["threads"] if item["id"] == identifier), {"id": identifier})
+        state = self._conversation_state(db, identifier)
+        pages, seen, cursor, partial, coverage, fetched = [], set(), "", True, {}, None
+        if state:
+            generation = state["cached_generation"]
+            while cursor not in seen:
+                row = db.execute("SELECT * FROM conversation_pages WHERE thread_id=? AND generation=? AND cursor=?",
+                    (identifier, generation, cursor)).fetchone()
+                if row is None:
+                    break
+                seen.add(cursor)
+                payload = json.loads(row["payload"])
+                pages.append(payload)
+                if len(pages) == 1:
+                    partial, coverage, fetched = payload["partial"], payload["coverage"], row["fetched_at"]
+                else:
+                    partial = partial or payload["partial"]
+                if payload["olderCursor"] is None:
+                    cursor = None
+                    break
+                cursor = payload["olderCursor"]
+            ordered = {}
+            for page in reversed(pages):
+                for message in page["messages"]:
+                    ordered[message["id"]] = message
+            messages = list(ordered.values())
+            if not pages:
+                cursor = None
+            descriptions = list(dict.fromkeys(page["coverage"]["description"] for page in pages))
+            coverage = {**coverage, "description": "；".join(descriptions)[:4096]} if descriptions else coverage
+            partial = partial or bool(cursor) or any(message["truncated"] for message in messages)
+        else:
+            messages, cursor = [], None
+        requests = db.execute("SELECT * FROM conversation_requests WHERE thread_id=? ORDER BY created_at DESC,id LIMIT 30", (identifier,)).fetchall()
+        return {"thread": thread, "messages": messages, "generation": state["generation"] if state else 0,
+                "snapshotGeneration": state["cached_generation"] if state else 0, "fetchedAt": fetched,
+                "partial": partial, "olderCursor": cursor, "hasMore": bool(cursor),
+                "coverage": {**coverage, "description": coverage.get("description", "尚未抓取；显示的是已保存缓存。"),
+                             "messageCount": len(messages), "pageCount": len(pages)},
+                "requests": [self._public_fetch(row) for row in requests], "revision": self._revision(db)}
+
+    def conversations_thread(self, identifier):
+        identifier = self._thread_id(identifier)
+        with self._db() as db:
+            db.execute("BEGIN")
+            return self._conversation_detail(db, identifier)
+
+    def conversations_request(self, body, prefix="/api/workflow", authorize=None):
+        if authorize:
+            authorize()
+        if (not isinstance(body, dict) or set(body) - {"requestId", "threadId", "mode"}
+                or not isinstance(body.get("mode"), str) or body["mode"] not in {"refresh", "older"}):
+            raise WorkflowError("会话抓取请求无效。")
+        identifier, mode = self._thread_id(body.get("threadId")), body["mode"]
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = self._receipt(db, "conversation_request", body)
+            if old:
+                row = db.execute("SELECT * FROM conversation_requests WHERE id=?", (old["fetchId"],)).fetchone()
+            else:
+                detail = self._conversation_detail(db, identifier)
+                if "kind" not in detail["thread"] and not detail["snapshotGeneration"]:
+                    raise WorkflowError("请先同步真实会话目录。", 404, "conversation_not_found")
+                row = db.execute("SELECT * FROM conversation_requests WHERE thread_id=? AND mode=? AND status='pending'",
+                    (identifier, mode)).fetchone()
+                if row is None:
+                    generation = detail["generation"]
+                    cursor = ""
+                    if mode == "refresh":
+                        generation += 1
+                        db.execute("UPDATE conversation_requests SET status='failed',error='新刷新已取代旧页请求。',updated_at=? WHERE thread_id=? AND status='pending'", (_now(), identifier))
+                    elif not detail["olderCursor"] or detail["snapshotGeneration"] != generation:
+                        raise WorkflowError("没有可读取的更早页，或新刷新尚未完成。", 409, "no_older_page")
+                    else:
+                        cursor = detail["olderCursor"]
+                    state = self._conversation_state(db, identifier)
+                    if state:
+                        db.execute("UPDATE conversation_threads SET generation=? WHERE id=?", (generation, identifier))
+                    else:
+                        db.execute("INSERT INTO conversation_threads VALUES (?,?,0,NULL,'{}')", (identifier, generation))
+                    now, fetch_id = _now(), uuid.uuid4().hex
+                    db.execute("INSERT INTO conversation_requests VALUES (?,?,?,?,?,'pending','',?,?)", (fetch_id, identifier, mode, generation, cursor, now, now))
+                    row = db.execute("SELECT * FROM conversation_requests WHERE id=?", (fetch_id,)).fetchone()
+                    self._revision(db, True)
+                self._receipt(db, "conversation_request", body, {"fetchId": row["id"]})
+            if authorize:
+                authorize()
+            return {"fetchRequest": self._public_fetch(row), "revision": self._revision(db), "duplicate": old is not None}
+
+    def conversations_thread_snapshot(self, body):
+        allowed = {"requestId", "threadId", "generation", "mode", "cursor", "olderCursor", "fetchedAt", "partial", "coverage", "messages"}
+        if (not isinstance(body, dict) or set(body) - allowed or not isinstance(body.get("mode"), str) or body["mode"] not in {"refresh", "older"}
+                or type(body.get("generation")) is not int or not 1 <= body["generation"] <= 2147483647
+                or not isinstance(body.get("messages"), list) or len(body["messages"]) > 256):
+            raise WorkflowError("会话页面快照无效。")
+        identifier, generation, mode = self._thread_id(body.get("threadId")), body["generation"], body["mode"]
+        source_time = self._source_time(body.get("fetchedAt"))
+        cursor = _text(body.get("cursor", ""), 2048)
+        older = None if body.get("olderCursor") is None else _text(body["olderCursor"], 2048)
+        partial = body.get("partial", True)
+        if type(partial) is not bool or (mode == "refresh" and cursor) or (mode == "older" and not cursor) or older == cursor:
+            raise WorkflowError("会话页游标或范围标记无效。")
+        coverage = body.get("coverage", {})
+        if not isinstance(coverage, dict) or set(coverage) - {"description", "oldestAt", "newestAt"}:
+            raise WorkflowError("会话缓存范围无效。")
+        clean_coverage = {"description": _text(coverage.get("description", "App Tools 实际可读消息缓存；可能含截断或缺页。"), 1024)}
+        for key in ("oldestAt", "newestAt"):
+            if coverage.get(key) is not None:
+                self._source_time(coverage[key])
+                clean_coverage[key] = coverage[key]
+        messages, seen, size = [], set(), 0
+        for source in body["messages"]:
+            if (not isinstance(source, dict) or set(source) - {"id", "role", "text", "turnId", "sourceMessageId", "phase", "status", "createdAt", "truncated"}
+                    or not isinstance(source.get("role"), str) or source["role"] not in {"user", "assistant"}):
+                raise WorkflowError("会话消息快照无效。")
+            message = {"id": _text(source.get("id"), 256), "role": source["role"], "text": _text(source.get("text")), "truncated": source.get("truncated", False)}
+            if not message["id"] or type(message["truncated"]) is not bool:
+                raise WorkflowError("会话消息标识或截断标记无效。")
+            for key, limit in (("turnId", 160), ("sourceMessageId", 160), ("phase", 80)):
+                if source.get(key) is not None:
+                    message[key] = _text(source[key], limit)
+            if "status" in source:
+                message["status"] = self._conversation_status(source["status"])
+            if source.get("createdAt") is not None:
+                self._source_time(source["createdAt"])
+                message["createdAt"] = source["createdAt"]
+            if message["id"] in seen:
+                raise WorkflowError("同一页面消息标识重复。")
+            seen.add(message["id"])
+            size += len(_json(message).encode("utf-8"))
+            if size > 1024 * 1024:
+                raise WorkflowError("会话缓存页面过大。", 413)
+            messages.append(message)
+        payload = {"messages": messages, "olderCursor": older, "partial": partial, "coverage": clean_coverage}
+        ignored = False
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = self._receipt(db, "conversation_snapshot", body)
+            state = self._conversation_state(db, identifier)
+            if not old:
+                if state and (generation < state["generation"] or (mode == "refresh" and state["fetched_at"] and source_time < self._source_time(state["fetched_at"]))):
+                    ignored = True
+                elif mode == "older":
+                    detail = self._conversation_detail(db, identifier)
+                    if not state or generation != state["generation"] or generation != state["cached_generation"] or cursor != detail["olderCursor"]:
+                        existing = db.execute("SELECT * FROM conversation_pages WHERE thread_id=? AND generation=? AND cursor=?", (identifier, generation, cursor)).fetchone()
+                        if not existing:
+                            raise WorkflowError("更早页不属于这个会话当前缓存游标。", 409, "cursor_mismatch")
+                        if source_time < self._source_time(existing["fetched_at"]):
+                            ignored = True
+                    if older is not None and db.execute("SELECT 1 FROM conversation_pages WHERE thread_id=? AND generation=? AND cursor=?", (identifier, generation, older)).fetchone():
+                        raise WorkflowError("会话分页游标形成循环。", 409, "cursor_mismatch")
+                    count = db.execute("SELECT COUNT(*) FROM conversation_pages WHERE thread_id=? AND generation=?", (identifier, generation)).fetchone()[0]
+                    if count >= 30 and not db.execute("SELECT 1 FROM conversation_pages WHERE thread_id=? AND generation=? AND cursor=?", (identifier, generation, cursor)).fetchone():
+                        raise WorkflowError("已保存 30 页缓存；请刷新最新消息。", 409, "cache_page_limit")
+                if not ignored:
+                    if mode == "refresh":
+                        db.execute("DELETE FROM conversation_pages WHERE thread_id=?", (identifier,))
+                        db.execute("INSERT INTO conversation_threads VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,cached_generation=excluded.cached_generation,fetched_at=excluded.fetched_at,payload=excluded.payload",
+                            (identifier, generation, generation, body["fetchedAt"], "{}"))
+                        db.execute("UPDATE conversation_requests SET status='failed',error='新刷新已取代旧页请求。',updated_at=? WHERE thread_id=? AND generation<? AND status='pending'", (_now(), identifier, generation))
+                    db.execute("INSERT INTO conversation_pages VALUES (?,?,?,?,?) ON CONFLICT(thread_id,generation,cursor) DO UPDATE SET fetched_at=excluded.fetched_at,payload=excluded.payload",
+                        (identifier, generation, cursor, body["fetchedAt"], _json(payload)))
+                    self._revision(db, True)
+                self._receipt(db, "conversation_snapshot", body, {"saved": not ignored})
+            result = self._conversation_detail(db, identifier)
+            return {**result, "duplicate": old is not None, "ignored": ignored}
+
+    def conversations_fetch_requests(self):
+        with self._db() as db:
+            db.execute("BEGIN")
+            return {"requests": [self._public_fetch(row) for row in db.execute("SELECT * FROM conversation_requests WHERE status='pending' ORDER BY created_at,id")], "revision": self._revision(db)}
+
+    def conversations_fetch_result(self, body):
+        if (not isinstance(body, dict) or set(body) - {"requestId", "id", "status", "error"}
+                or not isinstance(body.get("status"), str) or body["status"] not in {"completed", "failed"}):
+            raise WorkflowError("会话抓取结果无效。")
+        identifier, status = _id(body.get("id")), body["status"]
+        error = _text(body.get("error", ""), 2000)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM conversation_requests WHERE id=?", (identifier,)).fetchone()
+            if row is None:
+                raise WorkflowError("会话抓取请求不存在。", 404)
+            old = self._receipt(db, "conversation_fetch_result", body)
+            if not old:
+                if row["status"] != "pending":
+                    raise WorkflowError("抓取请求已经结束或被新代际取代。", 409)
+                if status == "completed":
+                    page = db.execute("SELECT fetched_at FROM conversation_pages WHERE thread_id=? AND generation=? AND cursor=?", (row["thread_id"], row["generation"], row["cursor"])).fetchone()
+                    if page is None or self._source_time(page["fetched_at"]) < self._source_time(row["created_at"]):
+                        raise WorkflowError("请先保存这次实际抓取的新页面，不能假报完成。", 409, "snapshot_missing")
+                db.execute("UPDATE conversation_requests SET status=?,error=?,updated_at=? WHERE id=?", (status, error, _now(), identifier))
+                self._receipt(db, "conversation_fetch_result", body, {"fetchId": identifier})
+                self._revision(db, True)
+            return {"fetchRequest": self._public_fetch(db.execute("SELECT * FROM conversation_requests WHERE id=?", (identifier,)).fetchone()),
+                    "revision": self._revision(db), "duplicate": old is not None}
+
     def incubator_publish(self, body, prefix="/api/workflow", authorize=None):
         if authorize:
             authorize()
-        if (not isinstance(body, dict) or set(body) - {"requestId", "id", "expectedRevision", "targetKind", "targetMode", "targetThreadId", "targetName"}
+        if (not isinstance(body, dict) or set(body) - {"requestId", "id", "expectedRevision", "targetKind", "targetMode", "targetThreadId", "targetName", "purpose", "roundLimit"}
                 or type(body.get("expectedRevision")) is not int or not 1 <= body["expectedRevision"] <= 9007199254740991):
             raise WorkflowError("请确认当前想法和发布目标后再发布。")
+        purpose, round_limit = body.get("purpose", "execute"), body.get("roundLimit", 3)
+        if (not isinstance(purpose, str) or purpose not in {"execute", "refine"}
+                or (purpose == "execute" and "roundLimit" in body)
+                or (purpose == "refine" and (type(round_limit) is not int or not 1 <= round_limit <= 10))):
+            raise WorkflowError("请明确完善用途及 1 至 10 次授权轮数。")
         identifier = _id(body.get("id"))
         kind, thread_id = body.get("targetKind"), body.get("targetThreadId")
         mode = body.get("targetMode", "existing" if thread_id else "new")
@@ -515,7 +849,12 @@ class WorkflowService:
                 name = _text(body.get("targetName", idea["targetName"] or idea["title"][:120]), 120).strip()
                 dispatch_id, now = uuid.uuid4().hex, _now()
                 snapshot = {key: idea[key] for key in ("title", "body", "stage", "priority", "revision")}
-                prompt = f"[Codex Console 发布编号：{dispatch_id}]\n\n" + idea["publishPrompt"]
+                if purpose == "refine":
+                    session_id = uuid.uuid4().hex
+                    db.execute("INSERT INTO idea_refinements VALUES (?,?,'active',1,?,?,?,?,?,'',?,?)",
+                        (session_id, identifier, round_limit, kind, thread_id, name, now, now, now))
+                    snapshot.update(purpose="refine", refinementId=session_id, round=1, roundLimit=round_limit)
+                prompt = self._dispatch_prompt(dispatch_id, idea, snapshot)
                 db.execute("INSERT INTO idea_dispatches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (dispatch_id, identifier, str(uuid.UUID(body["requestId"])), _json(snapshot), prompt, kind,
                      mode, thread_id, name, idea["priority"], "pending", "{}", "", None, now, now, now))
@@ -525,9 +864,103 @@ class WorkflowService:
                 self._revision(db, True)
             result = {"dispatch": self._public_dispatch(self._dispatch(db, dispatch_id)),
                       "idea": self._public_idea(self._idea(db, identifier)), "revision": self._revision(db), "duplicate": old is not None}
+            session_id = result["dispatch"]["refinementId"]
+            if session_id:
+                result["refinement"] = self._public_refinement(db.execute("SELECT * FROM idea_refinements WHERE id=?", (session_id,)).fetchone())
             if authorize:
                 authorize()
             return result
+
+    @staticmethod
+    def _dispatch_prompt(dispatch_id, idea, snapshot):
+        marker = f"[Codex Console 发布编号：{dispatch_id}]\n\n"
+        if snapshot.get("purpose") != "refine":
+            return marker + idea["publishPrompt"]
+        return (marker + f"这是任务孵化器的第 {snapshot['round']}/{snapshot['roundLimit']} 轮提示词完善。\n"
+                "本次只授权分析、澄清、检查遗漏并重写下面的完整任务稿；禁止执行任务、运行命令、修改项目、发送消息或建立其他聊天。\n"
+                "保留用户意图与限制，避免加入未经授权的操作。请指出关键缺口，再给出可直接保存的完整新版正文。\n"
+                "完整稿须且仅须放在一个 <refined_prompt>完整新版正文</refined_prompt> 块中，不在块内使用该标签；不要只给差异或声称已经执行。\n\n"
+                + f"标题：{idea['title']}\n\n原稿：\n" + (idea["body"] or "（请先帮助明确此想法，不能自行执行。）"))
+
+    @staticmethod
+    def _public_refinement(row):
+        return {"id": row["id"], "ideaId": row["idea_id"], "state": row["state"], "round": row["round"],
+                "roundLimit": row["round_limit"], "targetKind": row["target_kind"], "targetThreadId": row["target_thread_id"],
+                "targetName": row["target_name"], "userConfirmedAt": row["user_confirmed_at"], "error": row["error"],
+                "createdAt": row["created_at"], "updatedAt": row["updated_at"]}
+
+    @staticmethod
+    def _cancel_refinement_pending(db, session_id, now, error):
+        db.execute("UPDATE idea_dispatches SET status='failed',error=?,updated_at=? WHERE status='pending' AND json_extract(snapshot,'$.refinementId')=?",
+            (error, now, session_id))
+
+    def incubator_refinement_pause(self, body, prefix="/api/workflow", authorize=None):
+        if authorize:
+            authorize()
+        if not isinstance(body, dict) or set(body) - {"requestId", "id"}:
+            raise WorkflowError("暂停完善请求无效。")
+        identifier = _id(body.get("id"))
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM idea_refinements WHERE id=?", (identifier,)).fetchone()
+            if row is None:
+                raise WorkflowError("完善会话不存在。", 404)
+            old = self._receipt(db, "refinement_pause", body)
+            if not old:
+                if row["state"] == "completed":
+                    raise WorkflowError("完善已完成，无需暂停。", 409)
+                now = _now()
+                db.execute("UPDATE idea_refinements SET state='paused',error='后续完善已暂停；已送达的聊天不会被终止。',updated_at=? WHERE id=?", (now, identifier))
+                self._cancel_refinement_pending(db, identifier, now, "用户暂停，未发送的完善轮次已取消。")
+                latest = db.execute("SELECT snapshot FROM idea_dispatches WHERE idea_id=? ORDER BY rowid DESC LIMIT 1", (row["idea_id"],)).fetchone()
+                latest_snapshot = json.loads(latest["snapshot"]) if latest else {}
+                if latest_snapshot.get("refinementId") == identifier:
+                    db.execute("UPDATE ideas SET stage='thinking',revision=revision+1,updated_at=? WHERE id=? AND stage='queued' AND revision=?",
+                        (now, row["idea_id"], latest_snapshot["revision"] + 1))
+                self._receipt(db, "refinement_pause", body, {"refinementId": identifier})
+                self._revision(db, True)
+            if authorize:
+                authorize()
+            return {"refinement": self._public_refinement(db.execute("SELECT * FROM idea_refinements WHERE id=?", (identifier,)).fetchone()),
+                    "revision": self._revision(db), "duplicate": old is not None}
+
+    def _complete_refinement(self, db, row, result, thread_id, now):
+        snapshot = json.loads(row["snapshot"])
+        session = db.execute("SELECT * FROM idea_refinements WHERE id=?", (snapshot["refinementId"],)).fetchone()
+        if session is None:
+            return "needs_review", "完善授权记录缺失；未改写正文。"
+        if session["state"] == "paused":
+            return "completed", ""
+        idea = self._idea(db, row["idea_id"])
+        error = ""
+        if session["state"] != "active" or idea["revision"] != snapshot["revision"] + 1 or idea["stage"] != "queued":
+            error = "正文或完善状态已变更；保留用户草稿，请手动核对返回稿。"
+        text = result.get("text", "")
+        blocks = re.findall(r"<refined_prompt>(.*?)</refined_prompt>", text, re.DOTALL)
+        if len(blocks) != 1 or text.count("<refined_prompt>") != 1 or text.count("</refined_prompt>") != 1 or not blocks[0].strip():
+            error = error or "返回内容没有唯一完整的 refined_prompt 稿块；原稿未改变。"
+        elif len(blocks[0].strip()) > MAX_TEXT or "\0" in blocks[0]:
+            error = error or "返回稿无效或过长；原稿未改变。"
+        if error:
+            db.execute("UPDATE idea_refinements SET state='needs_review',error=?,updated_at=? WHERE id=?", (error, now, session["id"]))
+            return "needs_review", error
+        final = snapshot["round"] >= session["round_limit"]
+        db.execute("UPDATE ideas SET body=?,stage=?,revision=revision+1,updated_at=? WHERE id=?",
+            (blocks[0].strip(), "ready" if final else "queued", now, idea["id"]))
+        db.execute("UPDATE idea_refinements SET target_thread_id=?,state=?,error='',updated_at=? WHERE id=?",
+            (thread_id, "completed" if final else "active", now, session["id"]))
+        if not final:
+            next_round, next_id = snapshot["round"] + 1, uuid.uuid4().hex
+            next_idea = self._public_idea(self._idea(db, idea["id"]))
+            next_snapshot = {key: next_idea[key] for key in ("title", "body", "stage", "priority", "revision")}
+            next_snapshot.update(purpose="refine", refinementId=session["id"], round=next_round, roundLimit=session["round_limit"])
+            nonce = str(uuid.uuid5(uuid.NAMESPACE_URL, f"console-refinement:{session['id']}:{next_round}"))
+            db.execute("INSERT INTO idea_dispatches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (next_id, idea["id"], nonce, _json(next_snapshot), self._dispatch_prompt(next_id, next_idea, next_snapshot),
+                 session["target_kind"], "existing", thread_id, session["target_name"], next_idea["priority"], "pending", "{}", "", None, now, now, session["user_confirmed_at"]))
+            db.execute("UPDATE ideas SET revision=revision+1 WHERE id=?", (idea["id"],))
+            db.execute("UPDATE idea_refinements SET round=? WHERE id=?", (next_round, session["id"]))
+        return "completed", ""
 
     def incubator_targets(self, query=""):
         if query:
@@ -677,20 +1110,35 @@ class WorkflowService:
                         raise WorkflowError("发布结果不属于已选目标聊天。", 409)
                     thread_id = confirmed_id
                 now = _now()
+                refinement_id = json.loads(row["snapshot"]).get("refinementId")
+                if refinement_id:
+                    if not fail and status == "completed":
+                        status, error = self._complete_refinement(db, row, result, thread_id, now)
+                    elif fail:
+                        db.execute("UPDATE idea_refinements SET state=?,error=?,updated_at=? WHERE id=?",
+                            ("needs_review" if status == "needs_review" else "paused", error, now, refinement_id))
+                        if status == "failed":
+                            snapshot = json.loads(row["snapshot"])
+                            db.execute("UPDATE ideas SET stage='thinking',revision=revision+1,updated_at=? WHERE id=? AND revision=? AND stage='queued'",
+                                (now, row["idea_id"], snapshot["revision"] + 1))
                 db.execute("UPDATE idea_dispatches SET status=?,target_thread_id=?,result=?,error=?,updated_at=? WHERE id=?",
                     (status, thread_id, _json(result), error, now, dispatch_id))
                 idea = self._idea(db, row["idea_id"])
                 snapshot = json.loads(row["snapshot"])
                 # Later edits remain drafts; completing an older snapshot cannot publish them.
-                if idea["revision"] == snapshot["revision"] + 1 and idea["stage"] == "queued":
+                if not refinement_id and idea["revision"] == snapshot["revision"] + 1 and idea["stage"] == "queued":
                     stage = "published" if status == "completed" else snapshot["stage"] if status == "failed" else None
                     if stage is not None:
                         db.execute("UPDATE ideas SET stage=?,target_thread_id=?,revision=revision+1,updated_at=? WHERE id=?",
                             (stage, thread_id or "", now, idea["id"]))
                 self._receipt(db, kind, body, {"dispatchId": dispatch_id})
                 self._revision(db, True)
-            return {"dispatch": self._public_dispatch(self._dispatch(db, dispatch_id), True),
-                    "idea": self._public_idea(self._idea(db, row["idea_id"])), "revision": self._revision(db), "duplicate": old is not None}
+            response = {"dispatch": self._public_dispatch(self._dispatch(db, dispatch_id), True),
+                        "idea": self._public_idea(self._idea(db, row["idea_id"])), "revision": self._revision(db), "duplicate": old is not None}
+            refinement_id = response["dispatch"]["refinementId"]
+            if refinement_id:
+                response["refinement"] = self._public_refinement(db.execute("SELECT * FROM idea_refinements WHERE id=?", (refinement_id,)).fetchone())
+            return response
 
     def _receipt(self, db, kind, body, response=None):
         try:

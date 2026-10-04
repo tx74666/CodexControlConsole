@@ -9013,3 +9013,5 @@ body.music-track-dragging .delete-track-button {
 #consoleWorkView { display: block; }
 #consoleWorkView[hidden] { display: none; }
 .console-subnav [data-console-view-target="common"], .console-subnav [data-console-view-target="collaboration"] { font-size: 12px; }
+
+.work-view-nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}.work-view-nav button{min-height:44px;padding:9px 16px;border:1px solid var(--line,#39465b);border-radius:9px;background:var(--panel,#1c283b);color:var(--text,#e5edff);font:inherit;cursor:pointer}.work-view-nav button[aria-pressed=true]{border-color:var(--accent,#78b6ff);background:var(--accent,#78b6ff);color:#101e30;font-weight:700}@media(max-width:700px){.work-view-nav button{flex:1;padding:9px 8px;font-size:13px}}

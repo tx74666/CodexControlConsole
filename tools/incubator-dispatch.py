@@ -18,16 +18,16 @@ from workflow_service import WorkflowError, WorkflowService
 MAX_INPUT = 128 * 1024
 
 
-def read_body(filename):
+def read_body(filename, limit=MAX_INPUT):
     if filename:
         path = Path(filename)
-        if path.stat().st_size > MAX_INPUT:
+        if path.stat().st_size > limit:
             raise WorkflowError("队列操作输入过大。", 413)
         with path.open(encoding="utf-8-sig") as source:
-            text = source.read(MAX_INPUT + 1)
+            text = source.read(limit + 1)
     else:
-        text = sys.stdin.read(MAX_INPUT + 1)
-    if len(text.encode("utf-8")) > MAX_INPUT:
+        text = sys.stdin.read(limit + 1)
+    if len(text.encode("utf-8")) > limit:
         raise WorkflowError("队列操作输入过大。", 413)
     body = json.loads(text)
     if not isinstance(body, dict):
@@ -41,10 +41,11 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list", help="只读全部发布记录；不会认领或发送")
     commands.add_parser("read-waiting", help="只读 claimed/waiting/needs_review，含私有 claimToken 与授权快照")
+    commands.add_parser("read-fetch-requests", help="只读待抓取的缓存页请求；不会发送聊天")
     claim = commands.add_parser("claim", help="原子认领一个 pending（高优先级先到先出）；不会发送")
     claim.add_argument("--request-id", required=True)
     claim.add_argument("--id", help="可选固定 dispatch ID；已认领不可重复认领")
-    for name in ("attach-result", "fail", "targets"):
+    for name in ("attach-result", "fail", "targets", "catalog", "thread-snapshot", "fetch-result"):
         command = commands.add_parser(name, help="JSON 输入经文件或 stdin；不会调用任何聊天工具")
         command.add_argument("--json-file")
         command.add_argument("--request-id", help="覆写/补入 requestId；targets 缺省按快照内容生成稳定 UUID")
@@ -58,20 +59,24 @@ def main(argv=None):
         result = service.incubator_dispatches()
     elif args.command == "read-waiting":
         result = service.incubator_dispatches(waiting=True, private=True)
+    elif args.command == "read-fetch-requests":
+        result = service.conversations_fetch_requests()
     elif args.command == "claim":
         body = {"requestId": args.request_id}
         if args.id is not None:
             body["id"] = args.id
         result = service.incubator_claim(body)
     else:
-        body = read_body(args.json_file)
+        body = read_body(args.json_file, 2 * 1024 * 1024 if args.command in {"catalog", "thread-snapshot"} else MAX_INPUT)
         if args.request_id:
             body["requestId"] = args.request_id
         if args.command == "targets" and "requestId" not in body:
             digest = hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
             body["requestId"] = str(uuid.uuid5(uuid.NAMESPACE_URL, "console-incubator-targets:" + digest))
         operation = {"attach-result": service.incubator_attach_result, "fail": service.incubator_fail,
-                     "targets": service.incubator_set_targets}[args.command]
+                     "targets": service.incubator_set_targets, "catalog": service.conversations_catalog,
+                     "thread-snapshot": service.conversations_thread_snapshot,
+                     "fetch-result": service.conversations_fetch_result}[args.command]
         result = operation(body)
     print(json.dumps(result, ensure_ascii=False))
     return 0

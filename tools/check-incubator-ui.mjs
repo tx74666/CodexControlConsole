@@ -38,18 +38,24 @@ function harness({ phone = true, ideas = [], server = { ideas, receipts: new Map
     const result = backend(path, payload); if (failPath === path) { failPath = ""; throw new TypeError("Lost response"); } return result;
   } };
   function backend(path, payload) {
-    if (path === "incubator") return response({ ideas: server.ideas, targets: server.targets || [], dispatches: server.dispatches || [], revision: `r${server.ideas.reduce((sum, item) => sum + item.revision, 0)}` });
-    assert.deepEqual(Object.keys(payload).filter(key => !["requestId", "id", "expectedRevision", "title", "body", "stage", "priority", "parentId", "targetKind", "targetThreadId", "targetName", ...(path === "incubator/publish" ? ["targetMode"] : [])].includes(key)), []);
+    if (path === "incubator") return response({ ideas: server.ideas, targets: server.targets || [], dispatches: server.dispatches || [], refinements: server.refinements || [], revision: `r${server.ideas.reduce((sum, item) => sum + item.revision, 0)}` });
+    assert.deepEqual(Object.keys(payload).filter(key => !["requestId", "id", "expectedRevision", "title", "body", "stage", "priority", "parentId", "targetKind", "targetThreadId", "targetName", ...(path === "incubator/publish" ? ["targetMode", "purpose", "roundLimit"] : [])].includes(key)), []);
     if (server.receipts.has(payload.requestId)) return response({ ...server.receipts.get(payload.requestId), duplicate: true });
+    if (path === "incubator/refinement/pause") {
+      const refinement = server.refinements.find(item => item.id === payload.id); assert.ok(refinement); refinement.state = "paused";
+      const result = {refinement:clone(refinement), revision:"paused"}; server.receipts.set(payload.requestId, clone(result)); return response(result);
+    }
     let saved;
     if (path === "incubator/publish") {
-      assert.deepEqual(Object.keys(payload).sort(), ["requestId", "id", "expectedRevision", "targetKind", "targetMode", "targetThreadId", "targetName"].sort());
+      assert.deepEqual(Object.keys(payload).sort(), ["requestId", "id", "expectedRevision", "targetKind", "targetMode", "targetThreadId", "targetName", ...(payload.purpose === "refine" ? ["purpose","roundLimit"] : [])].sort());
       saved = server.ideas.find(item => item.id === payload.id); assert.ok(saved);
       if (saved.revision !== payload.expectedRevision) return response({ error: "发布版本已变化", code: "revision_conflict" }, 409);
       server.dispatches ||= []; if (server.dispatches.some(item => item.ideaId === saved.id && ["pending", "claimed", "waiting", "needs_review"].includes(item.status))) return response({ error: "已有发布在处理中", code: "dispatch_active" }, 409);
       assert.ok(payload.targetKind === "codex" || payload.targetMode === "existing"); if (payload.targetMode === "existing") assert.match(payload.targetThreadId, /^[a-f\d-]{36}$/i);
       const dispatch = { id: `dispatch-${server.dispatches.length + 1}`, ideaId: saved.id, status: "pending", targetKind: payload.targetKind, targetMode: payload.targetMode, targetThreadId: payload.targetThreadId, targetName: payload.targetName, snapshot: clone(saved), prompt: saved.publishPrompt || saved.body, result: {} }; server.dispatches.push(dispatch); saved.stage = "queued"; saved.revision++;
-      const result = { dispatch, idea: clone(saved), revision: `r${saved.revision}`, duplicate: false }; server.receipts.set(payload.requestId, clone(result)); return response(result);
+      let refinement;
+      if (payload.purpose === "refine") { server.refinements ||= []; refinement = {id:`refine-${server.refinements.length+1}`,ideaId:saved.id,state:"active",round:1,roundLimit:payload.roundLimit}; server.refinements.push(refinement); Object.assign(dispatch,{purpose:"refine",refinementId:refinement.id,round:1,roundLimit:payload.roundLimit}); }
+      const result = { dispatch, idea: clone(saved), ...(refinement ? {refinement:clone(refinement)} : {}), revision: `r${saved.revision}`, duplicate: false }; server.receipts.set(payload.requestId, clone(result)); return response(result);
     }
     if (path === "incubator/create") { saved = idea(`server-${server.ideas.length + 1}`, payload); delete saved.requestId; server.ideas.unshift(saved); }
     else if (path === "incubator/update") {
@@ -175,6 +181,46 @@ await test("paired phone GET/save/publish carry the same-origin auth gate while 
     const h = harness({ phone }); await h.start(); h.new(); h.type("标题", "请求配对验证"); h.button("保存想法").click(); await settle(); h.button("发布到目标聊天").click(); h.button("确认发布此任务").click(); await settle();
     assert.ok(h.calls.some(call => call.path === "incubator" && call.options.method === "GET")); assert.ok(h.calls.some(call => call.path === "incubator/create" && call.options.method === "POST")); assert.ok(h.calls.some(call => call.path === "incubator/publish" && call.options.method === "POST"));
     for (const call of h.calls) { assert.equal(call.options.headers.Accept, "application/json"); assert.equal(call.options.headers["X-Codex-Phone"], phone ? "1" : undefined); assert.equal(call.options.credentials, "same-origin"); assert.equal(call.options.mode, "same-origin"); assert.equal(call.options.referrerPolicy, "same-origin"); assert.equal(call.options.redirect, "error"); if (call.options.method === "POST") assert.equal(call.options.headers["Content-Type"], "application/json"); }
+  }
+});
+await test("prepared saved task uses a selected conversation without typing or sending", async () => {
+  const h = harness({ideas:[idea("ready",{title:"现成任务稿",body:"完整的原任务内容",stage:"ready"})]}); await h.start();
+  await h.panel.useTarget({id:"01a10257-e1b3-7ce2-a0af-cf9df4ec2c09",kind:"codex",title:"Codex Console"});
+  assert.equal(h.field("想法与任务内容").value,"完整的原任务内容"); assert.equal(h.server.ideas[0].targetName,"Codex Console");
+  assert.equal(h.server.ideas[0].targetThreadId,"01a10257-e1b3-7ce2-a0af-cf9df4ec2c09"); assert.equal(h.calls.filter(call=>call.path==="incubator/publish").length,0);
+  h.button("反复完善任务稿").click(); assert.ok(h.button("确认完善 3 轮")); assert.match(h.root.textContent,/不会自动正式派工/);
+});
+await test("refinement confirmation explicitly bounds rounds and stays separate from execution", async () => {
+  const h = harness({ideas:[idea("saved")]}); await h.start(); h.button("反复完善任务稿").click(); h.change("完善轮次","5");
+  const preview=h.all("textarea").find(element=>element.attributes["aria-label"]==="确认发布的已保存内容");
+  assert.match(preview.value,/第 1\/5 轮提示词完善/); assert.match(preview.value,/禁止执行任务/); assert.match(preview.value,/<refined_prompt>/);
+  assert.ok(h.button("确认完善 5 轮")); assert.equal(h.calls.filter(call=>call.path==="incubator/publish").length,0);
+  h.button("确认完善 5 轮").click(); await settle(); const sent=h.calls.find(call=>call.path==="incubator/publish").payload;
+  assert.equal(sent.purpose,"refine"); assert.equal(sent.roundLimit,5); assert.match(h.root.textContent,/只分析和改稿/); assert.ok(h.button("暂停后续完善"));
+  h.button("暂停后续完善").click(); await settle(); assert.equal(h.server.refinements[0].state,"paused");
+  assert.equal(h.calls.filter(call=>call.path==="incubator/publish").length,1); assert.match(h.root.textContent,/不会再自动发下一轮/);
+});
+await test("selecting a conversation keeps an unsaved task and requires deliberate save", async () => {
+  const h=harness({ideas:[idea("saved")]}); await h.start(); h.type("想法与任务内容","尚未保存的修改");
+  await h.panel.useTarget({id:"6ac16523-a468-83e8-a16a-877c3ec8f64a",kind:"chatgpt",title:"手机版App建议"});
+  assert.equal(h.field("想法与任务内容").value,"尚未保存的修改"); assert.equal(h.calls.filter(call=>call.payload).length,0);
+  assert.match(h.root.textContent,/当前草稿保留/);
+});
+await test("uncertain refinement retry retains purpose and authorized round count", async () => {
+  const server={ideas:[idea("saved")],receipts:new Map()},storage=new Map(); let h=harness({server,storage}); await h.start();
+  h.button("反复完善任务稿").click(); h.change("完善轮次","1"); h.fail("incubator/publish"); h.button("确认完善 1 轮").click(); await settle();
+  const first=h.calls.find(call=>call.path==="incubator/publish").payload; h.panel.setActive(false); h=harness({server,storage}); await h.start();
+  h.button("重试原发布请求").click(); await settle(); assert.deepEqual(h.calls.find(call=>call.path==="incubator/publish").payload,first);
+  assert.equal(server.refinements.length,1); assert.equal(first.roundLimit,1);
+});
+await test("associating a prepared task does not hide an uncertain save or revision conflict", async () => {
+  for (const conflict of [false,true]) {
+    const h=harness({ideas:[idea("prepared")]}); await h.start();
+    if (conflict) h.server.ideas[0].revision++; else h.fail("incubator/update");
+    const accepted=await h.panel.useTarget({id:"01a10257-e1b3-7ce2-a0af-cf9df4ec2c09",kind:"codex",title:"Codex Console"});
+    assert.equal(accepted,false); assert.doesNotMatch(h.root.textContent,/已关联选中的会话/);
+    assert.match(h.root.textContent,conflict?/版本冲突/:/原保存请求已保留/);
+    assert.equal(h.calls.filter(call=>call.path==="incubator/publish").length,0);
   }
 });
 console.log(`PASS ${count} incubator UI checks`);

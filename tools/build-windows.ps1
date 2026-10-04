@@ -250,6 +250,8 @@ if ($BuildApplication) {
   @{ Source = "workflow-panel.css"; Destination = "." },
   @{ Source = "incubator-panel.js"; Destination = "." },
   @{ Source = "incubator-panel.css"; Destination = "." },
+  @{ Source = "conversations-panel.js"; Destination = "." },
+  @{ Source = "conversations-panel.css"; Destination = "." },
   @{ Source = "mobile.webmanifest"; Destination = "." },
   @{ Source = "phone\phone-icon-180.png"; Destination = "phone" },
   @{ Source = "phone\phone-icon-192.png"; Destination = "phone" },

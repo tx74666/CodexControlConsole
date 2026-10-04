@@ -23,6 +23,7 @@ const context = {
   desktopTransferPanel: { hasDraft() { return false; } },
   desktopWorkflowPanel: { hasDraft() { return false; } },
   desktopIncubatorPanel: { hasDraft() { return false; } },
+  desktopConversationsPanel: { canReload() { return true; } },
   localStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) },
   window: { location: { reload() { reloads++; } } }
 };
@@ -60,6 +61,10 @@ context.desktopIncubatorPanel.hasDraft = () => true;
 context.refreshForNewConsoleVersion('99.0.0');
 assert.equal(reloads, 0, 'an unsaved incubator idea must block automatic reload');
 context.desktopIncubatorPanel.hasDraft = () => false;
+context.desktopConversationsPanel.canReload = () => false;
+context.refreshForNewConsoleVersion('99.0.0');
+assert.equal(reloads, 0, 'a conversation read request awaiting acknowledgement must block automatic reload');
+context.desktopConversationsPanel.canReload = () => true;
 context.refreshForNewConsoleVersion('99.0.0');
 context.refreshForNewConsoleVersion('99.0.0');
 assert.equal(reloads, 1, 'newer server must reload once');

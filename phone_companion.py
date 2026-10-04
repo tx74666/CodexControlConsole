@@ -56,6 +56,7 @@ ASSETS = {
     "/transfer-panel.js": "transfer-panel.js", "/transfer-panel.css": "transfer-panel.css",
     "/workflow-panel.js": "workflow-panel.js", "/workflow-panel.css": "workflow-panel.css",
     "/incubator-panel.js": "incubator-panel.js", "/incubator-panel.css": "incubator-panel.css",
+    "/conversations-panel.js": "conversations-panel.js", "/conversations-panel.css": "conversations-panel.css",
     "/mobile.webmanifest": "mobile.webmanifest",
     "/phone/phone-icon-180.png": "phone/phone-icon-180.png",
     "/phone/phone-icon-192.png": "phone/phone-icon-192.png",
@@ -443,7 +444,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                         authorize()
                         result = companion.workflow_service.upload(fields, files, prefix="/api/phone/workflow", authorize=authorize)
                 elif action in {"create", "message", "submit", "discuss", "transcribe", "retry",
-                                "incubator/create", "incubator/update", "incubator/publish"}:
+                                "incubator/create", "incubator/update", "incubator/publish", "incubator/refinement/pause", "conversations/request"}:
                     body = self._body(maximum=128 * 1024)
                     authorize()
                     result = workflow_post(companion.workflow_service, action, body, prefix="/api/phone/workflow", authorize=authorize)

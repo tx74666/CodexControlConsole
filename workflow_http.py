@@ -14,6 +14,13 @@ def workflow_get(service, action, query, *, prefix="/api/workflow"):
         return service.list(query, prefix=prefix)
     if action == "incubator":
         return service.incubator_list(query, prefix=prefix)
+    if action == "conversations":
+        return service.conversations_list(query)
+    if action == "conversations/thread":
+        values = parse_qs(query, keep_blank_values=True)
+        if len(query) > 100 or set(values) != {"id"} or len(values["id"]) != 1:
+            raise WorkflowError("会话缓存请求地址无效。")
+        return service.conversations_thread(values["id"][0])
     if action == "incubator/targets":
         return service.incubator_targets(query)
     if action == "incubator/dispatches":
@@ -35,7 +42,9 @@ def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=Fals
                   "submit": service.submit, "discuss": service.discuss,
                   "transcribe": service.transcribe, "retry": service.retry,
                   "incubator/create": service.incubator_create, "incubator/update": service.incubator_update,
-                  "incubator/publish": service.incubator_publish}
+                  "incubator/publish": service.incubator_publish,
+                  "incubator/refinement/pause": service.incubator_refinement_pause,
+                  "conversations/request": service.conversations_request}
     if action in operations:
         return operations[action](body, prefix=prefix, authorize=authorize)
     if desktop:

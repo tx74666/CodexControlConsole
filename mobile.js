@@ -30,6 +30,21 @@
     onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期，请重新连接电脑。")
   }) || null;
+  let workView = "ideas";
+  const conversationsPanel = window.CodexConversationsPanel?.create(el("phoneConversationsPanel"), {
+    phone: true, onConnectionState: connected => updateConnectionState(connected),
+    onAuth: () => showPair("配对已过期，请重新连接电脑。"),
+    onTarget: async thread => { selectWorkView("ideas"); await incubatorPanel?.useTarget(thread); }
+  }) || null;
+  function selectWorkView(value) {
+    workView = value === "conversations" ? "conversations" : "ideas";
+    if (el("phoneWorkIdeas")) el("phoneWorkIdeas").hidden = workView !== "ideas";
+    if (el("phoneConversationsPanel")) el("phoneConversationsPanel").hidden = workView !== "conversations";
+    for (const button of document.querySelectorAll("#workPanel [data-work-view]")) button.setAttribute("aria-pressed", String(button.dataset.workView === workView));
+    incubatorPanel?.setActive(state.tab === "work" && state.paired && workView === "ideas");
+    conversationsPanel?.setActive(state.tab === "work" && state.paired && workView === "conversations");
+  }
+  for (const button of document.querySelectorAll("#workPanel [data-work-view]")) button.addEventListener("click", () => selectWorkView(button.dataset.workView));
   el("phoneWorkflowDetails")?.addEventListener("toggle", () => workflowPanel?.setActive(state.tab === "work" && state.paired && Boolean(el("phoneWorkflowDetails").open)));
   const initialTab = new URL(window.location.href).searchParams.get("tab") || new URL(window.location.href).searchParams.get("view");
   if (["work", "transfer"].includes(initialTab)) state.tab = initialTab;
@@ -109,6 +124,7 @@
     transferPanel?.clear();
     workflowPanel?.clear();
     incubatorPanel?.clear();
+    conversationsPanel?.clear();
     document.body.dataset.phoneTab = "unpaired";
     window.clearTimeout(livePlan.timer); livePlan.timer = null; livePlan.busy = false; livePlan.controller?.abort(); livePlan.controller = null;
     state.generation += 1; state.paired = false; state.dashboard = null;
@@ -201,7 +217,8 @@
     el("tasksPanel").hidden = value !== "work";
     el("devicePanel").hidden = value !== "documents";
     transferPanel?.setActive(value === "transfer" && state.paired);
-    incubatorPanel?.setActive(value === "work" && state.paired);
+    incubatorPanel?.setActive(value === "work" && state.paired && workView === "ideas");
+    conversationsPanel?.setActive(value === "work" && state.paired && workView === "conversations");
     workflowPanel?.setActive(value === "work" && state.paired && Boolean(el("phoneWorkflowDetails").open));
     for (const button of document.querySelectorAll("[data-tab]")) button.setAttribute("aria-pressed", String(button.dataset.tab === value));
     if (value === "music" && state.paired && !state.music.loaded) void loadMusic();

@@ -92,7 +92,8 @@ $PythonSources = @(
   "feedback_service.py",
   "reference_views.py",
   "world_console.py",
-  "world_update.py"
+  "world_update.py",
+  "tools/thread-cache-import.py"
 )
 
 $PythonChecks = @(
@@ -121,6 +122,9 @@ $PythonChecks = @(
   "tools/check-phone-connection-qr.py",
   "tools/check-transfer.py",
   "tools/check-incubator.py",
+  "tools/check-incubator-refinement.py",
+  "tools/check-conversations.py",
+  "tools/check-thread-cache-import.py",
   "tools/check-workflow.py",
   "tools/check-workflow-http.py",
   "tools/check-workflow-desktop.py",
@@ -203,6 +207,8 @@ try {
   Invoke-QualityStep "Mobile companion UI" { & $Node tools/check-mobile-ui.mjs }
   Invoke-QualityStep "Transfer JavaScript syntax" { & $Node --check transfer-panel.js }
   Invoke-QualityStep "Task incubator JavaScript syntax" { & $Node --check incubator-panel.js }
+  Invoke-QualityStep "Conversation browser syntax" { & $Node --check conversations-panel.js }
+  Invoke-QualityStep "Conversation browser UI" { & $Node tools/check-conversations-ui.mjs }
   Invoke-QualityStep "Task incubator UI" { & $Node tools/check-incubator-ui.mjs }
   Invoke-QualityStep "Workflow JavaScript syntax" { & $Node --check workflow-panel.js }
   Invoke-QualityStep "Workflow UI" { & $Node tools/check-workflow-ui.mjs }
