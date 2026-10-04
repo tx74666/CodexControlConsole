@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Phone dialogue behavior in temporary databases; never sends to an App."""
+import hashlib
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from transfer_store import IncomingFile
 from PIL import Image
 from workflow_http import workflow_get, workflow_post
 from workflow_service import WorkflowError, WorkflowService
+from workflow_mobile_dialogue import MOBILE_IMAGE_BYTES
 
 
 def request(**fields):
@@ -78,11 +81,31 @@ class MobileDialogueChecks(unittest.TestCase):
         return next(message for message in detail["messages"] if message["role"] == "assistant")
 
     def image(self, state):
+        fields, files = self.upload_request(state)
+        result = self.service.mobile_dialogue_upload(fields, files)
+        state.update(result)
+        return result["uploadedAttachmentIds"][0]
+
+    def upload_request(self, state, color="blue"):
         spool = self.root / (uuid.uuid4().hex + ".png")
-        Image.new("RGB", (2, 2), "blue").save(spool, "PNG")
-        result = self.service.upload(request(recordId=state["session"]["recordId"]),
-            [IncomingFile(spool, 0, spool.stat().st_size, "selected.png", "image/png")])
-        return result["attachments"][-1]["id"]
+        Image.new("RGB", (2, 2), color).save(spool, "PNG")
+        session = state["session"]
+        return request(recordId=session["recordId"], text=json.dumps({"clientId": self.client,
+            "sessionId": session["id"], "expectedRevision": session["revision"]})), [
+                IncomingFile(spool, 0, spool.stat().st_size, "selected.png", "image/png")]
+
+    def save_idea(self, text):
+        state = self.mutate("save", self.open(), text=text)
+        self.mutate("clear", state)
+        return state["idea"]
+
+    def db_snapshot(self):
+        with self.service._db() as db:
+            return {table: [tuple(row) for row in db.execute("SELECT * FROM " + table + " ORDER BY rowid")]
+                for table in ("settings", "requests", "attachments", "records", "messages", "ideas", "jobs", "idea_dispatches")}
+
+    def files_snapshot(self):
+        return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in self.service.attachments_dir.iterdir() if path.is_file()}
 
     def test_get_is_readonly_and_open_does_not_create_a_long_term_idea(self):
         before = self.counts()
@@ -242,6 +265,335 @@ class MobileDialogueChecks(unittest.TestCase):
         second = self.mutate("clear", first)
         self.error(lambda: self.mutate("draft", second, attachmentIds=[image]))
         self.assertEqual(self.current()["session"]["draft"]["attachmentIds"], [])
+
+    def test_saved_originals_are_frozen_candidates_and_selection_survives_restart(self):
+        state = self.open(); original = self.image(state)
+        saved = self.mutate("save", state, text="有原图的想法", attachmentIds=[original])
+        idea = saved["idea"]
+        fields, files = self.upload_request(saved, "red")
+        incidental = self.service.upload(request(recordId=idea["workflowRecordId"]), files)["uploadedAttachmentIds"][0]
+        self.mutate("clear", saved)
+        reopened = self.open(ideaId=idea["id"], expectedIdeaRevision=idea["revision"])
+        self.assertEqual(reopened["session"]["eligibleAttachmentIds"], [original])
+        self.assertEqual([image["id"] for image in reopened["eligibleAttachments"]], [original])
+        self.assertEqual(reopened["session"]["draft"]["attachmentIds"], [])
+        self.error(lambda: self.mutate("draft", reopened, attachmentIds=[incidental]), "image_source_mismatch")
+        draft = self.mutate("draft", reopened, text="明确复用原图", attachmentIds=[original])
+        self.service = WorkflowService(self.root / "private", models=ForbiddenModels(), recover_jobs=False)
+        self.assertEqual(self.current()["session"]["draft"], draft["session"]["draft"])
+        self.error(lambda: self.mutate("send", self.current(), text="明确复用原图", attachmentIds=[original]), "app_images_unavailable")
+        self.assertEqual(self.counts()["idea_dispatches"], 0)
+
+    def test_another_session_same_record_upload_is_not_eligible(self):
+        saved = self.mutate("save", self.open(), text="相同想法独立讨论")
+        original_session = saved["session"]["id"]
+        other = self.open(ideaId=saved["idea"]["id"], expectedIdeaRevision=1)
+        uploaded = self.image(other)
+        reopened = self.open(ideaId=saved["idea"]["id"], expectedIdeaRevision=1)
+        self.assertNotEqual(reopened["session"]["id"], original_session)
+        self.assertEqual(reopened["session"]["recordId"], other["session"]["recordId"])
+        self.assertEqual(reopened["eligibleAttachments"], [])
+        self.error(lambda: self.mutate("draft", reopened, attachmentIds=[uploaded]), "image_source_mismatch")
+
+    def test_source_revision_and_actual_original_bytes_are_checked_before_selection(self):
+        state = self.open(); original = self.image(state)
+        saved = self.mutate("save", state, text="原图底稿", attachmentIds=[original])
+        linked = self.open(ideaId=saved["idea"]["id"], expectedIdeaRevision=1)
+        self.post("idea/update", request(id=saved["idea"]["id"], expectedRevision=1, body="新版本"))
+        self.error(lambda: self.mutate("draft", linked, attachmentIds=[original]), "revision_conflict")
+        cleared = self.mutate("clear", linked)
+        self.assertEqual(cleared["session"]["eligibleAttachmentIds"], [])
+        reopened = self.open(ideaId=saved["idea"]["id"], expectedIdeaRevision=2)
+        with self.service._db() as db:
+            filename = db.execute("SELECT filename FROM attachments WHERE id=?", (original,)).fetchone()[0]
+        path = self.service.attachments_dir / filename
+        data = bytearray(path.read_bytes()); data[-1] ^= 1; path.write_bytes(data)
+        self.error(lambda: self.mutate("draft", reopened, attachmentIds=[original]), "image_source_mismatch")
+        self.assertEqual(self.current()["session"]["draft"]["attachmentIds"], [])
+
+    def test_upload_nonce_and_old_session_replay_never_retargets_or_changes_draft(self):
+        first = self.mutate("draft", self.open(), text="保留的输入")
+        fields, files = self.upload_request(first)
+        uploaded = self.service.mobile_dialogue_upload(fields, files)
+        self.assertEqual(uploaded["session"]["draft"], first["session"]["draft"])
+        self.assertEqual(uploaded["session"]["revision"], first["session"]["revision"] + 1)
+        second = self.mutate("clear", uploaded)
+        before = self.db_snapshot(), self.files_snapshot()
+        replay = self.service.mobile_dialogue_upload(fields, files)
+        self.assertTrue(replay["duplicate"])
+        self.assertFalse(replay["session"]["isCurrent"])
+        self.assertEqual(replay["uploadedAttachmentIds"], uploaded["uploadedAttachmentIds"])
+        self.assertEqual(self.current()["session"]["id"], second["session"]["id"])
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        _changed_fields, changed_files = self.upload_request(second, "red")
+        self.error(lambda: self.service.mobile_dialogue_upload(fields, changed_files))
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+
+    def test_upload_revocation_and_partial_failure_leave_no_orphan_files_or_rows(self):
+        state = self.open(); fields, files = self.upload_request(state)
+        before = self.db_snapshot(), self.files_snapshot()
+        calls = []
+        def revoked():
+            calls.append(1)
+            if len(calls) == 2:
+                raise WorkflowError("Revoked", 403)
+        self.error(lambda: self.service.mobile_dialogue_upload(fields, files, authorize=revoked))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        with patch.object(self.service, "_mobile_install_image", wraps=self.service._mobile_install_image) as install:
+            def fail_after_install(*args):
+                install._mock_wraps(*args)
+                raise WorkflowError("Isolated failure after actual file creation")
+            install.side_effect = fail_after_install
+            self.error(lambda: self.service.mobile_dialogue_upload(fields, files))
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+
+    def test_upload_invalid_content_and_preview_collision_preserve_all_prior_files(self):
+        state = self.open(); fields, files = self.upload_request(state)
+        invalid = self.root / "invalid.png"
+        invalid.write_bytes(b"not an image")
+        before = self.db_snapshot(), self.files_snapshot()
+        self.error(lambda: self.service.mobile_dialogue_upload(fields, [
+            IncomingFile(invalid, 0, invalid.stat().st_size, "invalid.png", "image/png")]))
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        ghost = uuid.uuid4().hex
+        preview = self.service.attachments_dir / (ghost + ".preview.jpg")
+        preview.write_bytes(b"prior unregistered preview")
+        before = self.db_snapshot(), self.files_snapshot()
+        with patch("workflow_mobile_dialogue.uuid.uuid4", return_value=uuid.UUID(ghost)):
+            self.error(lambda: self.service.mobile_dialogue_upload(fields, files), "image_source_mismatch")
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+
+    def test_selected_actual_image_total_limit_is_atomic_for_saved_originals(self):
+        state = self.open(); first = self.image(state); second = self.image(state)
+        with self.service._db() as db:
+            limit = self.service._mobile_image_row(db, state["session"]["recordId"], first)["size"]
+        saved = self.mutate("save", state, text="明确保存两张", attachmentIds=[first, second])
+        linked = self.open(ideaId=saved["idea"]["id"], expectedIdeaRevision=1)
+        before = self.db_snapshot(), self.files_snapshot()
+        with patch("workflow_service.MAX_UPLOAD", limit):
+            error = self.error(lambda: self.mutate("draft", linked, attachmentIds=[first, second]))
+        self.assertEqual(error.status, 413)
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+
+    def test_saving_originals_across_rounds_stops_at_four_and_preserves_fifth_draft(self):
+        state, saved_ids = self.open(), []
+        for index in range(4):
+            identifier = self.image(state)
+            saved_ids.append(identifier)
+            state = self.mutate("save", state, text="第" + str(index + 1) + "轮原图", attachmentIds=[identifier])
+        self.assertEqual(state["idea"]["attachmentIds"], saved_ids)
+        fifth = self.image(state)
+        drafted = self.mutate("draft", state, text="第五张需要保留的草稿", attachmentIds=[fifth])
+        before = self.db_snapshot(), self.files_snapshot()
+        error = self.error(lambda: self.mutate("save", drafted, text="第五张需要保留的草稿", attachmentIds=[fifth]), "idea_images_limit")
+        self.assertEqual(error.status, 413)
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        self.assertEqual(self.current()["session"]["draft"], drafted["session"]["draft"])
+        idea = workflow_get(self.service, "mobile/idea", "id=" + state["idea"]["id"])["idea"]
+        self.assertEqual((idea["body"], idea["revision"], idea["attachmentIds"]),
+            (state["idea"]["body"], state["idea"]["revision"], saved_ids))
+
+    def test_saving_cumulative_original_bytes_checks_more_than_this_round_selection(self):
+        state = self.open(); first = self.image(state)
+        saved = self.mutate("save", state, text="已经保存第一张", attachmentIds=[first])
+        second = self.image(saved)
+        drafted = self.mutate("draft", saved, text="第二张草稿", attachmentIds=[second])
+        with self.service._db() as db:
+            limit = max(self.service._mobile_image_row(db, drafted["session"]["recordId"], identifier)["size"] for identifier in (first, second))
+        before = self.db_snapshot(), self.files_snapshot()
+        with patch("workflow_service.MAX_UPLOAD", limit):
+            error = self.error(lambda: self.mutate("save", drafted, text="第二张草稿", attachmentIds=[second]), "idea_images_limit")
+        self.assertEqual(error.status, 413)
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        self.assertEqual(self.current()["session"]["draft"]["attachmentIds"], [second])
+
+    def test_mobile_image_portable_limit_is_actual_eight_mib_but_legacy_upload_stays_twelve(self):
+        state = self.open(); fields, files = self.upload_request(state)
+        spool = files[0].spool
+        with spool.open("r+b") as stream:
+            stream.truncate(MOBILE_IMAGE_BYTES)
+        exact = IncomingFile(spool, 0, MOBILE_IMAGE_BYTES, "exact.png", "image/png")
+        accepted = self.service.mobile_dialogue_upload(fields, [exact])
+        self.assertEqual(accepted["detail"]["attachments"][0]["size"], MOBILE_IMAGE_BYTES)
+        saved = self.mutate("save", accepted, text="边界原图", attachmentIds=accepted["uploadedAttachmentIds"])
+        with spool.open("r+b") as stream:
+            stream.truncate(MOBILE_IMAGE_BYTES + 1)
+        over = IncomingFile(spool, 0, MOBILE_IMAGE_BYTES + 1, "legacy.png", "image/png")
+        next_fields, _files = self.upload_request(saved)
+        before = self.db_snapshot(), self.files_snapshot()
+        error = self.error(lambda: self.service.mobile_dialogue_upload(next_fields, [over]), "idea_image_size_limit")
+        self.assertEqual(error.status, 413)
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        legacy = self.service.upload(request(recordId=saved["session"]["recordId"]), [over])
+        identifier = legacy["uploadedAttachmentIds"][0]
+        self.assertEqual(next(image["size"] for image in legacy["attachments"] if image["id"] == identifier), MOBILE_IMAGE_BYTES + 1)
+        # Existing oversized metadata remains intact and readable; selecting it
+        # for a new mobile save is rejected, never resized or silently dropped.
+        with self.service._db() as db:
+            meta = self.service._mobile_metadata(db, saved["idea"]["id"])
+            meta["attachmentIds"].append(identifier)
+            self.service._set_setting(db, "mobile-idea:" + saved["idea"]["id"], meta)
+        linked = self.open(ideaId=saved["idea"]["id"], expectedIdeaRevision=1)
+        draft = self.mutate("draft", linked, text="旧大图要保留", attachmentIds=[identifier])
+        before = self.db_snapshot(), self.files_snapshot()
+        self.error(lambda: self.mutate("save", draft, text="旧大图要保留", attachmentIds=[identifier]), "idea_image_size_limit")
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        self.assertEqual(self.current()["session"]["draft"], draft["session"]["draft"])
+        self.assertEqual(workflow_get(self.service, "mobile/idea", "id=" + saved["idea"]["id"])["idea"]["attachmentIds"], meta["attachmentIds"])
+
+    def test_upload_and_management_uuid_collision_preserve_existing_bytes(self):
+        state = self.open(); existing = self.image(state)
+        before = self.db_snapshot(), self.files_snapshot()
+        fields, files = self.upload_request(state, "red")
+        with patch("workflow_mobile_dialogue.uuid.uuid4", return_value=uuid.UUID(existing)):
+            self.error(lambda: self.service.mobile_dialogue_upload(fields, files), "image_source_mismatch")
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        ghost = uuid.uuid4().hex
+        path = self.service.attachments_dir / (ghost + ".png")
+        path.write_bytes(b"existing unregistered file")
+        before = self.db_snapshot(), self.files_snapshot()
+        with patch("workflow_mobile_dialogue.uuid.uuid4", return_value=uuid.UUID(ghost)):
+            self.error(lambda: self.service.mobile_dialogue_upload(fields, files), "image_source_mismatch")
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+
+    def test_upload_strict_source_and_file_fields_never_become_execution(self):
+        state = self.open(); fields, files = self.upload_request(state)
+        before = self.db_snapshot(), self.files_snapshot()
+        for extra in ("dispatch", "appTarget", "role"):
+            self.error(lambda: self.service.mobile_dialogue_upload({**fields, extra: True}, files))
+        self.error(lambda: self.service.mobile_dialogue_upload({**fields,
+            "text": fields["text"][:-1] + ',"dispatch":true}'}, files))
+        self.error(lambda: self.service.mobile_dialogue_upload({**fields,
+            "text": fields["text"][:-1] + ',"clientId":"' + self.client + '"}'}, files))
+        for identifiers in ([{}], [files[0].name], [True]):
+            self.error(lambda: self.mutate("draft", state, attachmentIds=identifiers))
+        audio = IncomingFile(files[0].spool, 0, files[0].size, "test.mp3", "audio/mpeg")
+        self.error(lambda: self.service.mobile_dialogue_upload(fields, [audio]))
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+
+    def test_split_unicode_exact_subset_preserves_source_and_full_snapshot(self):
+        source = self.save_idea("A😀B\n第二段")
+        point = {"id": uuid.uuid4().hex, "text": "原要点", "kind": "decision"}
+        source = self.post("idea/update", request(id=source["id"], expectedRevision=1, keyPoints=[point],
+            executionDraft="原执行稿", projectId="console"))["idea"]
+        body = request(id=source["id"], expectedRevision=source["revision"], start=1, end=2, title="提取原表情")
+        split = self.post("idea/split", body)
+        idea = split["idea"]
+        self.assertEqual(idea["body"], "😀")
+        self.assertEqual((idea["keyPoints"], idea["executionDraft"], idea["attachmentIds"]), ([], "", []))
+        self.assertEqual(idea["projectId"], "console")
+        self.assertNotEqual(idea["workflowRecordId"], source["workflowRecordId"])
+        self.assertEqual(workflow_get(self.service, "mobile/idea", "id=" + source["id"])["idea"], source)
+        provenance = idea["provenance"][0]
+        self.assertEqual(provenance["selection"], {"start": 1, "end": 2, "unit": "unicode_codepoints"})
+        self.assertFalse(provenance["authorityVerified"])
+        with self.service._db() as db:
+            frozen = self.service._setting(db, "mobile-idea-op-source:" + idea["id"])["sources"][0]
+        self.assertEqual((frozen["body"], frozen["metadata"]["executionDraft"], frozen["metadata"]["keyPoints"]),
+            (source["body"], source["executionDraft"], source["keyPoints"]))
+        self.assertEqual(frozen["sourceBodySha256"], hashlib.sha256(source["body"].encode()).hexdigest())
+        self.assertEqual(self.counts()["idea_dispatches"], 0)
+
+    def test_management_nonce_precedes_source_version_but_returns_current_destination(self):
+        source = self.save_idea("原正文")
+        body = request(id=source["id"], expectedRevision=1, start=0, end=1, title="新条")
+        first = self.post("idea/split", body)
+        self.post("idea/update", request(id=source["id"], expectedRevision=1, body="来源后来修改"))
+        edited = self.post("idea/update", request(id=first["idea"]["id"], expectedRevision=1, body="新条后来修改"))["idea"]
+        before = self.db_snapshot(), self.files_snapshot()
+        replay = self.post("idea/split", body)
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["idea"], edited)
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        self.error(lambda: self.post("idea/split", {**body, "title": "另一个标题"}))
+        self.error(lambda: self.post("idea/split", {**body, "requestId": str(uuid.uuid4())}), "revision_conflict")
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+
+    def test_merge_third_idea_deterministic_fields_points_and_sources(self):
+        first, second = self.save_idea("第一份"), self.save_idea("第二份")
+        identical = "同文字不同决定程度"
+        first = self.post("idea/update", request(id=first["id"], expectedRevision=1, executionDraft=" 第一稿 ", projectId="console",
+            keyPoints=[{"id": uuid.uuid4().hex, "text": identical, "kind": "suggestion"},
+                {"id": uuid.uuid4().hex, "text": identical, "kind": "decision"}]))["idea"]
+        second = self.post("idea/update", request(id=second["id"], expectedRevision=1, executionDraft="第二稿",
+            keyPoints=[{"id": uuid.uuid4().hex, "text": identical, "kind": "suggestion"}]))["idea"]
+        body = request(firstId=first["id"], firstRevision=2, secondId=second["id"], secondRevision=2, title="合并第三份")
+        merged = self.post("idea/merge", body)["idea"]
+        self.assertNotIn(merged["id"], [first["id"], second["id"]])
+        self.assertEqual(merged["body"], "第一份\n\n第二份")
+        self.assertEqual(merged["executionDraft"], " 第一稿 \n\n第二稿")
+        self.assertIsNone(merged["projectId"])
+        self.assertEqual([(point["text"], point["kind"]) for point in merged["keyPoints"]],
+            [(identical, "suggestion"), (identical, "decision")])
+        self.assertEqual(len(merged["keyPoints"][0]["sources"]), 2)
+        self.assertEqual(merged["keyPoints"][0]["source"]["sourceIdeaId"], first["id"])
+        self.assertEqual(merged["attachmentIds"], [])
+        for source in (first, second):
+            self.assertEqual(workflow_get(self.service, "mobile/idea", "id=" + source["id"])["idea"], source)
+        self.assertEqual((self.counts()["jobs"], self.counts()["idea_dispatches"]), (0, 0))
+        self.post("idea/update", request(id=second["id"], expectedRevision=2, body="来源后来变化"))
+        before = self.db_snapshot(), self.files_snapshot()
+        replay = self.post("idea/merge", body)
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["idea"], merged)
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+
+    def test_management_explicit_original_images_copy_exact_bytes_and_ownership(self):
+        state = self.open(); original = self.image(state)
+        saved = self.mutate("save", state, text="原图正文", attachmentIds=[original])
+        source = saved["idea"]
+        no_images = self.post("idea/split", request(id=source["id"], expectedRevision=1, start=0, end=2, title="不带图"))
+        self.assertEqual(no_images["idea"]["imageCount"], 0)
+        split = self.post("idea/split", request(id=source["id"], expectedRevision=1, start=0, end=2, title="明确复制图", attachmentIds=[original]))
+        copy = split["idea"]["attachmentIds"][0]
+        self.assertNotEqual(copy, original)
+        with self.service._db() as db:
+            original_row = self.service._mobile_image_row(db, source["workflowRecordId"], original)
+            copy_row = self.service._mobile_image_row(db, split["idea"]["workflowRecordId"], copy)
+            self.assertEqual(self.service._mobile_image_proof(original_row), self.service._mobile_image_proof(copy_row))
+        before = self.db_snapshot(), self.files_snapshot()
+        self.error(lambda: self.post("idea/split", request(id=source["id"], expectedRevision=1, start=0, end=1,
+            title="不能串原图", attachmentIds=[copy])), "image_source_mismatch")
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+        self.mutate("clear", saved)
+        reopened = self.open(ideaId=split["idea"]["id"], expectedIdeaRevision=1)
+        self.assertEqual(reopened["session"]["eligibleAttachmentIds"], [copy])
+        self.assertEqual(reopened["session"]["draft"]["attachmentIds"], [])
+
+    def test_management_selected_images_revocation_cleans_only_new_copies(self):
+        state = self.open(); original = self.image(state)
+        source = self.mutate("save", state, text="原图和正文", attachmentIds=[original])["idea"]
+        before = self.db_snapshot(), self.files_snapshot()
+        calls = []
+        def revoked():
+            calls.append(1)
+            if len(calls) == 2:
+                raise WorkflowError("Revoked", 403)
+        self.error(lambda: self.service.mobile_idea_split(request(id=source["id"], expectedRevision=1,
+            start=0, end=2, title="保留原图", attachmentIds=[original]), authorize=revoked))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
+
+    def test_management_limits_auth_revocation_and_source_conflicts_are_atomic(self):
+        first, second = self.save_idea("a" * 11000), self.save_idea("b" * 10000)
+        before = self.db_snapshot(), self.files_snapshot()
+        self.error(lambda: self.post("idea/merge", request(firstId=first["id"], firstRevision=1,
+            secondId=second["id"], secondRevision=1, title="不截断")))
+        for fields in ({"title": "x" * 81}, {"start": True}, {"end": 12000}, {"dispatch": True}, {"attachmentIds": [{}]}):
+            invalid = {**request(id=first["id"], expectedRevision=1, start=0, end=1, title="严格范围"), **fields}
+            self.error(lambda: self.post("idea/split", invalid))
+        self.error(lambda: self.post("idea/merge", request(firstId=first["id"], firstRevision=1,
+            secondId=first["id"], secondRevision=1, title="不能同源两遍")))
+        calls = []
+        def revoked():
+            calls.append(1)
+            if len(calls) == 2:
+                raise WorkflowError("Revoked", 403)
+        self.error(lambda: self.service.mobile_idea_split(request(id=first["id"], expectedRevision=1,
+            start=0, end=1, title="撤销前确认"), authorize=revoked))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
 
     def test_remember_actual_answer_creates_suggestion_with_frozen_origin_only(self):
         saved = self.mutate("save", self.open(), text="原任务")

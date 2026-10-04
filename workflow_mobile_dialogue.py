@@ -5,12 +5,18 @@ into the existing outbox; delivery/profile capabilities remain unverified.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
 from urllib.parse import parse_qs
 import uuid
 
 
 PROFILES = {"fast", "high", "pro"}
+MOBILE_IMAGE_BYTES = 8 * 1024 * 1024
 
 
 def _api():
@@ -62,6 +68,81 @@ class MobileDialogueMixin:
             raise _api().WorkflowError("讨论草稿已在另一端更新；请保留输入后合并。", 409, "revision_conflict")
         return session
 
+    def _mobile_source_guard(self, db, session):
+        if session.get("ideaId"):
+            source = self._source_task(db, session["recordId"],
+                {"ideaId": session["ideaId"], "revision": session["ideaRevision"]})
+            if not source:
+                raise _api().WorkflowError("讨论来源已改变，请重新打开此想法。", 409, "task_source_mismatch")
+
+    def _mobile_original_ids(self, db, idea_id):
+        """Only explicitly saved originals, never all files on a shared record."""
+        api = _api()
+        meta = self._mobile_metadata(db, idea_id)
+        ids = meta.get("attachmentIds")
+        if ids is None:
+            ids = []
+            for item in meta.get("provenance", []):
+                if item.get("kind") == "user_saved":
+                    ids.extend(item.get("attachmentIds", []))
+        if not isinstance(ids, list):
+            raise api.WorkflowError("原图来源无法核对，请保留想法后核对。", 409, "image_source_mismatch")
+        record_id = self._setting(db, "task-record:" + idea_id)
+        clean = list(dict.fromkeys(api._id(identifier) for identifier in ids))
+        for identifier in clean:
+            self._mobile_image_row(db, record_id, identifier)
+        return clean
+
+    def _mobile_image_row(self, db, record_id, identifier):
+        row = db.execute("SELECT * FROM attachments WHERE id=? AND record_id=? AND mime_type LIKE 'image/%'",
+            (_api()._id(identifier), record_id)).fetchone()
+        if row is None:
+            raise _api().WorkflowError("所选原图不属于本次想法或讨论。", 403, "image_source_mismatch")
+        return row
+
+    def _mobile_image_proof(self, row):
+        api = _api()
+        try:
+            path = api._safe_child(self.attachments_dir, row["filename"])
+            if not path.is_file() or not 0 < path.stat().st_size == row["size"] <= api.MAX_FILE_BYTES:
+                raise api.WorkflowError("原图已改变或无法读取，请保留想法后核对。", 409, "image_source_mismatch")
+            digest = hashlib.sha256()
+            size = 0
+            with path.open("rb") as stream:
+                for block in iter(lambda: stream.read(65536), b""):
+                    size += len(block)
+                    if size > api.MAX_FILE_BYTES:
+                        raise api.WorkflowError("原图读取期间发生改变，请重新核对。", 409, "image_source_mismatch")
+                    digest.update(block)
+            if size != row["size"]:
+                raise api.WorkflowError("原图读取期间发生改变，请重新核对。", 409, "image_source_mismatch")
+            return {"sha256": digest.hexdigest(), "size": row["size"], "mimeType": row["mime_type"]}
+        except (OSError, api.TransferError) as error:
+            raise api.WorkflowError("原图无法读取，请保留想法后核对。", 409, "image_source_mismatch") from error
+
+    def _mobile_freeze_originals(self, db, idea_id):
+        identifiers = self._mobile_original_ids(db, idea_id)
+        record_id = self._setting(db, "task-record:" + idea_id)
+        return identifiers, {identifier: self._mobile_image_proof(self._mobile_image_row(db, record_id, identifier))
+            for identifier in identifiers}
+
+    def _mobile_selected_images(self, db, session, identifiers):
+        api = _api()
+        if (not isinstance(identifiers, list) or len(identifiers) > api.MAX_ATTACHMENTS
+                or any(not isinstance(identifier, str) for identifier in identifiers) or len(set(identifiers)) != len(identifiers)):
+            raise api.WorkflowError("请明确选择最多四张不同原图。")
+        proofs = {**session.get("eligibleAttachmentProofs", {}), **session.get("uploadedAttachmentProofs", {})}
+        allowed = set(session.get("eligibleAttachmentIds", [])) | set(session.get("uploadedAttachmentIds", []))
+        total = 0
+        for identifier in identifiers:
+            row = self._mobile_image_row(db, session["recordId"], identifier)
+            if identifier not in allowed or proofs.get(identifier) != self._mobile_image_proof(row):
+                raise api.WorkflowError("所选原图不属于本次冻结想法或讨论，请重新选择。", 403, "image_source_mismatch")
+            total += row["size"]
+        if total > api.MAX_UPLOAD:
+            raise api.WorkflowError("所选图片总大小不能超过 24 MB。", 413)
+        return identifiers
+
     def _mobile_project(self, db):
         projects = self._setting(db, "projects") or []
         return self._project(db, projects[0]["id"] if projects else "")
@@ -91,6 +172,9 @@ class MobileDialogueMixin:
             "ideaId": idea["id"] if idea else None, "ideaRevision": idea["revision"] if idea else None,
             "revision": 1, "draft": {"text": "", "attachmentIds": []},
             "requestedProfile": client["requestedProfile"], "createdAt": now, "updatedAt": now}
+        ids, proofs = self._mobile_freeze_originals(db, idea["id"]) if idea else ([], {})
+        session.update(eligibleAttachmentIds=ids, eligibleAttachmentProofs=proofs,
+            uploadedAttachmentIds=[], uploadedAttachmentProofs={})
         self._set_setting(db, "mobile-dialogue:session:" + identifier, session)
         self._set_setting(db, "mobile-dialogue:client:" + client_id, {**client, "currentSessionId": identifier})
         return session
@@ -104,11 +188,13 @@ class MobileDialogueMixin:
 
     def _mobile_draft(self, db, body, session):
         api = _api()
+        self._mobile_source_guard(db, session)
         text = api._text(body.get("text", ""))
         profile = body.get("requestedProfile", session["requestedProfile"])
         if not isinstance(profile, str) or profile not in PROFILES:
             raise api.WorkflowError("请选择极速、高或 Pro 档位。")
-        context = self._context(db, session["recordId"], {"attachmentIds": body.get("attachmentIds", [])})
+        identifiers = self._mobile_selected_images(db, session, body.get("attachmentIds", []))
+        context = self._context(db, session["recordId"], {"attachmentIds": identifiers})
         session["draft"] = {"text": text, "attachmentIds": context["attachmentIds"]}
         session["requestedProfile"] = profile
         return text, context
@@ -128,7 +214,10 @@ class MobileDialogueMixin:
                 session = {**session, "isCurrent": identifier == client["currentSessionId"]}
             revision = self._revision(db)
         profile = session["requestedProfile"] if session else client["requestedProfile"]
-        return {"session": session, "detail": self.detail(session["recordId"], prefix) if session else None,
+        detail = self.detail(session["recordId"], prefix) if session else None
+        eligible_ids = set(session.get("eligibleAttachmentIds", [])) | set(session.get("uploadedAttachmentIds", [])) if session else set()
+        return {"session": session, "detail": detail,
+            "eligibleAttachments": [item for item in detail["attachments"] if item["id"] in eligible_ids] if detail else [],
             "preferences": {"requestedProfile": client["requestedProfile"]}, "execution": self._mobile_execution(profile),
             "revision": revision, **extra}
 
@@ -192,6 +281,125 @@ class MobileDialogueMixin:
     def mobile_dialogue_save(self, body, prefix="/api/workflow", authorize=None):
         return self._mobile_dialogue_write("save", body, prefix, authorize)
 
+    def _mobile_prepare_images(self, files, staging):
+        api = _api()
+        if (not isinstance(files, (list, tuple)) or not 1 <= len(files) <= api.MAX_ATTACHMENTS
+                or any(not isinstance(file, api.IncomingFile) or type(file.size) is not int
+                    or not 0 < file.size <= api.MAX_FILE_BYTES for file in files)):
+            raise api.WorkflowError("请明确选择一至四张有效图片。")
+        if any(file.size > MOBILE_IMAGE_BYTES for file in files):
+            raise api.WorkflowError("手机想法每张原图最多 8 MB；原文件与草稿已保留，请缩小图片后再保存。", 413, "idea_image_size_limit")
+        if sum(file.size for file in files) > api.MAX_UPLOAD:
+            raise api.WorkflowError("上传总大小不能超过 24 MB。", 413)
+        prepared = []
+        try:
+            for index, file in enumerate(files):
+                name = api._filename(file.name)
+                if Path(name).suffix.lower() not in api.IMAGE_TYPES:
+                    raise api.WorkflowError("本次讨论上传只接受图片。", 415)
+                path, preview = staging / (str(index) + ".image"), staging / (str(index) + ".preview.jpg")
+                digest = file.copy_to(path)
+                if path.stat().st_size != file.size:
+                    raise api.WorkflowError("图片实际大小不符，内容未保存。", 415)
+                extension, detected, has_preview = api._image(path, name, preview)
+                allowed = {detected, "application/octet-stream"}
+                if detected == "image/jpeg":
+                    allowed.add("image/jpg")
+                if detected == "image/heic":
+                    allowed.add("image/heif")
+                if file.mime_type not in allowed:
+                    raise api.WorkflowError("图片类型与实际内容不符。", 415)
+                prepared.append({"name": name, "declaredType": file.mime_type, "mimeType": detected,
+                    "size": file.size, "sha256": digest, "extension": extension,
+                    "path": path, "preview": preview, "hasPreview": has_preview})
+        except (api.TransferError, OSError) as error:
+            raise api.WorkflowError(str(error), getattr(error, "status", 415)) from error
+        return prepared
+
+    def _mobile_install_image(self, db, record_id, image, created):
+        """Exclusive persistence and cleanup of this invocation's actual files only."""
+        api = _api()
+        identifier = uuid.uuid4().hex
+        if db.execute("SELECT 1 FROM attachments WHERE id=?", (identifier,)).fetchone():
+            raise api.WorkflowError("图片标识冲突，原文件已保留，请重新选择。", 409, "image_source_mismatch")
+        filename = identifier + image["extension"]
+        pairs = [(image["path"], api._safe_child(self.attachments_dir, filename))]
+        if image["hasPreview"]:
+            pairs.append((image["preview"], api._safe_child(self.attachments_dir, identifier + ".preview.jpg")))
+        try:
+            for source, target in pairs:
+                with source.open("rb") as incoming, target.open("xb") as output:
+                    created.append(target)
+                    shutil.copyfileobj(incoming, output, 65536)
+                    output.flush()
+                    os.fsync(output.fileno())
+        except (OSError, api.TransferError) as error:
+            raise api.WorkflowError("图片保存失败，原文件已保留。", 409, "image_source_mismatch") from error
+        db.execute("INSERT INTO attachments VALUES (?,?,?,?,?,?,?,?)", (identifier, record_id, image["name"], filename,
+            image["mimeType"], image["size"], int(image["hasPreview"]), None))
+        return identifier
+
+    def mobile_dialogue_upload(self, fields, files, prefix="/api/workflow", authorize=None):
+        api = _api()
+        if authorize:
+            authorize()
+        _body(fields, {"requestId", "recordId", "text"})
+        if set(fields) != {"requestId", "recordId", "text"}:
+            raise api.WorkflowError("讨论图片上传缺少确切来源。")
+        text = api._text(fields["text"], 4096)
+        def exact_object(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise api.WorkflowError("讨论图片来源字段重复。")
+                value[key] = item
+            return value
+        try:
+            body = json.loads(text, object_pairs_hook=exact_object)
+        except (ValueError, TypeError) as error:
+            if isinstance(error, api.WorkflowError):
+                raise
+            raise api.WorkflowError("讨论图片来源无效。") from error
+        _body(body, {"clientId", "sessionId", "expectedRevision"})
+        if set(body) != {"clientId", "sessionId", "expectedRevision"}:
+            raise api.WorkflowError("讨论图片来源不完整。")
+        client_id, record_id = _client(body["clientId"]), api._id(fields["recordId"])
+        created, committed = [], False
+        try:
+            with tempfile.TemporaryDirectory(prefix="mobile-dialogue-", dir=self.jobs_dir) as folder:
+                prepared = self._mobile_prepare_images(files, Path(folder))
+                nonce = {**fields, "files": [{key: image[key] for key in ("name", "declaredType", "mimeType", "size", "sha256")}
+                    for image in prepared]}
+                with self._db() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    old = self._receipt(db, "mobile_dialogue_upload", nonce)
+                    if old:
+                        session = self._mobile_session(db, client_id, old["sessionId"])
+                        if session["id"] != body["sessionId"] or session["recordId"] != record_id:
+                            raise api.WorkflowError("原图片回执来源不匹配。", 409, "image_source_mismatch")
+                        identifiers = old["attachmentIds"]
+                    else:
+                        session = self._mobile_guard(db, body, client_id)
+                        self._mobile_source_guard(db, session)
+                        if session["recordId"] != record_id:
+                            raise api.WorkflowError("图片记录不属于此讨论。", 403, "image_source_mismatch")
+                        identifiers = [self._mobile_install_image(db, record_id, image, created) for image in prepared]
+                        session["uploadedAttachmentIds"] = session.get("uploadedAttachmentIds", []) + identifiers
+                        session["uploadedAttachmentProofs"] = {**session.get("uploadedAttachmentProofs", {}),
+                            **{identifier: {key: image[key] for key in ("sha256", "size", "mimeType")}
+                                for identifier, image in zip(identifiers, prepared)}}
+                        self._mobile_save_session(db, session)
+                        self._receipt(db, "mobile_dialogue_upload", nonce, {"sessionId": session["id"], "attachmentIds": identifiers})
+                        self._revision(db, True)
+                    if authorize:
+                        authorize()
+                committed = True
+            return self._mobile_state(client_id, prefix, session["id"], uploadedAttachmentIds=identifiers, duplicate=old is not None)
+        finally:
+            if not committed:
+                for path in reversed(created):
+                    path.unlink(missing_ok=True)
+
     def _mobile_dialogue_write(self, action, body, prefix, authorize):
         api = _api()
         _body(body, {"requestId", "clientId", "sessionId", "expectedRevision", "text", "attachmentIds", "requestedProfile"})
@@ -230,9 +438,7 @@ class MobileDialogueMixin:
                     payload["appFrozen"].update(requestedProfile=session["requestedProfile"], mobileDialogue=dialogue)
                     if source:
                         meta = self._mobile_metadata(db, source["ideaId"])
-                        payload["appFrozen"]["mobileIdeaContext"] = {"id": source["ideaId"], "revision": source["revision"],
-                            "keyPoints": [{key: point[key] for key in ("id", "text", "kind")} for point in meta["keyPoints"]],
-                            "provenance": [{key: item[key] for key in ("id", "kind", "destinationRevision")} for item in meta["provenance"]]}
+                        payload["appFrozen"]["mobileIdeaContext"] = self._mobile_current_idea_context(db, source)
                         if sum(len(point["text"]) for point in meta["keyPoints"]) + sum(len(item["content"]) for item in payload["appFrozen"]["history"]) > 65000:
                             raise api.WorkflowError("当前长期要点与讨论历史过长，请缩小本轮上下文。")
                     job_id, now = uuid.uuid4().hex, api._now()
@@ -246,6 +452,17 @@ class MobileDialogueMixin:
                     idea = self._idea(db, session["ideaId"]) if session["ideaId"] else None
                     if idea and idea["revision"] != session["ideaRevision"]:
                         raise api.WorkflowError("想法已更新，请重新读取后补充。", 409, "revision_conflict")
+                    original_ids = self._mobile_original_ids(db, idea["id"]) if idea else []
+                    if any(self._mobile_image_row(db, session["recordId"], identifier)["size"] > MOBILE_IMAGE_BYTES
+                            for identifier in context["attachmentIds"]):
+                        raise api.WorkflowError("手机想法每张原图最多 8 MB；已选原文件与草稿已保留，请缩小图片后再保存。", 413, "idea_image_size_limit")
+                    saved_ids = list(dict.fromkeys(original_ids + context["attachmentIds"]))
+                    if len(saved_ids) > api.MAX_ATTACHMENTS:
+                        raise api.WorkflowError("同一想法最多保存四张原图；原想法与本轮草稿已保留，请另存或缩小范围。", 413, "idea_images_limit")
+                    total = sum(self._mobile_image_proof(self._mobile_image_row(db, session["recordId"], identifier))["size"]
+                        for identifier in saved_ids)
+                    if total > api.MAX_UPLOAD:
+                        raise api.WorkflowError("同一想法原图总大小不能超过 24 MB；原想法与本轮草稿已保留。", 413, "idea_images_limit")
                     if idea:
                         self._mobile_bump_idea(db, idea, body=api._text(idea["body"] + ("\n\n" if idea["body"] and text else "") + text))
                         idea = self._idea(db, idea["id"])
@@ -257,7 +474,12 @@ class MobileDialogueMixin:
                     self._mobile_add_provenance(db, idea["id"], {"kind": "user_saved", "sourceSessionId": session["id"],
                         "sourceSessionRevision": session["revision"], "sourceRecordId": session["recordId"],
                         "sourceIdeaId": session["ideaId"], "sourceIdeaRevision": session["ideaRevision"], "attachmentIds": context["attachmentIds"]})
+                    meta = self._mobile_metadata(db, idea["id"])
+                    meta["attachmentIds"] = saved_ids
+                    self._set_setting(db, "mobile-idea:" + idea["id"], meta)
                     session.update(ideaId=idea["id"], ideaRevision=idea["revision"])
+                    identifiers, proofs = self._mobile_freeze_originals(db, idea["id"])
+                    session.update(eligibleAttachmentIds=identifiers, eligibleAttachmentProofs=proofs)
                     session["draft"] = {"text": "", "attachmentIds": []}
                     saved["ideaId"] = idea["id"]
                 self._mobile_save_session(db, session)
@@ -276,6 +498,16 @@ class MobileDialogueMixin:
 
     def _mobile_metadata(self, db, idea_id):
         return self._setting(db, "mobile-idea:" + idea_id) or {"projectId": None, "archived": False, "keyPoints": [], "executionDraft": "", "provenance": []}
+
+    def _mobile_current_idea_context(self, db, source):
+        """Read current reviewed source only; callers must freeze final scope explicitly."""
+        row = self._idea(db, source["ideaId"])
+        if row["revision"] != source["revision"]:
+            raise _api().WorkflowError("想法已更新，请重新核对本轮要点。", 409, "revision_conflict")
+        meta = self._mobile_metadata(db, row["id"])
+        return {"id": row["id"], "revision": row["revision"],
+            "keyPoints": [{key: point[key] for key in ("id", "text", "kind")} for point in meta["keyPoints"]],
+            "provenance": [{key: item[key] for key in ("id", "kind", "destinationRevision")} for item in meta["provenance"]]}
 
     def _mobile_idea(self, db, row):
         return {**self._public_idea(db, row), **self._mobile_metadata(db, row["id"])}
@@ -370,6 +602,144 @@ class MobileDialogueMixin:
 
     def mobile_idea_update(self, body, prefix="/api/workflow", authorize=None):
         return self._mobile_idea_write(False, body, authorize)
+
+    def mobile_idea_split(self, body, prefix="/api/workflow", authorize=None):
+        return self._mobile_idea_manage("split", body, prefix, authorize)
+
+    def mobile_idea_merge(self, body, prefix="/api/workflow", authorize=None):
+        return self._mobile_idea_manage("merge", body, prefix, authorize)
+
+    def _mobile_management_points(self, sources):
+        api = _api()
+        points, seen = [], {}
+        for source in sources:
+            for point in source["metadata"].get("keyPoints", []):
+                text = api._text(point.get("text"), 2000)
+                kind = point.get("kind")
+                if not text.strip() or kind not in {"decision", "suggestion"}:
+                    raise api.WorkflowError("原要点无法核对，请先编辑原想法。")
+                key = (text, kind)
+                origin = {"sourceIdeaId": source["id"], "sourceIdeaRevision": source["revision"],
+                    "sourcePointId": api._id(point.get("id"))}
+                if key in seen:
+                    points[seen[key]]["sources"].append(origin)
+                else:
+                    seen[key] = len(points)
+                    points.append({"id": uuid.uuid4().hex, "text": text, "kind": kind,
+                        "source": origin, "sources": [origin]})
+        if len(points) > 100:
+            raise api.WorkflowError("合并后的长期要点超过 100 条，请先缩小范围。")
+        return points
+
+    def _mobile_idea_manage(self, action, body, prefix, authorize):
+        api = _api()
+        fields = {"id", "expectedRevision", "start", "end"} if action == "split" else {"firstId", "firstRevision", "secondId", "secondRevision"}
+        _body(body, {"requestId", "title", "attachmentIds"} | fields)
+        title = api._text(body.get("title"), 80).strip()
+        if not title:
+            raise api.WorkflowError("请为新想法填写标题。")
+        selected = body.get("attachmentIds", [])
+        if (not isinstance(selected, list) or len(selected) > api.MAX_ATTACHMENTS
+                or any(not isinstance(item, str) for item in selected) or len(set(selected)) != len(selected)):
+            raise api.WorkflowError("请明确选择最多四张不同原图。")
+        selected = [api._id(item) for item in selected]
+        if authorize:
+            authorize()
+        created, committed = [], False
+        try:
+            with self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                kind = "mobile_idea_" + action
+                old = self._receipt(db, kind, body)
+                if old:
+                    identifier = old["ideaId"]
+                else:
+                    wanted = [(body.get("id"), body.get("expectedRevision"))] if action == "split" else [
+                        (body.get("firstId"), body.get("firstRevision")), (body.get("secondId"), body.get("secondRevision"))]
+                    if action == "merge" and wanted[0][0] == wanted[1][0]:
+                        raise api.WorkflowError("请选择两条不同的原想法。")
+                    sources = []
+                    for source_id, expected in wanted:
+                        row = self._idea(db, source_id)
+                        if _revision(expected) != row["revision"]:
+                            raise api.WorkflowError("原想法已更新，请保留预览后重新核对。", 409, "revision_conflict")
+                        meta = self._mobile_metadata(db, row["id"])
+                        sources.append({"id": row["id"], "revision": row["revision"], "title": row["title"], "body": row["body"],
+                            "sourceBodySha256": hashlib.sha256(row["body"].encode("utf-8")).hexdigest(),
+                            "workflowRecordId": self._setting(db, "task-record:" + row["id"]), "metadata": meta})
+                    if action == "split":
+                        start, end = body.get("start"), body.get("end")
+                        if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(sources[0]["body"]):
+                            raise api.WorkflowError("请明确选择原正文内的 Unicode 字符范围。")
+                        text = sources[0]["body"][start:end]
+                        if any(0xD800 <= ord(character) <= 0xDFFF for character in text):
+                            raise api.WorkflowError("所选文字包含不完整 Unicode 字符。")
+                        execution, points = "", []
+                    else:
+                        text = "\n\n".join(source["body"] for source in sources if source["body"])
+                        execution = "\n\n".join(source["metadata"].get("executionDraft", "") for source in sources
+                            if source["metadata"].get("executionDraft", ""))
+                        points = self._mobile_management_points(sources)
+                    text, execution = api._text(text), api._text(execution)
+                    candidates = {}
+                    if selected:
+                        for source in sources:
+                            for attachment_id in self._mobile_original_ids(db, source["id"]):
+                                candidates[attachment_id] = source
+                        if any(attachment_id not in candidates for attachment_id in selected):
+                            raise api.WorkflowError("所选图片不属于这些原想法。", 403, "image_source_mismatch")
+                    idea = self._mobile_create_idea(db, text)
+                    identifier = idea["id"]
+                    db.execute("UPDATE ideas SET title=? WHERE id=?", (title, identifier))
+                    record_id = self._mobile_new_record(db, title)
+                    self._set_setting(db, "task-record:" + identifier, record_id)
+                    attachments, image_sources = [], []
+                    if selected:
+                        with tempfile.TemporaryDirectory(prefix="mobile-management-", dir=self.jobs_dir) as folder:
+                            files = []
+                            for attachment_id in selected:
+                                source = candidates[attachment_id]
+                                row = self._mobile_image_row(db, source["workflowRecordId"], attachment_id)
+                                proof = self._mobile_image_proof(row)
+                                files.append(api.IncomingFile(api._safe_child(self.attachments_dir, row["filename"]), 0,
+                                    row["size"], row["name"], row["mime_type"]))
+                                image_sources.append({"sourceAttachmentId": attachment_id, "sourceIdeaId": source["id"],
+                                    "sourceIdeaRevision": source["revision"], **proof})
+                            prepared = self._mobile_prepare_images(files, Path(folder))
+                            for image, origin in zip(prepared, image_sources):
+                                if any(image[key] != origin[key] for key in ("sha256", "size", "mimeType")):
+                                    raise api.WorkflowError("复制期间原图发生改变，未保存新想法。", 409, "image_source_mismatch")
+                                attachments.append(self._mobile_install_image(db, record_id, image, created))
+                                origin["destinationAttachmentId"] = attachments[-1]
+                        db.execute("UPDATE records SET primary_attachment_id=? WHERE id=?", (attachments[0], record_id))
+                    projects = [source["metadata"].get("projectId") for source in sources]
+                    project_id = projects[0] if all(project == projects[0] for project in projects) else None
+                    if project_id is not None:
+                        self._project(db, project_id)
+                    meta = {"projectId": project_id, "archived": False, "keyPoints": points,
+                        "executionDraft": execution, "provenance": [], "attachmentIds": attachments}
+                    self._set_setting(db, "mobile-idea:" + identifier, meta)
+                    provenance = {"kind": "user_" + action, "sourceClaim": True, "authorityVerified": False,
+                        "sources": [{"ideaId": source["id"], "revision": source["revision"],
+                            "sourceRecordId": source["workflowRecordId"], "sourceBodySha256": source["sourceBodySha256"]} for source in sources],
+                        "images": image_sources}
+                    if action == "split":
+                        provenance["selection"] = {"start": body["start"], "end": body["end"], "unit": "unicode_codepoints"}
+                    self._mobile_add_provenance(db, identifier, provenance)
+                    self._set_setting(db, "mobile-idea-op-source:" + identifier, {"action": action, "sources": sources,
+                        "selection": provenance.get("selection"), "images": image_sources})
+                    self._receipt(db, kind, body, {"ideaId": identifier})
+                    self._revision(db, True)
+                if authorize:
+                    authorize()
+                idea, revision = self._mobile_idea(db, self._idea(db, identifier)), self._revision(db)
+            committed = True
+            return {"idea": idea, "detail": self.detail(idea["workflowRecordId"], prefix),
+                "duplicate": old is not None, "revision": revision}
+        finally:
+            if not committed:
+                for path in reversed(created):
+                    path.unlink(missing_ok=True)
 
     def mobile_idea_archive(self, body, prefix="/api/workflow", authorize=None):
         return self._mobile_idea_write(True, body, authorize)

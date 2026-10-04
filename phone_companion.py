@@ -32,7 +32,7 @@ from phone_device_store import DeviceStoreError, REMEMBER_TTL, TOKEN_PATTERN
 from phone_discovery import discover_lan_interfaces
 from workflow_service import WorkflowError
 from workflow_models import WorkflowModelError
-from workflow_http import workflow_get, workflow_post, workflow_import_idea
+from workflow_http import workflow_get, workflow_post, workflow_import_idea, workflow_upload_dialogue
 
 
 PAIR_TTL = 300
@@ -445,6 +445,10 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                     with read_transfer_request(self.headers, self.rfile, allowed_fields={"requestId", "recordId"}) as (fields, files):
                         authorize()
                         result = companion.workflow_service.upload(fields, files, prefix="/api/phone/workflow", authorize=authorize)
+                elif action == "mobile/dialogue/upload":
+                    with read_transfer_request(self.headers, self.rfile, allowed_fields={"requestId", "recordId", "text"}) as (fields, files):
+                        authorize()
+                        result = workflow_upload_dialogue(companion.workflow_service, fields, files, prefix="/api/phone/workflow", authorize=authorize)
                 elif action == "mobile/idea/import":
                     with read_transfer_request(self.headers, self.rfile, allowed_fields={"requestId", "text"}) as (fields, files):
                         authorize()
@@ -452,7 +456,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 elif action in {"create", "message", "submit", "discuss", "transcribe", "retry", "task-record", "app-work", "app-work/end",
                                 "incubator/create", "incubator/update", "incubator/publish", "incubator/refinement/pause", "conversations/request",
                                 "mobile/dialogue/open", "mobile/dialogue/draft", "mobile/dialogue/clear", "mobile/dialogue/send",
-                                "mobile/dialogue/save", "mobile/dialogue/remember", "mobile/idea/update", "mobile/idea/archive", "mobile/idea/import-status"}:
+                                "mobile/dialogue/save", "mobile/dialogue/remember", "mobile/idea/update", "mobile/idea/archive", "mobile/idea/split", "mobile/idea/merge", "mobile/idea/import-status"}:
                     # This read-only lookup wraps the exact frozen manifest in
                     # JSON, whose escaping can double its bounded 80 KB text.
                     maximum = 192 * 1024 if action == "mobile/idea/import-status" else 128 * 1024

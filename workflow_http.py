@@ -12,6 +12,13 @@ def workflow_import_idea(service, fields, files, *, prefix="/api/workflow", auth
     return operation(fields, files, prefix=prefix, authorize=authorize)
 
 
+def workflow_upload_dialogue(service, fields, files, *, prefix="/api/workflow", authorize=None):
+    operation = getattr(service, "mobile_dialogue_upload", None)
+    if not callable(operation):
+        raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    return operation(fields, files, prefix=prefix, authorize=authorize)
+
+
 def workflow_get(service, action, query, *, prefix="/api/workflow"):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
@@ -62,6 +69,7 @@ def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=Fals
         "mobile/dialogue/clear": "mobile_dialogue_clear", "mobile/dialogue/send": "mobile_dialogue_send",
         "mobile/dialogue/save": "mobile_dialogue_save", "mobile/dialogue/remember": "mobile_dialogue_remember",
         "mobile/idea/update": "mobile_idea_update", "mobile/idea/archive": "mobile_idea_archive",
+        "mobile/idea/split": "mobile_idea_split", "mobile/idea/merge": "mobile_idea_merge",
         "mobile/idea/import-status": "mobile_idea_import_status"})
     if action in operations:
         operation = getattr(service, operations[action], None)

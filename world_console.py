@@ -60,7 +60,7 @@ from phone_discovery import DiscoveryAnnouncer
 from transfer_store import TransferStore, TransferError, read_transfer_request, send_transfer_attachment
 from workflow_service import WorkflowError, WorkflowService
 from workflow_models import WorkflowModels, WorkflowModelError
-from workflow_http import workflow_get, workflow_post
+from workflow_http import workflow_get, workflow_post, workflow_upload_dialogue
 from phone_offline import build_phone_export
 from workspace_plan import (
     MAX_PLAN_BYTES, PlanStateConflict,
@@ -1929,6 +1929,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if action == "upload":
                     with read_transfer_request(self.headers, self.rfile, allowed_fields={"requestId", "recordId"}) as (fields, files):
                         self.send_json(WORKFLOW_SERVICE.upload(fields, files))
+                elif action == "mobile/dialogue/upload":
+                    with read_transfer_request(self.headers, self.rfile, allowed_fields={"requestId", "recordId", "text"}) as (fields, files):
+                        self.send_json(workflow_upload_dialogue(WORKFLOW_SERVICE, fields, files))
                 else:
                     self.send_json(workflow_post(WORKFLOW_SERVICE, action,
                         self.read_json_body(max_bytes=128 * 1024), desktop=True))

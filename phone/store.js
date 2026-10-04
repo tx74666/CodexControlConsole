@@ -59,6 +59,7 @@
     database, replaceLibrary, putTrack, mutateRecord,
     get: (name, id) => operation(name, "readonly", store => store.get(id)),
     put: (name, value) => operation(name, "readwrite", store => store.put(value)),
+    add: (name, value) => operation(name, "readwrite", store => store.add(value)),
     remove: (name, id) => operation(name, "readwrite", store => store.delete(id)),
     all: name => operation(name, "readonly", store => store.getAll()),
     keys: name => operation(name, "readonly", store => store.getAllKeys())
