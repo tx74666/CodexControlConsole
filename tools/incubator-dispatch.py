@@ -5,6 +5,8 @@ explicit publish or App-discussion HTTP action can create pending dispatches;
 this CLI consumes their stored user confirmation and writes actual tool
 receipts/results. Work-picture discussions share the serial outbox while keeping
 their original record/job identity; they do not create hidden incubator ideas.
+import-chat-capture privately saves a human-authorized completed ChatGPT receipt
+to its original task; it never creates a dispatch or sends the plain text again.
 """
 import argparse
 import hashlib
@@ -47,7 +49,7 @@ def main(argv=None):
     claim = commands.add_parser("claim", help="原子认领一个 pending（高优先级先到先出）；不会发送")
     claim.add_argument("--request-id", required=True)
     claim.add_argument("--id", help="可选固定 dispatch ID；已认领不可重复认领")
-    for name in ("attach-result", "fail", "targets", "catalog", "thread-snapshot", "fetch-result", "workspaces", "work-bindings"):
+    for name in ("attach-result", "fail", "targets", "catalog", "thread-snapshot", "fetch-result", "workspaces", "work-bindings", "import-chat-capture"):
         command = commands.add_parser(name, help="JSON 输入经文件或 stdin；不会调用任何聊天工具")
         command.add_argument("--json-file")
         command.add_argument("--request-id", help="覆写/补入 requestId；targets 缺省按快照内容生成稳定 UUID")
@@ -69,6 +71,8 @@ def main(argv=None):
             body["id"] = args.id
         result = service.incubator_claim(body)
     else:
+        if args.command == "import-chat-capture" and not args.json_file and hasattr(sys.stdin, "reconfigure"):
+            sys.stdin.reconfigure(encoding="utf-8", errors="strict")
         body = read_body(args.json_file, 2 * 1024 * 1024 if args.command in {"catalog", "thread-snapshot"} else MAX_INPUT)
         if args.request_id:
             body["requestId"] = args.request_id
@@ -79,6 +83,7 @@ def main(argv=None):
                      "targets": service.incubator_set_targets, "catalog": service.conversations_catalog,
                      "thread-snapshot": service.conversations_thread_snapshot,
                      "workspaces": service.native_work_catalog, "work-bindings": service.configure_app_work,
+                     "import-chat-capture": service.import_chat_capture,
                      "fetch-result": service.conversations_fetch_result}[args.command]
         result = operation(body)
     print(json.dumps(result, ensure_ascii=False))

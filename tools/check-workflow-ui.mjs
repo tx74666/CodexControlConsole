@@ -85,6 +85,11 @@ function completeDiscussion(h, job = h.server.detail.jobs.find(item => item.appD
   job.result = { text, messageId: `answer-${job.id}`, dispatchId: job.appDispatch.id }; job.resultMessageId = job.result.messageId;
   h.server.detail.messages.push({ id: job.result.messageId, role: "assistant", text }); return job;
 }
+function addCapturedChat(h, task, text = "ChatGPT 实际回复") {
+  const capture = { sourceType: "chatgpt_browser_capture", evidenceSource: "read_thread", status: "completed", targetKind: "chatgpt", targetThreadId: "chatgpt-source", targetName: "原对话", sourceUrl: "https://chatgpt.com/c/chatgpt-source", turnId: "actual-turn", sourceMessageId: "actual-user", agentMessageId: "actual-assistant", observedAt: "2026-10-04T17:33:00Z", sourceSha256: "a".repeat(64) };
+  const job = { id: "captured-chat", recordId: task.recordId, kind: "discuss", status: "succeeded", purpose: "discussion", sourceTask: { ideaId: task.ideaId, revision: task.revision }, chatCapture: capture, resultMessageId: "captured-output", result: { text, messageId: "captured-output", ...capture } };
+  h.server.detail.jobs.push(job); h.server.detail.messages.push({ id: job.resultMessageId, role: "assistant", text }); return job;
+}
 function addScriptProposals(server, { executable = true } = {}) {
   server.config.models.ready = false; server.config.models.providers = []; server.config.projects[0].root = "D:/fixture-project";
   const message = server.detail.messages[0];
@@ -133,6 +138,26 @@ await test("task Chat reveals one actual new reply once without repeated poll ju
   await h.poll(); await h.poll(); assert.equal(answer.scrollCalls.length, 1); conversation.open = false; await h.poll(); assert.equal(conversation.open, false);
   job.status = "waiting"; await h.poll(); job.status = "succeeded"; await h.poll(); assert.equal(conversation.open, false); assert.equal(answer.scrollCalls.length, 1);
   assert.equal(h.calls.filter(item => item.options.method === "POST").length, posted);
+});
+await test("captured ChatGPT reply returns to the same task Output once without another send", async () => {
+  const h = harness(), task = addTask(h.server); await h.start(); await h.panel.openTask(task); h.button("发送消息").focus(); const before = h.calls.filter(call => call.options.method === "POST").length;
+  const job = addCapturedChat(h, task, "你好，这是普通 ChatGPT 的原文。"), conversation = h.all("details").find(item => item.className.includes("workflow-conversation")); await h.poll();
+  const answer = h.all("article").find(item => item.dataset.messageId === job.resultMessageId), link = h.all("a", answer).find(item => item.textContent === "查看 ChatGPT 原对话");
+  assert.equal(conversation.open, true); assert.equal(answer.scrollCalls.length, 1); assert.match(answer.textContent, /ChatGPT · 回复/); assert.equal(link.href, job.chatCapture.sourceUrl); assert.equal(link.rel, "noopener noreferrer"); assert.equal(task.body, h.panel.getTaskContext().body); await h.poll(); assert.equal(answer.scrollCalls.length, 1);
+  assert.equal(h.calls.filter(call => call.options.method === "POST").length, before);
+});
+await test("captured ChatGPT reply preserves a draft and opens only its actual matching source", async () => {
+  for (const invalid of ["none", "record", "source", "body", "duplicate", "url", "hash"]) {
+    const h = harness(), task = addTask(h.server); await h.start(); await h.panel.openTask(task); h.type("下一轮未发草稿"); h.draft.focus(); const conversation = h.all("details").find(item => item.className.includes("workflow-conversation")); conversation.open = false; const job = addCapturedChat(h, task); const answer = h.server.detail.messages.at(-1);
+    if (invalid === "record") job.recordId = "other-record"; else if (invalid === "source") job.result.sourceMessageId = "unrelated-user"; else if (invalid === "body") answer.text = "不匹配的回答"; else if (invalid === "duplicate") h.server.detail.messages.push(clone(answer)); else if (invalid === "url") job.chatCapture.sourceUrl = job.result.sourceUrl = "javascript:alert(1)"; else if (invalid === "hash") job.result.sourceSha256 = "b".repeat(64);
+    await h.poll(); assert.equal(conversation.open, invalid === "none"); assert.equal(h.draft.value, "下一轮未发草稿"); assert.equal(h.all("article").filter(item => item.dataset.messageId === answer.id).every(item => !item.scrolled), true); assertNoExecution(h);
+    if (invalid === "none") { assert.ok(h.button("查看新回复")); h.button("查看新回复").click(); assert.equal(conversation.open, true); assert.equal(h.draft.value, "下一轮未发草稿"); } else { assert.equal(h.button("查看新回复"), undefined); assert.equal(h.all("a").some(item => item.textContent === "查看 ChatGPT 原对话"), false); }
+  }
+});
+await test("ordinary ChatGPT new chat requires explicit text-only selection and one send", async () => {
+  const h = harness(), task = addTask(h.server); await h.start(); await h.panel.openTask(task); assert.equal(h.field("App 目的地").value, "codex:new"); h.type("你好"); h.change(h.field("App 目的地"), "chatgpt:new");
+  assertNoExecution(h); assert.equal(h.button("发送消息").disabled, true); const pictures = h.field("带上当前图片"); pictures.checked = false; pictures.fire("change"); assert.equal(h.button("发送消息").disabled, false); assertNoExecution(h);
+  h.button("发送消息").click(); await settle(); const calls = h.calls.filter(call => call.path === "discuss"); assert.equal(calls.length, 1); assert.deepEqual(calls[0].data.appTarget, { kind: "chatgpt", mode: "new", threadId: "", name: "ChatGPT 新聊天" }); assert.deepEqual(calls[0].data.context.attachmentIds, []); assert.equal(calls[0].data.text, "你好"); assert.deepEqual(calls[0].data.sourceTask, { ideaId: task.ideaId, revision: task.revision }); assert.equal(h.calls.some(call => ["app-work", "submit", "upload", "models"].includes(call.path)), false);
 });
 await test("task Chat preserves new draft selected picture and native historical reading when a reply arrives", async () => {
   const h = harness(), task = addTask(h.server); addScriptProposals(h.server); h.server.detail.attachments.push(h.server.asset("second")); await h.start(); await h.panel.openTask(task); h.type("本轮提问"); h.button("发送消息").click(); await settle(); pickImage(h, "second"); h.type("下一轮还没发的完整草稿"); h.draft.scrollTop = 31; h.draft.focus();

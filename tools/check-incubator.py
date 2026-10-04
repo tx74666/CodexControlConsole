@@ -353,7 +353,7 @@ class IncubatorChecks(unittest.TestCase):
     def test_publish_targets_and_stale_review_are_rejected(self):
         idea = self.create(title="Target validation")
         base = request(id=idea["id"], expectedRevision=1, targetKind="codex", targetMode="new")
-        for invalid in ({"targetKind": "none"}, {"targetKind": "chatgpt"}, {"targetMode": []},
+        for invalid in ({"targetKind": "none"}, {"targetKind": []}, {"targetMode": []},
                         {"targetMode": "existing", "targetThreadId": None},
                         {"targetMode": "existing", "targetThreadId": "invalid"},
                         {"targetThreadId": str(uuid.uuid4())}):

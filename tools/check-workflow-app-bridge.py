@@ -241,8 +241,55 @@ class AppBridgeChecks(unittest.TestCase):
         self.assertEqual(reply["job"]["appDispatch"]["targetKind"], "chatgpt")
         self.assertNotIn(str(self.service.attachments_dir), self.claim()["dispatch"]["prompt"])
 
-    def test_target_mismatch_cloud_unknown_host_and_chatgpt_new_rejected(self):
-        self.error(lambda: self.service.discuss(request(recordId=self.record, text="Question", appTarget=self.target("chatgpt", "new"))), "app_target_unavailable")
+    def test_chatgpt_new_text_freezes_explicit_target_task_and_prompt_without_default_change(self):
+        idea = self.service.incubator_create(request(title="Original plain-text task", body="Preserve the draft"))["idea"]
+        record = self.service.task_record(request(ideaId=idea["id"], expectedRevision=idea["revision"]))["record"]["id"]
+        result = self.service.discuss(request(recordId=record, text="Hello from the confirmed task", context={"attachmentIds": []},
+            sourceTask={"ideaId": idea["id"], "revision": idea["revision"]}, appTarget=self.target("chatgpt", "new")))
+        dispatch = self.service.incubator_dispatches(private=True)["dispatches"][0]
+        self.assertEqual((dispatch["targetKind"], dispatch["targetMode"], dispatch["targetThreadId"]), ("chatgpt", "new", None))
+        self.assertEqual(dispatch["status"], "pending")
+        self.assertEqual(dispatch["userConfirmedAt"], dispatch["createdAt"])
+        self.assertEqual(dispatch["snapshot"]["sourceTask"]["body"], idea["body"])
+        self.assertEqual(dispatch["snapshot"]["sourceTask"]["revision"], idea["revision"])
+        self.assertEqual(dispatch["snapshot"]["attachmentIds"], [])
+        self.assertIn(f"[Codex Console 发布编号：{dispatch['id']}]", dispatch["prompt"])
+        self.assertIn('"question":"Hello from the confirmed task"', dispatch["prompt"])
+        self.assertIn("禁止执行修改", dispatch["prompt"])
+        self.assertEqual(result["job"]["status"], "waiting")
+        self.assertEqual(self.service.config()["appDiscussion"]["defaultTarget"]["kind"], "codex")
+        self.assertFalse(self.service._wake.is_set())
+        self.assertIsNone(self.service._thread)
+
+    def test_chatgpt_new_requires_empty_image_selection_and_no_existing_thread_id(self):
+        self.upload()
+        target = self.target("chatgpt", "new")
+        self.error(lambda: self.service.discuss(request(recordId=self.record, text="Image question", appTarget=target)), "app_images_unavailable")
+        self.error(lambda: self.service.discuss(request(recordId=self.record, text="Text", context={"attachmentIds": []},
+            appTarget={**target, "threadId": self.chatgpt})), "app_target_unavailable")
+        self.assertEqual(self.service.incubator_dispatches()["dispatches"], [])
+        accepted = self.service.discuss(request(recordId=self.record, text="Only confirmed text", context={"attachmentIds": []}, appTarget=target))
+        self.assertEqual(accepted["job"]["appDispatch"]["targetKind"], "chatgpt")
+        self.assertEqual(accepted["job"]["appDispatch"]["targetMode"], "new")
+        self.assertNotIn(str(self.service.attachments_dir), self.service.incubator_dispatches(private=True)["dispatches"][0]["prompt"])
+
+    def test_chatgpt_new_incubator_publish_preserves_prompt_and_confirmation(self):
+        idea = self.service.incubator_create(request(title="Explicit ChatGPT task", body="Original authorized plain text"))["idea"]
+        body = request(id=idea["id"], expectedRevision=idea["revision"], targetKind="chatgpt", targetMode="new", targetName="New ChatGPT discussion")
+        result = self.service.incubator_publish(body)
+        dispatch = result["dispatch"]
+        self.assertEqual((dispatch["targetKind"], dispatch["targetMode"], dispatch["targetThreadId"]), ("chatgpt", "new", None))
+        self.assertEqual(dispatch["status"], "pending")
+        self.assertEqual(dispatch["userConfirmedAt"], dispatch["createdAt"])
+        self.assertIn(f"[Codex Console 发布编号：{dispatch['id']}]", dispatch["prompt"])
+        self.assertIn(idea["body"], dispatch["prompt"])
+        self.assertEqual(dispatch["snapshot"]["body"], idea["body"])
+        self.assertTrue(self.service.incubator_publish(body)["duplicate"])
+        self.assertEqual(self.service.config()["appDiscussion"]["defaultTarget"]["kind"], "codex")
+        self.assertFalse(self.service._wake.is_set())
+        self.assertIsNone(self.service._thread)
+
+    def test_target_mismatch_and_unknown_codex_host_rejected(self):
         self.error(lambda: self.service.discuss(request(recordId=self.record, text="Question", appTarget={**self.target("codex", "existing"), "name": "Wrong title"})), "app_target_changed")
         self.error(lambda: self.service.discuss(request(recordId=self.record, text="Question", appTarget={**self.target("chatgpt", "existing"), "threadId": self.codex})), "app_target_changed")
         self.upload()

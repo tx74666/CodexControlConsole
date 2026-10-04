@@ -38,6 +38,7 @@ IDEA_PRIORITIES = {"high", "normal", "low"}
 IDEA_TARGETS = {"none", "codex", "chatgpt"}
 IDEA_FIELDS = {"title", "body", "stage", "priority", "parentId", "targetKind", "targetThreadId", "targetName"}
 DISPATCH_OPEN = {"pending", "claimed", "waiting", "needs_review"}
+CHAT_CAPTURE_SOURCE = "chatgpt_browser_capture"
 
 
 class WorkflowError(ValueError):
@@ -338,6 +339,8 @@ class WorkflowService(NativeWorkMixin):
             value["workspace"] = {key: payload["nativeWork"]["binding"][key] for key in ("id", "name", "workspaceProjectId", "workspaceRoot", "allowedRoot")}
         if payload.get("sourceTask"):
             value["sourceTask"] = payload["sourceTask"]
+        if payload.get("origin") == CHAT_CAPTURE_SOURCE:
+            value["chatCapture"] = payload["chatCapture"]
         if payload.get("appScript"):
             script = payload["appScript"]
             value["scriptProposal"] = {key: script[key] for key in
@@ -895,8 +898,8 @@ class WorkflowService(NativeWorkMixin):
         if not isinstance(kind, str) or kind not in {"codex", "chatgpt"} or not isinstance(mode, str) or mode not in {"new", "existing"}:
             raise WorkflowError("请选择 Codex 或 ChatGPT 发布目标。")
         if mode == "new":
-            if kind != "codex" or thread_id not in (None, ""):
-                raise WorkflowError("只有 Codex 支持明确创建本机新聊天。")
+            if thread_id not in (None, ""):
+                raise WorkflowError("新聊天不能同时指定已有聊天标识。")
             thread_id = None
         else:
             thread_id = self._thread_id(thread_id)
@@ -1615,6 +1618,128 @@ class WorkflowService(NativeWorkMixin):
             raise WorkflowError("请选择 AI 方案所属消息。")
         return clean
 
+    @staticmethod
+    def _chat_capture_source(source, observed_at, expected_text):
+        """Validate a complete read_thread receipt; never contacts or sends to ChatGPT."""
+        invalid = WorkflowError("请提供完整、未截断的普通 ChatGPT 本轮实际 read_thread 结果。", 409, "chat_capture_invalid")
+        if (not isinstance(source, dict) or source.get("isError") is not False
+                or set(source) - {"content", "isError", "_meta"}
+                or not isinstance(source.get("content"), list) or len(source["content"]) != 1):
+            raise invalid
+        block = source["content"][0]
+        if not isinstance(block, dict) or set(block) != {"type", "text"} or block["type"] != "text":
+            raise invalid
+        raw = _text(block["text"], 128 * 1024)
+        if len(raw.encode("utf-8")) > 128 * 1024:
+            raise invalid
+        def unique_object(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise invalid
+                value[key] = item
+            return value
+        try:
+            data = json.loads(raw, object_pairs_hook=unique_object)
+        except (TypeError, json.JSONDecodeError):
+            raise invalid from None
+        def truncated(value):
+            if isinstance(value, dict):
+                return any(("truncat" in key.lower() and item not in (False, None, 0, "")) or truncated(item)
+                           for key, item in value.items())
+            return isinstance(value, list) and any(truncated(item) for item in value)
+        if truncated(source) or truncated(data) or not isinstance(data, dict) or type(data.get("schemaVersion")) is not int or data["schemaVersion"] != 1:
+            raise invalid
+        thread, page, turns = data.get("thread"), data.get("page"), data.get("turns")
+        if (not isinstance(thread, dict) or thread.get("kind") != "chatgpt"
+                or not isinstance(page, dict) or page.get("order") != "newest_first"
+                or type(page.get("limit")) is not int or not 1 <= page["limit"] <= 100
+                or page.get("hasMore") is not False or page.get("nextCursor") is not None
+                or not isinstance(turns, list) or len(turns) != 1 or data.get("attachments") != []):
+            raise invalid
+        turn = turns[0]
+        if not isinstance(turn, dict) or turn.get("status") != "completed" or turn.get("error") is not None:
+            raise invalid
+        items = turn.get("items")
+        if not isinstance(items, list) or len(items) != 2 or not all(isinstance(item, dict) for item in items):
+            raise invalid
+        user, agent = items
+        if (set(user) != {"type", "id", "content"} or user["type"] != "userMessage"
+                or user["content"] != [{"type": "text", "text": expected_text}]
+                or set(agent) != {"type", "id", "text"} or agent["type"] != "agentMessage"):
+            raise invalid
+        thread_id, turn_id = WorkflowService._thread_id(thread.get("id")), WorkflowService._thread_id(turn.get("id"))
+        user_id, agent_id = WorkflowService._thread_id(user.get("id")), WorkflowService._thread_id(agent.get("id"))
+        text, title = _text(agent.get("text")), _text(thread.get("title"), 256)
+        if user_id == agent_id or not text.strip() or not title.strip():
+            raise invalid
+        started, completed = turn.get("startedAt"), turn.get("completedAt")
+        if (type(started) not in (int, float) or type(completed) not in (int, float)
+                or not math.isfinite(started) or not math.isfinite(completed) or completed < started):
+            raise invalid
+        observed = WorkflowService._source_time(observed_at)
+        if observed.timestamp() < completed or observed.timestamp() > time.time() + 120:
+            raise invalid
+        capture = {"sourceType": CHAT_CAPTURE_SOURCE, "evidenceSource": "read_thread", "status": "completed",
+            "targetKind": "chatgpt", "targetThreadId": thread_id, "targetName": title,
+            "sourceUrl": "https://chatgpt.com/c/" + thread_id, "turnId": turn_id,
+            "sourceMessageId": user_id, "agentMessageId": agent_id, "observedAt": observed.isoformat(),
+            "sourceSha256": hashlib.sha256(_json(source).encode("utf-8")).hexdigest()}
+        return capture, text
+
+    def import_chat_capture(self, body):
+        """Private import of a human-authorized completed plain-text new Chat; no outbox."""
+        fields = {"requestId", "recordId", "text", "sourceTask", "observedAt", "authorization", "source"}
+        if not isinstance(body, dict) or set(body) != fields:
+            raise WorkflowError("请提供原任务、当前人类授权说明和完整 ChatGPT 回传证据。")
+        authorization = body["authorization"]
+        if (not isinstance(authorization, dict) or set(authorization) != {"origin", "description"}
+                or authorization["origin"] != "current_human_chat"
+                or not _text(authorization["description"], 2000).strip() or not isinstance(body["sourceTask"], dict)):
+            raise WorkflowError("回传导入须注明本聊天人类明确授权；不能补造发件队列授权。")
+        expected_text = _text(body["text"])
+        if not expected_text.strip():
+            raise WorkflowError("请保留本次明确授权且实际发送的原文字。")
+        capture, text = self._chat_capture_source(body["source"], body["observedAt"], expected_text)
+        identity = [capture[key] for key in ("targetThreadId", "sourceMessageId", "agentMessageId")]
+        capture_key = "import-chat-capture:" + hashlib.sha256(_json(identity).encode("utf-8")).hexdigest()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            record = self._record(db, body["recordId"])
+            old = self._receipt(db, "import_chat_capture", body)
+            duplicate = old is not None
+            if old:
+                job_id = old["jobId"]
+            else:
+                source_task = self._source_task(db, record["id"], body["sourceTask"])
+                if source_task is None:
+                    raise WorkflowError("请导入到明确关联的原任务。", 409, "task_source_mismatch")
+                previous = self._setting(db, capture_key)
+                if previous:
+                    row = db.execute("SELECT * FROM jobs WHERE id=?", (previous["jobId"],)).fetchone()
+                    payload, result = (json.loads(row["payload"]), json.loads(row["result"])) if row else ({}, {})
+                    if (row is None or row["record_id"] != record["id"] or payload.get("sourceTask") != source_task
+                            or payload.get("text") != expected_text
+                            or result.get("text") != text or result.get("turnId") != capture["turnId"]):
+                        raise WorkflowError("这组实际聊天来源已绑定另一任务、版本或回答，不能覆盖。", 409, "chat_capture_conflict")
+                    job_id, duplicate = row["id"], True
+                else:
+                    job_id, now = uuid.uuid4().hex, _now()
+                    message_id = self._message(db, record["id"], "assistant", text)
+                    payload = {"origin": CHAT_CAPTURE_SOURCE, "text": expected_text, "purpose": "discussion",
+                        "projectId": record["project_id"], "context": {}, "sourceTask": source_task,
+                        "chatCapture": capture, "readThreadSource": body["source"], "authorization": authorization}
+                    result = {key: capture[key] for key in ("sourceType", "evidenceSource", "targetThreadId", "sourceUrl",
+                        "turnId", "sourceMessageId", "agentMessageId", "sourceSha256")}
+                    result.update(text=text, messageId=message_id, attachmentIds=[])
+                    db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, record["id"], "discuss",
+                        body["requestId"], _json(payload), "succeeded", 0, None, now, now, "", "", _json(result)))
+                    self._set_setting(db, capture_key, {"jobId": job_id})
+                    self._revision(db, True)
+                self._receipt(db, "import_chat_capture", body, {"jobId": job_id})
+            return {"job": self._job_public(db, db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()),
+                "record": self._public_record(self._record(db, record["id"])), "revision": self._revision(db), "duplicate": duplicate}
+
     def create(self, body, prefix="/api/workflow", authorize=None):
         if authorize:
             authorize()
@@ -1664,8 +1789,10 @@ class WorkflowService(NativeWorkMixin):
             raise WorkflowError("App 讨论目标类型无效。")
         name = _text(value.get("name", ""), 160).strip()
         if mode == "new":
-            if kind != "codex" or value.get("threadId") not in (None, ""):
-                raise WorkflowError("目前只能创建本机 Codex 新聊天；ChatGPT 请选择已有聊天。", 400, "app_target_unavailable")
+            if value.get("threadId") not in (None, ""):
+                raise WorkflowError("新聊天不能同时指定已有聊天标识。", 400, "app_target_unavailable")
+            if has_images and kind == "chatgpt":
+                raise WorkflowError("图片讨论需要本机 Codex；ChatGPT 新聊天当前只接受文字。", 400, "app_images_unavailable")
             return {"kind": kind, "mode": mode, "threadId": "", "name": name or "Console 图片讨论"}
         identifier = self._thread_id(value.get("threadId"))
         cached = next((item for item in self._setting(db, "incubator_targets") or []
@@ -1957,9 +2084,13 @@ class WorkflowService(NativeWorkMixin):
                 job_id = old["jobId"]
             else:
                 parent = db.execute("SELECT * FROM jobs WHERE id=?", (_id(body["jobId"]),)).fetchone()
-                if parent is None or parent["status"] not in {"failed", "waiting", "interrupted"}:
+                if parent is None:
                     raise WorkflowError("仅失败、等待配置或中断的任务可以重试。", 409)
                 payload = json.loads(parent["payload"])
+                if payload.get("origin") == CHAT_CAPTURE_SOURCE:
+                    raise WorkflowError("这条记录是实际完成的 ChatGPT 回传导入，不能重试或再次发送。", 409, "chat_capture_not_retryable")
+                if parent["status"] not in {"failed", "waiting", "interrupted"}:
+                    raise WorkflowError("仅失败、等待配置或中断的任务可以重试。", 409)
                 if payload.get("executionEngine") == "codex_app":
                     raise WorkflowError("请重新审核 Work 并确认新任务；不能自动重发可能已执行的任务。", 409, "verification_required")
                 self._context(db, parent["record_id"], payload.get("context", {}))
