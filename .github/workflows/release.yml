@@ -214,12 +214,18 @@ jobs:
             "dist\CodexControlConsole-Windows-x64.zip"
           )
 
+      - name: Build verified updater manifest
+        shell: pwsh
+        run: |
+          python tools/build-update-manifest.py --version "$env:RELEASE_VERSION" --directory dist
+
       - name: Verify release downloads
         shell: pwsh
         run: |
           $expected = @(
             "CodexControlConsole-Setup-x64.exe",
-            "CodexControlConsole-Windows-x64.zip"
+            "CodexControlConsole-Windows-x64.zip",
+            "update-manifest.json"
           )
           $actual = @(Get-ChildItem dist -File | ForEach-Object { $_.Name } | Sort-Object)
           if (($actual -join "`n") -ne (($expected | Sort-Object) -join "`n")) {
@@ -236,6 +242,7 @@ jobs:
           files: |
             dist/CodexControlConsole-Setup-x64.exe
             dist/CodexControlConsole-Windows-x64.zip
+            dist/update-manifest.json
           body: |
             ## Windows x64
 

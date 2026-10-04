@@ -95,7 +95,8 @@ $PythonSources = @(
   "reference_views.py",
   "world_console.py",
   "world_update.py",
-  "tools/thread-cache-import.py"
+  "tools/thread-cache-import.py",
+  "tools/build-update-manifest.py"
 )
 
 $PythonChecks = @(
@@ -106,6 +107,7 @@ $PythonChecks = @(
   "tools/check-console-instance.py",
   "tools/check-console-window-launcher.py",
   "tools/check-console-update.py",
+  "tools/check-update-manifest.py",
   "tools/check-world-update.py",
   "tools/check-clean-uninstall.py",
   "tools/check-wallpaper-style.py",
