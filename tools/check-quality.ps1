@@ -83,6 +83,7 @@ $PythonSources = @(
   "phone_connection_qr.py",
   "transfer_store.py",
   "workflow_service.py",
+  "workflow_mobile_dialogue.py",
   "workflow_script_proposals.py",
   "workflow_native_work.py",
   "workflow_process.py",
@@ -132,6 +133,7 @@ $PythonChecks = @(
   "tools/check-conversations.py",
   "tools/check-thread-cache-import.py",
   "tools/check-workflow.py",
+  "tools/check-mobile-dialogue.py",
   "tools/check-workflow-app-bridge.py",
   "tools/check-chat-capture.py",
   "tools/check-workflow-app-scripts.py",
@@ -161,6 +163,7 @@ try {
     "phone/index.html",
     "phone/app.js",
     "phone/store.js",
+    "phone/dialogue-local.js",
     "phone/styles.css",
     "phone/sw.js",
     "phone/connection-qr.js",
@@ -173,6 +176,10 @@ try {
     "mobile.html",
     "mobile.js",
     "mobile.css",
+    "mobile-dialogue.js",
+    "mobile-dialogue.css",
+    "tools/check-mobile-dialogue-ui.mjs",
+    "tools/check-mobile-dialogue-local.mjs",
     "mobile.webmanifest",
     "tools/check-mobile-ui.mjs",
     "tools/check-work-navigation.mjs",
@@ -213,11 +220,15 @@ try {
   Invoke-QualityStep "Offline phone export JavaScript syntax" { & $Node --check phone-offline-export.js }
   Invoke-QualityStep "Offline phone JavaScript syntax" { & $Node --check phone/app.js }
   Invoke-QualityStep "Offline phone local storage syntax" { & $Node --check phone/store.js }
+  Invoke-QualityStep "Mobile dialogue local storage syntax" { & $Node --check phone/dialogue-local.js }
+  Invoke-QualityStep "Mobile dialogue local persistence" { & $Node tools/check-mobile-dialogue-local.mjs }
   Invoke-QualityStep "Offline phone service worker syntax" { & $Node --check phone/sw.js }
   Invoke-QualityStep "Phone QR scanner syntax" { & $Node --check phone/connection-qr.js }
   Invoke-QualityStep "Phone QR scanner behavior" { & $Node tools/check-connection-qr-ui.mjs }
   Invoke-QualityStep "Offline phone UI" { & $Node tools/check-phone-offline-ui.mjs }
   Invoke-QualityStep "Mobile JavaScript syntax" { & $Node --check mobile.js }
+  Invoke-QualityStep "Mobile dialogue syntax" { & $Node --check mobile-dialogue.js }
+  Invoke-QualityStep "Mobile dialogue behavior" { & $Node tools/check-mobile-dialogue-ui.mjs }
   Invoke-QualityStep "Mobile companion UI" { & $Node tools/check-mobile-ui.mjs }
   Invoke-QualityStep "Work view navigation and activation" { & $Node tools/check-work-navigation.mjs }
   Invoke-QualityStep "Transfer JavaScript syntax" { & $Node --check transfer-panel.js }

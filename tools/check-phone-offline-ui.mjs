@@ -151,7 +151,7 @@ await test("remembered computer opens work records without exporting phone data 
   h.get("transferAddress").value = "http://192.168.1.10:8899/";
   await h.api.openTransferConnection();
   await h.api.openTransferConnection(true, "work");
-  assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=work&workView=ideas");
+  assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=work&workView=dialogue");
   assert.equal(h.stores.get("settings").get("transferConnection").address, "http://192.168.1.10:8899/?tab=transfer");
   assert.equal(JSON.stringify([...h.stores.get("records")]), privateBefore); assert.equal(h.calls.length, 0);
 });
@@ -610,7 +610,8 @@ await test("offline quota failures preserve accepted ideas and allow the origina
 await test("Work adapter identifies this phone and reload waits for unsafe drafts or active saves", () => {
   const h = harness(); let active, safe = false, supplied;
   h.runtime.window.CodexIncubatorPanel = { create(root, options) { supplied = options; return { setActive(value) { active = value; }, canReload: () => safe }; } };
-  h.api.selectTab("work"); assert.equal(active, true); assert.equal(supplied.offline, true); assert.equal(typeof supplied.endpoint, "function"); assert.equal(supplied.storageKey, "codexIncubator.phone.v1");
+  h.api.selectTab("work"); assert.equal(active, false); assert.equal(h.get("bottomNav").hidden, true); assert.equal(supplied.offline, true); assert.equal(typeof supplied.endpoint, "function"); assert.equal(supplied.storageKey, "codexIncubator.phone.v1");
+  h.get("phoneLegacyWork").open = true; h.api.selectTab("work"); assert.equal(active, true);
   h.api.state.updatePending = true; assert.equal(h.api.updateIsIdle(), false); safe = true; assert.equal(h.api.updateIsIdle(), true);
   h.api.selectTab("materials"); assert.equal(active, false); assert.equal(h.get("materialsPanel").hidden, false); assert.equal(h.get("workPanel").hidden, true);
 });
@@ -618,7 +619,7 @@ await test("computer Work entry navigates only after a saved LAN address and nev
   const h = harness(); await h.api.openComputerWork(); assert.equal(h.api.state.tab, "transfer"); assert.match(h.get("transferNotice").textContent, /配对后打开电脑工作区/);
   h.stores.get("settings").set("transferConnection", { id: "transferConnection", address: "http://codex-0123456789abcdef.local:8899/?tab=transfer" }); await h.api.restoreTransferConnection();
   await h.api.incubatorApi("incubator/create", { requestId: requestId(17), title: "不会自动上传" }); await h.api.openComputerWork();
-  assert.equal(h.runtime.window.location.href, "http://codex-0123456789abcdef.local:8899/?tab=work&workView=ideas"); assert.equal(h.get("computerWorkOpen").textContent, "打开 Console 工作区"); assert.equal(h.calls.length, 0); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 1);
+  assert.equal(h.runtime.window.location.href, "http://codex-0123456789abcdef.local:8899/?tab=work&workView=dialogue"); assert.equal(h.get("computerWorkOpen").textContent, "打开 Console 工作区"); assert.equal(h.calls.length, 0); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 1);
 });
 await test("PhoneStore commits atomic record transforms and aborts without overwriting existing private stores", async () => {
   const saved = new Map([["library", { id: "library", privateText: "original library" }]]), self = {}; let opens = 0;
@@ -638,7 +639,7 @@ await test("PhoneStore commits atomic record transforms and aborts without overw
   assert.equal(saved.get("library").privateText, "original library"); assert.equal(saved.get("incubator").ideas.length, 1); assert.equal(opens, 1);
 });
 await test("actual shared component uses the PhoneStore adapter and keeps an unsaved phone draft after reload", async () => {
-  const h = harness({ withIncubator: true }); h.api.selectTab("work"); await settle(); const root = h.get("phoneIncubator");
+  const h = harness({ withIncubator: true }); h.get("phoneLegacyWork").open = true; h.api.selectTab("work"); await settle(); const root = h.get("phoneIncubator");
   const click = text => { const button = h.all(root, "button").find(item => item.textContent === text); assert.ok(button, text); assert.equal(Boolean(button.disabled), false, text); return button.listeners.get("click")(); };
   click("＋ 新建想法"); const title = h.all(root, "input").find(item => item.placeholder === "一句话记下想法"), body = h.all(root, "textarea").find(item => item.placeholder?.startsWith("想解决什么"));
   title.value = "真实组件离线保存"; title.listeners.get("input")(); body.value = "不会上传"; body.listeners.get("input")();
@@ -651,7 +652,7 @@ await test("actual shared component uses the PhoneStore adapter and keeps an uns
   assert.ok(!h.all(root, "button").some(item => item.textContent === "发布到目标聊天"));
 });
 await test("actual phone component imports one exported idea as a fresh editable draft and never publishes", async () => {
-  const h = harness({ withIncubator: true }); h.api.selectTab("work"); await settle(); const root = h.get("phoneIncubator");
+  const h = harness({ withIncubator: true }); h.get("phoneLegacyWork").open = true; h.api.selectTab("work"); await settle(); const root = h.get("phoneIncubator");
   const click = text => h.all(root, "button").find(item => item.textContent === text).listeners.get("click")();
   click("导入想法 JSON"); const input = h.all(root, "textarea").find(item => item.placeholder?.includes("另一工作区"));
   input.value = JSON.stringify({ format: "codex-incubator-idea", version: 1, idea: { title: "从电脑带来", body: "原来的发布内容", stage: "published", priority: "high", parentId: "old-parent", targetKind: "none", targetThreadId: "", targetName: "" } });

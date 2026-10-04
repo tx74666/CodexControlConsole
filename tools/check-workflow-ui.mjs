@@ -257,6 +257,40 @@ await test("task Chat sends prepared body and original pictures through logged-i
 await test("task Work review chooses an authorized Workspace and only explicit confirmation sends real app-work", async () => {
   const h = harness(), task = addTask(h.server); h.server.config.models.ready = false; await h.start(); assert.equal(await h.panel.openTask(task), true); h.button("Work").click(); assert.equal(h.calls.some(call => call.path === "app-work"), false); h.button("审核 Work").click(); assert.equal(h.field("可修改内容").value, task.body); assert.equal(h.button("确认 Work 修改").disabled, true); assert.match(h.root.textContent, /请选择本次 Work/); h.change(h.field("Work 工作区"), "console-workspace"); assert.equal(h.button("确认 Work 修改").disabled, false); assert.match(h.root.textContent, /D:\/fixture-project/); assert.equal(h.field("把完成的新方案写回此任务正文").checked, false); assert.equal(h.calls.some(call => call.path === "app-work"), false); h.button("确认 Work 修改").click(); await settle(); const data = h.calls.find(call => call.path === "app-work").data; assert.deepEqual(data.sourceTask, { ideaId: task.ideaId, revision: 4 }); assert.deepEqual(data.context, { attachmentIds: ["source"] }); assert.equal(data.recordId, task.recordId); assert.equal(data.text, task.body); assert.equal(data.bindingId, "console-workspace"); assert.equal(data.workspaceAuthorizationSha256, "c".repeat(64)); assert.deepEqual(data.workTarget, { mode: "new", name: task.title }); assert.equal(data.updateTaskBody, undefined); for (const key of ["action", "commandId", "args", "appTarget", "purpose", "root"]) assert.equal(data[key], undefined); assert.equal(h.calls.some(call => ["discuss", "submit", "models", "projects", "create"].includes(call.path)), false); assert.match(h.notice().textContent, /Work 已确认.*尚未完成/); assert.equal(h.server.detail.jobs[0].action, "native_work");
 });
+await test("idea execution handoff opens exact native Work review preserves source and unsent draft and waits for confirmation", async () => {
+  for (const phone of [true, false]) {
+    const storage = new Map(), server = fixture(phone), h = harness({ phone, storage, server }), task = addTask(server);
+    const unsent = "下一轮尚未发送的评价\n保留这一段，不是执行要求。", executionDraft = "  本轮已保存执行稿\n只修改首页输入区；保留原始内容。\n  ";
+    await h.start(); await h.panel.openTask(task); h.type(unsent);
+    assert.equal(await h.panel.openTask({ ideaId: task.ideaId, revision: task.revision, executionDraft, mode: "work" }), true);
+    assert.equal(h.panel.getTaskContext().body, task.body); assert.equal(h.panel.getTaskContext().revision, task.revision);
+    assert.equal(h.panel.getTaskContext().mode, "work"); assert.equal(h.button("Work").attributes["aria-pressed"], "true");
+    assert.equal(h.field("可修改内容").value, executionDraft); assert.equal(h.draft.value, unsent); assert.equal(h.button("确认 Work 修改").disabled, true);
+    const saved = workflowSaved(h).drafts[task.recordId];
+    assert.equal(saved.text, unsent); assert.equal(saved.review.nativeWork, true); assert.equal(saved.review.text, executionDraft); assert.equal(saved.review.taskBody, task.body);
+    assert.deepEqual(saved.review.sourceTask, { ideaId: task.ideaId, revision: task.revision }); assert.equal(saved.review.updateTaskBody, false);
+    assertNoExecution(h); assert.equal(server.detail.jobs.length, 0); assert.equal(server.tasks[task.ideaId].body, task.body);
+    h.panel.setActive(false);
+    const restored = harness({ phone, storage, server }); await restored.start();
+    assert.equal(restored.field("可修改内容").value, executionDraft); assert.equal(restored.draft.value, unsent); assert.equal(restored.panel.getTaskContext().body, task.body); assertNoExecution(restored);
+    restored.change(restored.field("Work 工作区"), "console-workspace"); assertNoExecution(restored);
+    restored.button("确认 Work 修改").click(); await settle();
+    const posted = restored.calls.filter(call => call.path === "app-work"); assert.equal(posted.length, 1);
+    assert.equal(posted[0].data.text, executionDraft); assert.equal(posted[0].data.recordId, task.recordId); assert.deepEqual(posted[0].data.sourceTask, { ideaId: task.ideaId, revision: task.revision });
+    assert.equal(posted[0].data.updateTaskBody, undefined); assert.equal(restored.draft.value, unsent); assert.equal(server.tasks[task.ideaId].body, task.body);
+    assert.equal(restored.calls.some(call => ["discuss", "submit", "retry", "create"].includes(call.path)), false);
+  }
+});
+await test("idea execution handoff keeps each record draft and rejects invalid execution text before association", async () => {
+  const h = harness(), first = addTask(h.server), second = addOtherTask(h.server), executionDraft = "第二想法独立的已保存执行稿\n按此稿进入审核。";
+  await h.start(); await h.panel.openTask(second); h.type("第二记录未发送草稿"); await h.panel.openTask(first); h.type("第一记录未发送草稿");
+  assert.equal(await h.panel.openTask({ ideaId: second.ideaId, revision: second.revision, executionDraft, mode: "work" }), true);
+  assert.equal(h.panel.getTaskContext().ideaId, second.ideaId); assert.equal(h.panel.getTaskContext().body, second.body); assert.equal(h.draft.value, "第二记录未发送草稿");
+  assert.equal(h.field("可修改内容").value, executionDraft); assert.equal(workflowSaved(h).drafts[first.recordId].text, "第一记录未发送草稿"); assertNoExecution(h);
+  const before = h.calls.filter(call => call.options.method === "POST").length;
+  for (const invalid of [null, {}, " \n\t", "x".repeat(20001)]) assert.equal(await h.panel.openTask({ ideaId: first.ideaId, revision: first.revision, executionDraft: invalid, mode: "work" }), false);
+  assert.equal(h.calls.filter(call => call.options.method === "POST").length, before); assert.equal(h.panel.getTaskContext().ideaId, second.ideaId); assert.equal(h.field("可修改内容").value, executionDraft); assert.equal(h.draft.value, "第二记录未发送草稿"); assertNoExecution(h);
+});
 await test("task Work freezes selected output or prose rather than sending all options or new unrelated draft", async () => {
   for (const selected of [false, true]) { const h = harness(), task = addTask(h.server); await h.start(); await h.panel.openTask(task); h.type("另一轮输入草稿"); if (selected) { const paragraph = h.all("p", h.all("article")[0])[0]; h.runtime.window.getSelection = () => ({ anchorNode: paragraph, focusNode: paragraph, toString: () => "只调整灯光" }); h.events.get("selectionchange")(); h.button("所选文字交 Work 审核").click(); } else h.button("整条交 Work 审核").click(); h.change(h.field("Work 工作区"), "console-workspace"); h.button("确认 Work 修改").click(); await settle(); const data = h.calls.find(call => call.path === "app-work").data; assert.equal(data.text, selected ? "只调整灯光" : h.server.detail.messages[0].text); assert.equal(data.context.sourceMessageId, "ai-1"); assert.equal(data.context.selectedText, selected ? "只调整灯光" : undefined); if (selected) assert.doesNotMatch(JSON.stringify(data), /修改全部材质/); assert.equal(h.draft.value, "另一轮输入草稿"); assert.equal(h.calls.some(call => ["discuss", "submit"].includes(call.path)), false); }
 });

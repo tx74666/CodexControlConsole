@@ -10,8 +10,8 @@ import zipfile
 
 
 PROJECT = Path(__file__).resolve().parents[1]
-PHONE_ASSETS = ("index.html", "styles.css", "app.js", "store.js", "sw.js", "manifest.webmanifest", "connection-qr.js", "vendor/jsQR.js", "vendor/jsQR.LICENSE")
-SHARED_PHONE_ASSETS = ("incubator-panel.js", "incubator-panel.css")
+PHONE_ASSETS = ("index.html", "styles.css", "app.js", "store.js", "dialogue-local.js", "sw.js", "manifest.webmanifest", "connection-qr.js", "vendor/jsQR.js", "vendor/jsQR.LICENSE")
+SHARED_PHONE_ASSETS = ("incubator-panel.js", "incubator-panel.css", "mobile-dialogue.js", "mobile-dialogue.css")
 ICONS = ("phone-icon-180.png", "phone-icon-192.png", "phone-icon-512.png")
 PUBLIC_TRACKS = (
     "Airborne.mp3", "Around the World.mp3", "Dancin.mp3", "Final Step.mp3", "Fire Inside.mp3",

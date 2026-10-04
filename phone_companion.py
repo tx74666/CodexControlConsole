@@ -53,6 +53,7 @@ NETWORK_WARNING = "只在你信任的同一 Wi-Fi 内使用。当前连接未加
 ASSETS = {
     "/": "mobile.html", "/mobile.html": "mobile.html",
     "/mobile.css": "mobile.css", "/mobile.js": "mobile.js",
+    "/mobile-dialogue.js": "mobile-dialogue.js", "/mobile-dialogue.css": "mobile-dialogue.css",
     "/transfer-panel.js": "transfer-panel.js", "/transfer-panel.css": "transfer-panel.css",
     "/workflow-panel.js": "workflow-panel.js", "/workflow-panel.css": "workflow-panel.css",
     "/incubator-panel.js": "incubator-panel.js", "/incubator-panel.css": "incubator-panel.css",
@@ -444,7 +445,9 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                         authorize()
                         result = companion.workflow_service.upload(fields, files, prefix="/api/phone/workflow", authorize=authorize)
                 elif action in {"create", "message", "submit", "discuss", "transcribe", "retry", "task-record", "app-work", "app-work/end",
-                                "incubator/create", "incubator/update", "incubator/publish", "incubator/refinement/pause", "conversations/request"}:
+                                "incubator/create", "incubator/update", "incubator/publish", "incubator/refinement/pause", "conversations/request",
+                                "mobile/dialogue/open", "mobile/dialogue/draft", "mobile/dialogue/clear", "mobile/dialogue/send",
+                                "mobile/dialogue/save", "mobile/dialogue/remember", "mobile/idea/update", "mobile/idea/archive"}:
                     body = self._body(maximum=128 * 1024)
                     authorize()
                     result = workflow_post(companion.workflow_service, action, body, prefix="/api/phone/workflow", authorize=authorize)

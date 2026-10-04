@@ -14,7 +14,7 @@
   const el = id => document.getElementById(id);
   const MUSIC_TIERS = [{ value: "first", number: "1", suffix: "st" }, { value: "second", number: "2", suffix: "nd" }, { value: "third", number: "3", suffix: "rd" }];
   const state = { paired: false, generation: 0, busy: false, tab: "work", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
-  const UI_SCRIPTS = ["mobile.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"];
+  const UI_SCRIPTS = ["mobile.js", "mobile-dialogue.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"];
   const UPDATE_KEY = "codexPhone.connectedUiUpdate.v1";
   const uiUpdate = { loaded: loadedUiVersion(), actual: "", checking: false, preparing: false, reloading: false, timer: 0, trusted: false, reason: "" };
   const versionNotice = document.createElement("p"); versionNotice.className = "notice"; versionNotice.hidden = true; versionNotice.setAttribute("role", "status"); el("main").prepend(versionNotice);
@@ -24,7 +24,7 @@
     onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期或已断开，请输入电脑显示的新配对码。")
   }) || null;
-  let incubatorPanel = null;
+  let incubatorPanel = null, dialoguePanel = null;
   const workflowPanel = window.CodexWorkflowPanel?.create(el("phoneWorkflowPanel"), {
     phone: true,
     onConnectionState: connected => updateConnectionState(connected),
@@ -42,17 +42,26 @@
     onTaskStateChange: syncWorkPanelActivity
   }) || null;
   const initialWorkView = new URL(window.location.href).searchParams.get("workView");
-  let workView = ["ideas", "conversations", "workflow"].includes(initialWorkView) ? initialWorkView : "ideas";
+  let workView = ["dialogue", "ideas", "conversations", "workflow"].includes(initialWorkView) ? initialWorkView : "dialogue";
   const conversationsPanel = window.CodexConversationsPanel?.create(el("phoneConversationsPanel"), {
     phone: true, onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期，请重新连接电脑。"),
     onTarget: async thread => { selectWorkView("ideas"); await incubatorPanel?.useTarget(thread); }
   }) || null;
+  dialoguePanel = window.CodexMobileDialogue?.create(el("phoneDialoguePanel"), {
+    phone: true,
+    onConnectionState: connected => updateConnectionState(connected),
+    onAuth: () => showPair("配对已过期，请重新连接电脑。"),
+    getVersion: () => el("versionLabel")?.textContent || "Codex Console",
+    onModule: value => { if (value === "conversations") selectWorkView("conversations"); else if (value === "legacy") selectWorkView("ideas"); else selectTab(value); },
+    onExecution: async idea => { if (incubatorPanel?.closeTask?.() === false) return false; selectWorkView("workflow"); const opened = await workflowPanel?.openTask?.({ ideaId: idea.id, revision: idea.revision, title: idea.title, projectId: idea.projectId, executionDraft: idea.executionDraft, mode: "work" }); if (opened) { el("phoneWorkflowDetails").open = true; window.scrollTo({ top: 0, behavior: "auto" }); } return Boolean(opened); }
+  }) || null;
   function selectWorkView(value) {
-    const next = ["ideas", "conversations", "workflow"].includes(value) ? value : "ideas";
+    const next = ["dialogue", "ideas", "conversations", "workflow"].includes(value) ? value : "dialogue";
     if (next === "workflow" && incubatorPanel?.closeTask?.() === false) return false;
     workView = next;
     document.body.dataset.workView = workView;
+    if (el("phoneDialoguePanel")) el("phoneDialoguePanel").hidden = workView !== "dialogue";
     if (el("phoneWorkIdeas")) el("phoneWorkIdeas").hidden = workView !== "ideas";
     if (el("phoneConversationsPanel")) el("phoneConversationsPanel").hidden = workView !== "conversations";
     const workflow = el("phoneWorkflowDetails"); if (workflow) { workflow.hidden = workView !== "workflow"; if (workView === "workflow") workflow.open = true; }
@@ -63,6 +72,7 @@
   }
   function syncWorkPanelActivity() {
     const active = state.tab === "work" && state.paired && !document.hidden;
+    dialoguePanel?.setActive(active && workView === "dialogue");
     incubatorPanel?.setActive(active && workView === "ideas");
     conversationsPanel?.setActive(active && workView === "conversations");
     workflowPanel?.setActive(active && (workView === "ideas" && Boolean(incubatorPanel?.hasOpenTask?.()) || workView === "workflow" && Boolean(el("phoneWorkflowDetails")?.open)));
@@ -112,7 +122,8 @@
       !(editing && (editing.isContentEditable || ["TEXTAREA", "INPUT"].includes(editing.tagName))) &&
       (!transferPanel || typeof transferPanel.hasDraft === "function" && !transferPanel.hasDraft()) &&
       (!incubatorPanel || typeof incubatorPanel.canReload === "function" && incubatorPanel.canReload() && !incubatorPanel.hasDraft?.()) &&
-      (!conversationsPanel || typeof conversationsPanel.canReload === "function" && conversationsPanel.canReload());
+      (!conversationsPanel || typeof conversationsPanel.canReload === "function" && conversationsPanel.canReload()) &&
+      (!dialoguePanel || typeof dialoguePanel.canReload === "function" && dialoguePanel.canReload() && !dialoguePanel.hasDraft?.());
   }
   function scheduleVersionCheck() {
     window.clearTimeout(uiUpdate.timer); uiUpdate.timer = 0;
@@ -150,6 +161,7 @@
       if (uiUpdate.reloading || target !== uiUpdate.actual || !reloadIsIdle()) return;
       if (JSON.parse(sessionStorage.getItem(UPDATE_KEY) || "null")?.target === target) throw new Error("新版已进入重开流程，暂不重复重开。");
       if (!workflowPanel || typeof workflowPanel.prepareReload !== "function" || !await workflowPanel.prepareReload()) throw new Error("工作草稿或原附件尚未核验保存，保持当前页；保存完成后继续检查。");
+      if (dialoguePanel && !await dialoguePanel.prepareReload()) throw new Error("当前对话草稿尚未可靠保存，保持当前页。");
       if (uiUpdate.reloading || target !== uiUpdate.actual || !reloadIsIdle() || !workflowPanel.canReload?.() || navigator.serviceWorker?.controller) return;
       if (JSON.parse(sessionStorage.getItem(UPDATE_KEY) || "null")?.target === target) throw new Error("新版已进入重开流程，暂不重复重开。");
       address.searchParams.set("tab", state.tab); address.searchParams.set("workView", workView);
@@ -237,6 +249,7 @@
     workflowPanel?.clear();
     incubatorPanel?.clear();
     conversationsPanel?.clear();
+    dialoguePanel?.clear();
     document.body.dataset.phoneTab = "unpaired";
     window.clearTimeout(livePlan.timer); livePlan.timer = null; livePlan.busy = false; livePlan.controller?.abort(); livePlan.controller = null;
     state.generation += 1; state.paired = false; state.dashboard = null;

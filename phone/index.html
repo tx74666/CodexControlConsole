@@ -13,10 +13,13 @@
   <link rel="icon" href="./phone-icon-192.png?v=__CONSOLE_PHONE_BUILD__" type="image/png">
   <link rel="stylesheet" href="./styles.css">
   <link rel="stylesheet" href="./incubator-panel.css">
+  <link rel="stylesheet" href="./mobile-dialogue.css">
   <script src="./store.js" defer></script>
   <script src="./vendor/jsQR.js" defer></script>
   <script src="./connection-qr.js" defer></script>
   <script src="./incubator-panel.js" defer></script>
+  <script src="./mobile-dialogue.js" defer></script>
+  <script src="./dialogue-local.js" defer></script>
   <script src="./app.js" defer></script>
 </head>
 <body>
@@ -29,7 +32,9 @@
       <div class="toolbar" id="appToolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
       <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
       <section id="workPanel" class="tab-panel" aria-labelledby="workTitle">
-        <div class="section-title"><h2 id="workTitle">Console Workspace</h2><span class="pill">此手机</span></div>
+        <h2 id="workTitle" class="visually-hidden">当前对话</h2>
+        <div id="phoneDialogue"></div>
+        <details id="phoneLegacyWork" class="document-section phone-legacy-work"><summary>原有想法与计划 · 导入、导出</summary>
         <div class="card phone-workspace"><p>打开电脑 Console 工作区，在同一任务里查看底稿、Chat、Work 和 Output。手机不需要打开 ChatGPT。</p><button id="computerWorkOpen" type="button" class="secondary">连接 Console 工作区</button><p id="computerWorkNotice" class="muted small">下方草稿可离线编辑。此手机的想法不会自动带到电脑；可导出选中的想法，再到 Console 工作区导入。</p></div>
         <div id="phoneIncubator"></div>
         <details class="document-section saved-plans"><summary>已保存的计划</summary>
@@ -44,6 +49,7 @@
           <p class="muted small">连接中每 5 秒检查计划；离线时保留最后一次同步。首次连接仅在你信任的 Wi-Fi 使用，局域网连接未加密。</p>
         </details>
       </section>
+        </details>
         </details>
       </section>
       <section id="musicPanel" class="tab-panel" hidden aria-labelledby="musicTitle">
@@ -102,7 +108,7 @@
           <p class="muted small">同一 Wi-Fi，电脑保持开机并运行 Console。请在这个 App 内扫码，才能保存电脑入口；用系统相机扫码可直接互传，但不会替这个 App 保存入口。收发内容保存在电脑。</p>
         </div>
       </section>
-      <details class="session-settings"><summary>资料与更新 <span class="muted small">v__CONSOLE_PHONE_VERSION__</span></summary>
+      <details id="phoneSettings" class="session-settings"><summary>资料与更新 <span class="muted small">v__CONSOLE_PHONE_VERSION__</span></summary>
         <p class="muted small">Safari 分享 → 添加到主屏幕。已保存的内容可离线使用。</p>
         <div class="settings-actions"><button id="importButton" type="button" class="secondary">导入电脑资料</button><button id="backupButton" type="button" class="secondary">备份资料</button><button id="restoreButton" type="button" class="text-button" hidden>恢复上次导入</button></div>
         <input id="dataFile" type="file" accept=".json,application/json" hidden>

@@ -13,6 +13,7 @@
   const taskSync = { generation: 0, controller: null, timer: null, config: null, busy: false, connected: false };
   let rememberedTransferAddress = "";
   let phoneIncubator = null;
+  let phoneDialogue = null;
   let incubatorSaving = 0;
   const transferScanner = window.CodexPhoneQrScanner?.create({ video: el("transferQrVideo"), canvas: el("transferQrCanvas"), onResult: acceptTransferQr, onNotice: (message, error) => notice("transferQrNotice", message, error) }) || null;
   const node = (tag, text = "", className = "") => {
@@ -164,6 +165,24 @@
     if (!phoneIncubator) phoneIncubator = window.CodexIncubatorPanel?.create(el("phoneIncubator"), { phone: true, offline: true, storageKey: "codexIncubator.phone.v1", endpoint: incubatorApi }) || null;
     return phoneIncubator;
   }
+  function ensurePhoneDialogue() {
+    if (!phoneDialogue) phoneDialogue = window.CodexMobileDialogue?.create(el("phoneDialogue"), {
+      phone: true, offline: true, endpoint: window.CodexPhoneDialogueLocal?.endpoint,
+      uploadAttachments: window.CodexPhoneDialogueLocal?.uploadAttachments,
+      blobStore: {
+        get: async id => { const saved = await PhoneStore.get("records", `mobile-image-draft:${id}`); return saved ? { ...saved, id } : null; },
+        put: value => PhoneStore.put("records", { ...value, id: `mobile-image-draft:${value.id}` })
+      },
+      onConnect: () => void openComputerWork(), onModule: value => {
+        if (value === "legacy" || value === "settings") {
+          const section = el(value === "legacy" ? "phoneLegacyWork" : "phoneSettings");
+          section.hidden = false; section.open = true; section.scrollIntoView?.({ block: "start", behavior: "smooth" });
+        } else if (value === "conversations") void openComputerWork(); else selectTab(value);
+      },
+      onExecution: () => { void openComputerWork(); return false; }
+    }) || null;
+    return phoneDialogue;
+  }
   async function openComputerWork() {
     if (rememberedTransferAddress) { await openTransferConnection(true, "work"); return; }
     selectTab("transfer"); notice("transferNotice", "先扫描电脑 Console 的连接二维码，或填写电脑显示的手机地址；配对后打开电脑工作区。");
@@ -212,12 +231,17 @@
     if (value !== "transfer") transferScanner?.stop();
     if (!["work", "music", "materials", "transfer"].includes(value)) return;
     state.tab = value;
-    el("appToolbar").hidden = value === "music";
+    el("appToolbar").hidden = value === "music" || value === "work";
+    document.body.dataset.dialogue = String(value === "work");
+    el("bottomNav").hidden = value === "work";
+    if (value === "work") { el("phoneLegacyWork").hidden = !el("phoneLegacyWork").open; el("phoneSettings").hidden = !el("phoneSettings").open; }
+    else el("phoneSettings").hidden = false;
     el("taskSyncSection").hidden = !TASK_SYNC_ENABLED;
     for (const tab of ["work", "music", "materials", "transfer"]) el(`${tab}Panel`).hidden = tab !== value;
     for (const button of document.querySelectorAll("[data-tab]")) button.setAttribute("aria-pressed", String(button.dataset.tab === value));
     if (value === "music" && state.ready && !state.music.loaded) void loadMusic();
-    ensurePhoneIncubator()?.setActive(value === "work");
+    ensurePhoneDialogue()?.setActive(value === "work");
+    ensurePhoneIncubator()?.setActive(value === "work" && Boolean(el("phoneLegacyWork")?.open));
   }
   function validateImport(data) {
     const text = (value, limit, label) => { if (typeof value !== "string" || value.length > limit) throw new Error(`${label}格式或大小不正确。`); return value; };
@@ -384,7 +408,7 @@
       const address = transferAddress(useRemembered ? rememberedTransferAddress : el("transferAddress").value);
       transferScanner?.stop(); await saveTransferConnection(address);
       const target = new URL(address);
-      if (view === "work") { target.searchParams.set("tab", "work"); target.searchParams.set("workView", "ideas"); }
+      if (view === "work") { target.searchParams.set("tab", "work"); target.searchParams.set("workView", "dialogue"); }
       window.location.href = target.href;
     } catch (error) { failure(error, "transferNotice"); }
   }
@@ -532,7 +556,7 @@
   }
   async function requestPersistence() { try { if (navigator.storage?.persist) await navigator.storage.persist(); } catch { /* Storage availability is checked on every write. */ } }
   function updateIsIdle() {
-    return !state.busy && !state.mutationBusy && !incubatorSaving && (phoneIncubator?.canReload?.() ?? true) && !state.mediaSaving && !state.reviewingImport && !state.downloadController && !state.pendingImport && !state.pendingSnapshot && el("musicAudio").paused;
+    return !state.busy && !state.mutationBusy && !incubatorSaving && (phoneIncubator?.canReload?.() ?? true) && (phoneDialogue?.canReload?.() ?? true) && !state.mediaSaving && !state.reviewingImport && !state.downloadController && !state.pendingImport && !state.pendingSnapshot && el("musicAudio").paused;
   }
   async function maybeReloadUpdate() {
     if (!state.updatePending || state.reloadingUpdate) return;
@@ -542,6 +566,7 @@
     let pending;
     do { pending = libraryMutationQueue; await pending; } while (pending !== libraryMutationQueue);
     if (!updateIsIdle()) { state.reloadingUpdate = false; return; }
+    if (phoneDialogue?.prepareReload && !await phoneDialogue.prepareReload()) { state.reloadingUpdate = false; return; }
     window.location.reload();
   }
   function prepareWaitingUpdate() {
@@ -1121,6 +1146,7 @@
 
   el("refreshButton").addEventListener("click", () => void refresh());
   el("computerWorkOpen").addEventListener("click", () => void openComputerWork());
+  el("phoneLegacyWork")?.addEventListener("toggle", () => ensurePhoneIncubator()?.setActive(state.tab === "work" && el("phoneLegacyWork").open));
   el("importButton").addEventListener("click", () => el("dataFile").click());
   el("dataFile").addEventListener("change", async () => { try { await reviewImport(el("dataFile").files[0]); } catch (error) { failure(error, "settingsNotice"); } finally { el("dataFile").value = ""; } });
   el("importConfirm").addEventListener("click", () => void commitImport());

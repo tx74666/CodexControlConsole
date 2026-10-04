@@ -192,6 +192,38 @@ class PhoneCompanionChecks(unittest.TestCase):
             status, result, _ = self.request("/api/phone/workflow/" + action, "POST", {"bindings": []})
             self.assertEqual(status, 404, (action, result))
 
+    def test_mobile_dialogue_actions_keep_the_paired_phone_boundary(self):
+        calls = []
+        routes = {"mobile/dialogue/open": "mobile_dialogue_open", "mobile/dialogue/draft": "mobile_dialogue_draft",
+            "mobile/dialogue/clear": "mobile_dialogue_clear", "mobile/dialogue/send": "mobile_dialogue_send",
+            "mobile/dialogue/save": "mobile_dialogue_save", "mobile/dialogue/remember": "mobile_dialogue_remember",
+            "mobile/idea/update": "mobile_idea_update", "mobile/idea/archive": "mobile_idea_archive"}
+
+        class WorkflowProbe:
+            def __getattr__(self, name):
+                if name not in routes.values():
+                    raise AttributeError(name)
+                def operation(body, *, prefix, authorize):
+                    authorize()
+                    calls.append((name, body, prefix))
+                    return {"isolatedBoundaryProbe": True}
+                return operation
+
+        self.service.workflow_service = WorkflowProbe()
+        for route in routes:
+            self.assertEqual(self.request("/api/phone/workflow/" + route, "POST", {"requestId": "isolated"})[0], 401)
+        self.assertEqual(calls, [])
+        self.pair()
+        for route, name in routes.items():
+            body = {"requestId": "isolated-" + name}
+            status, value, _ = self.request("/api/phone/workflow/" + route, "POST", body)
+            self.assertEqual(status, 200, value)
+            self.assertEqual(calls[-1], (name, body, "/api/phone/workflow"))
+        self.now[0] += phone.SESSION_TTL + 1
+        for route in routes:
+            self.assertEqual(self.request("/api/phone/workflow/" + route, "POST", {"requestId": "expired"})[0], 401)
+        self.assertEqual(len(calls), len(routes))
+
     def test_explicit_work_rejection_marker_does_not_turn_unknown_failure_into_no_queue(self):
         class WorkflowProbe:
             def app_work(self, body, *, prefix, authorize):

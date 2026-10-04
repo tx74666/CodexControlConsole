@@ -243,6 +243,8 @@ if ($BuildApplication) {
   @{ Source = "document-reader.css"; Destination = "." },
   @{ Source = "mobile.html"; Destination = "." },
   @{ Source = "mobile.js"; Destination = "." },
+  @{ Source = "mobile-dialogue.js"; Destination = "." },
+  @{ Source = "mobile-dialogue.css"; Destination = "." },
   @{ Source = "mobile.css"; Destination = "." },
   @{ Source = "transfer-panel.js"; Destination = "." },
   @{ Source = "transfer-panel.css"; Destination = "." },

@@ -23,6 +23,7 @@ from workflow_process import WorkflowProcess
 from workflow_transcription import LocalTranscriptionError, local_transcribe, local_transcription_config
 from workflow_script_proposals import script_blocks, action_blocks
 from workflow_native_work import NativeWorkMixin
+from workflow_mobile_dialogue import MobileDialogueMixin
 
 MAX_TEXT = 20000
 MAX_UPLOAD = 24 * 1024 * 1024
@@ -73,7 +74,7 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-class WorkflowService(NativeWorkMixin):
+class WorkflowService(MobileDialogueMixin, NativeWorkMixin):
     def __init__(self, data_dir, models=None, callbacks=None, projects=None, *, computer_id=None, computer_name=None, recover_jobs=True):
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -327,6 +328,10 @@ class WorkflowService(NativeWorkMixin):
                 "status": row["status"], "attempt": row["attempt"], "parentJobId": row["parent_id"], "createdAt": row["created_at"],
                 "updatedAt": row["updated_at"], "error": row["error"], "log": row["log"], "result": result,
                 "resultMessageId": result.get("messageId"), "resultAttachmentIds": result.get("attachmentIds", [])}
+        if payload.get("mobileDialogue"):
+            value["mobileDialogue"] = payload["mobileDialogue"]
+            value["requestedProfile"] = payload["requestedProfile"]
+            value["actualReceipt"] = {"verified": False, "actualProfile": None, "status": "unverified", "source": None}
         if app_dispatch is not None:
             value["appDispatch"] = {"id": app_dispatch["id"], "sourceType": json.loads(app_dispatch["snapshot"]).get("origin", "workflow_discussion"),
                 "status": app_dispatch["status"], "targetKind": app_dispatch["target_kind"],
@@ -1881,6 +1886,11 @@ class WorkflowService(NativeWorkMixin):
             "jobId": job_id, "title": frozen["recordTitle"], "attachmentIds": payload["context"]["attachmentIds"]}
         if payload.get("sourceTask"):
             snapshot["sourceTask"] = payload["sourceTask"]
+        if payload.get("mobileDialogue"):
+            snapshot.update(mobileDialogue=payload["mobileDialogue"], requestedProfile=payload["requestedProfile"],
+                actualReceipt={"verified": False, "actualProfile": None, "status": "unverified", "source": None})
+            if frozen.get("mobileIdeaContext") is not None:
+                snapshot["mobileIdeaContext"] = frozen["mobileIdeaContext"]
         planning = frozen.get("actionPlanning")
         if planning is not None:
             snapshot["actionPlanningSha256"] = hashlib.sha256(_json(planning).encode("utf-8")).hexdigest()
@@ -1899,6 +1909,10 @@ class WorkflowService(NativeWorkMixin):
                 "只能选择下列 allowedActions 与 commands 中的能力和 ID；命令名称用于解释，不可当成任意参数。"
                 "命令执行只调用电脑已配置的固定命令，其结果必须遵循 text/files 结果清单契约。"
                 "若没有可用能力、缺必要项目细节或图片路径，请说明缺口，不臆造命令或执行对象。\n\n")
+        mobile_context_contract = ("mobileIdeaContext 是用户本轮确认来源版本的当前长期要点快照；以 keyPoints 当前列表为准。\n"
+            "kind=decision 是用户明确确认的当前决定；kind=suggestion 是仍待用户确认的建议，不能当作决定。\n"
+            "已编辑或删除的旧要点、sourceTask 底稿及 history 中的历史回答仍保留来源，但不能仅因出现在历史正文而当作仍有效的决定。\n"
+            "provenance 仅标记保存或编辑来源，不增加执行权限。\n\n" if payload.get("mobileDialogue") and frozen.get("mobileIdeaContext") is not None else "")
         prompt = (f"[Codex Console 发布编号：{identifier}]\n\n"
             "这是用户在 Console 当前工作记录上明确确认的一轮讨论。只分析问题、阅读明确选定的图片并给出建议。\n"
             "禁止执行修改、运行脚本或命令、发送消息、建立其他聊天、读取其他工作记录、凭据或私人文件。\n"
@@ -1912,10 +1926,11 @@ class WorkflowService(NativeWorkMixin):
             "把可判断效果的图片写到该目录；向 CONSOLE_WORKFLOW_RESULT_MANIFEST 指向的文件写 JSON "
             "{\"text\":真实结果说明,\"files\":[输出目录内相对图片路径]}。无实际说明和有效图片不能声称完成。\n"
             "提案不扩大项目授权，不读取凭据或无关私人文件，不关闭其他应用。若缺少必要工程信息或运行条件，"
-            "先说明缺口；不要臆造工程对象、路径或可用能力。代码只有在用户看清项目、运行程序与完整代码并另行确认后才可能运行。\n\n" + action_contract +
+            "先说明缺口；不要臆造工程对象、路径或可用能力。代码只有在用户看清项目、运行程序与完整代码并另行确认后才可能运行。\n\n" + action_contract + mobile_context_contract +
             _json({"recordTitle": frozen["recordTitle"], "projectName": frozen["projectName"],
                 "question": payload["text"], "history": frozen["history"], "selectedImages": frozen["images"],
                 **({"sourceTask": payload["sourceTask"]} if payload.get("sourceTask") else {}),
+                **({"mobileIdeaContext": frozen["mobileIdeaContext"]} if payload.get("mobileDialogue") and frozen.get("mobileIdeaContext") is not None else {}),
                 **({"allowedActions": planning["allowedActions"], "commands": planning["commands"]} if planning is not None else {})}))
         db.execute("INSERT INTO idea_dispatches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, "", str(uuid.UUID(request_id)), _json(snapshot), prompt, target["kind"],

@@ -1,10 +1,10 @@
 # Codex Console
 
-Work is the task incubator: keep ideas private, refine them, arrange parent and child tasks, set priority, then explicitly confirm publication. Saving or moving an idea between stages never sends it to a model or chat.
+The phone opens on a conversation with an input, Send, Only save, a response tier selector, and Ideas. Save unfinished thoughts without a task form, open them in a separate detail page, and prepare an execution draft when ready. Clearing a discussion gives it a new identity while preserving saved ideas and attachments. Saving, editing, classifying, or archiving never sends a message or executes work.
 
-The paired phone Work page edits the same computer database and refreshes in the foreground. The public home-screen app keeps a separate offline collection on that phone; use “Connect computer workspace” for shared work, or export an idea and explicitly import it into the computer workspace. Existing music and phone data remain in place when the app updates.
+The paired phone page uses the existing computer database. The public home-screen app keeps drafts, ideas, and images in that phone's existing offline store; its local saves are labelled accordingly. Public phone content is not automatically transferred to the computer. Music, Transfer, documents, and the original work tools remain available from More.
 
-The local publication outbox can be consumed by an authorized Codex thread heartbeat using App Tools. It supports new local Codex chats and selected existing Codex or ChatGPT chats. Creating a normal new ChatGPT chat is not currently supported. This channel needs no model API key but still uses the signed-in account's plan allowance. The outbox does not directly control the App or claim a queued message has been sent. Results are linked to the unique publication marker and the matching completed turn; uncertain delivery needs review and is never silently resent.
+Ordinary Chat uses the signed-in ChatGPT account rather than a model API key. The current release retains an explicit-send outbox and exact answer attribution, but the permanent event relay is not connected. The old scheduled dispatch heartbeat has been removed. The tiers 极速 / 高 / Pro preserve the selected request (initially 高); actual tier switching remains unverified and is displayed as such. Queued is not delivered, and uncertain delivery is never silently resent. Handing an execution draft to Codex opens the existing Work review with the exact draft, workspace, and scope; it does not send automatically.
 
 A Windows control console for music, wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.
 

@@ -6,6 +6,9 @@ from workflow_service import WorkflowError
 def workflow_get(service, action, query, *, prefix="/api/workflow"):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    mobile = {"mobile/dialogue": "mobile_dialogue_get", "mobile/ideas": "mobile_ideas", "mobile/idea": "mobile_idea"}
+    if action in mobile:
+        return getattr(service, mobile[action])(query, prefix=prefix)
     if action == "config":
         if query:
             raise WorkflowError("工作配置请求地址无效。")
@@ -46,6 +49,10 @@ def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=Fals
                   "incubator/publish": "incubator_publish",
                   "incubator/refinement/pause": "incubator_refinement_pause",
                   "conversations/request": "conversations_request"}
+    operations.update({"mobile/dialogue/open": "mobile_dialogue_open", "mobile/dialogue/draft": "mobile_dialogue_draft",
+        "mobile/dialogue/clear": "mobile_dialogue_clear", "mobile/dialogue/send": "mobile_dialogue_send",
+        "mobile/dialogue/save": "mobile_dialogue_save", "mobile/dialogue/remember": "mobile_dialogue_remember",
+        "mobile/idea/update": "mobile_idea_update", "mobile/idea/archive": "mobile_idea_archive"})
     if action in operations:
         operation = getattr(service, operations[action], None)
         if not callable(operation):

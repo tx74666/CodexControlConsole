@@ -19,7 +19,7 @@ const inbox = () => ({ entries: [
 ] });
 const dashboard = () => ({ version: "1.0.14", plan: plan(), device: { currentMemory: { status: "available", usedPercent: 91, availableBytes: 1024 ** 3, totalBytes: 16 * 1024 ** 3, readAt: "2026-10-01T11:00:00+08:00" }, model: "Dell fixture", cpuModel: "CPU", gpuModels: ["GPU"], sampledAt: "2026-09-27T11:00:00+08:00", installedMemoryBytes: 16 * 1024 ** 3 }, documents: { inbox: inbox(), guide: { items: [{ title: "阅读重点", path: "human.md", highlights: ["重点"] }] }, references: { items: [{ id: "nodes", defaultLanguage: "zh-CN", variants: [{ language: "zh-CN", label: "中文", title: "节点参考", path: "nodes.zh.md", available: true }, { language: "en", label: "English", title: "Nodes", path: "nodes.en.md", available: true }] }] } } });
 const playlist = () => ({ playback: "phone", tracks: [{ name: "<script>One</script>", path: "local/one.mp3", type: "mp3", size: 100 }, { name: "Two", path: "album/two.m4a", type: "m4a", size: 200 }, { name: "三首", path: "album/three.mp3", type: "mp3", lyrics: true, lyricsLanguage: "zh", lyricsLanguages: [{ code: "zh", label: "Chinese" }, { code: "en", label: "English" }] }], truncated: false });
-function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.html", { loadedVersion = "1.0.14", session = new Map() } = {}) {
+function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.html?workView=ideas", { loadedVersion = "1.0.14", session = new Map() } = {}) {
   class Element {
     constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.style = { setProperty(key, value) { this[key] = value; } }; }
     append(...items) { for (const item of items) { if (item.parentElement) item.parentElement.children = item.parentElement.children.filter(value => value !== item); this.children.push(item); item.parentElement = this; } }
@@ -47,11 +47,11 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
   audio.load = () => { audio.loadCalls++; audio.duration = NaN; audio.currentTime = 0; mediaEvents.push("load"); };
   audio.play = () => { audio.playCalls++; mediaEvents.push("play"); if (audio.playError) return Promise.reject(audio.playError); audio.paused = false; return Promise.resolve(); };
   const tabs = ["work", "transfer", "tasks", "music", "device", "documents"].map(tab => { const button = new Element("button"); button.dataset.tab = tab; return button; });
-  const workTabs = ["ideas", "conversations", "workflow"].map(view => { const button = new Element("button"); button.dataset.workView = view; return button; });
+  const workTabs = ["dialogue", "ideas", "conversations", "workflow"].map(view => { const button = new Element("button"); button.dataset.workView = view; return button; });
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const tierTabs = ["", "first", "second", "third"].map(tier => { const button = new Element("button"); button.dataset.musicTier = tier; return button; });
   const documentEvents = new Map(), windowEvents = new Map();
-  const scripts = ["mobile.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => ({ src: `http://192.0.2.1:8899/${name}?v=console-app-scripts-${loadedVersion}-20261004` })), frames = [], otherMedia = [];
+  const scripts = ["mobile.js", "mobile-dialogue.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => ({ src: `http://192.0.2.1:8899/${name}?v=console-app-scripts-${loadedVersion}-20261004` })), frames = [], otherMedia = [];
   const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "script[src]" ? scripts : selector === "iframe" ? frames : selector === "audio,video" ? [audio, ...otherMedia] : selector === "[data-tab]" ? tabs : selector === "#workPanel [data-work-view]" ? workTabs : selector === "[data-inbox]" ? listTabs : selector === "button[data-music-tier]" ? tierTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
   const replacedUrls = [];
   const history = { state: null, replaceState(value, unused, url) { this.state = value; replacedUrls.push(url); runtime.window.location.href = url; }, pushState(value) { this.state = value; }, back() { this.state = null; } };
@@ -69,9 +69,13 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
 
-await test("Work offers an explicit picture dispatch entry and starts with ideas", () => {
-  assert.deepEqual([...html.matchAll(/data-work-view="([^"]+)"/g)].map(match => match[1]), ["ideas", "conversations", "workflow"]); assert.match(html, /data-work-view="workflow"[^>]*>独立工作记录/); assert.match(html, /<summary>其它入口<\/summary>/); assert.match(html, /id="phoneWorkflowDetails"[^>]*hidden/); assert.equal([...html.matchAll(/id="phoneWorkflowPanel"/g)].length, 1);
+await test("Default dialogue preserves an explicit legacy picture and dispatch workspace", () => {
+  assert.deepEqual([...html.matchAll(/data-work-view="([^"]+)"/g)].map(match => match[1]), ["dialogue", "ideas", "conversations", "workflow"]); assert.match(html, /data-work-view="workflow"[^>]*>独立工作记录/); assert.match(html, /<summary>其它入口<\/summary>/); assert.match(html, /id="phoneWorkflowDetails"[^>]*hidden/); assert.equal([...html.matchAll(/id="phoneWorkflowPanel"/g)].length, 1);
   const h = harness(); h.ready(); h.api.selectTab("work"); assert.equal(h.get("phoneWorkflowDetails").hidden, true); assert.equal(h.panels.incubator.active, true); assert.equal(h.panels.workflow.active, false); assert.match(h.get("phoneWorkNotice").textContent, /点确认发布/);
+});
+await test("a plain mobile launch starts in dialogue without opening legacy task forms", () => {
+  const h = harness(source, "http://192.0.2.1:8899/mobile.html"); h.ready(); h.api.selectTab("work");
+  assert.equal(h.document.body.dataset.workView, "dialogue"); assert.equal(h.get("phoneDialoguePanel").hidden, false); assert.equal(h.get("phoneWorkIdeas").hidden, true); assert.equal(h.get("phoneWorkflowDetails").hidden, true); assert.equal(h.panels.incubator.active, false); assert.equal(h.panels.workflow.active, false); assert.equal(h.calls.length, 0);
 });
 await test("picture dispatch selection opens the existing panel with its own explanation", () => {
   const h = harness(); h.ready(); h.workTabs.find(tab => tab.dataset.workView === "workflow").listeners.get("click")(); assert.equal(h.get("phoneWorkflowDetails").hidden, false); assert.equal(h.get("phoneWorkflowDetails").open, true); assert.equal(h.get("phoneWorkIdeas").hidden, true); assert.equal(h.get("phoneConversationsPanel").hidden, true); assert.equal(h.panels.workflow.active, true); assert.equal(h.panels.incubator.active, false); assert.equal(h.panels.conversations.active, false); assert.match(h.get("phoneWorkNotice").textContent, /看图、评价和派工由电脑 Console 处理/); assert.doesNotMatch(h.get("phoneWorkNotice").textContent, /发布|聊天/); assert.equal(h.calls.length, 0);
@@ -83,7 +87,7 @@ await test("explicit phone workflow URL waits for pairing before activating", ()
   const h = harness(source, "http://192.0.2.1:8899/mobile.html?tab=work&workView=workflow"); assert.equal(h.get("phoneWorkflowDetails").hidden, false); assert.equal(h.get("phoneWorkflowDetails").open, true); assert.equal(h.panels.workflow.active, false); h.ready(); h.api.selectTab("work"); assert.equal(h.panels.workflow.active, true); assert.equal(h.workTabs.find(tab => tab.dataset.workView === "workflow").attributes["aria-pressed"], "true"); assert.equal(h.calls.length, 0);
 });
 await test("unknown work view falls back safely without persisting a new navigation preference", () => {
-  const h = harness(source, "http://192.0.2.1:8899/mobile.html?tab=work&workView=%3Cscript%3E"); h.ready(); h.api.selectTab("work"); assert.equal(h.panels.incubator.active, true); assert.equal(h.panels.workflow.active, false); assert.equal(h.get("phoneWorkflowDetails").hidden, true); assert.equal(h.saved.size, 0);
+  const h = harness(source, "http://192.0.2.1:8899/mobile.html?tab=work&workView=%3Cscript%3E"); h.ready(); h.api.selectTab("work"); assert.equal(h.document.body.dataset.workView, "dialogue"); assert.equal(h.panels.incubator.active, false); assert.equal(h.panels.workflow.active, false); assert.equal(h.get("phoneWorkflowDetails").hidden, true); assert.equal(h.saved.size, 0);
 });
 await test("pair revocation and hidden phone document prevent workflow activation", () => {
   const h = harness(); h.ready(); h.api.selectWorkView("workflow"); h.document.hidden = true; h.api.syncWorkPanelActivity(); assert.equal(h.panels.workflow.active, false); h.document.hidden = false; h.api.syncWorkPanelActivity(); assert.equal(h.panels.workflow.active, true); h.api.showPair("配对撤销"); assert.equal(h.panels.workflow.active, false); assert.equal(h.panels.workflow.clears, 1); h.get("phoneWorkflowDetails").listeners.get("toggle")(); assert.equal(h.panels.workflow.active, false); h.ready(); h.api.selectTab("work"); assert.equal(h.panels.workflow.active, true);
@@ -430,7 +434,7 @@ await test("invalid task data never marks working transfer disconnected", async 
   assert.equal(h.get("connectionLabel").textContent, "已连接"); assert.equal(h.get("connectionLabel").dataset.connected, "true");
   assert.match(h.get("planNotice").textContent, /其他功能仍可使用/); assert.equal(h.api.state.paired, true); assert.equal(h.get("transferPanel").hidden, false);
 });
-const newShell = (version = "1.0.15") => ["mobile.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => `<script src="/${name}?v=console-app-scripts-${version}-20261004"></script>`).join("\n");
+const newShell = (version = "1.0.15") => ["mobile.js", "mobile-dialogue.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => `<script src="/${name}?v=console-app-scripts-${version}-20261004"></script>`).join("\n");
 await test("loaded UI baseline comes from all core cache tags and never from the first newer runtime badge", async () => {
   const h = harness(); h.ready(); h.api.renderVersion("1.0.15");
   assert.equal(h.api.uiUpdate.loaded, "1.0.14"); assert.match(h.get("versionLabel").textContent, /电脑版 v1.0.15.*界面 v1.0.14/);
