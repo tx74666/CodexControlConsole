@@ -30,24 +30,33 @@
     onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期，请重新连接电脑。")
   }) || null;
-  let workView = "ideas";
+  const initialWorkView = new URL(window.location.href).searchParams.get("workView");
+  let workView = ["ideas", "conversations", "workflow"].includes(initialWorkView) ? initialWorkView : "ideas";
   const conversationsPanel = window.CodexConversationsPanel?.create(el("phoneConversationsPanel"), {
     phone: true, onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期，请重新连接电脑。"),
     onTarget: async thread => { selectWorkView("ideas"); await incubatorPanel?.useTarget(thread); }
   }) || null;
   function selectWorkView(value) {
-    workView = value === "conversations" ? "conversations" : "ideas";
+    workView = ["ideas", "conversations", "workflow"].includes(value) ? value : "ideas";
     if (el("phoneWorkIdeas")) el("phoneWorkIdeas").hidden = workView !== "ideas";
     if (el("phoneConversationsPanel")) el("phoneConversationsPanel").hidden = workView !== "conversations";
+    const workflow = el("phoneWorkflowDetails"); if (workflow) { workflow.hidden = workView !== "workflow"; if (workView === "workflow") workflow.open = true; }
+    if (el("phoneWorkNotice")) el("phoneWorkNotice").textContent = ({ ideas: "电脑工作区 · 保存后电脑和已配对手机会同步。想法保存在这里，点确认发布才会交给聊天。", conversations: "查看电脑抓取的真实对话快取；更新和更多历史只读取内容，不发送消息。", workflow: "看图、评价和派工由电脑 Console 处理；已接收任务可在手机离开后继续。" })[workView];
     for (const button of document.querySelectorAll("#workPanel [data-work-view]")) button.setAttribute("aria-pressed", String(button.dataset.workView === workView));
-    incubatorPanel?.setActive(state.tab === "work" && state.paired && workView === "ideas");
-    conversationsPanel?.setActive(state.tab === "work" && state.paired && workView === "conversations");
+    syncWorkPanelActivity();
+  }
+  function syncWorkPanelActivity() {
+    const active = state.tab === "work" && state.paired && !document.hidden;
+    incubatorPanel?.setActive(active && workView === "ideas");
+    conversationsPanel?.setActive(active && workView === "conversations");
+    workflowPanel?.setActive(active && workView === "workflow" && Boolean(el("phoneWorkflowDetails")?.open));
   }
   for (const button of document.querySelectorAll("#workPanel [data-work-view]")) button.addEventListener("click", () => selectWorkView(button.dataset.workView));
-  el("phoneWorkflowDetails")?.addEventListener("toggle", () => workflowPanel?.setActive(state.tab === "work" && state.paired && Boolean(el("phoneWorkflowDetails").open)));
+  el("phoneWorkflowDetails")?.addEventListener("toggle", syncWorkPanelActivity);
   const initialTab = new URL(window.location.href).searchParams.get("tab") || new URL(window.location.href).searchParams.get("view");
   if (["work", "transfer"].includes(initialTab)) state.tab = initialTab;
+  selectWorkView(workView);
   const node = (tag, text = "", className = "") => {
     const result = document.createElement(tag);
     if (text) result.textContent = String(text);
@@ -217,9 +226,7 @@
     el("tasksPanel").hidden = value !== "work";
     el("devicePanel").hidden = value !== "documents";
     transferPanel?.setActive(value === "transfer" && state.paired);
-    incubatorPanel?.setActive(value === "work" && state.paired && workView === "ideas");
-    conversationsPanel?.setActive(value === "work" && state.paired && workView === "conversations");
-    workflowPanel?.setActive(value === "work" && state.paired && Boolean(el("phoneWorkflowDetails").open));
+    syncWorkPanelActivity();
     for (const button of document.querySelectorAll("[data-tab]")) button.setAttribute("aria-pressed", String(button.dataset.tab === value));
     if (value === "music" && state.paired && !state.music.loaded) void loadMusic();
   }
@@ -753,9 +760,11 @@
   document.addEventListener("visibilitychange", async () => {
     window.clearTimeout(livePlan.timer); livePlan.timer = null;
     if (document.hidden && livePlan.controller) { state.generation += 1; livePlan.controller.abort(); livePlan.controller = null; livePlan.busy = false; }
+    syncWorkPanelActivity();
     if (document.hidden || state.busy || !state.paired) return;
     try { const result = await api("status"); if (!result.paired) showPair("配对已过期，请重新连接电脑。"); }
     catch (error) { failure(error); }
+    syncWorkPanelActivity();
     if (state.paired) void pollLivePlan();
   });
   try { const font = Number(localStorage.getItem("codexPhone.readerFont.v1")); if (font >= 14 && font <= 26) state.font = font; } catch { /* Presentation defaults work without storage. */ }

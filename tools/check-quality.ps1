@@ -83,6 +83,7 @@ $PythonSources = @(
   "phone_connection_qr.py",
   "transfer_store.py",
   "workflow_service.py",
+  "workflow_process.py",
   "workflow_http.py",
   "workflow_models.py",
   "phone_offline.py",
@@ -126,6 +127,7 @@ $PythonChecks = @(
   "tools/check-conversations.py",
   "tools/check-thread-cache-import.py",
   "tools/check-workflow.py",
+  "tools/check-workflow-process.py",
   "tools/check-workflow-http.py",
   "tools/check-workflow-desktop.py",
   "tools/check-workflow-models.py",
@@ -162,6 +164,7 @@ try {
     "mobile.css",
     "mobile.webmanifest",
     "tools/check-mobile-ui.mjs",
+    "tools/check-work-navigation.mjs",
     "tools/check-document-reader.mjs",
     "tools/check-document-reader-page.mjs",
     "tools/check-document-images.mjs",
@@ -205,6 +208,7 @@ try {
   Invoke-QualityStep "Offline phone UI" { & $Node tools/check-phone-offline-ui.mjs }
   Invoke-QualityStep "Mobile JavaScript syntax" { & $Node --check mobile.js }
   Invoke-QualityStep "Mobile companion UI" { & $Node tools/check-mobile-ui.mjs }
+  Invoke-QualityStep "Work view navigation and activation" { & $Node tools/check-work-navigation.mjs }
   Invoke-QualityStep "Transfer JavaScript syntax" { & $Node --check transfer-panel.js }
   Invoke-QualityStep "Task incubator JavaScript syntax" { & $Node --check incubator-panel.js }
   Invoke-QualityStep "Conversation browser syntax" { & $Node --check conversations-panel.js }

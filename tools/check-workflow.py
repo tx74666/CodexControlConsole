@@ -47,6 +47,7 @@ class Models:
         self.inputs = []
         self.ready = True
         self.script = SCRIPT
+        self.transcription_metadata = None
 
     def config(self):
         return {"ready": self.ready, "selected": "fake", "providers": [{"id": "fake", "transcriptionReady": True}]}
@@ -68,7 +69,15 @@ class Models:
 
     def transcribe(self, path, **kwargs):
         self.inputs.append({"path": path, **kwargs})
-        return {"text": "Recorded review, not a dispatch", "durationValidated": True}
+        metadata = self.transcription_metadata
+        if metadata is None:
+            if kwargs.get("mime_type") == "audio/wav":
+                with wave.open(str(path), "rb") as source:
+                    seconds = source.getnframes() / source.getframerate()
+                metadata = {"durationValidated": True, "durationSeconds": seconds}
+            else:
+                metadata = {"durationValidated": False, "durationSeconds": kwargs.get("duration")}
+        return {"text": "Recorded review, not a dispatch", **metadata}
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -174,6 +183,72 @@ class WorkflowChecks(unittest.TestCase):
         self.assertTrue(any(item["role"] == "assistant" for item in history))
         self.assertFalse(list(self.service.jobs_dir.iterdir()))
         self.assertIsNone(self.service.detail(self.record)["record"]["primaryAttachmentId"])
+
+    def test_default_image_context_is_frozen_before_worker_execution_and_request_replay(self):
+        first = self.upload()["uploadedAttachmentIds"][0]
+        payload = request(recordId=self.record, text="Review accepted first image")
+        accepted = self.service.discuss(payload)["job"]
+        second = self.upload(name="later.png")["uploadedAttachmentIds"][0]
+        self.assertNotEqual(first, second)
+        self.assertEqual(self.service.discuss(payload)["job"]["id"], accepted["id"])
+        with self.service._db() as db:
+            stored = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (accepted["id"],)).fetchone()["payload"])
+        self.assertEqual(stored["context"]["attachmentIds"], [first])
+        self.service.start()
+        self.assertEqual(self.wait(accepted)["status"], "succeeded")
+        self.assertEqual([item["path"].stem for item in self.models.inputs[-1]["images"]], [first])
+        self.assertEqual(self.service.detail(self.record)["record"]["primaryAttachmentId"], second)
+
+    def test_retry_after_main_image_change_and_service_restart_keeps_original_image(self):
+        first = self.upload()["uploadedAttachmentIds"][0]
+        self.models.ready = False
+        self.service.start()
+        accepted = self.service.discuss(request(recordId=self.record, text="Review original image"))["job"]
+        self.assertEqual(self.wait(accepted)["status"], "waiting")
+        second = self.upload(name="replacement.png")["uploadedAttachmentIds"][0]
+        self.service.shutdown()
+        self.models.ready = True
+        self.service = WorkflowService(self.root / "data", self.models, projects=[])
+        retried = self.service.retry(request(jobId=accepted["id"]))["job"]
+        self.service.start()
+        done = self.wait(retried)
+        self.assertEqual((done["status"], done["attempt"], done["parentJobId"]), ("succeeded", 2, accepted["id"]))
+        self.assertEqual([item["path"].stem for item in self.models.inputs[-1]["images"]], [first])
+        self.assertEqual(self.service.detail(self.record)["record"]["primaryAttachmentId"], second)
+
+    def test_empty_and_no_initial_image_context_do_not_acquire_later_uploads(self):
+        absent = self.service.discuss(request(recordId=self.record, text="Text only before upload"))["job"]
+        self.upload()
+        empty = self.service.discuss(request(recordId=self.record, text="Explicitly no image", context={"attachmentIds": []}))["job"]
+        self.upload(name="later.png")
+        self.service.start()
+        for accepted in (absent, empty):
+            self.assertEqual(self.wait(accepted)["status"], "succeeded")
+        self.assertEqual([item["images"] for item in self.models.inputs], [[], []])
+
+    def test_image_context_rejects_cross_record_ids_for_default_selection_and_retry(self):
+        first = self.upload()["uploadedAttachmentIds"][0]
+        self.models.ready = False
+        self.service.start()
+        accepted = self.service.discuss(request(recordId=self.record, text="Original selection"))["job"]
+        self.assertEqual(self.wait(accepted)["status"], "waiting")
+        other = self.service.create(request(projectId="console", title="Other record"))["record"]["id"]
+        foreign = self.upload(fields=request(recordId=other))["uploadedAttachmentIds"][0]
+        for context in ({"attachmentIds": [foreign]}, None):
+            with self.service._db() as db:
+                db.execute("UPDATE records SET primary_attachment_id=? WHERE id=?", (foreign, self.record))
+            body = request(recordId=self.record, text="Reject another record image")
+            if context is not None:
+                body["context"] = context
+            with self.assertRaises(WorkflowError) as rejected:
+                self.service.discuss(body)
+            self.assertEqual(rejected.exception.status, 403)
+        with self.service._db() as db:
+            db.execute("UPDATE attachments SET record_id=? WHERE id=?", (other, first))
+        with self.assertRaises(WorkflowError) as rejected:
+            self.service.retry(request(jobId=accepted["id"]))
+        self.assertEqual(rejected.exception.status, 403)
+        self.assertEqual(len(self.service.detail(self.record)["jobs"]), 1)
 
     def test_jobs_survive_disconnected_client_and_interrupted_jobs_never_replay(self):
         queued = self.service.submit(request(recordId=self.record, text="Offline accepted command", action="command", commandId="preview"))["job"]
@@ -343,8 +418,37 @@ class WorkflowChecks(unittest.TestCase):
         done = self.wait(job)
         self.assertEqual(done["status"], "succeeded", done)
         self.assertIn("Recorded review", done["result"]["text"])
+        self.assertIs(done["result"]["durationValidated"], True)
+        self.assertAlmostEqual(done["result"]["durationSeconds"], 100 / 8000)
         self.assertEqual(self.service.detail(self.record)["messages"][-1]["role"], "transcript")
         self.assertFalse(list(self.service.jobs_dir.iterdir()))
+        restarted = WorkflowService(self.root / "data", recover_jobs=False)
+        stored = next(item for item in restarted.detail(self.record)["jobs"] if item["id"] == job["id"])
+        self.assertEqual(stored["result"], done["result"])
+
+    def test_unvalidated_compressed_audio_duration_is_preserved_without_claiming_validation(self):
+        self.service.start()
+        for duration in (None, "2.5"):
+            with self.subTest(duration=duration):
+                fields = request(recordId=self.record, **({"duration": duration} if duration is not None else {}))
+                uploaded = self.upload(b"\x00\x00\x00\x18ftypM4A " + b"\0" * 12, "voice.m4a", "audio/mp4", fields=fields)
+                done = self.wait(self.service.transcribe(request(recordId=self.record, attachmentId=uploaded["uploadedAttachmentIds"][0]))["job"])
+                self.assertEqual(done["status"], "succeeded", done)
+                self.assertIs(done["result"]["durationValidated"], False)
+                self.assertEqual(done["result"]["durationSeconds"], None if duration is None else 2.5)
+
+    def test_invalid_transcription_duration_metadata_never_persists_a_validation_claim(self):
+        uploaded = self.upload(b"\x00\x00\x00\x18ftypM4A " + b"\0" * 12, "voice.m4a", "audio/mp4")
+        self.service.start()
+        for metadata in ({"durationValidated": True, "durationSeconds": None},
+                         {"durationValidated": False, "durationSeconds": float("nan")},
+                         {"durationValidated": "true", "durationSeconds": 2}):
+            with self.subTest(metadata=metadata):
+                self.models.transcription_metadata = metadata
+                done = self.wait(self.service.transcribe(request(recordId=self.record, attachmentId=uploaded["uploadedAttachmentIds"][0]))["job"])
+                self.assertEqual(done["status"], "failed", done)
+                self.assertEqual(done["result"], {})
+        self.assertFalse(any(message["role"] == "transcript" for message in self.service.detail(self.record)["messages"]))
 
     def test_capture_and_result_import_work_without_model_configuration(self):
         self.service.models = None

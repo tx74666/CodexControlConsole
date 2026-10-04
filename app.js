@@ -45,7 +45,7 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.32";
+const consoleUiVersion = "1.0.33";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -2366,7 +2366,7 @@ let desktopTransferPanel = null;
 let desktopWorkflowPanel = null;
 let desktopIncubatorPanel = null;
 let desktopConversationsPanel = null;
-let activeWorkView = "ideas";
+let activeWorkView = normalizeConsoleWorkView(new URLSearchParams(window.location.search).get("workView"));
 const documentLibrary = {
   loaded: false, busy: false, root: "", exists: false, path: "", file: "",
   entries: [], sample: { status: "idle" }, sampleTimer: 0, sampleErrors: 0,
@@ -2689,6 +2689,7 @@ function initialModuleId() {
   const pageName = currentPageName();
   const unavailable = new Set([...allArchivedModuleIds(), ...deletedModuleIds()]);
   if (pageName === "index.html") {
+    if (requestedConsoleView === "work" && activeWorkView === "workflow" && !unavailable.has("workspace")) return "workspace";
     const saved = lastModuleId();
     if (saved && !unavailable.has(saved)) {
       return saved;
@@ -3086,11 +3087,16 @@ function appendDocumentImage(parent, label, target) {
   image.src = url.href; anchor.appendChild(image); wrapper.appendChild(anchor); parent.appendChild(wrapper);
 }
 
+function normalizeConsoleWorkView(value) {
+  return ["ideas", "conversations", "workflow"].includes(value) ? value : "ideas";
+}
+
 function setConsoleWorkView(value) {
-  activeWorkView = value === "conversations" ? "conversations" : "ideas";
-  const ideas = document.getElementById("desktopWorkIdeas"), conversations = document.getElementById("desktopConversationsPanel");
+  activeWorkView = normalizeConsoleWorkView(value);
+  const ideas = document.getElementById("desktopWorkIdeas"), conversations = document.getElementById("desktopConversationsPanel"), workflow = document.getElementById("desktopWorkflowDetails");
   if (ideas) ideas.hidden = activeWorkView !== "ideas";
   if (conversations) conversations.hidden = activeWorkView !== "conversations";
+  if (workflow) { workflow.hidden = activeWorkView !== "workflow"; if (activeWorkView === "workflow") workflow.open = true; }
   for (const button of document.querySelectorAll("#consoleWorkView [data-work-view]")) button.setAttribute("aria-pressed", String(button.dataset.workView === activeWorkView));
   syncConsoleTransferActivity();
 }
@@ -3099,7 +3105,7 @@ function syncConsoleTransferActivity() {
   desktopTransferPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "transfer");
   desktopIncubatorPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && activeWorkView === "ideas");
   desktopConversationsPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && activeWorkView === "conversations");
-  desktopWorkflowPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && Boolean(document.getElementById("desktopWorkflowDetails")?.open));
+  desktopWorkflowPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && activeWorkView === "workflow" && Boolean(document.getElementById("desktopWorkflowDetails")?.open));
 }
 
 function bindConsoleTransfer() {
@@ -3115,6 +3121,7 @@ function bindConsoleTransfer() {
   desktopTransferPanel = window.CodexTransferPanel?.create(document.getElementById("desktopTransferPanel"), {
     onConnection: () => document.getElementById("phoneCompanionOpen")?.click()
   }) || null;
+  setConsoleWorkView(activeWorkView);
 }
 
 function appendDocumentInline(parent, source, depth = 0) {

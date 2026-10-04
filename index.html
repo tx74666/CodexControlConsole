@@ -50,11 +50,11 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=console-conversations-1.0.32-20261004">
+  <link rel="stylesheet" href="styles.css?v=console-workflow-1.0.33-20261004">
   <link rel="stylesheet" href="transfer-panel.css?v=console-transfer-1.0.30-phone-message-20261004">
-  <link rel="stylesheet" href="workflow-panel.css?v=console-work-1.0.29-ai-settings">
-  <link rel="stylesheet" href="conversations-panel.css?v=console-conversations-1.0.32-20261004">
-  <link rel="stylesheet" href="incubator-panel.css?v=console-conversations-1.0.32-20261004">
+  <link rel="stylesheet" href="workflow-panel.css?v=console-workflow-1.0.33-20261004">
+  <link rel="stylesheet" href="conversations-panel.css?v=console-workflow-1.0.33-20261004">
+  <link rel="stylesheet" href="incubator-panel.css?v=console-workflow-1.0.33-20261004">
 </head>
 <body>
   <main class="app-shell">
@@ -66,7 +66,7 @@
         </div>
       </div>
       <div class="top-actions" aria-label="Console status">
-        <span id="consoleUiVersionBadge" class="console-ui-version" aria-label="当前界面版本" data-i18n-aria="consoleUiVersionLabel">v1.0.32</span>
+        <span id="consoleUiVersionBadge" class="console-ui-version" aria-label="当前界面版本" data-i18n-aria="consoleUiVersionLabel">v1.0.33</span>
         <button id="consolePhoneMessages" class="status-button console-phone-messages" type="button" data-i18n="consolePhoneMessages" data-i18n-aria="consolePhoneMessagesHint">手机传话</button>
         <button id="consoleUpdateTop" class="status-button console-update-top" type="button" hidden></button>
         <button id="languageToggle" class="status-button" type="button">EN</button>
@@ -157,7 +157,7 @@
 
       <div class="console-view-stage">
         <section id="consoleWorkView" class="console-subview panel" data-console-view="work" role="tabpanel" aria-labelledby="consoleWorkTab">
-          <nav class="work-view-nav" aria-label="Work 内容"><button type="button" data-work-view="ideas" aria-pressed="true">想法与任务</button><button type="button" data-work-view="conversations" aria-pressed="false">Projects / Recents · 会话</button></nav>
+          <nav class="work-view-nav" aria-label="Work 内容"><button type="button" data-work-view="ideas" aria-pressed="true">想法与任务</button><button type="button" data-work-view="conversations" aria-pressed="false">Projects / Recents · 会话</button><button type="button" data-work-view="workflow" aria-pressed="false">看图与派工</button></nav>
           <div id="desktopWorkIdeas"><div id="desktopIncubatorPanel"></div></div>
           <div id="desktopConversationsPanel" hidden></div>
           <details class="work-secondary"><summary>执行清单</summary>
@@ -181,7 +181,7 @@
         <div id="workspaceTodoList" class="workspace-todo-list"></div>
       </section>
           </details>
-          <details id="desktopWorkflowDetails" class="work-secondary"><summary>工作记录与电脑执行</summary><div id="desktopWorkflowPanel"></div></details>
+          <details id="desktopWorkflowDetails" class="work-secondary" hidden><summary>工作记录与电脑执行</summary><div id="desktopWorkflowPanel"></div></details>
         </section>
         <section id="consoleTransferView" class="console-subview panel" data-console-view="transfer" role="tabpanel" aria-labelledby="consoleTransferTab" hidden>
           <div id="desktopTransferPanel"></div>
@@ -1364,10 +1364,10 @@
 <script src="/api/release-defaults.js"></script>
 <script src="/api/workspace-plan.js"></script>
 <script src="transfer-panel.js?v=console-transfer-1.0.30-phone-message-20261004"></script>
-<script src="workflow-panel.js?v=console-work-1.0.29-ai-settings"></script>
-<script src="conversations-panel.js?v=console-conversations-1.0.32-20261004"></script>
-<script src="incubator-panel.js?v=console-conversations-1.0.32-20261004"></script>
-  <script src="app.js?v=console-conversations-1.0.32-20261004"></script>
+<script src="workflow-panel.js?v=console-workflow-1.0.33-20261004"></script>
+<script src="conversations-panel.js?v=console-workflow-1.0.33-20261004"></script>
+<script src="incubator-panel.js?v=console-workflow-1.0.33-20261004"></script>
+  <script src="app.js?v=console-workflow-1.0.33-20261004"></script>
 <script src="phone-pairing.js?v=console-connect-1.0.27"></script>
 <script src="phone-offline-export.js?v=console-connect-1.0.27"></script>
 </body>

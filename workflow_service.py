@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -18,6 +19,7 @@ from urllib.parse import parse_qs, urlencode
 import uuid
 
 from transfer_store import IncomingFile, TransferError, _image, _filename, _safe_child, MAX_FILE_BYTES
+from workflow_process import WorkflowProcess
 
 MAX_TEXT = 20000
 MAX_UPLOAD = 24 * 1024 * 1024
@@ -1249,6 +1251,11 @@ class WorkflowService:
                 payload["projectId"] = project["id"]
                 payload["text"] = _text(body.get("text", ""))
                 payload["context"] = self._context(db, record["id"], body.get("context", json.loads(record["context"])))
+                if "attachmentIds" not in payload["context"]:
+                    # Save the accepted image selection, including an empty selection.
+                    # A later upload or retry must not retarget this task to a new image.
+                    payload["context"]["attachmentIds"] = [record["primary_attachment_id"]] if record["primary_attachment_id"] else []
+                    payload["context"] = self._context(db, record["id"], payload["context"])
                 if kind == "execute":
                     action = body.get("action", "auto")
                     if not isinstance(action, str) or action not in ACTIONS:
@@ -1304,6 +1311,7 @@ class WorkflowService:
                 parent = db.execute("SELECT * FROM jobs WHERE id=?", (_id(body["jobId"]),)).fetchone()
                 if parent is None or parent["status"] not in {"failed", "waiting", "interrupted"}:
                     raise WorkflowError("仅失败、等待配置或中断的任务可以重试。", 409)
+                self._context(db, parent["record_id"], json.loads(parent["payload"]).get("context", {}))
                 job_id, now = uuid.uuid4().hex, _now()
                 db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, parent["record_id"], parent["kind"], body["requestId"], parent["payload"], "queued", parent["attempt"] + 1, parent["id"], now, now, "", "", "{}"))
                 self._receipt(db, "retry", body, {"jobId": job_id})
@@ -1477,8 +1485,8 @@ class WorkflowService:
         self._stop.set()
         self._wake.set()
         process = self._process
-        if process is not None and process.poll() is None:
-            process.terminate()  # Only the subprocess owned by this worker.
+        if process is not None:
+            process.terminate()  # This task's private job; no other application's processes.
         thread = self._thread
         if thread and thread is not threading.current_thread():
             thread.join(timeout=max(0, min(float(wait), 30)))
@@ -1534,8 +1542,9 @@ class WorkflowService:
     def _model_input(self, row, payload, project, for_model=True):
         with self._db() as db:
             record = self._record(db, row["record_id"])
-            context = payload.get("context", {})
-            ids = context.get("attachmentIds") or ([record["primary_attachment_id"]] if record["primary_attachment_id"] else [])
+            context = self._context(db, record["id"], payload.get("context", {}))
+            # Legacy tasks without a saved selection cannot safely infer their old image.
+            ids = context.get("attachmentIds", [])
             images = []
             for identifier in ids:
                 attachment = db.execute("SELECT * FROM attachments WHERE id=? AND record_id=?", (identifier, record["id"])).fetchone()
@@ -1600,7 +1609,12 @@ class WorkflowService:
                 if item is None:
                     raise WorkflowError("录音不存在。", 404)
             result = self.models.transcribe(_safe_child(self.attachments_dir, item["filename"]), name=item["name"], mime_type=item["mime_type"], duration=item["duration"])
-            return {"text": _text(result.get("text", "")), "attachmentIds": []}, "", []
+            validated, seconds = result.get("durationValidated", False), result.get("durationSeconds")
+            if not isinstance(validated, bool) or (seconds is not None and
+                    (isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or not 0 < seconds <= 180)) or (validated and seconds is None):
+                raise WorkflowError("转写服务返回的时长校验信息无效。", 502)
+            return {"text": _text(result.get("text", "")), "attachmentIds": [],
+                    "durationValidated": validated, "durationSeconds": seconds}, "", []
         action = payload.get("action", "auto")
         needs_model = row["kind"] == "discuss" or action in {"auto", "generated_script"}
         if needs_model:
@@ -1756,14 +1770,15 @@ class WorkflowService:
         for name in ("JOB_DIR", "OUTPUT_DIR", "RESULT_MANIFEST", "INSTRUCTION", "INPUT_FILE"):
             env["CODEX_WORKFLOW_" + name] = env["CONSOLE_WORKFLOW_" + name]
         log_file = _safe_child(job_dir, "execution.log")
+        process, reader = None, None
         try:
             failure = None
             # Raw output is bounded in RAM and never persisted before redaction.
             captured, output_lock, truncated = bytearray(), threading.Lock(), False
             with self._db() as db:
                 current = self._execution_project(db, project, action, command_id, language)
-                process = subprocess.Popen(argv, cwd=current["root"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                           stdin=subprocess.DEVNULL, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                process = WorkflowProcess(argv, cwd=current["root"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                          stdin=subprocess.DEVNULL, shell=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 self._process = process
             def drain():
                 nonlocal truncated
@@ -1792,10 +1807,14 @@ class WorkflowService:
                     process.wait(timeout=3)
                 failure = WorkflowError("脚本执行超时；没有自动重试。", 503)
             finally:
-                self._process = None
+                # End only descendants launched by this task, including ones
+                # retaining stdout after the launcher returned. Releasing the
+                # job first lets the reader reach EOF before joining it.
+                process.release()
                 reader.join(timeout=2)
                 if not reader.is_alive():
                     process.stdout.close()
+                self._process = None
             with output_lock:
                 # A truncated last line could contain only a prefix of a secret.
                 complete = captured.rsplit(b"\n", 1)[0] + b"\n" if truncated and b"\n" in captured else (b"" if truncated else captured)
@@ -1813,3 +1832,16 @@ class WorkflowService:
             return log
         except OSError:
             raise WorkflowError("已授权脚本无法启动，请检查电脑上的运行程序。", 503)
+        finally:
+            # Also cover an exception before the reader/wait block begins.
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.terminate()
+                    process.release()
+                    process.wait(timeout=3)
+                    if process.stdout and (reader is None or not reader.is_alive()):
+                        process.stdout.close()
+                finally:
+                    if self._process is process:
+                        self._process = None
