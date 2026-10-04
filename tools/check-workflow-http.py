@@ -310,6 +310,72 @@ class WorkflowHttpChecks(unittest.TestCase):
         self.assertEqual(status, 401, response)
         self.assertEqual(self.workflow.list()["records"], [])
 
+    def test_phone_app_image_discussion_is_durable_private_and_returns_to_same_record(self):
+        self.pair()
+        identifier = self.create('Isolated App discussion transport check.')["record"]["id"]
+        status, uploaded, _ = self.upload(identifier)
+        self.assertEqual(status, 200, uploaded)
+        image_id = uploaded["uploadedAttachmentIds"][0]
+        body = {"requestId": request_id(), "recordId": identifier,
+                "text": "Only describe the selected fixture image; do not execute anything.",
+                "context": {"attachmentIds": [image_id]},
+                "appTarget": {"kind": "codex", "mode": "new", "threadId": "", "name": "Isolated image discussion"}}
+        with patch.object(self.models, 'discuss', side_effect=AssertionError('App route must not invoke model API')):
+            status, accepted, _ = self.request(PREFIX + 'discuss', 'POST', body)
+            self.assertEqual(status, 200, accepted)
+            self.assertEqual(self.request(PREFIX + 'discuss', 'POST', body)[1]['job']['id'], accepted['job']['id'])
+            detail = self.detail(identifier)
+            self.assertEqual(len(detail['jobs']), 1)
+            self.assertEqual(detail['jobs'][0]['appDispatch']['status'], 'pending')
+            private_root = self.base.as_posix().lower()
+            self.assertNotIn(private_root, json.dumps(accepted).replace('\\\\', '/').lower())
+            self.assertNotIn(private_root, json.dumps(detail).replace('\\\\', '/').lower())
+            self.assertFalse(any(item['role'] == 'assistant' for item in detail['messages']))
+            claim = self.workflow.incubator_claim({'requestId': request_id()})
+            self.assertIs(claim['shouldDispatch'], True)
+            dispatch = claim['dispatch']
+            self.assertEqual(dispatch['recordId'], identifier)
+            self.assertIn(private_root, dispatch['prompt'].replace('\\\\', '/').replace('\\', '/').lower())
+            self.assertIn('[Codex Console 发布编号：' + dispatch['id'] + ']', dispatch['prompt'])
+            target = request_id()
+            result_body = {'requestId': request_id(), 'id': dispatch['id'],
+                           'claimToken': dispatch['claimToken'], 'targetThreadId': target, 'status': 'waiting'}
+            self.workflow.incubator_attach_result(result_body)
+            answer = {'text': 'Isolated fixture answer: two colored pixels; no execution authorized.',
+                      'turnId': request_id(), 'sourceMessageId': request_id()}
+            completed = {**result_body, 'requestId': request_id(), 'status': 'completed', 'result': answer}
+            self.workflow.incubator_attach_result(completed)
+            self.workflow.incubator_attach_result(completed)
+            final = self.detail(identifier)
+            self.assertEqual(final['record']['id'], identifier)
+            self.assertEqual(final['jobs'][0]['status'], 'succeeded')
+            self.assertEqual(final['jobs'][0]['appDispatch']['status'], 'completed')
+            replies = [item for item in final['messages'] if item['role'] == 'assistant']
+            self.assertEqual([item['text'] for item in replies], [answer['text']])
+            self.assertEqual(len(final['attachments']), 1)
+            self.assertFalse(self.marker.exists(), 'A discussion must not execute the fixture command')
+            self.assertNotIn(private_root, json.dumps(final).replace('\\\\', '/').lower())
+
+    def test_phone_app_discussion_revocation_rolls_back_job_dispatch_and_message(self):
+        self.pair()
+        identifier = self.create()["record"]["id"]
+        token = self.cookie.split('=', 1)[1]
+        original_message = self.workflow._message
+        def revoke_inside_transaction(*args, **kwargs):
+            result = original_message(*args, **kwargs)
+            self.companion.logout(token)
+            return result
+        body = {'requestId': request_id(), 'recordId': identifier, 'text': 'Do not accept after revocation.',
+                'context': {'attachmentIds': []},
+                'appTarget': {'kind': 'codex', 'mode': 'new', 'threadId': '', 'name': 'Isolated discussion'}}
+        with patch.object(self.workflow, '_message', side_effect=revoke_inside_transaction):
+            status, response, _ = self.request(PREFIX + 'discuss', 'POST', body)
+        self.assertEqual(status, 401, response)
+        detail = self.workflow.detail(identifier)
+        self.assertEqual(detail['jobs'], [])
+        self.assertEqual(len(detail['messages']), 1)
+        self.assertEqual(self.workflow.incubator_dispatches()['dispatches'], [])
+
     def test_missing_ai_jobs_wait_without_fabricated_messages_or_results(self):
         self.pair()
         identifier = self.create()["record"]["id"]

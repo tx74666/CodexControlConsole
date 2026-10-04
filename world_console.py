@@ -376,7 +376,7 @@ def capture_workflow_screen(output_path):
 
 
 def allow_workflow_execution(action, project):
-    if action not in {"command", "generated_script"}:
+    if action not in {"command", "generated_script", "transcribe"}:
         return True
     memory = current_memory()
     available = memory.get("availableBytes")
@@ -392,7 +392,7 @@ WORKFLOW_MODELS = WorkflowModels(WORKFLOW_DATA_DIR)
 WORKFLOW_SERVICE = WorkflowService(
     WORKFLOW_DATA_DIR, models=WORKFLOW_MODELS,
     callbacks={"capture_screen": capture_workflow_screen, "before_execute": allow_workflow_execution,
-               "work_finished": workflow_job_finished},
+               "work_finished": workflow_job_finished, "ffmpeg_executable": lambda: ffmpeg_executable()},
     computer_id=INSTALLATION_STATE["installationId"],
     projects=[{"id": "console", "name": "Codex Console", "root": str(APP_DIR),
                "capabilities": ["capture_screen", "result_import"],

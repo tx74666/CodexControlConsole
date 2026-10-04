@@ -1,8 +1,10 @@
 """Private local outbox operations for an authorized Codex heartbeat.
 
 Never invokes a model, message tool, GUI, shell, or external executable. Only the
-explicit publish HTTP action can create pending dispatches; this CLI consumes
-their stored user confirmation and writes actual tool receipts/results.
+explicit publish or App-discussion HTTP action can create pending dispatches;
+this CLI consumes their stored user confirmation and writes actual tool
+receipts/results. Work-picture discussions share the serial outbox while keeping
+their original record/job identity; they do not create hidden incubator ideas.
 """
 import argparse
 import hashlib
@@ -39,8 +41,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", required=True, help="现有私有 workflow.sqlite3 所在绝对目录")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("list", help="只读全部发布记录；不会认领或发送")
-    commands.add_parser("read-waiting", help="只读 claimed/waiting/needs_review，含私有 claimToken 与授权快照")
+    commands.add_parser("list", help="只读想法发布与工作讨论；不会认领或发送，隐藏工作图片的本机路径")
+    commands.add_parser("read-waiting", help="只读 claimed/waiting/needs_review，含私有 claimToken、授权快照与已选工作图片路径")
     commands.add_parser("read-fetch-requests", help="只读待抓取的缓存页请求；不会发送聊天")
     claim = commands.add_parser("claim", help="原子认领一个 pending（高优先级先到先出）；不会发送")
     claim.add_argument("--request-id", required=True)

@@ -36,7 +36,7 @@ The installer contains the x64 application runtime. Users do not need to install
 
 ## Updates
 
-Codex Console checks the latest GitHub Releases for both Codex Console and Codex World. When an update is available, the update control downloads the verified Windows x64 Setup and opens the same bilingual installation guide. Updates are never installed silently.
+Codex Console checks GitHub Releases for Codex Console and Codex World. Its installed update flow downloads and verifies the Windows x64 Setup, preserves the existing installation and data directory, and verifies the installed version before reopening Console. For this publisher's local Console, each validated release is installed automatically by the development workflow; no manual package download is required. An active computer task or an unidentified app window can prevent replacement until it is safe to continue.
 
 ### Reopening Console
 
@@ -48,13 +48,17 @@ Submitted to-dos retain their existing storage key. An unfinished to-do input is
 
 ## Per-device Data
 
-### Phone work records (1.0.33)
+### Phone work records (1.0.34)
 
 Open **Work → 看图与派工** on the computer or paired phone; `?consoleView=work&workView=workflow` on the desktop and `?tab=work&workView=workflow` on the phone open it directly. A record keeps its original pictures, feedback, model discussion, submitted jobs and returned images together. The phone offers image-first, image with text, image-only and text layouts; its editor has separate **讨论** and **交给电脑** actions. A whole suggestion, selected text or one model option opens an editable dispatch form with the computer, project and action shown before submission. The computer stores accepted work in its own SQLite queue and runs one job at a time, independently of Codex/Work and the phone page. Pictures are bound when the task is accepted and remain the same after retries or a later primary-image change.
 
-In **模型与项目设置** on the computer, configure a Responses or Chat Completions compatible endpoint, model and optional transcription model. Keys use an explicitly named environment variable or a write-only Windows DPAPI store. Phone configuration is read-only. Until a model is configured, model-dependent jobs remain waiting with a reason. Explicit screenshots, configured commands and existing-result imports can work without a model. Only the Console project is enabled initially, with screenshot/result-import permissions; other projects and generated scripts require explicit local configuration.
+**讨论** defaults to the signed-in App route, with its destination shown before sending. A new local Codex chat can read only the selected pictures through their private local files; later discussion can reuse that record's verified chat. Existing ChatGPT chats currently accept text only, so they cannot be selected for a picture discussion. The folded discussion settings retain an optional model-service route. App acceptance, an actual answer and computer execution are separate states: the answer returns to this record and never executes a suggestion automatically. App discussion requires the authorized App dispatcher to be available; the Console computer executor and stored results do not depend on that chat remaining connected.
 
-On the existing LAN HTTP page, iPhone voice input uses system keyboard dictation: tap **麦克风**, then the keyboard's dictation button, inspect the resulting text and choose discussion or dispatch. The web recording path uses MediaRecorder only where the browser provides a secure context and microphone permission; recording and browser dictation stop at three minutes. The phone's input area has **录音文件**, and the folded **电脑与模型** or desktop **模型与项目设置** section also offers **导入录音并转写** from an existing WAV, MP3, M4A, MP4, WebM or OGG file. Leaving the work view or hiding the page stops its microphone and retains received text or the recording draft; return and explicitly upload the recording for transcription. A missing transcription model preserves the recording and shows a waiting task; configuring a model does not silently retry it. Recording or transcription never sends an execution request automatically. Transcription results distinguish measured WAV duration from unverified compressed-audio duration.
+In **模型与项目设置** on the computer, optional Responses or Chat Completions compatible providers remain available. Keys use an explicitly named environment variable or a write-only Windows DPAPI store. Phone configuration is read-only. Explicit screenshots, configured commands and existing-result imports work without a model API. Only the Console project is enabled initially, with screenshot/result-import permissions; other projects and generated scripts require explicit local configuration.
+
+On the existing LAN HTTP page, iPhone voice input uses system keyboard dictation: tap **麦克风**, then the keyboard's dictation button, inspect the resulting text and choose discussion or dispatch. The web recording path uses MediaRecorder only where the browser provides a secure context and microphone permission; recording and browser dictation stop at three minutes. **录音文件** and the folded **导入录音并转写** entry accept an existing WAV, MP3, M4A, MP4, WebM or OGG file. Uploaded recordings default to the computer's installed Windows Chinese or English recognizer, without a model API or key. Compressed recordings require an already available ffmpeg; no recognizer or decoder is downloaded automatically. Local transcription checks the actual duration and rejects recordings over three minutes. Its text needs review and can be edited before discussion or dispatch; Windows recognition quality and a successful synthetic-voice check do not establish real iPhone microphone accuracy.
+
+Leaving the work view or hiding the page stops its microphone and retains received text or the recording draft; return and explicitly upload it for transcription. Missing local components preserve the original recording and report the reason. The optional model-service transcription route remains an explicit choice; its older waiting jobs are not retried automatically. Recording or transcription never sends an execution request automatically.
 
 The dispatch review for **导入项目结果** accepts one to four project-relative image paths, one per line. The paths are saved with the review draft and checked against the configured project by the backend. Choosing another record clears its temporary message selection while retaining each record's drafts. A lost connection preserves records and requests; after reconnecting, inspect the actual job state because a backend restart may require an explicit retry.
 
@@ -64,7 +68,7 @@ Configured preview commands must use an absolute executable path and write a UTF
 
 On Windows 10 and newer, a task process starts inside its own private job object. Timeout, shutdown and normal task completion release that task's descendants, including helpers retaining stdout after their launcher exits; other applications are outside this job. Non-Windows runtimes retain ordinary `Popen` behavior and do not offer the same descendant cleanup guarantee.
 
-Video-compatible media roles are reserved; the first release focuses on images, text and audio. A physical-phone round with a real configured model is a separate acceptance check from browser fixtures and simulated model tests.
+Video-compatible media roles are reserved; the first release focuses on images, text and audio. A physical-phone round with real speech, an actual picture discussion and returned computer results is a separate acceptance check from browser fixtures and simulated model tests.
 
 Each Windows account keeps its own settings, indexes, cookies, desktop layouts, downloaded music, and update files under:
 
