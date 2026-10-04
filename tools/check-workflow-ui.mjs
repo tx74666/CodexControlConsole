@@ -23,6 +23,8 @@ function harness({ phone = true, storage = new Map(), blobData = new Map(), serv
     replaceChildren(...elements) { for (const child of this.children) child.parentElement = null; this.children = []; this._text = ""; this.append(...elements); }
     set textContent(value) { this.replaceChildren(); this._text = String(value); }
     get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
+    set value(value) { const text = String(value); this._value = this.tagName === "SELECT" && !this.children.some(item => item.tagName === "OPTION" && item.value === text) ? "" : text; }
+    get value() { return this._value || ""; }
     set innerHTML(value) { throw new Error("Untrusted HTML must not be rendered."); }
     setAttribute(name, value) { this.attributes[name] = String(value); }
     addEventListener(name, handler) { this.listeners.set(name, handler); }
@@ -380,6 +382,15 @@ await test("private clear is idempotent, preserves drafts and rejects late authe
   const h = harness(); await h.start(); h.type("不能丢失的草稿"); const pending = defer(); h.pending("record", pending.promise); const poll = h.panel.refresh(); await settle(); h.panel.clear(); h.panel.clear(); h.panel.setActive(false); h.runtime.document.hidden = true; h.events.get("visibilitychange")(); h.runtime.document.hidden = false; pending.resolve(response(h.server.detail)); await poll; await settle(); assert.equal(h.draft.value, ""); assert.doesNotMatch(h.root.textContent, /只调整灯光/); assert.equal(h.panel.hasDraft(), true);
   h.panel.setActive(true); await settle(); assert.equal(h.draft.value, "不能丢失的草稿");
   const unauthorized = defer(); h.pending("record", unauthorized.promise); const again = h.panel.refresh(); await settle(); unauthorized.resolve(response({ error: "expired" }, 401)); await again; assert.equal(h.authCount(), 1); assert.equal(h.draft.value, ""); assert.equal(h.panel.hasDraft(), true);
+});
+await test("real select semantics preserve review references when deactivated before configuration has loaded", async () => {
+  const key = "codexWorkflow.v1:/api/phone/workflow", review = { text: "已核对的预览任务", projectId: "console", action: "command", commandId: "preview", paths: "renders/kept.png", context: { sourceMessageId: "ai-1", attachmentIds: ["source"] } };
+  const storage = new Map([[key, JSON.stringify({ recordId: "record-1", composeProjectId: "console", drafts: { "record-1": { text: "未发文字", review } }, outbox: [{ id: "original-request", path: "submit", payload: { requestId: "original-request", recordId: "record-1", action: "command", projectId: "console", commandId: "preview", text: review.text, context: review.context } }] })]]);
+  const h = harness({ storage }); assert.equal(h.field("项目").value, ""); assert.equal(h.field("操作").value, ""); assert.equal(h.field("已授权命令").value, "");
+  h.field("项目").value = "not-an-option"; assert.equal(h.field("项目").value, "", "SELECT must not retain values without an option");
+  h.panel.setActive(false); let saved = JSON.parse(storage.get(key)); assert.deepEqual(saved.drafts["record-1"].review, review); assert.equal(saved.composeProjectId, "console");
+  const waiting = defer(); h.pending("config", waiting.promise); h.panel.setActive(true); await settle(); h.panel.setActive(false); saved = JSON.parse(storage.get(key)); assert.deepEqual(saved.drafts["record-1"].review, review); waiting.resolve(response(h.server.config)); await settle();
+  h.panel.setActive(true); await settle(); assert.equal(h.field("项目").value, "console"); assert.equal(h.field("操作").value, "command"); assert.equal(h.field("已授权命令").value, "preview"); assert.equal(h.field("项目内图片路径（每行一条，最多 4 张）").value, "renders/kept.png"); assert.equal(h.draft.value, "未发文字"); assert.equal(JSON.parse(storage.get(key)).outbox[0].id, "original-request"); assert.equal(h.calls.some(item => item.options.method === "POST"), false);
 });
 await test("safe UI reload restores exact draft, target, selected image, review, outbox and original file bytes without sending", async () => {
   const storage = new Map(), blobData = new Map(), server = fixture(); server.detail.attachments.push(server.asset("second"));

@@ -16,7 +16,7 @@
   const state = { paired: false, generation: 0, busy: false, tab: "work", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
   const UI_SCRIPTS = ["mobile.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"];
   const UPDATE_KEY = "codexPhone.connectedUiUpdate.v1";
-  const uiUpdate = { loaded: loadedUiVersion(), actual: "", checking: false, reloading: false, timer: 0, trusted: false, reason: "" };
+  const uiUpdate = { loaded: loadedUiVersion(), actual: "", checking: false, preparing: false, reloading: false, timer: 0, trusted: false, reason: "" };
   const versionNotice = document.createElement("p"); versionNotice.className = "notice"; versionNotice.hidden = true; versionNotice.setAttribute("role", "status"); el("main").prepend(versionNotice);
   const livePlan = { snapshot: null, timer: null, busy: false, controller: null };
   const transferPanel = window.CodexTransferPanel?.create(el("phoneTransferPanel"), {
@@ -128,24 +128,28 @@
   }
   async function maybeReloadConnectedUi() {
     const target = uiUpdate.actual;
-    if (!target || target === uiUpdate.loaded || uiUpdate.reloading) return;
+    if (!target || target === uiUpdate.loaded || uiUpdate.reloading || uiUpdate.preparing) return;
     if (!uiUpdate.loaded) { versionWarning("加载时的组件版本无法核验，暂缓自动重开以保护草稿。"); return; }
     if (!newerUiVersion(target, uiUpdate.loaded)) { versionWarning("电脑版本较旧或尚未核验，等待电脑更新；不会自动退回旧界面。"); return; }
     if (!reloadIsIdle()) { versionWarning("等待编辑、录音、上传、操作或音乐播放结束后自动更新。"); return; }
+    uiUpdate.preparing = true;
     try {
       const attempt = JSON.parse(sessionStorage.getItem(UPDATE_KEY) || "null");
       if (attempt?.target === target) throw new Error("已经重开过一次，但组件仍未更新；继续核对，避免反复闪动。");
       const address = await verifiedNewShell(target);
-      if (target !== uiUpdate.actual || !reloadIsIdle()) return;
+      if (uiUpdate.reloading || target !== uiUpdate.actual || !reloadIsIdle()) return;
+      if (JSON.parse(sessionStorage.getItem(UPDATE_KEY) || "null")?.target === target) throw new Error("新版已进入重开流程，暂不重复重开。");
       if (!workflowPanel || typeof workflowPanel.prepareReload !== "function" || !await workflowPanel.prepareReload()) throw new Error("工作草稿或原附件尚未核验保存，保持当前页；保存完成后继续检查。");
-      if (target !== uiUpdate.actual || !reloadIsIdle() || !workflowPanel.canReload?.() || navigator.serviceWorker?.controller) return;
+      if (uiUpdate.reloading || target !== uiUpdate.actual || !reloadIsIdle() || !workflowPanel.canReload?.() || navigator.serviceWorker?.controller) return;
+      if (JSON.parse(sessionStorage.getItem(UPDATE_KEY) || "null")?.target === target) throw new Error("新版已进入重开流程，暂不重复重开。");
       address.searchParams.set("tab", state.tab); address.searchParams.set("workView", workView);
       const receipt = JSON.stringify({ target, loaded: uiUpdate.loaded, tab: state.tab, workView });
       sessionStorage.setItem(UPDATE_KEY, receipt);
-      if (sessionStorage.getItem(UPDATE_KEY) !== receipt || !workflowPanel.canReload() || !reloadIsIdle()) throw new Error("重开状态尚未可靠保存，保持当前页面。");
+      if (uiUpdate.reloading || target !== uiUpdate.actual || sessionStorage.getItem(UPDATE_KEY) !== receipt || !workflowPanel.canReload() || !reloadIsIdle()) throw new Error("重开状态尚未可靠保存，保持当前页面。");
       uiUpdate.reloading = true; window.clearTimeout(uiUpdate.timer);
       window.location.replace(address.href);
     } catch (error) { versionWarning(error.message || "新版核验尚未完成，保持当前页并稍后重试。"); }
+    finally { uiUpdate.preparing = false; }
   }
   async function checkConnectedVersion() {
     if (uiUpdate.checking || uiUpdate.reloading || document.hidden || state.busy || !(state.paired || uiUpdate.trusted)) { scheduleVersionCheck(); return; }

@@ -393,6 +393,21 @@ await test("safe version upgrade reads fresh same-origin shell then reloads once
   assert.deepEqual(h.calls.map(call => call.options.method), ["GET", "GET"]); assert.ok(h.calls.every(call => call.options.cache === "no-store" && call.options.redirect === "error")); assert.equal(JSON.parse(h.session.get("codexPhone.connectedUiUpdate.v1")).target, "1.0.15");
   await h.api.checkConnectedVersion(); assert.equal(h.calls.length, 2); assert.equal(h.reloads.length, 1);
 });
+await test("overlapping timer and foreground reload checks share one in-flight preparation and replace once", async () => {
+  const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); const shell = defer(), saved = defer(); let prepared = 0;
+  h.answers.push(shell.promise); h.panels.workflow.prepareReload = () => { prepared++; return saved.promise; };
+  const first = h.api.maybeReloadConnectedUi(); await h.api.maybeReloadConnectedUi(); assert.equal(h.api.uiUpdate.preparing, true); assert.equal(h.calls.length, 1);
+  shell.resolve(result(newShell())); await new Promise(resolve => setImmediate(resolve)); await h.api.maybeReloadConnectedUi(); assert.equal(prepared, 1); assert.equal(h.calls.length, 1);
+  saved.resolve(true); await first; assert.equal(h.reloads.length, 1); assert.equal(h.api.uiUpdate.preparing, false); await h.api.maybeReloadConnectedUi(); assert.equal(h.reloads.length, 1);
+});
+await test("navigation receipt or target changes during asynchronous preparation prevent a late duplicate replace", async () => {
+  for (const change of [h => h.session.set("codexPhone.connectedUiUpdate.v1", JSON.stringify({ target: "1.0.15" })), h => { h.api.uiUpdate.reloading = true; }, h => h.api.renderVersion("1.0.16")]) {
+    const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); const saved = defer(); h.panels.workflow.prepareReload = () => saved.promise; h.respond(newShell()); const first = h.api.maybeReloadConnectedUi(); await new Promise(resolve => setImmediate(resolve)); change(h); saved.resolve(true); await first; assert.equal(h.reloads.length, 0); assert.equal(h.api.uiUpdate.preparing, false);
+  }
+});
+await test("failed shell preparation releases its in-flight lock for a safe later check", async () => {
+  const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); h.respond("unavailable", 503); await h.api.maybeReloadConnectedUi(); assert.equal(h.api.uiUpdate.preparing, false); assert.equal(h.reloads.length, 0); h.respond(newShell()); await h.api.maybeReloadConnectedUi(); assert.equal(h.reloads.length, 1);
+});
 await test("saved draft readiness, editor focus, music and other panel operations delay reload without stopping them", async () => {
   for (const block of [h => { h.panels.workflow.reloadReady = false; }, h => { h.api.state.busy = true; }, h => { h.api.state.mutationBusy = true; }, h => { h.audio.paused = false; }, h => { h.otherMedia.push({ paused: false }); }, h => { h.frames.push({}); }, h => { h.document.activeElement = { tagName: "TEXTAREA" }; }, h => { h.panels.transfer.draft = true; }, h => { h.panels.incubator.draft = true; }, h => { h.panels.conversations.reloadReady = false; }]) {
     const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); block(h); h.respond(newShell()); await h.api.maybeReloadConnectedUi(); assert.equal(h.reloads.length, 0); assert.match(h.api.versionNotice.textContent, /等待|保持当前页/); assert.equal(h.audio.pauseCalls, 0); assert.equal(h.calls.filter(call => call.options.method === "POST").length, 0);
