@@ -771,9 +771,9 @@
   function advanceMusic(direction = 1, ended = false) {
     const music = state.music; if (!music.selected || !music.tracks.length) return;
     if (ended && music.repeat === "one") { el("musicAudio").currentTime = 0; playMusic(); return; }
+    if (ended && music.repeat === "off") { updateMusicControls(); return; }
     let queue = filteredMusic().filter(track => state.saved.has(track.path)); if (!queue.some(track => track.path === music.selected.path)) queue = music.tracks.filter(track => state.saved.has(track.path));
     const index = queue.findIndex(track => track.path === music.selected.path);
-    if (ended && music.repeat === "off" && index === queue.length - 1) { updateMusicControls(); return; }
     selectMusicTrack(queue[(index + direction + queue.length) % queue.length].path);
   }
   function updateMusicPosition() {

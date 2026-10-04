@@ -318,6 +318,64 @@ await test("saved music starts synchronously through the local SW route, never P
   assert.equal(h.get("musicPlayer").hidden, false);
   h.api.selectTab("tasks"); assert.equal(h.audio.paused, false); assert.equal(h.api.state.music.selected.path, "builtin/one.mp3");
 });
+
+async function repeatHarness() {
+  const h = harness(); h.ready();
+  h.api.state.catalog = Array.from({ length: 5 }, (_, index) => ({ name: `Repeat ${index}`, path: `builtin/repeat-${index}.mp3`, source: `music/repeat-${index}.mp3`, type: "mp3", tier: index < 3 ? "first" : index === 3 ? "second" : "third" }));
+  for (const track of h.api.state.catalog) h.stores.get("media").set(track.path, { id: track.path, blob: new Blob(["audio"]) });
+  await h.api.loadMusic(); return h;
+}
+
+function endCurrentMusic(h) { h.audio.duration = 200; h.audio.currentTime = 200; h.audio.paused = true; h.audio.listeners.get("ended")(); }
+function repeatQueue(h, tier) {
+  h.musicTabs.find(tab => tab.dataset.musicTier === tier).listeners.get("click")();
+  return h.api.state.music.tracks.filter(track => !tier || track.tier === tier);
+}
+await test("repeat regression: off stops the current first middle and last track in full and category queues", async () => {
+  const h = await repeatHarness(); h.api.state.music.repeat = "off";
+  for (const tier of ["", "first"]) {
+    const queue = repeatQueue(h, tier);
+    for (const index of [0, Math.floor(queue.length / 2), queue.length - 1]) {
+      const track = queue[index]; h.api.selectMusicTrack(track.path);
+      const before = { src: h.audio.src, play: h.audio.playCalls, pause: h.audio.pauseCalls, load: h.audio.loadCalls };
+      endCurrentMusic(h);
+      assert.equal(h.api.state.music.selected.path, track.path, `${tier || "all"} track ${index} must stay selected`);
+      assert.deepEqual({ src: h.audio.src, play: h.audio.playCalls, pause: h.audio.pauseCalls, load: h.audio.loadCalls }, before);
+      assert.equal(h.audio.paused, true); assert.equal(h.audio.currentTime, 200); assert.equal(h.get("musicSeek").value, "1000");
+      assert.equal(h.get("musicPlay").textContent, "播放"); assert.equal(h.get("musicRepeat").textContent, "播完停止");
+    }
+  }
+  assert.equal(h.calls.length, 0, "ended events must not fetch another track");
+});
+await test("repeat regression: off still permits manual previous and next in full and category queues", async () => {
+  const h = await repeatHarness(); h.api.state.music.repeat = "off";
+  for (const tier of ["", "first"]) {
+    const queue = repeatQueue(h, tier);
+    for (const index of [0, Math.floor(queue.length / 2), queue.length - 1]) {
+      for (const [button, direction] of [["musicPrevious", -1], ["musicNext", 1]]) {
+        h.api.selectMusicTrack(queue[index].path); const plays = h.audio.playCalls;
+        h.get(button).listeners.get("click")();
+        assert.equal(h.api.state.music.selected.path, queue[(index + direction + queue.length) % queue.length].path);
+        assert.equal(h.audio.playCalls, plays + 1); assert.equal(h.audio.paused, false);
+      }
+    }
+  }
+});
+await test("repeat regression: all advances and wraps while one replays in full and category queues", async () => {
+  const h = await repeatHarness();
+  for (const tier of ["", "first"]) {
+    const queue = repeatQueue(h, tier);
+    for (const index of [0, Math.floor(queue.length / 2), queue.length - 1]) {
+      for (const mode of ["all", "one"]) {
+        h.api.state.music.repeat = mode; h.api.selectMusicTrack(queue[index].path);
+        const plays = h.audio.playCalls, loads = h.audio.loadCalls; endCurrentMusic(h);
+        assert.equal(h.api.state.music.selected.path, queue[mode === "one" ? index : (index + 1) % queue.length].path);
+        assert.equal(h.audio.playCalls, plays + 1); assert.equal(h.audio.loadCalls, loads + (mode === "all" ? 1 : 0));
+        assert.equal(h.audio.currentTime, 0); assert.equal(h.audio.paused, false);
+      }
+    }
+  }
+});
 await test("local audio and matching translated lyrics import without any upload", async () => {
   const h = harness(); h.ready(); const audio = new Blob(["local audio"], { type: "audio/wav" }); Object.defineProperty(audio, "name", { value: "song.wav" }); const lyric = new Blob(["[00:01]English"], { type: "text/plain" }); Object.defineProperty(lyric, "name", { value: "song.en.lrc" }); await h.api.importMusicFiles([audio, lyric]);
   assert.equal(h.stores.get("media").size, 1); const track = [...h.stores.get("music").values()][0]; assert.equal(track.offlineLyrics[0].code, "en"); assert.equal(h.calls.length, 0);

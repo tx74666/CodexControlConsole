@@ -254,6 +254,63 @@ await test("seek previous next and repeat modes control only the phone media ele
   h.get("musicRepeat").listeners.get("click")(); assert.equal(h.api.state.music.repeat, "off"); assert.equal(h.get("musicRepeat").textContent, "播完停止"); h.api.selectMusicTrack("album/three.mp3"); const last = h.audio.playCalls; h.audio.listeners.get("ended")(); assert.equal(h.audio.playCalls, last);
   assert.equal(h.calls.filter(call => call.options.method === "POST").length, 0);
 });
+
+async function repeatHarness() {
+  const h = harness(); h.ready();
+  const tracks = Array.from({ length: 5 }, (_, index) => ({ name: `Repeat ${index}`, path: `repeat/${index}.mp3`, type: "mp3", tier: index < 3 ? "first" : index === 3 ? "second" : "third" }));
+  h.respond({ playback: "phone", tracks, truncated: false }); await h.api.loadMusic(); return h;
+}
+
+function endCurrentMusic(h) { h.audio.duration = 200; h.audio.currentTime = 200; h.audio.paused = true; h.audio.listeners.get("ended")(); }
+function repeatQueue(h, tier) {
+  h.tierTabs.find(tab => tab.dataset.musicTier === tier).listeners.get("click")();
+  return h.api.state.music.tracks.filter(track => !tier || track.tier === tier);
+}
+await test("repeat regression: off stops the current first middle and last track in full and category queues", async () => {
+  const h = await repeatHarness(); h.api.state.music.repeat = "off";
+  for (const tier of ["", "first"]) {
+    const queue = repeatQueue(h, tier);
+    for (const index of [0, Math.floor(queue.length / 2), queue.length - 1]) {
+      const track = queue[index]; h.api.selectMusicTrack(track.path);
+      const before = { src: h.audio.src, play: h.audio.playCalls, pause: h.audio.pauseCalls, load: h.audio.loadCalls };
+      endCurrentMusic(h);
+      assert.equal(h.api.state.music.selected.path, track.path, `${tier || "all"} track ${index} must stay selected`);
+      assert.deepEqual({ src: h.audio.src, play: h.audio.playCalls, pause: h.audio.pauseCalls, load: h.audio.loadCalls }, before);
+      assert.equal(h.audio.paused, true); assert.equal(h.audio.currentTime, 200); assert.equal(h.get("musicSeek").value, "1000");
+      assert.equal(h.get("musicPlay").textContent, "播放"); assert.equal(h.get("musicRepeat").textContent, "播完停止");
+    }
+  }
+  assert.equal(h.calls.length, 1, "ended events must not fetch another track");
+});
+await test("repeat regression: off still permits manual previous and next in full and category queues", async () => {
+  const h = await repeatHarness(); h.api.state.music.repeat = "off";
+  for (const tier of ["", "first"]) {
+    const queue = repeatQueue(h, tier);
+    for (const index of [0, Math.floor(queue.length / 2), queue.length - 1]) {
+      for (const [button, direction] of [["musicPrevious", -1], ["musicNext", 1]]) {
+        h.api.selectMusicTrack(queue[index].path); const plays = h.audio.playCalls;
+        h.get(button).listeners.get("click")();
+        assert.equal(h.api.state.music.selected.path, queue[(index + direction + queue.length) % queue.length].path);
+        assert.equal(h.audio.playCalls, plays + 1); assert.equal(h.audio.paused, false);
+      }
+    }
+  }
+});
+await test("repeat regression: all advances and wraps while one replays in full and category queues", async () => {
+  const h = await repeatHarness();
+  for (const tier of ["", "first"]) {
+    const queue = repeatQueue(h, tier);
+    for (const index of [0, Math.floor(queue.length / 2), queue.length - 1]) {
+      for (const mode of ["all", "one"]) {
+        h.api.state.music.repeat = mode; h.api.selectMusicTrack(queue[index].path);
+        const plays = h.audio.playCalls, loads = h.audio.loadCalls; endCurrentMusic(h);
+        assert.equal(h.api.state.music.selected.path, queue[mode === "one" ? index : (index + 1) % queue.length].path);
+        assert.equal(h.audio.playCalls, plays + 1); assert.equal(h.audio.loadCalls, loads + (mode === "all" ? 1 : 0));
+        assert.equal(h.audio.currentTime, 0); assert.equal(h.audio.paused, false);
+      }
+    }
+  }
+});
 await test("music refresh preserves a surviving selection and never autoplays", async () => {
   const h = harness(); h.ready(); h.respond(playlist()); await h.api.loadMusic(); h.api.selectMusicTrack("local/one.mp3"); h.audio.pause(); const count = h.audio.playCalls;
   h.respond(playlist()); await h.api.loadMusic(true); assert.equal(h.api.state.music.selected.path, "local/one.mp3"); assert.equal(h.audio.playCalls, count); assert.equal(h.audio.paused, true);
