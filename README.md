@@ -48,7 +48,9 @@ Submitted to-dos retain their existing storage key. An unfinished to-do input is
 
 ## Per-device Data
 
-### Phone work records (1.0.35)
+### Phone work records (1.0.37)
+
+The connected phone workspace compares the computer version with its loaded UI assets. A newer workspace reloads automatically only after local drafts and original attachment files are verified saved and recording, uploads, editing, and music playback are idle. After this page has connected successfully, it can reconnect through its existing trusted session without a saved task snapshot or replaying publications and accepted work. If the computer is already offline when the page is first opened, use its reconnect button. Pages loaded before 1.0.37 receive this behavior when they are next opened; the public home-screen app already checks its own updates automatically.
 
 Open **Work → 看图与派工** on the computer or paired phone; `?consoleView=work&workView=workflow` on the desktop and `?tab=work&workView=workflow` on the phone open it directly. A record keeps its original pictures, feedback, model discussion, submitted jobs and returned images together. The phone offers image-first, image with text, image-only and text layouts; its editor has separate **讨论** and **交给电脑** actions. A whole suggestion, selected text or one model option opens an editable dispatch form with the computer, project and action shown before submission. The computer stores accepted work in its own SQLite queue and runs one job at a time, independently of Codex/Work and the phone page. Pictures are bound when the task is accepted and remain the same after retries or a later primary-image change.
 

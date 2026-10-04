@@ -10,7 +10,7 @@ const html = readFileSync(new URL("../mobile.html", import.meta.url), "utf8");
 const css = readFileSync(new URL("../mobile.css", import.meta.url), "utf8");
 const manifest = JSON.parse(readFileSync(new URL("../mobile.webmanifest", import.meta.url), "utf8"));
 const defer = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
-const result = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, async json() { return body; } });
+const result = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, async json() { return body; }, async text() { return body; } });
 const plan = () => ({ plan: { version: 1, revision: "fixture-1", groups: Array.from({ length: 4 }, (_, index) => ({ id: `group-${index}`, title: ["示例计划一", "示例计划二", "示例计划三", "示例计划四"][index], summary: `摘要 ${index}`, items: [{ id: `task-${index}`, text: "<script>保留为文字</script>", done: index === 1 }] })) }, label: "计划清单（电脑浏览器中的勾选进度暂未同步）", error: "" });
 const inbox = () => ({ entries: [
   { id: "to-read", path: "reports/one.md", title: "待阅读文件", summary: "一份报告", status: "inbox", createdAt: "2026-10-01T10:00:00+08:00" },
@@ -19,16 +19,18 @@ const inbox = () => ({ entries: [
 ] });
 const dashboard = () => ({ version: "1.0.14", plan: plan(), device: { currentMemory: { status: "available", usedPercent: 91, availableBytes: 1024 ** 3, totalBytes: 16 * 1024 ** 3, readAt: "2026-10-01T11:00:00+08:00" }, model: "Dell fixture", cpuModel: "CPU", gpuModels: ["GPU"], sampledAt: "2026-09-27T11:00:00+08:00", installedMemoryBytes: 16 * 1024 ** 3 }, documents: { inbox: inbox(), guide: { items: [{ title: "阅读重点", path: "human.md", highlights: ["重点"] }] }, references: { items: [{ id: "nodes", defaultLanguage: "zh-CN", variants: [{ language: "zh-CN", label: "中文", title: "节点参考", path: "nodes.zh.md", available: true }, { language: "en", label: "English", title: "Nodes", path: "nodes.en.md", available: true }] }] } } });
 const playlist = () => ({ playback: "phone", tracks: [{ name: "<script>One</script>", path: "local/one.mp3", type: "mp3", size: 100 }, { name: "Two", path: "album/two.m4a", type: "m4a", size: 200 }, { name: "三首", path: "album/three.mp3", type: "mp3", lyrics: true, lyricsLanguage: "zh", lyricsLanguages: [{ code: "zh", label: "Chinese" }, { code: "en", label: "English" }] }], truncated: false });
-function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.html") {
+function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.html", { loadedVersion = "1.0.14", session = new Map() } = {}) {
   class Element {
     constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.style = { setProperty(key, value) { this[key] = value; } }; }
     append(...items) { this.children.push(...items); }
+    prepend(...items) { this.children.unshift(...items); }
     appendChild(item) { this.append(item); return item; }
     replaceChildren(...items) { this.children = items; this._text = ""; }
     set textContent(value) { this.replaceChildren(); this._text = String(value); }
     get textContent() { return this._text + this.children.map(item => item.textContent).join(""); }
     set innerHTML(_) { throw new Error("Raw HTML must never be used."); }
     setAttribute(key, value) { this.attributes[key] = String(value); }
+    getAttribute(key) { return this.attributes[key]; }
     removeAttribute(key) { delete this.attributes[key]; if (key === "src") this.src = ""; }
     addEventListener(key, fn) { this.listeners.set(key, fn); }
     focus() { this.focused = true; }
@@ -48,18 +50,20 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
   const listTabs = ["inbox", "later", "archive"].map(tab => { const button = new Element("button"); button.dataset.inbox = tab; return button; });
   const tierTabs = ["", "first", "second", "third"].map(tier => { const button = new Element("button"); button.dataset.musicTier = tier; return button; });
   const documentEvents = new Map(), windowEvents = new Map();
-  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "[data-tab]" ? tabs : selector === "#workPanel [data-work-view]" ? workTabs : selector === "[data-inbox]" ? listTabs : selector === "button[data-music-tier]" ? tierTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
+  const scripts = ["mobile.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => ({ src: `http://192.0.2.1:8899/${name}?v=console-app-scripts-${loadedVersion}-20261004` })), frames = [], otherMedia = [];
+  const document = { body: new Element("body"), documentElement: new Element("html"), hidden: false, getElementById: get, createElement: tag => new Element(tag), createTextNode: value => { const text = new Element("#text"); text.textContent = value; return text; }, querySelectorAll: selector => selector === "script[src]" ? scripts : selector === "iframe" ? frames : selector === "audio,video" ? [audio, ...otherMedia] : selector === "[data-tab]" ? tabs : selector === "#workPanel [data-work-view]" ? workTabs : selector === "[data-inbox]" ? listTabs : selector === "button[data-music-tier]" ? tierTabs : [], addEventListener(name, callback) { documentEvents.set(name, callback); } };
   const replacedUrls = [];
   const history = { state: null, replaceState(value, unused, url) { this.state = value; replacedUrls.push(url); runtime.window.location.href = url; }, pushState(value) { this.state = value; }, back() { this.state = null; } };
-  const runtime = { URL, URLSearchParams, AbortController, TypeError, Blob, structuredClone, document, history, navigator: {}, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: initialUrl }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
+  const reloads = [];
+  const runtime = { URL, URLSearchParams, AbortController, TypeError, Blob, structuredClone, document, history, navigator: {}, DOMParser: class { parseFromString(text) { const entries = [...text.matchAll(/<script\s+src="([^"]+)"/g)].map(match => ({ getAttribute: () => match[1] })); return { querySelectorAll: () => entries }; } }, sessionStorage: { getItem: key => session.get(key) || null, setItem: (key, value) => session.set(key, value), removeItem: key => session.delete(key) }, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: initialUrl, replace(url) { reloads.push(url); } }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
   const panels = {};
-  for (const [name, apiName] of [["workflow", "CodexWorkflowPanel"], ["incubator", "CodexIncubatorPanel"], ["conversations", "CodexConversationsPanel"], ["transfer", "CodexTransferPanel"]]) runtime.window[apiName] = { create(root, options) { const panel = { root, options, active: false, activity: [], clears: 0, targets: [], setActive(value) { this.active = Boolean(value); this.activity.push(this.active); }, clear() { this.active = false; this.clears++; }, async useTarget(value) { this.targets.push(value); return true; } }; panels[name] = panel; return panel; } };
-  const names = "state,livePlan,validateLivePlan,pollLivePlan,savePlanSnapshot,api,bootstrap,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,showPair,showOffline,pathValue,appendLink,renderMarkdown,setFont,selectTab,selectWorkView,syncWorkPanelActivity,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
+  for (const [name, apiName] of [["workflow", "CodexWorkflowPanel"], ["incubator", "CodexIncubatorPanel"], ["conversations", "CodexConversationsPanel"], ["transfer", "CodexTransferPanel"]]) runtime.window[apiName] = { create(root, options) { const panel = { root, options, active: false, activity: [], clears: 0, targets: [], reloadReady: true, draft: false, hasDraft() { return this.draft; }, canReload() { return this.reloadReady; }, async prepareReload() { return this.reloadReady; }, setActive(value) { this.active = Boolean(value); this.activity.push(this.active); }, clear() { this.active = false; this.clears++; }, async useTarget(value) { this.targets.push(value); return true; } }; panels[name] = panel; return panel; } };
+  const names = "state,livePlan,validateLivePlan,pollLivePlan,savePlanSnapshot,api,bootstrap,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,showPair,showOffline,pathValue,appendLink,renderMarkdown,setFont,selectTab,selectWorkView,syncWorkPanelActivity,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks,uiUpdate,versionNotice,renderVersion,scriptVersion,loadedUiVersion,maybeReloadConnectedUi,checkConnectedVersion";
   const normalized = normalizeScript(script), footer = "  void bootstrap();\n})();";
   assert.equal(normalized.split(footer).length, 2, "test export insertion must match only bootstrap footer");
   runInNewContext(normalized.replace(footer, `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
-  return { api, runtime, get, document, calls, answers, saved, history, replacedUrls, tabs, workTabs, panels, listTabs, tierTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.paired = true; api.state.dashboard = dashboard(); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
+  return { api, runtime, get, document, calls, answers, saved, session, scripts, frames, otherMedia, reloads, history, replacedUrls, tabs, workTabs, panels, listTabs, tierTabs, audio, mediaEvents, timers, documentEvents, windowEvents, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.paired = true; api.uiUpdate.trusted = true; api.state.dashboard = dashboard(); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
 }
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
@@ -89,10 +93,10 @@ await test("using a cached conversation returns to ideas and only binds the sele
 
 await test("visible version follows the connected computer and rejects malformed values", async () => {
   const h = harness(); h.respond(dashboard()); await h.api.refreshDashboard();
-  assert.equal(h.get("versionLabel").textContent, "电脑版 v1.0.14");
+  assert.equal(h.get("versionLabel").textContent, "v1.0.14 · 已更新"); assert.equal(h.get("versionLabel").attributes["aria-label"], "电脑版与当前界面均为 v1.0.14");
   const changed = dashboard(); changed.version = "1.0.30";
   h.respond(changed); await h.api.refreshDashboard();
-  assert.equal(h.get("versionLabel").textContent, "电脑版 v1.0.30");
+  assert.equal(h.get("versionLabel").textContent, "电脑版 v1.0.30 · 界面 v1.0.14");
   const malformed = dashboard(); malformed.version = "<script>30</script>";
   h.respond(malformed); await h.api.refreshDashboard();
   assert.equal(h.get("versionLabel").textContent, "电脑版 · 版本暂不可读");
@@ -104,7 +108,7 @@ await test("iPhone install entry, safe areas, touch sizes and four grouped tabs"
   assert.deepEqual([...html.matchAll(/data-tab="([^"]+)"/g)].map(match => match[1]), ["work", "transfer", "music", "documents"]);
   assert.match(html, /id="phoneIncubatorPanel"/);
   assert.match(css, /env\(safe-area-inset-bottom\)/); assert.match(css, /min-height:44px/); assert.match(css, /font-size:24px/); assert.match(css, /reader-table-scroll\{overflow-x:auto/);
-  assert.doesNotMatch(source, /serviceWorker|\.innerHTML|document\.cookie/); assert.doesNotMatch(html, /onclick=|<script[^>]*>\s*[^<\s]/);
+  assert.doesNotMatch(source, /serviceWorker\??\.(?:register|unregister)|\.innerHTML|document\.cookie/); assert.doesNotMatch(html, /onclick=|<script[^>]*>\s*[^<\s]/);
   const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
   for (const match of source.matchAll(/\bel\("([^"]+)"\)/g)) assert.ok(ids.has(match[1]), `Missing phone element ${match[1]}`);
 });
@@ -367,5 +371,65 @@ await test("invalid task data never marks working transfer disconnected", async 
   const h = harness(); h.ready(); h.api.selectTab("transfer"); h.respond({}); await h.api.pollLivePlan();
   assert.equal(h.get("connectionLabel").textContent, "已连接"); assert.equal(h.get("connectionLabel").dataset.connected, "true");
   assert.match(h.get("planNotice").textContent, /其他功能仍可使用/); assert.equal(h.api.state.paired, true); assert.equal(h.get("transferPanel").hidden, false);
+});
+const newShell = (version = "1.0.15") => ["mobile.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"].map(name => `<script src="/${name}?v=console-app-scripts-${version}-20261004"></script>`).join("\n");
+await test("loaded UI baseline comes from all core cache tags and never from the first newer runtime badge", async () => {
+  const h = harness(); h.ready(); h.api.renderVersion("1.0.15");
+  assert.equal(h.api.uiUpdate.loaded, "1.0.14"); assert.match(h.get("versionLabel").textContent, /电脑版 v1.0.15.*界面 v1.0.14/);
+  assert.equal(h.api.scriptVersion("/mobile.js?v=console-workflow-1.0.35-20261004"), "1.0.35");
+  assert.equal(h.api.scriptVersion("/mobile.js?v=console-app-scripts-1.0.36-20261004"), "1.0.36");
+  assert.equal(h.api.scriptVersion("https://evil.test/mobile.js?v=1.0.15"), "");
+  h.scripts[1].src = "/workflow-panel.js?v=older-1.0.13"; assert.equal(h.api.loadedUiVersion(), "");
+});
+await test("older backend never downgrades a newer loaded UI", async () => {
+  const h = harness(source, undefined, { loadedVersion: "1.0.37" }); h.ready(); h.api.renderVersion("1.0.36"); await h.api.maybeReloadConnectedUi(); assert.equal(h.reloads.length, 0); assert.equal(h.calls.length, 0); assert.match(h.get("versionLabel").textContent, /电脑版 v1.0.36.*界面 v1.0.37/); assert.match(h.api.versionNotice.textContent, /不会自动退回/);
+});
+await test("a missing or malformed latest version invalidates an earlier pending update", async () => {
+  const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); h.api.renderVersion("bad"); await h.api.maybeReloadConnectedUi(); assert.equal(h.api.uiUpdate.actual, ""); assert.equal(h.calls.length, 0); assert.equal(h.reloads.length, 0);
+});
+await test("safe version upgrade reads fresh same-origin shell then reloads once preserving the active Work destination", async () => {
+  const h = harness(); h.ready(); h.api.selectWorkView("workflow"); h.respond({ paired: true, version: "1.0.15" }); h.respond(newShell()); await h.api.checkConnectedVersion();
+  assert.equal(h.reloads.length, 1); const address = new URL(h.reloads[0]); assert.equal(address.origin, "http://192.0.2.1:8899"); assert.equal(address.pathname, "/mobile.html"); assert.equal(address.searchParams.get("tab"), "work"); assert.equal(address.searchParams.get("workView"), "workflow");
+  assert.deepEqual(h.calls.map(call => call.options.method), ["GET", "GET"]); assert.ok(h.calls.every(call => call.options.cache === "no-store" && call.options.redirect === "error")); assert.equal(JSON.parse(h.session.get("codexPhone.connectedUiUpdate.v1")).target, "1.0.15");
+  await h.api.checkConnectedVersion(); assert.equal(h.calls.length, 2); assert.equal(h.reloads.length, 1);
+});
+await test("saved draft readiness, editor focus, music and other panel operations delay reload without stopping them", async () => {
+  for (const block of [h => { h.panels.workflow.reloadReady = false; }, h => { h.api.state.busy = true; }, h => { h.api.state.mutationBusy = true; }, h => { h.audio.paused = false; }, h => { h.otherMedia.push({ paused: false }); }, h => { h.frames.push({}); }, h => { h.document.activeElement = { tagName: "TEXTAREA" }; }, h => { h.panels.transfer.draft = true; }, h => { h.panels.incubator.draft = true; }, h => { h.panels.conversations.reloadReady = false; }]) {
+    const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); block(h); h.respond(newShell()); await h.api.maybeReloadConnectedUi(); assert.equal(h.reloads.length, 0); assert.match(h.api.versionNotice.textContent, /等待|保持当前页/); assert.equal(h.audio.pauseCalls, 0); assert.equal(h.calls.filter(call => call.options.method === "POST").length, 0);
+  }
+});
+await test("open document or full-size image waits for reading to finish", async () => {
+  const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); h.api.state.reader = { path: "reading.md" }; await h.api.maybeReloadConnectedUi(); assert.equal(h.calls.length, 0); assert.equal(h.reloads.length, 0);
+  h.api.state.reader = null; const query = h.document.querySelectorAll; h.document.querySelectorAll = selector => selector === ".workflow-lightbox" ? [{ hidden: false }] : query(selector); await h.api.maybeReloadConnectedUi(); assert.equal(h.reloads.length, 0);
+});
+await test("initial never-connected offline page does not guess pairing or replay a launch QR", async () => {
+  const h = harness(source, "http://192.0.2.1:8899/#qrToken=" + "x".repeat(32)); await h.api.checkConnectedVersion(); assert.equal(h.calls.length, 0); assert.equal(h.api.uiUpdate.trusted, false); assert.equal(h.reloads.length, 0);
+});
+await test("workflow storage becomes safe later and the next version poll resumes a single reload", async () => {
+  const h = harness(); h.ready(); h.panels.workflow.reloadReady = false; h.respond({ paired: true, version: "1.0.15" }); h.respond(newShell()); await h.api.checkConnectedVersion(); assert.equal(h.reloads.length, 0); assert.ok([...h.timers.values()].some(timer => timer.delay === 15000));
+  h.panels.workflow.reloadReady = true; h.respond({ paired: true, version: "1.0.15" }); h.respond(newShell()); await h.api.checkConnectedVersion(); assert.equal(h.reloads.length, 1);
+});
+await test("component mismatch or foreign shell cannot reload; old service worker is not removed or bypassed blindly", async () => {
+  for (const shell of [newShell().replace("workflow-panel.js?v=console-app-scripts-1.0.15", "workflow-panel.js?v=console-app-scripts-1.0.14"), newShell().replace("/workflow-panel.js", "https://evil.test/workflow-panel.js"), newShell().replace(/<script src="\/mobile.js[^\n]+/, "")]) {
+    const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); h.respond(shell); await h.api.maybeReloadConnectedUi(); assert.equal(h.reloads.length, 0); assert.match(h.api.versionNotice.textContent, /尚未一致/);
+  }
+  const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); h.runtime.navigator.serviceWorker = { controller: {}, unregister() { throw new Error("Must not unregister"); } }; await h.api.maybeReloadConnectedUi(); assert.equal(h.calls.length, 0); assert.equal(h.reloads.length, 0); assert.match(h.api.versionNotice.textContent, /缓存仍在接管/);
+});
+await test("late user edits during fresh-shell or storage verification cancel reload", async () => {
+  const h = harness(); h.ready(); h.api.renderVersion("1.0.15"); const pending = defer(); h.answers.push(pending.promise); const task = h.api.maybeReloadConnectedUi(); h.audio.paused = false; pending.resolve(result(newShell())); await task; assert.equal(h.reloads.length, 0);
+  const other = harness(); other.ready(); other.api.renderVersion("1.0.15"); const saving = defer(); other.panels.workflow.prepareReload = () => saving.promise; other.respond(newShell()); const reload = other.api.maybeReloadConnectedUi(); await new Promise(resolve => setImmediate(resolve)); other.panels.transfer.draft = true; saving.resolve(true); await reload; assert.equal(other.reloads.length, 0);
+});
+await test("a still-old shell after a previous navigation cannot create a reload loop, and failed session storage never navigates", async () => {
+  const session = new Map([["codexPhone.connectedUiUpdate.v1", JSON.stringify({ target: "1.0.15", loaded: "1.0.14" })]]); const h = harness(source, undefined, { session }); h.ready(); h.api.renderVersion("1.0.15"); await h.api.maybeReloadConnectedUi(); assert.equal(h.reloads.length, 0); assert.equal(h.calls.length, 0); assert.match(h.api.versionNotice.textContent, /避免反复闪动/);
+  const current = harness(source, undefined, { loadedVersion: "1.0.15", session }); current.ready(); current.api.renderVersion("1.0.15"); assert.equal(session.size, 0); assert.equal(current.api.versionNotice.hidden, true);
+  const failed = harness(); failed.ready(); failed.api.renderVersion("1.0.15"); failed.runtime.sessionStorage.setItem = () => { throw new Error("QuotaExceededError"); }; failed.respond(newShell()); await failed.api.maybeReloadConnectedUi(); assert.equal(failed.reloads.length, 0);
+});
+await test("trusted offline page without a plan snapshot reconnects by reads only; expired pairing stops automatic retries", async () => {
+  const h = harness(); h.ready(); h.api.showOffline(new Error("offline")); assert.equal(h.api.livePlan.snapshot, null); h.respond({ paired: true, version: "1.0.14" }); h.respond(dashboard()); h.respond(snapshot()); await h.api.checkConnectedVersion(); assert.equal(h.api.state.paired, true); assert.ok(h.calls.every(call => call.options.method === "GET")); assert.equal(h.calls.some(call => /discuss|submit|upload/.test(call.url)), false);
+  const expired = harness(); expired.ready(); expired.api.showOffline(new Error("offline")); expired.respond({ paired: false, version: "1.0.14" }); await expired.api.checkConnectedVersion(); assert.equal(expired.api.uiUpdate.trusted, false); const countBefore = expired.calls.length; await expired.api.checkConnectedVersion(); assert.equal(expired.calls.length, countBefore); assert.equal(expired.get("pairScreen").hidden, false);
+});
+await test("version probe outage leaves a working record alone and foreground resumes only safe reads", async () => {
+  const h = harness(); h.ready(); h.api.selectWorkView("workflow"); h.answers.push(Promise.reject(new TypeError("offline"))); await h.api.checkConnectedVersion(); assert.equal(h.api.state.paired, true); assert.equal(h.panels.workflow.clears, 0); assert.equal(h.reloads.length, 0); assert.ok([...h.timers.values()].some(timer => timer.delay === 15000));
+  h.document.hidden = true; const before = h.calls.length; await h.api.checkConnectedVersion(); assert.equal(h.calls.length, before);
 });
 console.log(`PASS phone UI ${count} checks`);

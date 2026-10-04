@@ -14,6 +14,10 @@
   const el = id => document.getElementById(id);
   const MUSIC_TIERS = [{ value: "first", number: "1", suffix: "st" }, { value: "second", number: "2", suffix: "nd" }, { value: "third", number: "3", suffix: "rd" }];
   const state = { paired: false, generation: 0, busy: false, tab: "work", inbox: "inbox", dashboard: null, reader: null, readerSequence: 0, mutationBusy: false, font: 18, headings: new Map(), music: { tracks: [], selected: null, loaded: false, loading: false, sequence: 0, playSequence: 0, lyricsSequence: 0, tier: "", visible: 60, repeat: "all", lyrics: [], synced: false, activeLine: -1 } };
+  const UI_SCRIPTS = ["mobile.js", "workflow-panel.js", "incubator-panel.js", "conversations-panel.js"];
+  const UPDATE_KEY = "codexPhone.connectedUiUpdate.v1";
+  const uiUpdate = { loaded: loadedUiVersion(), actual: "", checking: false, reloading: false, timer: 0, trusted: false, reason: "" };
+  const versionNotice = document.createElement("p"); versionNotice.className = "notice"; versionNotice.hidden = true; versionNotice.setAttribute("role", "status"); el("main").prepend(versionNotice);
   const livePlan = { snapshot: null, timer: null, busy: false, controller: null };
   const transferPanel = window.CodexTransferPanel?.create(el("phoneTransferPanel"), {
     phone: true,
@@ -66,8 +70,92 @@
   };
   function notice(id, message = "", error = false) { el(id).textContent = message; el(id).dataset.error = String(error); }
   function renderVersion(version) {
-    el("versionLabel").textContent = typeof version === "string" && /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)
-      ? `电脑版 v${version}` : "电脑版 · 版本暂不可读";
+    if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) { uiUpdate.actual = ""; el("versionLabel").textContent = "电脑版 · 版本暂不可读"; return; }
+    uiUpdate.actual = version;
+    el("versionLabel").textContent = version === uiUpdate.loaded ? `v${version} · 已更新` : `电脑版 v${version} · 界面 ${uiUpdate.loaded ? `v${uiUpdate.loaded}` : "版本未核验"}`;
+    el("versionLabel").setAttribute("aria-label", version === uiUpdate.loaded ? `电脑版与当前界面均为 v${version}` : el("versionLabel").textContent);
+    if (version === uiUpdate.loaded) {
+      versionNotice.hidden = true; uiUpdate.reason = "";
+      try { sessionStorage.removeItem(UPDATE_KEY); } catch { /* No reload is needed. */ }
+    } else versionWarning("正在核对新版界面；草稿和附件会保留。");
+  }
+  function scriptVersion(value) { try { const url = new URL(value, window.location.href); return url.origin === new URL(window.location.href).origin ? url.searchParams.get("v")?.match(/(?:^|[^0-9.])(\d+\.\d+\.\d+)(?=$|[^0-9.])/)?.[1] || "" : ""; } catch { return ""; } }
+  function loadedUiVersion() {
+    const scripts = Array.from(document.querySelectorAll("script[src]")), versions = UI_SCRIPTS.map(name => {
+      const matches = scripts.filter(item => { try { return new URL(item.src, window.location.href).pathname === "/" + name; } catch { return false; } });
+      return matches.length === 1 ? scriptVersion(matches[0].src) : "";
+    });
+    return versions.every(value => value && value === versions[0]) ? versions[0] : "";
+  }
+  function versionWarning(reason) { uiUpdate.reason = reason; versionNotice.hidden = false; versionNotice.textContent = `电脑已是 v${uiUpdate.actual}，${uiUpdate.loaded ? `当前界面为 v${uiUpdate.loaded}` : "当前界面版本未核验"}。${reason}`; }
+  function newerUiVersion(actual, loaded) {
+    const left = actual.split(".").map(Number), right = loaded.split(".").map(Number);
+    if (left.length !== 3 || right.length !== 3 || ![...left, ...right].every(Number.isSafeInteger)) return false;
+    for (let index = 0; index < 3; index++) if (left[index] !== right[index]) return left[index] > right[index];
+    return false;
+  }
+  function reloadIsIdle() {
+    const editing = document.activeElement, media = Array.from(document.querySelectorAll("audio,video"));
+    return state.paired && !document.hidden && !state.busy && !state.mutationBusy && !state.reader && !state.music.loading && el("musicAudio").paused &&
+      !media.some(item => item.paused === false) && !document.querySelectorAll("iframe").length &&
+      !Array.from(document.querySelectorAll(".workflow-lightbox")).some(item => !item.hidden) &&
+      !(editing && (editing.isContentEditable || ["TEXTAREA", "INPUT"].includes(editing.tagName))) &&
+      (!transferPanel || typeof transferPanel.hasDraft === "function" && !transferPanel.hasDraft()) &&
+      (!incubatorPanel || typeof incubatorPanel.canReload === "function" && incubatorPanel.canReload() && !incubatorPanel.hasDraft?.()) &&
+      (!conversationsPanel || typeof conversationsPanel.canReload === "function" && conversationsPanel.canReload());
+  }
+  function scheduleVersionCheck() {
+    window.clearTimeout(uiUpdate.timer); uiUpdate.timer = 0;
+    if (!document.hidden && !uiUpdate.reloading && (state.paired || uiUpdate.trusted)) uiUpdate.timer = window.setTimeout(() => void checkConnectedVersion(), 15000);
+  }
+  async function verifiedNewShell(version) {
+    if (navigator.serviceWorker?.controller) throw new Error("旧页面缓存仍在接管此工作区，暂缓重开；不会删除其他 App 缓存。");
+    const address = new URL("/mobile.html", window.location.href); address.searchParams.set("consoleUiRefresh", version);
+    const controller = new AbortController(), timeout = window.setTimeout(() => controller.abort(), 10000);
+    let text;
+    try {
+      const response = await fetch(address.href, { method: "GET", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
+      if (!response.ok) throw new Error("新版页面暂时不能读取，恢复连接后会继续检查。");
+      text = await response.text();
+    } finally { window.clearTimeout(timeout); }
+    if (text.length > 1024 * 1024) throw new Error("新版页面尚未核验，暂缓重开。");
+    const parsed = new DOMParser().parseFromString(text, "text/html"), scripts = Array.from(parsed.querySelectorAll("script[src]"));
+    for (const name of UI_SCRIPTS) {
+      const matches = scripts.filter(item => { try { const url = new URL(item.getAttribute("src"), address); return url.origin === address.origin && url.pathname === "/" + name; } catch { return false; } });
+      if (matches.length !== 1 || scriptVersion(new URL(matches[0].getAttribute("src"), address).href) !== version) throw new Error("新版页面与工作组件尚未一致，等待发布完成后再自动更新。");
+    }
+    return address;
+  }
+  async function maybeReloadConnectedUi() {
+    const target = uiUpdate.actual;
+    if (!target || target === uiUpdate.loaded || uiUpdate.reloading) return;
+    if (!uiUpdate.loaded) { versionWarning("加载时的组件版本无法核验，暂缓自动重开以保护草稿。"); return; }
+    if (!newerUiVersion(target, uiUpdate.loaded)) { versionWarning("电脑版本较旧或尚未核验，等待电脑更新；不会自动退回旧界面。"); return; }
+    if (!reloadIsIdle()) { versionWarning("等待编辑、录音、上传、操作或音乐播放结束后自动更新。"); return; }
+    try {
+      const attempt = JSON.parse(sessionStorage.getItem(UPDATE_KEY) || "null");
+      if (attempt?.target === target) throw new Error("已经重开过一次，但组件仍未更新；继续核对，避免反复闪动。");
+      const address = await verifiedNewShell(target);
+      if (target !== uiUpdate.actual || !reloadIsIdle()) return;
+      if (!workflowPanel || typeof workflowPanel.prepareReload !== "function" || !await workflowPanel.prepareReload()) throw new Error("工作草稿或原附件尚未核验保存，保持当前页；保存完成后继续检查。");
+      if (target !== uiUpdate.actual || !reloadIsIdle() || !workflowPanel.canReload?.() || navigator.serviceWorker?.controller) return;
+      address.searchParams.set("tab", state.tab); address.searchParams.set("workView", workView);
+      const receipt = JSON.stringify({ target, loaded: uiUpdate.loaded, tab: state.tab, workView });
+      sessionStorage.setItem(UPDATE_KEY, receipt);
+      if (sessionStorage.getItem(UPDATE_KEY) !== receipt || !workflowPanel.canReload() || !reloadIsIdle()) throw new Error("重开状态尚未可靠保存，保持当前页面。");
+      uiUpdate.reloading = true; window.clearTimeout(uiUpdate.timer);
+      window.location.replace(address.href);
+    } catch (error) { versionWarning(error.message || "新版核验尚未完成，保持当前页并稍后重试。"); }
+  }
+  async function checkConnectedVersion() {
+    if (uiUpdate.checking || uiUpdate.reloading || document.hidden || state.busy || !(state.paired || uiUpdate.trusted)) { scheduleVersionCheck(); return; }
+    uiUpdate.checking = true;
+    try {
+      if (!state.paired) await bootstrap();
+      else { const status = await api("status"); if (!status.paired) showPair("配对已过期，请重新连接电脑。"); else renderVersion(status.version); }
+      if (state.paired) await maybeReloadConnectedUi();
+    } catch (error) { if (!error.auth && !error.cancelled) { updateConnectionState(false); if (uiUpdate.actual && uiUpdate.actual !== uiUpdate.loaded) versionWarning("暂时连接不到电脑；草稿保留，恢复后自动继续核对。"); } }
+    finally { uiUpdate.checking = false; scheduleVersionCheck(); }
   }
   function updateConnectionState(connected) {
     if (!state.paired) return;
@@ -148,6 +236,7 @@
     notice("appNotice");
   }
   function showPair(message = "") {
+    uiUpdate.trusted = false; window.clearTimeout(uiUpdate.timer); uiUpdate.timer = 0;
     livePlan.snapshot = null; try { localStorage.removeItem("codexPhone.planSnapshot.v1"); } catch { /* Pairing remains available without storage. */ }
     el("offlineTaskGroups").replaceChildren(); el("offlinePlanNotice").textContent = ""; el("savePlanSnapshot").disabled = true;
     clearPrivate(); el("pairScreen").hidden = false; el("offlineScreen").hidden = true;
@@ -195,7 +284,7 @@
       await refreshDashboard();
       void pollLivePlan();
     } catch (error) { failure(error, el("pairScreen").hidden ? "appNotice" : "pairNotice"); }
-    finally { setBusy(false); }
+    finally { setBusy(false); scheduleVersionCheck(); }
   }
   function phoneDeviceName() { return /iPad/i.test(navigator.userAgent || "") ? "iPad" : /iPhone/i.test(navigator.userAgent || "") ? "iPhone" : "手机"; }
   async function refreshDashboard() {
@@ -204,7 +293,7 @@
     if (generation !== state.generation) return;
     if (!data || typeof data !== "object" || !data.documents || !data.device) throw new Error("电脑返回的页面数据不完整，请重试。");
     closeReader(false);
-    state.dashboard = data; state.paired = true;
+    state.dashboard = data; state.paired = true; uiUpdate.trusted = true;
     renderVersion(data.version);
     el("pairScreen").hidden = true; el("offlineScreen").hidden = true; el("appScreen").hidden = false; el("bottomNav").hidden = false;
     el("connectionLabel").textContent = "已连接"; el("connectionLabel").dataset.connected = "true";
@@ -757,16 +846,18 @@
   el("fontLarger").addEventListener("click", () => setFont(state.font + 2));
   window.addEventListener("popstate", () => closeReader(false));
   window.addEventListener("offline", () => { if (state.paired) showOffline(new Error("Wi-Fi 连接已中断。")); });
-  window.addEventListener("online", () => { if (state.paired) void pollLivePlan(); else if (livePlan.snapshot) void bootstrap(); });
+  window.addEventListener("online", () => { if (state.paired) void pollLivePlan(); if (state.paired || uiUpdate.trusted) void checkConnectedVersion(); });
   document.addEventListener("visibilitychange", async () => {
+    window.clearTimeout(uiUpdate.timer); uiUpdate.timer = 0;
     window.clearTimeout(livePlan.timer); livePlan.timer = null;
     if (document.hidden && livePlan.controller) { state.generation += 1; livePlan.controller.abort(); livePlan.controller = null; livePlan.busy = false; }
     syncWorkPanelActivity();
-    if (document.hidden || state.busy || !state.paired) return;
-    try { const result = await api("status"); if (!result.paired) showPair("配对已过期，请重新连接电脑。"); }
+    if (document.hidden || state.busy) return;
+    if (!state.paired) { if (uiUpdate.trusted) await checkConnectedVersion(); return; }
+    try { const result = await api("status"); if (!result.paired) showPair("配对已过期，请重新连接电脑。"); else renderVersion(result.version); }
     catch (error) { failure(error); }
     syncWorkPanelActivity();
-    if (state.paired) void pollLivePlan();
+    if (state.paired) { void pollLivePlan(); await maybeReloadConnectedUi(); } scheduleVersionCheck();
   });
   try { const font = Number(localStorage.getItem("codexPhone.readerFont.v1")); if (font >= 14 && font <= 26) state.font = font; } catch { /* Presentation defaults work without storage. */ }
   document.documentElement.style.setProperty("--reader-size", `${state.font}px`);
