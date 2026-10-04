@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PIL import Image
 from transfer_store import IncomingFile
 from workflow_service import WorkflowService, WorkflowError
+import workflow_native_work as native_work
 
 
 def request(**fields):
@@ -93,6 +94,62 @@ class NativeWorkChecks(unittest.TestCase):
         self.assertEqual(self.service.incubator_list()["ideas"][0]["workflowRecordId"], self.record)
         self.assertEqual(len(self.service.list()["records"]), 1)
         self.assertEqual(self.service.incubator_dispatches()["dispatches"], [])
+
+    def test_inventory_prunes_nested_dist_directories_without_hashing_or_counting(self):
+        (self.project / "nested").mkdir()
+        (self.project / "nested" / "source.txt").write_text("Nested real source", encoding="utf-8")
+        artifacts = ["dist-candidate/old.txt", "nested/DIST-local/security-venv/old.txt", "nested/dist-phone/site/old.txt"]
+        for relative in artifacts:
+            path = self.project / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("Ignored build artifact", encoding="utf-8")
+        hashed = []
+        original_digest = self.service._file_digest
+        def digest(path):
+            relative = path.relative_to(self.project).as_posix()
+            self.assertNotIn(relative, artifacts, "Excluded build output must never be read")
+            hashed.append(relative)
+            return original_digest(path)
+        self.service._file_digest = digest
+        inventory = self.service._native_inventory(self.project)
+        self.assertEqual(set(inventory), {"source.txt", "nested/source.txt"})
+        self.assertEqual(set(hashed), {"source.txt", "nested/source.txt"})
+
+    def test_build_artifact_changes_do_not_invalidate_reviewed_source_before_claim(self):
+        artifact = self.project / "nested" / "dist-local" / "security-venv" / "runtime.txt"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("Original generated artifact", encoding="utf-8")
+        accepted = self.service.app_work(self.body())
+        artifact.write_text("Rebuilt generated artifact", encoding="utf-8")
+        claimed = self.service.incubator_claim(request())
+        self.assertTrue(claimed["shouldDispatch"])
+        self.assertEqual(claimed["dispatch"]["id"], accepted["job"]["appDispatch"]["id"])
+
+    def test_old_excluded_artifact_cannot_be_reported_as_new_work_result(self):
+        for relative in ("nested/DIST-candidate/old.txt", "dist-local/security-venv/file.txt", "nested/dist-phone/site/new.png"):
+            for field in ("files", "changedFiles"):
+                self.error(lambda path=relative, key=field: native_work.result_block(answer(**{key: [path]})))
+        artifact = self.project / "nested" / "DIST-candidate" / "old.txt"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("An unchanged old build artifact", encoding="utf-8")
+        accepted, dispatch = self.claim()
+        result = self.attach(dispatch, answer(changedFiles=["nested/DIST-candidate/old.txt"]))
+        self.assertEqual(result["dispatch"]["status"], "needs_review")
+        self.assertFalse(result["job"]["result"]["executionVerified"])
+        self.assertNotEqual(result["job"]["status"], "succeeded")
+        self.assertIn("构建缓存", result["job"]["result"]["verificationError"])
+        self.assertEqual(artifact.read_text(encoding="utf-8"), "An unchanged old build artifact")
+
+    def test_dist_prefixed_source_filename_is_preserved_and_its_change_verified(self):
+        path = self.project / "dist-notes.txt"
+        path.write_text("Real source before Work", encoding="utf-8")
+        self.assertIn("dist-notes.txt", self.service._native_inventory(self.project))
+        accepted, dispatch = self.claim()
+        path.write_text("Real source after Work", encoding="utf-8")
+        result = self.attach(dispatch, answer(changedFiles=["dist-notes.txt"]))
+        self.assertEqual(result["job"]["status"], "succeeded", result["job"])
+        self.assertTrue(result["job"]["result"]["executionVerified"])
+        self.assertEqual(result["job"]["result"]["fileProof"][0]["path"], "dist-notes.txt")
 
     def test_default_binding_disabled_and_existing_project_grants_unchanged(self):
         original = self.service.config()["projects"]

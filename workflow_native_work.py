@@ -39,6 +39,16 @@ def _root(value):
     return path.resolve()
 
 
+_INTERNAL_DIRECTORIES = frozenset({
+    ".git", "workflow-private", "work", "node_modules", "__pycache__", ".venv", "venv", "cache", "build", "dist"
+})
+
+
+def _internal_directory(name):
+    name = name.casefold()
+    return name in _INTERNAL_DIRECTORIES or name.startswith("dist-")
+
+
 def _relative(value, output_directory=None):
     if not isinstance(value, str) or not value or len(value) > 1024 or "\0" in value or ":" in value or value.startswith(("/", "\\")):
         raise _api().WorkflowError("Work 成果必须使用范围内相对路径。", 403)
@@ -47,7 +57,8 @@ def _relative(value, output_directory=None):
         raise _api().WorkflowError("Work 成果路径越过授权目录。", 403)
     output = bool(output_directory and "/".join(parts).startswith(output_directory + "/"))
     checked_parts = parts[3:] if output else parts
-    if any(part.casefold() in {".git", "workflow-private", "work", "node_modules", "__pycache__", ".venv", "venv", "cache", "build", "dist"} for part in checked_parts):
+    if (any(_internal_directory(part) for part in checked_parts[:-1])
+            or checked_parts[-1].casefold() in _INTERNAL_DIRECTORIES):
         raise _api().WorkflowError("Work 不访问凭据、内部资料或构建缓存。", 403)
     if any(part.casefold().startswith(".env") or part.casefold().endswith((".pem", ".key", ".pfx")) or
            "credential" in part.casefold() or part.casefold().startswith("secrets.") for part in parts):
@@ -239,8 +250,7 @@ class NativeWorkMixin:
         # Bound reads, never follow links, and do not inspect internal/private trees.
         files, remaining = {}, 128 * 1024 * 1024
         for directory, dirs, names in os.walk(root, followlinks=False):
-            dirs[:] = [name for name in dirs if name.casefold() not in
-                {".git", ".venv", "workflow-private", "work", "node_modules", "__pycache__", "venv", "cache", "build", "dist"}
+            dirs[:] = [name for name in dirs if not _internal_directory(name)
                 and not (Path(directory) / name).is_symlink() and not getattr(Path(directory) / name, "is_junction", lambda: False)()]
             for name in sorted(names):
                 path = Path(directory) / name
