@@ -22,7 +22,7 @@ const playlist = () => ({ playback: "phone", tracks: [{ name: "<script>One</scri
 function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.html", { loadedVersion = "1.0.14", session = new Map() } = {}) {
   class Element {
     constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.style = { setProperty(key, value) { this[key] = value; } }; }
-    append(...items) { this.children.push(...items); }
+    append(...items) { for (const item of items) { if (item.parentElement) item.parentElement.children = item.parentElement.children.filter(value => value !== item); this.children.push(item); item.parentElement = this; } }
     prepend(...items) { this.children.unshift(...items); }
     appendChild(item) { this.append(item); return item; }
     replaceChildren(...items) { this.children = items; this._text = ""; }
@@ -40,6 +40,7 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
   }
   const nodes = new Map(), calls = [], answers = [], saved = new Map(), timers = new Map(); let nextTimer = 1;
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
+  get("phoneWorkflowDetails").append(get("phoneWorkflowPanel"));
   get("pairRemember").checked = true;
   const audio = get("musicAudio"); audio.paused = true; audio.currentTime = 0; audio.duration = NaN; audio.src = ""; audio.playCalls = 0; audio.pauseCalls = 0; audio.loadCalls = 0; const mediaEvents = [];
   audio.pause = () => { audio.paused = true; audio.pauseCalls++; mediaEvents.push("pause"); };
@@ -57,7 +58,7 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
   const reloads = [];
   const runtime = { URL, URLSearchParams, AbortController, TypeError, Blob, structuredClone, document, history, navigator: {}, DOMParser: class { parseFromString(text) { const entries = [...text.matchAll(/<script\s+src="([^"]+)"/g)].map(match => ({ getAttribute: () => match[1] })); return { querySelectorAll: () => entries }; } }, sessionStorage: { getItem: key => session.get(key) || null, setItem: (key, value) => session.set(key, value), removeItem: key => session.delete(key) }, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: initialUrl, replace(url) { reloads.push(url); } }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
   const panels = {};
-  for (const [name, apiName] of [["workflow", "CodexWorkflowPanel"], ["incubator", "CodexIncubatorPanel"], ["conversations", "CodexConversationsPanel"], ["transfer", "CodexTransferPanel"]]) runtime.window[apiName] = { create(root, options) { const panel = { root, options, active: false, activity: [], clears: 0, targets: [], reloadReady: true, draft: false, hasDraft() { return this.draft; }, canReload() { return this.reloadReady; }, async prepareReload() { return this.reloadReady; }, setActive(value) { this.active = Boolean(value); this.activity.push(this.active); }, clear() { this.active = false; this.clears++; }, async useTarget(value) { this.targets.push(value); return true; } }; panels[name] = panel; return panel; } };
+  for (const [name, apiName] of [["workflow", "CodexWorkflowPanel"], ["incubator", "CodexIncubatorPanel"], ["conversations", "CodexConversationsPanel"], ["transfer", "CodexTransferPanel"]]) runtime.window[apiName] = { create(root, options) { const panel = { root, options, active: false, activity: [], clears: 0, targets: [], reloadReady: true, draft: false, taskOpen: false, taskContext: null, openReady: true, clearReady: true, refreshes: 0, refresh() { this.refreshes++; }, hasDraft() { return this.draft; }, canReload() { return this.reloadReady; }, async prepareReload() { return this.reloadReady; }, setActive(value) { this.active = Boolean(value); this.activity.push(this.active); }, clear() { this.active = false; this.taskOpen = false; this.taskContext = null; this.clears++; }, async useTarget(value) { this.targets.push(value); return true; }, async openTask(value) { if (!this.openReady) return false; this.taskContext = value; return true; }, clearTask() { if (!this.clearReady) return false; this.taskContext = null; return true; }, getTaskContext() { return this.taskContext; }, hasOpenTask() { return this.taskOpen; }, closeTask() { if (options.onTaskLeave?.() === false) return false; this.taskOpen = false; options.onTaskStateChange?.(); return true; } }; panels[name] = panel; return panel; } };
   const names = "state,livePlan,validateLivePlan,pollLivePlan,savePlanSnapshot,api,bootstrap,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,showPair,showOffline,pathValue,appendLink,renderMarkdown,setFont,selectTab,selectWorkView,syncWorkPanelActivity,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks,uiUpdate,versionNotice,renderVersion,scriptVersion,loadedUiVersion,maybeReloadConnectedUi,checkConnectedVersion";
   const normalized = normalizeScript(script), footer = "  void bootstrap();\n})();";
   assert.equal(normalized.split(footer).length, 2, "test export insertion must match only bootstrap footer");
@@ -69,7 +70,7 @@ let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
 
 await test("Work offers an explicit picture dispatch entry and starts with ideas", () => {
-  assert.deepEqual([...html.matchAll(/data-work-view="([^"]+)"/g)].map(match => match[1]), ["ideas", "conversations", "workflow"]); assert.match(html, /data-work-view="workflow"[^>]*>看图与派工/); assert.match(html, /id="phoneWorkflowDetails"[^>]*hidden/); assert.equal([...html.matchAll(/id="phoneWorkflowPanel"/g)].length, 1);
+  assert.deepEqual([...html.matchAll(/data-work-view="([^"]+)"/g)].map(match => match[1]), ["ideas", "conversations", "workflow"]); assert.match(html, /data-work-view="workflow"[^>]*>独立工作记录/); assert.match(html, /<summary>其它入口<\/summary>/); assert.match(html, /id="phoneWorkflowDetails"[^>]*hidden/); assert.equal([...html.matchAll(/id="phoneWorkflowPanel"/g)].length, 1);
   const h = harness(); h.ready(); h.api.selectTab("work"); assert.equal(h.get("phoneWorkflowDetails").hidden, true); assert.equal(h.panels.incubator.active, true); assert.equal(h.panels.workflow.active, false); assert.match(h.get("phoneWorkNotice").textContent, /点确认发布/);
 });
 await test("picture dispatch selection opens the existing panel with its own explanation", () => {
@@ -446,5 +447,22 @@ await test("trusted offline page without a plan snapshot reconnects by reads onl
 await test("version probe outage leaves a working record alone and foreground resumes only safe reads", async () => {
   const h = harness(); h.ready(); h.api.selectWorkView("workflow"); h.answers.push(Promise.reject(new TypeError("offline"))); await h.api.checkConnectedVersion(); assert.equal(h.api.state.paired, true); assert.equal(h.panels.workflow.clears, 0); assert.equal(h.reloads.length, 0); assert.ok([...h.timers.values()].some(timer => timer.delay === 15000));
   h.document.hidden = true; const before = h.calls.length; await h.api.checkConnectedVersion(); assert.equal(h.calls.length, before);
+});
+await test("paired task workspace reuses one workflow DOM and follows task foreground activity", async () => {
+  const h = harness(); h.ready(); h.api.selectTab("work"); const task = { ideaId: "exact-idea", recordId: "exact-record", revision: 3, title: "底稿", body: "不打开手机 ChatGPT" }, host = h.document.createElement("section");
+  assert.equal(await h.panels.incubator.options.onTaskOpen(task), true); assert.equal(h.panels.incubator.options.getTaskContext(), task); h.panels.incubator.options.onTaskMount(host); h.panels.incubator.taskOpen = true; h.panels.incubator.options.onTaskStateChange(); assert.equal(h.get("phoneWorkflowPanel").parentElement, host); assert.equal(h.panels.workflow.active, true); assert.equal(h.panels.incubator.active, true); assert.equal(h.get("phoneWorkflowDetails").hidden, true); assert.equal(h.calls.length, 0);
+  h.api.selectWorkView("conversations"); assert.equal(h.panels.workflow.active, false); h.api.selectWorkView("ideas"); assert.equal(h.panels.workflow.active, true); assert.equal(h.get("phoneWorkflowPanel").parentElement, host); h.api.selectTab("documents"); assert.equal(h.panels.workflow.active, false); h.api.selectTab("work"); assert.equal(h.panels.workflow.active, true);
+});
+await test("busy task cannot detach its panel into independent records until workflow saves are safe", () => {
+  const h = harness(); h.ready(); h.api.selectTab("work"); const host = h.document.createElement("section"); h.panels.incubator.options.onTaskMount(host); h.panels.incubator.taskOpen = true; h.panels.incubator.options.onTaskStateChange(); h.panels.workflow.clearReady = false;
+  assert.equal(h.api.selectWorkView("workflow"), false); assert.equal(h.get("phoneWorkIdeas").hidden, false); assert.equal(h.get("phoneWorkflowDetails").hidden, true); assert.equal(h.get("phoneWorkflowPanel").parentElement, host); assert.equal(h.panels.incubator.taskOpen, true);
+  h.panels.workflow.clearReady = true; assert.equal(h.api.selectWorkView("workflow"), true); assert.equal(h.get("phoneWorkflowPanel").parentElement, h.get("phoneWorkflowDetails")); assert.equal(h.panels.incubator.taskOpen, false); assert.equal(h.panels.workflow.active, true); assert.equal(h.calls.length, 0);
+});
+await test("task open rejection and pairing expiry preserve exact activity and private clearing boundaries", async () => {
+  const h = harness(); h.ready(); h.api.selectTab("work"); h.panels.workflow.openReady = false; assert.equal(await h.panels.incubator.options.onTaskOpen({ ideaId: "one" }), false); assert.equal(h.get("phoneWorkflowPanel").parentElement, h.get("phoneWorkflowDetails")); assert.equal(h.panels.workflow.active, false);
+  h.panels.incubator.taskOpen = true; h.panels.incubator.options.onTaskStateChange(); assert.equal(h.panels.workflow.active, true); h.api.showPair("配对撤销"); assert.equal(h.panels.workflow.active, false); assert.equal(h.panels.workflow.taskContext, null); assert.equal(h.panels.incubator.taskOpen, false); assert.equal(h.panels.workflow.clears, 1); assert.equal(h.panels.incubator.clears, 1); assert.equal(h.calls.length, 0);
+});
+await test("computer task source change refreshes the same phone task list without navigating or sending", () => {
+  const h = harness(); h.ready(); h.api.selectTab("work"); h.panels.workflow.options.onTaskChange({ ideaId: "one", revision: 2 }); assert.equal(h.panels.incubator.refreshes, 1); assert.equal(h.get("phoneWorkIdeas").hidden, false); assert.equal(h.calls.length, 0); assert.equal(h.reloads.length, 0); assert.equal(h.panels.workflow.active, false);
 });
 console.log(`PASS phone UI ${count} checks`);

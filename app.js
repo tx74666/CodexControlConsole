@@ -45,7 +45,7 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.39";
+const consoleUiVersion = "1.0.40";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -3092,32 +3092,45 @@ function normalizeConsoleWorkView(value) {
 }
 
 function setConsoleWorkView(value) {
-  activeWorkView = normalizeConsoleWorkView(value);
+  const next = normalizeConsoleWorkView(value);
+  if (next === "workflow" && desktopIncubatorPanel?.closeTask?.() === false) return false;
+  activeWorkView = next;
   const ideas = document.getElementById("desktopWorkIdeas"), conversations = document.getElementById("desktopConversationsPanel"), workflow = document.getElementById("desktopWorkflowDetails");
   if (ideas) ideas.hidden = activeWorkView !== "ideas";
   if (conversations) conversations.hidden = activeWorkView !== "conversations";
   if (workflow) { workflow.hidden = activeWorkView !== "workflow"; if (activeWorkView === "workflow") workflow.open = true; }
   for (const button of document.querySelectorAll("#consoleWorkView [data-work-view]")) button.setAttribute("aria-pressed", String(button.dataset.workView === activeWorkView));
   syncConsoleTransferActivity();
+  return true;
 }
 
 function syncConsoleTransferActivity() {
   desktopTransferPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "transfer");
   desktopIncubatorPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && activeWorkView === "ideas");
   desktopConversationsPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && activeWorkView === "conversations");
-  desktopWorkflowPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && activeWorkView === "workflow" && Boolean(document.getElementById("desktopWorkflowDetails")?.open));
+  desktopWorkflowPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && (activeWorkView === "ideas" && Boolean(desktopIncubatorPanel?.hasOpenTask?.()) || activeWorkView === "workflow" && Boolean(document.getElementById("desktopWorkflowDetails")?.open)));
 }
 
 function bindConsoleTransfer() {
-  desktopIncubatorPanel = window.CodexIncubatorPanel?.create(document.getElementById("desktopIncubatorPanel")) || null;
+  desktopWorkflowPanel = window.CodexWorkflowPanel?.create(document.getElementById("desktopWorkflowPanel"), {
+    onConnection: () => document.getElementById("phoneCompanionOpen")?.click(),
+    onTaskChange: () => void desktopIncubatorPanel?.refresh?.()
+  }) || null;
+  desktopIncubatorPanel = window.CodexIncubatorPanel?.create(document.getElementById("desktopIncubatorPanel"), {
+    onTaskOpen: task => desktopWorkflowPanel?.openTask?.(task) || false,
+    getTaskContext: () => desktopWorkflowPanel?.getTaskContext?.() || null,
+    onTaskMount: host => host.append(document.getElementById("desktopWorkflowPanel")),
+    onTaskLeave: () => {
+      if (desktopWorkflowPanel?.clearTask?.() === false) return false;
+      const host = document.getElementById("desktopWorkflowDetails"), panel = document.getElementById("desktopWorkflowPanel"); if (host && panel) host.append(panel); return true;
+    },
+    onTaskStateChange: syncConsoleTransferActivity
+  }) || null;
   desktopConversationsPanel = window.CodexConversationsPanel?.create(document.getElementById("desktopConversationsPanel"), {
     onTarget: async thread => { setConsoleWorkView("ideas"); await desktopIncubatorPanel?.useTarget(thread); }
   }) || null;
   for (const button of document.querySelectorAll("#consoleWorkView [data-work-view]")) button.addEventListener("click", () => setConsoleWorkView(button.dataset.workView));
   document.getElementById("desktopWorkflowDetails")?.addEventListener("toggle", syncConsoleTransferActivity);
-  desktopWorkflowPanel = window.CodexWorkflowPanel?.create(document.getElementById("desktopWorkflowPanel"), {
-    onConnection: () => document.getElementById("phoneCompanionOpen")?.click()
-  }) || null;
   desktopTransferPanel = window.CodexTransferPanel?.create(document.getElementById("desktopTransferPanel"), {
     onConnection: () => document.getElementById("phoneCompanionOpen")?.click()
   }) || null;

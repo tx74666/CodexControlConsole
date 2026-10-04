@@ -151,7 +151,7 @@ await test("remembered computer opens work records without exporting phone data 
   h.get("transferAddress").value = "http://192.168.1.10:8899/";
   await h.api.openTransferConnection();
   await h.api.openTransferConnection(true, "work");
-  assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=work");
+  assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=work&workView=ideas");
   assert.equal(h.stores.get("settings").get("transferConnection").address, "http://192.168.1.10:8899/?tab=transfer");
   assert.equal(JSON.stringify([...h.stores.get("records")]), privateBefore); assert.equal(h.calls.length, 0);
 });
@@ -560,7 +560,7 @@ await test("computer Work entry navigates only after a saved LAN address and nev
   const h = harness(); await h.api.openComputerWork(); assert.equal(h.api.state.tab, "transfer"); assert.match(h.get("transferNotice").textContent, /配对后打开电脑工作区/);
   h.stores.get("settings").set("transferConnection", { id: "transferConnection", address: "http://codex-0123456789abcdef.local:8899/?tab=transfer" }); await h.api.restoreTransferConnection();
   await h.api.incubatorApi("incubator/create", { requestId: requestId(17), title: "不会自动上传" }); await h.api.openComputerWork();
-  assert.equal(h.runtime.window.location.href, "http://codex-0123456789abcdef.local:8899/?tab=work"); assert.equal(h.calls.length, 0); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 1);
+  assert.equal(h.runtime.window.location.href, "http://codex-0123456789abcdef.local:8899/?tab=work&workView=ideas"); assert.equal(h.get("computerWorkOpen").textContent, "打开 Console 工作区"); assert.equal(h.calls.length, 0); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 1);
 });
 await test("PhoneStore commits atomic record transforms and aborts without overwriting existing private stores", async () => {
   const saved = new Map([["library", { id: "library", privateText: "original library" }]]), self = {}; let opens = 0;

@@ -1935,7 +1935,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if action == "background":
                     CONSOLE_WINDOW_SESSIONS.reconsider_shutdown()
             except (WorkflowError, WorkflowModelError, TransferError, RequestBodyError) as error:
-                self.send_json({"error": str(error), "code": getattr(error, "code", "invalid_request")}, status=error.status)
+                self.send_json({"error": str(error), "code": getattr(error, "code", "invalid_request"),
+                    **({"queueAccepted": False} if getattr(error, "queueAccepted", None) is False else {})}, status=error.status)
             except (OSError, sqlite3.Error):
                 self.send_json({"error": "工作内容未送达，请检查电脑磁盘后重试。"}, status=503)
             return

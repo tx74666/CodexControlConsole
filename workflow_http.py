@@ -38,16 +38,25 @@ def workflow_get(service, action, query, *, prefix="/api/workflow"):
 def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=False, authorize=None):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
-    operations = {"create": service.create, "message": service.add_message,
-                  "submit": service.submit, "discuss": service.discuss,
-                  "transcribe": service.transcribe, "retry": service.retry,
-                  "incubator/create": service.incubator_create, "incubator/update": service.incubator_update,
-                  "incubator/publish": service.incubator_publish,
-                  "incubator/refinement/pause": service.incubator_refinement_pause,
-                  "conversations/request": service.conversations_request}
+    operations = {"create": "create", "message": "add_message",
+                  "submit": "submit", "discuss": "discuss",
+                  "transcribe": "transcribe", "retry": "retry",
+                  "task-record": "task_record", "app-work": "app_work", "app-work/end": "end_app_work",
+                  "incubator/create": "incubator_create", "incubator/update": "incubator_update",
+                  "incubator/publish": "incubator_publish",
+                  "incubator/refinement/pause": "incubator_refinement_pause",
+                  "conversations/request": "conversations_request"}
     if action in operations:
-        return operations[action](body, prefix=prefix, authorize=authorize)
+        operation = getattr(service, operations[action], None)
+        if not callable(operation):
+            raise WorkflowError("电脑端工作组件尚未更新。", 503)
+        return operation(body, prefix=prefix, authorize=authorize)
     if desktop:
+        if action == "app-work/bindings":
+            operation = getattr(service, "configure_app_work", None)
+            if not callable(operation):
+                raise WorkflowError("电脑端工作组件尚未更新。", 503)
+            return operation(body, authorize=authorize)
         if action == "incubator/targets":
             return service.incubator_set_targets(body, authorize=authorize)
         if action == "models":

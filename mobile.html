@@ -11,16 +11,16 @@
   <link rel="manifest" href="/mobile.webmanifest">
   <link rel="apple-touch-icon" href="/phone/phone-icon-180.png?v=phone-white-72" sizes="180x180">
   <link rel="icon" href="/phone/phone-icon-192.png?v=phone-white-72" type="image/png">
-  <link rel="stylesheet" href="/mobile.css?v=console-app-actions-1.0.39-20261004">
+  <link rel="stylesheet" href="/mobile.css?v=console-task-chat-work-1.0.40-20261004">
   <link rel="stylesheet" href="/transfer-panel.css?v=console-transfer-1.0.30-phone-message-20261004">
   <script src="/transfer-panel.js?v=console-transfer-1.0.30-phone-message-20261004" defer></script>
-  <link rel="stylesheet" href="/workflow-panel.css?v=console-app-actions-1.0.39-20261004">
-  <script src="/workflow-panel.js?v=console-app-actions-1.0.39-20261004" defer></script>
-  <link rel="stylesheet" href="/incubator-panel.css?v=console-app-actions-1.0.39-20261004">
-  <script src="/incubator-panel.js?v=console-app-actions-1.0.39-20261004" defer></script>
-  <link rel="stylesheet" href="/conversations-panel.css?v=console-app-actions-1.0.39-20261004">
-  <script src="/conversations-panel.js?v=console-app-actions-1.0.39-20261004" defer></script>
-  <script src="/mobile.js?v=console-app-actions-1.0.39-20261004" defer></script>
+  <link rel="stylesheet" href="/workflow-panel.css?v=console-task-chat-work-1.0.40-20261004">
+  <script src="/workflow-panel.js?v=console-task-chat-work-1.0.40-20261004" defer></script>
+  <link rel="stylesheet" href="/incubator-panel.css?v=console-task-chat-work-1.0.40-20261004">
+  <script src="/incubator-panel.js?v=console-task-chat-work-1.0.40-20261004" defer></script>
+  <link rel="stylesheet" href="/conversations-panel.css?v=console-task-chat-work-1.0.40-20261004">
+  <script src="/conversations-panel.js?v=console-task-chat-work-1.0.40-20261004" defer></script>
+  <script src="/mobile.js?v=console-task-chat-work-1.0.40-20261004" defer></script>
 </head>
 <body>
   <header class="app-header" id="appHeader">
@@ -52,10 +52,10 @@
       <div class="toolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
       <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
       <section id="workPanel" class="tab-panel" hidden aria-label="工作记录">
-        <nav class="work-view-nav" aria-label="Work 内容"><button type="button" data-work-view="ideas" aria-pressed="true">想法与任务</button><button type="button" data-work-view="conversations" aria-pressed="false">Projects / Recents · 会话</button><button type="button" data-work-view="workflow" aria-pressed="false">看图与派工</button></nav>
+        <nav class="work-view-nav" aria-label="Console 工作区"><button type="button" data-work-view="ideas" aria-pressed="true">任务 · Chat / Work / Output</button><details class="work-view-more"><summary>其它入口</summary><button type="button" data-work-view="conversations" aria-pressed="false">Projects / Recents · 会话</button><button type="button" data-work-view="workflow" aria-pressed="false">独立工作记录</button></details></nav>
         <div id="phoneWorkIdeas"><div id="phoneIncubatorPanel"></div></div>
         <div id="phoneConversationsPanel" hidden></div>
-        <p id="phoneWorkNotice" class="muted small">电脑工作区 · 保存后电脑和已配对手机会同步。想法保存在这里，点确认发布才会交给聊天。</p>
+        <p id="phoneWorkNotice" class="muted small">Console 工作区 · 任务底稿、Chat、Work 和 Output 在同一处。保存不等于执行。</p>
         <details id="phoneWorkflowDetails" class="document-section" hidden><summary>工作记录与电脑执行</summary><div id="phoneWorkflowPanel"></div></details>
         <details class="document-section"><summary>执行清单</summary>
       <section id="tasksPanel" aria-labelledby="tasksTitle">

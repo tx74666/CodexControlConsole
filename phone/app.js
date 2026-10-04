@@ -366,7 +366,7 @@
     rememberedTransferAddress = address; el("transferAddress").value = address;
     el("transferRemembered").hidden = !address; el("transferForget").hidden = !address;
     el("transferComputerName").textContent = address ? `已保存电脑入口 · ${new URL(address).hostname}` : "";
-    el("computerWorkOpen").textContent = address ? "打开电脑工作区" : "连接电脑工作区";
+    el("computerWorkOpen").textContent = address ? "打开 Console 工作区" : "连接 Console 工作区";
     el("transferScan").textContent = address ? "扫描新的电脑二维码" : "扫码连接电脑";
   }
   async function restoreTransferConnection() {
@@ -384,7 +384,7 @@
       const address = transferAddress(useRemembered ? rememberedTransferAddress : el("transferAddress").value);
       transferScanner?.stop(); await saveTransferConnection(address);
       const target = new URL(address);
-      if (view === "work") target.searchParams.set("tab", "work");
+      if (view === "work") { target.searchParams.set("tab", "work"); target.searchParams.set("workView", "ideas"); }
       window.location.href = target.href;
     } catch (error) { failure(error, "transferNotice"); }
   }

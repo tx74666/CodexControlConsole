@@ -290,9 +290,9 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                     self._send({"paired": False})
                 else:
                     session = companion.session(token, self.client_address[0])
-                    result = {"paired": True}
+                    result = {"paired": True, "version": companion.version}
                     if session.get("remembered"):
-                        result.update({"remembered": True, "version": companion.version,
+                        result.update({"remembered": True,
                                        "connectionUrl": companion.connection_url})
                     self._send(result)
                 return
@@ -443,7 +443,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                     with read_transfer_request(self.headers, self.rfile, allowed_fields={"requestId", "recordId"}) as (fields, files):
                         authorize()
                         result = companion.workflow_service.upload(fields, files, prefix="/api/phone/workflow", authorize=authorize)
-                elif action in {"create", "message", "submit", "discuss", "transcribe", "retry",
+                elif action in {"create", "message", "submit", "discuss", "transcribe", "retry", "task-record", "app-work", "app-work/end",
                                 "incubator/create", "incubator/update", "incubator/publish", "incubator/refinement/pause", "conversations/request"}:
                     body = self._body(maximum=128 * 1024)
                     authorize()
@@ -501,7 +501,8 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         except PhoneRequestError as error:
             self._send({"error": str(error)}, error.status)
         except (TransferError, DeviceStoreError, WorkflowError, WorkflowModelError) as error:
-            self._send({"error": str(error), "code": getattr(error, "code", "invalid_request")}, error.status)
+            self._send({"error": str(error), "code": getattr(error, "code", "invalid_request"),
+                **({"queueAccepted": False} if getattr(error, "queueAccepted", None) is False else {})}, error.status)
         except (ValueError, OSError, RuntimeError, sqlite3.Error):
             self._send({"error": "操作未完成，请刷新后重试。"}, 400)
 

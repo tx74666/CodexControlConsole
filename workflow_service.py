@@ -22,6 +22,7 @@ from transfer_store import IncomingFile, TransferError, _image, _filename, _safe
 from workflow_process import WorkflowProcess
 from workflow_transcription import LocalTranscriptionError, local_transcribe, local_transcription_config
 from workflow_script_proposals import script_blocks, action_blocks
+from workflow_native_work import NativeWorkMixin
 
 MAX_TEXT = 20000
 MAX_UPLOAD = 24 * 1024 * 1024
@@ -71,7 +72,7 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-class WorkflowService:
+class WorkflowService(NativeWorkMixin):
     def __init__(self, data_dir, models=None, callbacks=None, projects=None, *, computer_id=None, computer_name=None, recover_jobs=True):
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -93,7 +94,7 @@ class WorkflowService:
                 recovered += db.execute("UPDATE idea_dispatches SET status='needs_review',error='发布过程中电脑服务重启；请核对目标聊天，不能自动重发。',updated_at=? WHERE status='claimed'", (_now(),)).rowcount
                 db.execute("""UPDATE jobs SET status='waiting',error='App 讨论发送结果需要核对，不能自动重发。',updated_at=?
                     WHERE id IN (SELECT json_extract(snapshot,'$.jobId') FROM idea_dispatches
-                    WHERE status='needs_review' AND json_extract(snapshot,'$.origin')='workflow_discussion')""", (_now(),))
+                    WHERE status='needs_review' AND json_extract(snapshot,'$.origin') IN ('workflow_discussion','workflow_work'))""", (_now(),))
             if recovered:
                 self._revision(db, True)
             db.commit()
@@ -271,6 +272,7 @@ class WorkflowService:
                 "actions": [{"id": action, "name": {"auto": "AI 规划并执行", "capture_screen": "截图", "command": "指定脚本", "generated_script": "生成并运行项目脚本", "result_import": "导入项目结果"}[action]} for action in sorted(ACTIONS)],
                 "models": self.models.config() if self.models is not None else {"ready": False, "selected": "", "providers": [], "status": "未配置 AI"},
                 "appDiscussion": {"enabled": True, "defaultTarget": {"kind": "codex", "mode": "new", "threadId": "", "name": "Console 图片讨论"}},
+                "appWork": self.app_work_config(),
                 "localTranscription": local_transcription_config(ffmpeg_path=discover_ffmpeg() if discover_ffmpeg else None),
                 "backgroundEnabled": self.background_enabled, "limits": {"maxTextChars": MAX_TEXT, "maxFiles": MAX_ATTACHMENTS, "maxFileBytes": MAX_FILE_BYTES}}
 
@@ -320,12 +322,17 @@ class WorkflowService:
                 "updatedAt": row["updated_at"], "error": row["error"], "log": row["log"], "result": result,
                 "resultMessageId": result.get("messageId"), "resultAttachmentIds": result.get("attachmentIds", [])}
         if app_dispatch is not None:
-            value["appDispatch"] = {"id": app_dispatch["id"], "sourceType": "workflow_discussion",
+            value["appDispatch"] = {"id": app_dispatch["id"], "sourceType": json.loads(app_dispatch["snapshot"]).get("origin", "workflow_discussion"),
                 "status": app_dispatch["status"], "targetKind": app_dispatch["target_kind"],
                 "targetMode": app_dispatch["target_mode"], "targetThreadId": app_dispatch["target_thread_id"],
                 "targetName": app_dispatch["target_name"], "error": app_dispatch["error"]}
         if "purpose" in payload:
             value["purpose"] = payload["purpose"]
+        if payload.get("executionEngine"):
+            value["executionEngine"] = payload["executionEngine"]
+            value["workspace"] = {key: payload["nativeWork"]["binding"][key] for key in ("id", "name", "workspaceProjectId", "workspaceRoot", "allowedRoot")}
+        if payload.get("sourceTask"):
+            value["sourceTask"] = payload["sourceTask"]
         if payload.get("appScript"):
             script = payload["appScript"]
             value["scriptProposal"] = {key: script[key] for key in
@@ -357,6 +364,8 @@ class WorkflowService:
                     message["actionProposals"] = self._action_proposals(db, identifier, message["id"])
             jobs = [self._job_public(db, item) for item in db.execute("SELECT * FROM jobs WHERE record_id=? ORDER BY rowid", (identifier,))]
             record = self._public_record(row)
+            source_task = self._source_task(db, identifier)
+            record["sourceIdeaId"] = source_task["ideaId"] if source_task else None
             previous = db.execute("""SELECT * FROM idea_dispatches WHERE json_extract(snapshot,'$.origin')='workflow_discussion'
                 AND json_extract(snapshot,'$.recordId')=? AND status IN ('waiting','completed')
                 AND target_thread_id IS NOT NULL AND target_thread_id<>'' ORDER BY rowid DESC LIMIT 1""", (identifier,)).fetchone()
@@ -365,7 +374,7 @@ class WorkflowService:
                     if item["id"] == previous["target_thread_id"] and item["kind"] == previous["target_kind"]), None)
                 record["discussionTarget"] = {"kind": previous["target_kind"], "mode": "existing",
                     "threadId": previous["target_thread_id"], "name": cached_target["title"] if cached_target else previous["target_name"]}
-            return {"record": record, "messages": messages, "attachments": attachments, "jobs": jobs, "revision": self._revision(db)}
+            return {"record": record, "sourceTask": source_task, "messages": messages, "attachments": attachments, "jobs": jobs, "revision": self._revision(db)}
 
     def list(self, query="", prefix="/api/workflow"):
         params = parse_qs(query, keep_blank_values=True)
@@ -417,7 +426,7 @@ class WorkflowService:
                  "purpose": snapshot.get("purpose", "execute"), "refinementId": snapshot.get("refinementId"),
                  "round": snapshot.get("round"), "roundLimit": snapshot.get("roundLimit")}
         value["sourceType"] = snapshot.get("origin", "idea")
-        if value["sourceType"] == "workflow_discussion":
+        if value["sourceType"] in {"workflow_discussion", "workflow_work"}:
             value.update(recordId=snapshot["recordId"], jobId=snapshot["jobId"])
             if not private:
                 value.pop("prompt")  # Local image paths are for the authenticated computer dispatcher only.
@@ -451,8 +460,8 @@ class WorkflowService:
                 return {"unchanged": True, "revision": revision}
             rows = db.execute("""SELECT * FROM ideas ORDER BY
                 CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,updated_at DESC,id""").fetchall()
-            dispatches = db.execute("SELECT * FROM idea_dispatches WHERE COALESCE(json_extract(snapshot,'$.origin'),'idea')<>'workflow_discussion' ORDER BY created_at DESC,id").fetchall()
-            return {"ideas": [self._public_idea(row) for row in rows], "revision": revision,
+            dispatches = db.execute("SELECT * FROM idea_dispatches WHERE COALESCE(json_extract(snapshot,'$.origin'),'idea') NOT IN ('workflow_discussion','workflow_work') ORDER BY created_at DESC,id").fetchall()
+            return {"ideas": [{**self._public_idea(row), "workflowRecordId": self._setting(db, "task-record:" + row["id"])} for row in rows], "revision": revision,
                     "dispatches": [self._public_dispatch(row) for row in dispatches],
                     "refinements": [self._public_refinement(row) for row in db.execute("SELECT * FROM idea_refinements ORDER BY created_at DESC,id")],
                     "targets": self._setting(db, "incubator_targets") or []}
@@ -1099,20 +1108,24 @@ class WorkflowService:
                         return {"dispatch": None, "revision": self._revision(db), "duplicate": False, "shouldDispatch": False}
                 dispatch_id = row["id"]
                 snapshot = json.loads(row["snapshot"])
-                if snapshot.get("origin") == "workflow_discussion":
+                if snapshot.get("origin") in {"workflow_discussion", "workflow_work"}:
                     job = self._app_dispatch_job(db, row, snapshot)
                     try:
-                        self._check_app_images(json.loads(job["payload"]))
-                    except (WorkflowError, TransferError):
-                        now, error = _now(), "本轮已确认的图片不存在或已变更；讨论未发送，请重新选择图片后确认。"
+                        payload = json.loads(job["payload"])
+                        self._check_app_images(payload)
+                        if snapshot.get("origin") == "workflow_work":
+                            self._check_native_work(db, job, payload, before_send=True)
+                    except (WorkflowError, TransferError, OSError) as failure:
+                        now = _now()
+                        error = ("Work 未发送：" + str(failure)) if snapshot.get("origin") == "workflow_work" else "本轮已确认的图片不存在或已变更；讨论未发送，请重新选择图片后确认。"
                         db.execute("UPDATE idea_dispatches SET status='failed',error=?,updated_at=? WHERE id=?", (error, now, dispatch_id))
                         db.execute("UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=?", (error, now, job["id"]))
                         self._receipt(db, "incubator_claim", body, {"dispatchId": dispatch_id})
                         self._revision(db, True)
                         return {"dispatch": self._public_dispatch(self._dispatch(db, dispatch_id), True),
                             "revision": self._revision(db), "duplicate": False, "shouldDispatch": False}
-                    db.execute("UPDATE jobs SET error='电脑已认领 App 讨论，正在确认送达；请勿重复发送。',updated_at=? WHERE id=?",
-                        (_now(), job["id"]))
+                    note = "电脑已认领 App Work，正在确认送达；请勿重复发送。" if snapshot.get("origin") == "workflow_work" else "电脑已认领 App 讨论，正在确认送达；请勿重复发送。"
+                    db.execute("UPDATE jobs SET error=?,updated_at=? WHERE id=?", (note, _now(), job["id"]))
                 db.execute("UPDATE idea_dispatches SET status='claimed',claim_token=?,updated_at=? WHERE id=?",
                     (uuid.uuid4().hex, _now(), dispatch_id))
                 self._receipt(db, "incubator_claim", body, {"dispatchId": dispatch_id})
@@ -1174,12 +1187,15 @@ class WorkflowService:
                     thread_id = confirmed_id
                 now = _now()
                 snapshot = json.loads(row["snapshot"])
-                workflow = snapshot.get("origin") == "workflow_discussion"
+                workflow = snapshot.get("origin") in {"workflow_discussion", "workflow_work"}
                 refinement_id = snapshot.get("refinementId")
                 if workflow:
                     if not fail and status == "completed" and not result.get("sourceMessageId", "").strip():
                         raise WorkflowError("请绑定包含发布编号的实际用户消息，再回收 App 讨论结果。", 409, "result_not_matching")
-                    self._attach_app_discussion(db, row, snapshot, status, result, thread_id, error, now)
+                    if snapshot.get("origin") == "workflow_work":
+                        status, error = self._attach_native_work(db, row, snapshot, status, result, thread_id, error, now)
+                    else:
+                        self._attach_app_discussion(db, row, snapshot, status, result, thread_id, error, now)
                 elif refinement_id:
                     if not fail and status == "completed":
                         status, error = self._complete_refinement(db, row, result, thread_id, now)
@@ -1205,7 +1221,7 @@ class WorkflowService:
             response = {"dispatch": self._public_dispatch(self._dispatch(db, dispatch_id), True),
                         "revision": self._revision(db), "duplicate": old is not None}
             snapshot = json.loads(row["snapshot"])
-            if snapshot.get("origin") == "workflow_discussion":
+            if snapshot.get("origin") in {"workflow_discussion", "workflow_work"}:
                 response["job"] = self._job_public(db, self._app_dispatch_job(db, row, snapshot))
             else:
                 response["idea"] = self._public_idea(self._idea(db, row["idea_id"]))
@@ -1215,10 +1231,13 @@ class WorkflowService:
             return response
 
     def _app_dispatch_job(self, db, dispatch, snapshot):
-        job = db.execute("SELECT * FROM jobs WHERE id=? AND record_id=? AND kind='discuss'",
-            (_id(snapshot.get("jobId")), _id(snapshot.get("recordId")))).fetchone()
+        job = db.execute("SELECT * FROM jobs WHERE id=? AND record_id=? AND kind=?",
+            (_id(snapshot.get("jobId")), _id(snapshot.get("recordId")), "execute" if snapshot.get("origin") == "workflow_work" else "discuss")).fetchone()
         if job is None or json.loads(job["payload"]).get("appDispatchId") != dispatch["id"]:
             raise WorkflowError("App 讨论与原工作记录不匹配，未写入结果。", 409, "result_not_matching")
+        payload = json.loads(job["payload"])
+        if payload.get("sourceTask") != snapshot.get("sourceTask"):
+            raise WorkflowError("App 请求与原任务冻结正文不匹配。", 409, "result_not_matching")
         return job
 
     def _attach_app_discussion(self, db, dispatch, snapshot, status, result, thread_id, error, now):
@@ -1700,6 +1719,7 @@ class WorkflowService:
         if sum(len(item["content"]) for item in history) > 65000:
             raise WorkflowError("所选上下文过长，请缩小引用范围。")
         return {"recordTitle": record["title"], "projectName": project["name"], "history": history, "images": images,
+                "sourceTask": payload.get("sourceTask"),
                 "actionPlanning": self._action_catalog(project)}
 
     @staticmethod
@@ -1711,6 +1731,8 @@ class WorkflowService:
         return digest.hexdigest()
 
     def _check_app_images(self, payload):
+        if payload["appFrozen"].get("sourceTask") != payload.get("sourceTask"):
+            raise WorkflowError("原任务冻结内容发生变化，未发送。", 409, "context_changed")
         for item in payload["appFrozen"]["images"]:
             path = _safe_child(self.attachments_dir, Path(item["path"]).name)
             if str(path) != item["path"] or not path.is_file() or path.stat().st_size != item["size"] or self._file_digest(path) != item["sha256"]:
@@ -1722,6 +1744,8 @@ class WorkflowService:
         target, frozen = payload["appTarget"], payload["appFrozen"]
         snapshot = {"origin": "workflow_discussion", "purpose": "discuss", "recordId": record["id"],
             "jobId": job_id, "title": frozen["recordTitle"], "attachmentIds": payload["context"]["attachmentIds"]}
+        if payload.get("sourceTask"):
+            snapshot["sourceTask"] = payload["sourceTask"]
         planning = frozen.get("actionPlanning")
         if planning is not None:
             snapshot["actionPlanningSha256"] = hashlib.sha256(_json(planning).encode("utf-8")).hexdigest()
@@ -1756,6 +1780,7 @@ class WorkflowService:
             "先说明缺口；不要臆造工程对象、路径或可用能力。代码只有在用户看清项目、运行程序与完整代码并另行确认后才可能运行。\n\n" + action_contract +
             _json({"recordTitle": frozen["recordTitle"], "projectName": frozen["projectName"],
                 "question": payload["text"], "history": frozen["history"], "selectedImages": frozen["images"],
+                **({"sourceTask": payload["sourceTask"]} if payload.get("sourceTask") else {}),
                 **({"allowedActions": planning["allowedActions"], "commands": planning["commands"]} if planning is not None else {})}))
         db.execute("INSERT INTO idea_dispatches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, "", str(uuid.UUID(request_id)), _json(snapshot), prompt, target["kind"],
@@ -1765,7 +1790,7 @@ class WorkflowService:
     def _discuss_app(self, body, authorize=None):
         if authorize:
             authorize()
-        allowed = {"requestId", "recordId", "text", "computerId", "projectId", "context", "appTarget", "purpose"}
+        allowed = {"requestId", "recordId", "text", "computerId", "projectId", "context", "appTarget", "purpose", "sourceTask"}
         if not isinstance(body, dict) or set(body) - allowed:
             raise WorkflowError("App 讨论内容无效。")
         with self._db() as db:
@@ -1775,7 +1800,7 @@ class WorkflowService:
             if old:
                 job_id = old["jobId"]
             else:
-                if db.execute("""SELECT 1 FROM idea_dispatches WHERE json_extract(snapshot,'$.origin')='workflow_discussion'
+                if db.execute("""SELECT 1 FROM idea_dispatches WHERE json_extract(snapshot,'$.origin') IN ('workflow_discussion','workflow_work')
                     AND json_extract(snapshot,'$.recordId')=? AND status IN ('pending','claimed','waiting','needs_review')""",
                     (record["id"],)).fetchone():
                     raise WorkflowError("这条记录已有 App 讨论在途，请等待结果或先核对送达情况。", 409, "dispatch_in_progress")
@@ -1794,6 +1819,9 @@ class WorkflowService:
                 if not isinstance(purpose, str) or purpose not in {"discussion", "execution_plan"}:
                     raise WorkflowError("App 讨论用途无效。")
                 payload = {"computerId": computer["id"], "projectId": project["id"], "text": text, "context": context, "purpose": purpose}
+                payload["sourceTask"] = self._source_task(db, record["id"], body.get("sourceTask"))
+                if payload["sourceTask"] and body.get("sourceTask") is None:
+                    raise WorkflowError("请核对原任务当前草稿后确认 Chat。", 409, "revision_conflict")
                 payload["appTarget"] = self._app_target(db, body["appTarget"], bool(context["attachmentIds"]))
                 payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, project)
                 job_id, now = uuid.uuid4().hex, _now()
@@ -1924,6 +1952,8 @@ class WorkflowService:
                 if parent is None or parent["status"] not in {"failed", "waiting", "interrupted"}:
                     raise WorkflowError("仅失败、等待配置或中断的任务可以重试。", 409)
                 payload = json.loads(parent["payload"])
+                if payload.get("executionEngine") == "codex_app":
+                    raise WorkflowError("请重新审核 Work 并确认新任务；不能自动重发可能已执行的任务。", 409, "verification_required")
                 self._context(db, parent["record_id"], payload.get("context", {}))
                 if payload.get("appScript"):
                     self._check_frozen_script(db, parent["record_id"], payload)
@@ -1937,7 +1967,7 @@ class WorkflowService:
                     dispatch = self._dispatch(db, payload["appDispatchId"])
                     if parent["status"] != "failed" or dispatch["status"] != "failed":
                         raise WorkflowError("App 讨论尚在途或送达不明；请核对已有聊天，不能再次发送。", 409, "verification_required")
-                    if db.execute("""SELECT 1 FROM idea_dispatches WHERE json_extract(snapshot,'$.origin')='workflow_discussion'
+                    if db.execute("""SELECT 1 FROM idea_dispatches WHERE json_extract(snapshot,'$.origin') IN ('workflow_discussion','workflow_work')
                         AND json_extract(snapshot,'$.recordId')=? AND status IN ('pending','claimed','waiting','needs_review')""",
                         (parent["record_id"],)).fetchone():
                         raise WorkflowError("这条记录已有 App 讨论在途，请先等待结果。", 409, "dispatch_in_progress")
@@ -2102,7 +2132,9 @@ class WorkflowService:
 
     def has_pending_jobs(self):
         status = self.status()
-        return bool(status["running"] or status["queued"])
+        with self._db() as db:
+            native = db.execute("SELECT 1 FROM idea_dispatches WHERE json_extract(snapshot,'$.origin')='workflow_work' AND status IN ('pending','claimed','waiting') LIMIT 1").fetchone()
+        return bool(status["running"] or status["queued"] or native)
 
     def start(self):
         with self._lock:
@@ -2232,6 +2264,8 @@ class WorkflowService:
 
     def _run(self, row):
         payload = json.loads(row["payload"])
+        if payload.get("executionEngine") == "codex_app":
+            raise WorkflowError("Native Work 仅由已确认的 App 队列执行，不能进入本地模型任务。", 409)
         with self._db() as db:
             project = self._project(db, payload["projectId"])
             if payload.get("appScript"):

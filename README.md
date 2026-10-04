@@ -48,7 +48,15 @@ Submitted to-dos retain their existing storage key. An unfinished to-do input is
 
 ## Per-device Data
 
-### Phone work records (1.0.39)
+### Task Chat and Work (1.0.40)
+
+Open **Work → Console 工作区**, select a saved task and open its workspace. The task keeps its original text, selected pictures, Chat discussion, Work modifications and Output in the same record. Chat and Work are highlighted modes; choosing a mode does not send anything. Chat can use the saved task body when no additional instruction is needed. Work opens a separate review of the original task version, selected pictures, actual local Codex workspace, authorized subdirectory and exact destination. A separately selected checkbox permits the completed replacement text to update this task body; a newer user draft is never overwritten.
+
+Native Work uses the signed-in Codex App in a verified saved local project, without a model API key. Its private workspace bindings are separate from the existing screenshot, fixed-command and generated-script grants, and are disabled until explicitly configured on the computer. App acceptance and an App report alone do not establish completion: Console checks the matching completed turn and actual changed-file hashes or the precisely versioned task-body update. Returned images are copied into the original record only after their files have been checked. Uncertain delivery, changed authorization or invalid results require review and are not resent automatically. Existing discussion, script proposals, fixed actions, priorities and publication controls remain available.
+
+Each Native Work answer reports one complete `console-work-result` JSON block containing `version:1`, `text`, `files`, `changedFiles` and `validation`; `updatedTaskBody` is accepted only when that specific update was confirmed. Paths are relative to the authorized directory. A newly reserved `work/console-work-results/<publication-id>/` directory is permitted only for this round's returned images; other private or build directories cannot be reported as modified source. Selecting a workspace states the authorized scope; it is not an operating-system sandbox.
+
+### Phone work records
 
 The connected phone workspace compares the computer version with its loaded UI assets. A newer workspace reloads automatically only after local drafts and original attachment files are verified saved and recording, uploads, editing, and music playback are idle. After this page has connected successfully, it can reconnect through its existing trusted session without a saved task snapshot or replaying publications and accepted work. If the computer is already offline when the page is first opened, use its reconnect button. Pages loaded before 1.0.37 receive this behavior when they are next opened; the public home-screen app already checks its own updates automatically.
 

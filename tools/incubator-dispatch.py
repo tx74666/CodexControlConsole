@@ -47,7 +47,7 @@ def main(argv=None):
     claim = commands.add_parser("claim", help="原子认领一个 pending（高优先级先到先出）；不会发送")
     claim.add_argument("--request-id", required=True)
     claim.add_argument("--id", help="可选固定 dispatch ID；已认领不可重复认领")
-    for name in ("attach-result", "fail", "targets", "catalog", "thread-snapshot", "fetch-result"):
+    for name in ("attach-result", "fail", "targets", "catalog", "thread-snapshot", "fetch-result", "workspaces", "work-bindings"):
         command = commands.add_parser(name, help="JSON 输入经文件或 stdin；不会调用任何聊天工具")
         command.add_argument("--json-file")
         command.add_argument("--request-id", help="覆写/补入 requestId；targets 缺省按快照内容生成稳定 UUID")
@@ -78,6 +78,7 @@ def main(argv=None):
         operation = {"attach-result": service.incubator_attach_result, "fail": service.incubator_fail,
                      "targets": service.incubator_set_targets, "catalog": service.conversations_catalog,
                      "thread-snapshot": service.conversations_thread_snapshot,
+                     "workspaces": service.native_work_catalog, "work-bindings": service.configure_app_work,
                      "fetch-result": service.conversations_fetch_result}[args.command]
         result = operation(body)
     print(json.dumps(result, ensure_ascii=False))

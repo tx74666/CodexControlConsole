@@ -267,7 +267,7 @@ class PhoneDeviceChecks(unittest.TestCase):
         self.assertTrue(state["autoRestore"]["error"])
         self.assertEqual(self.request("/api/phone/pair", "POST", {"code": state["pairingCode"], "remember": True})[0], 503)
         self.assertEqual(self.request("/api/phone/pair", "POST", {"code": state["pairingCode"], "remember": False})[0], 200)
-        self.assertEqual(self.request("/api/phone/status")[1], {"paired": True})
+        self.assertEqual(self.request("/api/phone/status")[1], {"paired": True, "version": self.service.version})
 
     def test_top_level_pwa_navigation_can_load_shell_without_opening_cross_site_api(self):
         navigation = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}

@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from document_library import DocumentLibraryService
+from workflow_service import WorkflowError
+from workflow_http import workflow_post
 import phone_companion as phone
 
 
@@ -149,6 +151,105 @@ class PhoneCompanionChecks(unittest.TestCase):
             self.assertNotIn("NOT REGISTERED", str(data))
         self.assertEqual(self.service.state(False)["pairedCount"], 0)
 
+    def test_task_chat_work_routes_require_the_live_paired_session(self):
+        calls = []
+
+        class WorkflowProbe:
+            def task_record(self, body, *, prefix, authorize):
+                authorize()
+                calls.append(("task-record", body, prefix))
+                return {"record": {"id": "isolated-task-record"}}
+
+            def app_work(self, body, *, prefix, authorize):
+                authorize()
+                calls.append(("app-work", body, prefix))
+                return {"job": {"id": "isolated-work-job", "status": "queued"}}
+
+            def end_app_work(self, body, *, prefix, authorize):
+                authorize()
+                calls.append(("app-work/end", body, prefix))
+                return {"job": {"id": "isolated-work-job", "status": "failed"}}
+
+        self.service.workflow_service = WorkflowProbe()
+        for action in ("task-record", "app-work", "app-work/end"):
+            self.assertEqual(self.request("/api/phone/workflow/" + action, "POST", {"requestId": "test-only"})[0], 401)
+        self.assertEqual(calls, [])
+        self.pair()
+        for action in ("task-record", "app-work", "app-work/end"):
+            body = {"requestId": "isolated-" + action, "recordId": "isolated-task-record"}
+            status, result, _ = self.request("/api/phone/workflow/" + action, "POST", body)
+            self.assertEqual(status, 200, result)
+            self.assertEqual(calls[-1], (action, body, "/api/phone/workflow"))
+        self.assertEqual(len(calls), 3)
+        self.now[0] += phone.SESSION_TTL + 1
+        self.assertEqual(self.request("/api/phone/workflow/app-work", "POST", {"requestId": "expired"})[0], 401)
+        self.assertEqual(len(calls), 3)
+
+    def test_phone_cannot_configure_work_authorization_or_workspace_catalog(self):
+        self.service.workflow_service = object()
+        self.pair()
+        for action in ("app-work/bindings", "app-work/workspaces", "workspaces", "work-bindings"):
+            status, result, _ = self.request("/api/phone/workflow/" + action, "POST", {"bindings": []})
+            self.assertEqual(status, 404, (action, result))
+
+    def test_explicit_work_rejection_marker_does_not_turn_unknown_failure_into_no_queue(self):
+        class WorkflowProbe:
+            def app_work(self, body, *, prefix, authorize):
+                authorize()
+                error = WorkflowError("Work source changed" if body["case"] == "rejected" else "Unavailable", 409)
+                if body["case"] == "rejected":
+                    error.code, error.queueAccepted = "revision_conflict", False
+                raise error
+
+        self.service.workflow_service = WorkflowProbe()
+        self.pair()
+        status, result, _ = self.request("/api/phone/workflow/app-work", "POST", {"case": "rejected"})
+        self.assertEqual(status, 409)
+        self.assertEqual(result["code"], "revision_conflict")
+        self.assertIs(result["queueAccepted"], False)
+        status, result, _ = self.request("/api/phone/workflow/app-work", "POST", {"case": "unknown"})
+        self.assertEqual(status, 409)
+        self.assertNotIn("queueAccepted", result)
+
+    def test_temporary_pairing_status_keeps_actual_version_without_device_trust(self):
+        self.pair()
+        status, result, _ = self.request("/api/phone/status")
+        self.assertEqual(status, 200)
+        self.assertIs(result["paired"], True)
+        self.assertEqual(result["version"], self.service.version)
+        self.assertNotIn("remembered", result)
+        self.assertNotIn("connectionUrl", result)
+
+    def test_new_work_ui_cannot_silently_downgrade_on_an_older_component(self):
+        class OlderWorkflow:
+            def create(self, body, *, prefix, authorize):
+                return {"record": {"id": "legacy-record"}}
+
+        service = OlderWorkflow()
+        self.assertEqual(workflow_post(service, "create", {})["record"]["id"], "legacy-record")
+        for action in ("task-record", "app-work", "app-work/end"):
+            with self.assertRaises(WorkflowError) as outcome:
+                workflow_post(service, action, {})
+            self.assertEqual(outcome.exception.status, 503)
+
+    def test_only_desktop_route_can_configure_explicit_work_binding(self):
+        calls = []
+        authorization = lambda: "isolated-local-authority"
+
+        class WorkflowProbe:
+            def configure_app_work(self, body, *, authorize):
+                calls.append((body, authorize))
+                return {"appWork": {"bindings": []}}
+
+        service, body = WorkflowProbe(), {"requestId": "isolated-configure", "bindings": []}
+        with self.assertRaises(WorkflowError) as outcome:
+            workflow_post(service, "app-work/bindings", body, desktop=False, authorize=authorization)
+        self.assertEqual(outcome.exception.status, 404)
+        self.assertEqual(calls, [])
+        self.assertEqual(workflow_post(service, "app-work/bindings", body, desktop=True, authorize=authorization),
+                         {"appWork": {"bindings": []}})
+        self.assertEqual(calls, [(body, authorization)])
+
     def test_phone_icons_use_exact_public_assets_without_opening_phone_directory(self):
         source_root = Path(__file__).resolve().parents[1]
         folder = self.assets / "phone"
@@ -195,7 +296,7 @@ class PhoneCompanionChecks(unittest.TestCase):
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
         self.assertNotIn("Secure", cookie)  # Explicit HTTP LAN transport.
-        self.assertEqual(self.request("/api/phone/status")[1], {"paired": True})
+        self.assertEqual(self.request("/api/phone/status")[1], {"paired": True, "version": self.service.version})
         self.assertEqual(self.request("/api/phone/pair", "POST", {"code": code})[0], 401)
         token = self.cookie.split("=", 1)[1]
         self.assertFalse(self.service.is_paired(token, "192.168.1.55"))

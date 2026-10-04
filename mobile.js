@@ -24,15 +24,22 @@
     onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期或已断开，请输入电脑显示的新配对码。")
   }) || null;
+  let incubatorPanel = null;
   const workflowPanel = window.CodexWorkflowPanel?.create(el("phoneWorkflowPanel"), {
     phone: true,
     onConnectionState: connected => updateConnectionState(connected),
-    onAuth: () => showPair("配对已过期或已断开，请输入电脑显示的新配对码。")
+    onAuth: () => showPair("配对已过期或已断开，请输入电脑显示的新配对码。"),
+    onTaskChange: () => void incubatorPanel?.refresh?.()
   }) || null;
-  const incubatorPanel = window.CodexIncubatorPanel?.create(el("phoneIncubatorPanel"), {
+  incubatorPanel = window.CodexIncubatorPanel?.create(el("phoneIncubatorPanel"), {
     phone: true,
     onConnectionState: connected => updateConnectionState(connected),
-    onAuth: () => showPair("配对已过期，请重新连接电脑。")
+    onAuth: () => showPair("配对已过期，请重新连接电脑。"),
+    onTaskOpen: task => workflowPanel?.openTask?.(task) || false,
+    getTaskContext: () => workflowPanel?.getTaskContext?.() || null,
+    onTaskMount: host => host.append(el("phoneWorkflowPanel")),
+    onTaskLeave: () => { if (workflowPanel?.clearTask?.() === false) return false; const host = el("phoneWorkflowDetails"), panel = el("phoneWorkflowPanel"); if (host && panel) host.append(panel); return true; },
+    onTaskStateChange: syncWorkPanelActivity
   }) || null;
   const initialWorkView = new URL(window.location.href).searchParams.get("workView");
   let workView = ["ideas", "conversations", "workflow"].includes(initialWorkView) ? initialWorkView : "ideas";
@@ -42,20 +49,23 @@
     onTarget: async thread => { selectWorkView("ideas"); await incubatorPanel?.useTarget(thread); }
   }) || null;
   function selectWorkView(value) {
-    workView = ["ideas", "conversations", "workflow"].includes(value) ? value : "ideas";
+    const next = ["ideas", "conversations", "workflow"].includes(value) ? value : "ideas";
+    if (next === "workflow" && incubatorPanel?.closeTask?.() === false) return false;
+    workView = next;
     document.body.dataset.workView = workView;
     if (el("phoneWorkIdeas")) el("phoneWorkIdeas").hidden = workView !== "ideas";
     if (el("phoneConversationsPanel")) el("phoneConversationsPanel").hidden = workView !== "conversations";
     const workflow = el("phoneWorkflowDetails"); if (workflow) { workflow.hidden = workView !== "workflow"; if (workView === "workflow") workflow.open = true; }
-    if (el("phoneWorkNotice")) el("phoneWorkNotice").textContent = ({ ideas: "电脑工作区 · 保存后电脑和已配对手机会同步。想法保存在这里，点确认发布才会交给聊天。", conversations: "查看电脑抓取的真实对话快取；更新和更多历史只读取内容，不发送消息。", workflow: "看图、评价和派工由电脑 Console 处理；已接收任务可在手机离开后继续。" })[workView];
+    if (el("phoneWorkNotice")) el("phoneWorkNotice").textContent = ({ ideas: "Console 工作区 · 每条任务的底稿、Chat、Work 和 Output 都在这里。保存不等于执行；点确认发布或确认 Work 才会交给电脑。", conversations: "查看电脑抓取的真实对话快取；更新和更多历史只读取内容，不发送消息。", workflow: "看图、评价和派工由电脑 Console 处理；已接收任务可在手机离开后继续。" })[workView];
     for (const button of document.querySelectorAll("#workPanel [data-work-view]")) button.setAttribute("aria-pressed", String(button.dataset.workView === workView));
     syncWorkPanelActivity();
+    return true;
   }
   function syncWorkPanelActivity() {
     const active = state.tab === "work" && state.paired && !document.hidden;
     incubatorPanel?.setActive(active && workView === "ideas");
     conversationsPanel?.setActive(active && workView === "conversations");
-    workflowPanel?.setActive(active && workView === "workflow" && Boolean(el("phoneWorkflowDetails")?.open));
+    workflowPanel?.setActive(active && (workView === "ideas" && Boolean(incubatorPanel?.hasOpenTask?.()) || workView === "workflow" && Boolean(el("phoneWorkflowDetails")?.open)));
   }
   for (const button of document.querySelectorAll("#workPanel [data-work-view]")) button.addEventListener("click", () => selectWorkView(button.dataset.workView));
   el("phoneWorkflowDetails")?.addEventListener("toggle", syncWorkPanelActivity);

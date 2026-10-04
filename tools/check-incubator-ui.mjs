@@ -10,10 +10,10 @@ const settle = async () => { for (let index = 0; index < 5; index++) await new P
 const defer = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const response = (body, status = 200) => ({ status, ok: status >= 200 && status < 300, async json() { return clone(body); } });
 const idea = (id, patch = {}) => ({ id, title: `想法 ${id}`, body: "保存、整理、随后才发布", stage: "vague", priority: "normal", parentId: null, targetKind: "none", targetName: "", targetThreadId: "", revision: 1, createdAt: "2026-10-04T10:00:00Z", updatedAt: "2026-10-04T10:00:00Z", ...patch });
-function harness({ phone = true, ideas = [], server = { ideas, receipts: new Map() }, storage = new Map(), secure = false, failStorage = false, offline = false } = {}) {
+function harness({ phone = true, ideas = [], server = { ideas, receipts: new Map() }, storage = new Map(), secure = false, failStorage = false, offline = false, taskOptions = {} } = {}) {
   class Element {
     constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this.hidden = false; this.disabled = false; this.value = ""; this._text = ""; this.checked = false; this.classList = { add() {} }; this.style = { values: {}, setProperty(name, value) { this.values[name] = value; } }; }
-    append(...children) { for (const child of children) { this.children.push(child); child.parentElement = this; } }
+    append(...children) { for (const child of children) { if (child.parentElement) child.parentElement.children = child.parentElement.children.filter(value => value !== child); this.children.push(child); child.parentElement = this; } }
     replaceChildren(...children) { this.children.forEach(child => { child.parentElement = null; }); this.children = []; this._text = ""; this.append(...children); }
     set textContent(value) { this.replaceChildren(); this._text = String(value); }
     get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
@@ -67,7 +67,7 @@ function harness({ phone = true, ideas = [], server = { ideas, receipts: new Map
   }
   const endpoint = offline ? async (path, payload) => { calls.push({ path, payload: payload ? clone(payload) : null, options: { method: payload ? "POST" : "GET", adapter: true } }); const result = backend(path, payload); const data = await result.json(); if (!result.ok) throw Object.assign(Error(data.error), { status: result.status, data }); return data; } : undefined;
   if (offline) runtime.fetch = () => { throw Error("Offline adapter must not fetch the public site"); };
-  runInNewContext(source, runtime); panel = runtime.window.CodexIncubatorPanel.create(root, { phone, offline, endpoint, storageKey: offline ? "codexIncubator.phone.v1" : undefined, onAuth() { auth++; }, onConnectionState: value => connection.push(value) });
+  runInNewContext(source, runtime); panel = runtime.window.CodexIncubatorPanel.create(root, { phone, offline, endpoint, storageKey: offline ? "codexIncubator.phone.v1" : undefined, onAuth() { auth++; }, onConnectionState: value => connection.push(value), ...taskOptions });
   const all = (tag, start = root) => { const results = []; const visit = element => { if (element.tagName === tag.toUpperCase()) results.push(element); element.children.forEach(visit); }; visit(start); return results; };
   const button = label => all("button").find(element => element.textContent === label), field = label => all("label").find(element => element.children[0]?.textContent === label)?.children[1];
   return { root, panel, runtime, server, storage, calls, timers, events, connection, clipboard, all, button, field, auth: () => auth, async start() { panel.setActive(true); await settle(); }, new() { button("＋ 新建想法").click(); }, type(label, value) { const control = field(label); control.value = value; control.fire("input"); }, change(label, value) { const control = field(label); control.value = value; control.fire("change"); }, fail(path) { failPath = path; }, pending(path, promise) { pendingResponse = { path, promise }; }, async poll() { const timer = [...timers.values()].find(item => item.delay === 30000); assert.ok(timer); timer.action(); await settle(); }, cards() { return all("button").filter(element => element.className === "incubator-button incubator-idea"); } };
@@ -222,5 +222,70 @@ await test("associating a prepared task does not hide an uncertain save or revis
     assert.match(h.root.textContent,conflict?/版本冲突/:/原保存请求已保留/);
     assert.equal(h.calls.filter(call=>call.path==="incubator/publish").length,0);
   }
+});
+function taskBridge() {
+  const bridge = { context: null, opens: [], hosts: [], leaveReady: true, openReady: true, waiting: null, override: null };
+  bridge.options = {
+    async onTaskOpen(task) { bridge.opens.push(clone(task)); if (bridge.waiting) await bridge.waiting; if (!bridge.openReady) return false; bridge.context = { ...task, recordId: task.recordId || `record-${task.ideaId}`, ...bridge.override }; return true; },
+    getTaskContext: () => bridge.context,
+    onTaskMount: host => bridge.hosts.push(host),
+    onTaskLeave() { if (!bridge.leaveReady) return false; bridge.context = null; return true; }
+  };
+  return bridge;
+}
+await test("a saved linked task delegates its exact server association and mounts without publishing", async () => {
+  const bridge = taskBridge(), h = harness({ ideas: [idea("one", { workflowRecordId: "record-one" })], taskOptions: bridge.options }); await h.start();
+  assert.equal(h.panel.hasOpenTask(), true); assert.deepEqual(bridge.opens, [{ ideaId: "one", recordId: "record-one", revision: 1, title: "想法 one", body: "保存、整理、随后才发布" }]); assert.equal(bridge.hosts.length, 1); assert.equal(bridge.hosts[0].hidden, false); assert.equal(h.calls.filter(call => call.payload).length, 0);
+  const planning = h.all("details").find(value => value.className === "incubator-planning"); assert.notEqual(planning.open, true); assert.ok(h.button("反复完善任务稿")); assert.ok(h.button("发布到目标聊天")); assert.match(h.root.textContent, /Chat 讨论 · Work 在电脑 Workspace 工作 · Output 回到本任务/);
+});
+await test("tasks with identical titles select by exact IDs and busy workflow cannot switch the outer task", async () => {
+  const bridge = taskBridge(), h = harness({ ideas: [idea("one", { title: "相同标题", workflowRecordId: "record-one" }), idea("two", { title: "相同标题", workflowRecordId: "record-two" })], taskOptions: bridge.options }); await h.start();
+  bridge.leaveReady = false; assert.equal(h.panel.selectIdea("two"), false); assert.equal(h.cards().find(value => value.dataset.selected === "true").dataset.ideaId, "one"); assert.equal(bridge.opens.length, 1); assert.equal(h.panel.hasOpenTask(), true);
+  bridge.leaveReady = true; assert.equal(h.panel.selectIdea("two"), true); await settle(); assert.equal(bridge.opens.at(-1).ideaId, "two"); assert.equal(bridge.opens.at(-1).recordId, "record-two"); assert.equal(h.cards().find(value => value.dataset.selected === "true").dataset.ideaId, "two"); assert.equal(h.calls.filter(call => call.payload).length, 0);
+});
+await test("opening a new task first saves its draft and delegates one associated record without a second idea", async () => {
+  const bridge = taskBridge(), h = harness({ taskOptions: bridge.options }); await h.start(); h.new(); h.type("标题", "文字与图片底稿"); h.type("想法与任务内容", "先讨论，Work 再确认");
+  assert.equal(bridge.opens.length, 0); assert.equal(await h.panel.openTask(true), true); assert.equal(h.server.ideas.length, 1); assert.equal(h.calls.filter(call => call.payload).length, 1); assert.equal(h.calls.find(call => call.payload).path, "incubator/create"); assert.equal(bridge.opens.length, 1); assert.equal(bridge.opens[0].ideaId, h.server.ideas[0].id); assert.equal(bridge.opens[0].body, "先讨论，Work 再确认"); assert.equal(h.panel.hasOpenTask(), true);
+  assert.equal(await h.panel.openTask(false), true); assert.equal(bridge.opens.length, 1); assert.equal(h.calls.filter(call => call.path === "incubator/publish").length, 0);
+});
+await test("an unlinked saved task does not create a record merely from polling or selection", async () => {
+  const bridge = taskBridge(), h = harness({ ideas: [idea("one")], taskOptions: bridge.options }); await h.start(); h.panel.selectIdea("one"); await h.poll(); assert.equal(bridge.opens.length, 0); assert.equal(h.panel.hasOpenTask(), false); assert.equal(h.calls.filter(call => call.payload).length, 0);
+  assert.equal(await h.panel.openTask(true), true); assert.equal(bridge.opens.length, 1); assert.equal(h.calls.filter(call => call.payload).length, 0);
+});
+await test("failed or ambiguous task saves preserve the source draft and never open a workspace", async () => {
+  const bridge = taskBridge(), h = harness({ taskOptions: bridge.options }); await h.start(); h.new(); h.type("标题", "保留待保存底稿"); h.type("想法与任务内容", "输入不会丢"); h.fail("incubator/create");
+  assert.equal(await h.panel.openTask(true), false); assert.equal(bridge.opens.length, 0); assert.equal(h.field("想法与任务内容").value, "输入不会丢"); assert.equal(h.panel.hasDraft(), true); assert.match(h.root.textContent, /原保存请求已保留/);
+});
+await test("workspace rejection does not mount or claim that a linked record is ready", async () => {
+  const bridge = taskBridge(); bridge.openReady = false; const h = harness({ ideas: [idea("one", { workflowRecordId: "record-one" })], taskOptions: bridge.options }); await h.start(); assert.equal(h.panel.hasOpenTask(), false); assert.equal(bridge.hosts.length, 0); assert.equal(h.field("标题").value, "想法 one"); assert.match(h.root.textContent, /结束录音|保存/); assert.equal(h.calls.filter(call => call.payload).length, 0);
+});
+await test("pending task load blocks new-task and selection changes without losing original source", async () => {
+  const bridge = taskBridge(), waiting = defer(); bridge.waiting = waiting.promise; const h = harness({ ideas: [idea("one", { workflowRecordId: "record-one" }), idea("two")], taskOptions: bridge.options }); await h.start();
+  assert.equal(h.panel.canReload(), false); assert.equal(h.panel.selectIdea("two"), false); h.new(); assert.equal(h.field("标题").value, "想法 one"); assert.equal(h.button("保存想法").disabled, true); waiting.resolve(); await settle(); assert.equal(h.panel.hasOpenTask(), true); assert.equal(h.panel.canReload(), true); assert.equal(h.server.ideas.length, 2);
+});
+await test("late task load cannot mount after leaving the foreground or clearing private content", async () => {
+  for (const clear of [false, true]) { const bridge = taskBridge(), waiting = defer(); bridge.waiting = waiting.promise; const h = harness({ ideas: [idea("one", { body: "私有底稿", workflowRecordId: "record-one" })], taskOptions: bridge.options }); await h.start(); if (clear) h.panel.clear(); else h.panel.setActive(false); waiting.resolve(); await settle(); assert.equal(h.panel.hasOpenTask(), false); assert.equal(bridge.hosts.length, 0); if (clear) assert.doesNotMatch(h.root.textContent, /私有底稿/); }
+});
+await test("record or revision mismatch cannot mount a task or overwrite its source draft", async () => {
+  for (const override of [{ recordId: "different-record" }, { ideaId: "different-idea" }, { revision: 9 }]) { const bridge = taskBridge(); bridge.override = override; const h = harness({ ideas: [idea("one", { workflowRecordId: "record-one" })], taskOptions: bridge.options }); await h.start(); assert.equal(h.panel.hasOpenTask(), false); assert.equal(bridge.hosts.length, 0); assert.equal(h.field("标题").value, "想法 one"); assert.match(h.root.textContent, /关联没有核验通过/); }
+});
+await test("saved source updates rebind the same task and same workspace host without publishing", async () => {
+  const bridge = taskBridge(), h = harness({ ideas: [idea("one", { workflowRecordId: "record-one" })], taskOptions: bridge.options }); await h.start(); const host = bridge.hosts[0]; h.type("想法与任务内容", "新一轮底稿"); assert.equal(bridge.opens.length, 1); assert.match(h.root.textContent, /底稿修改尚未保存/); h.button("保存想法").click(); await settle();
+  assert.equal(bridge.opens.length, 2); assert.equal(bridge.opens[1].recordId, "record-one"); assert.equal(bridge.opens[1].revision, 2); assert.equal(bridge.opens[1].body, "新一轮底稿"); assert.equal(bridge.hosts[1], host); assert.equal(h.server.ideas.length, 1); assert.equal(h.calls.filter(call => call.payload).length, 1); assert.equal(h.calls.find(call => call.payload).path, "incubator/update");
+});
+await test("offline task editing never invokes computer workflow callbacks or invents shared record links", async () => {
+  const bridge = taskBridge(), h = harness({ offline: true, ideas: [idea("one", { workflowRecordId: "record-one" })], taskOptions: bridge.options }); await h.start(); assert.equal(await h.panel.openTask(true), false); assert.equal(bridge.opens.length, 0); assert.equal(h.panel.hasOpenTask(), false); assert.equal(h.all("section").find(value => value.className === "incubator-task-workspace").hidden, true); assert.match(h.root.textContent, /与电脑工作区不自动共享/);
+});
+await test("a saved newer source remains visibly unbound when workspace is busy and safely retries without resaving", async () => {
+  const bridge = taskBridge(), h = harness({ ideas: [idea("one", { workflowRecordId: "record-one" })], taskOptions: bridge.options }); await h.start(); bridge.openReady = false; h.type("想法与任务内容", "新的已保存底稿"); h.button("保存想法").click(); await settle(); assert.equal(h.panel.hasOpenTask(), true); assert.equal(bridge.context.revision, 1); assert.match(h.root.textContent, /新版本已保存，工作区尚未载入/); assert.ok(h.button("保存并更新任务底稿")); const posts = h.calls.filter(call => call.payload).length;
+  bridge.openReady = true; assert.equal(await h.panel.openTask(true), true); assert.equal(bridge.context.revision, 2); assert.equal(h.calls.filter(call => call.payload).length, posts); assert.equal(h.server.ideas.length, 1); assert.doesNotMatch(h.root.textContent, /工作区尚未载入/);
+});
+await test("computer source writeback refreshes the task body without reopening an already matching workspace", async () => {
+  const bridge = taskBridge(), h = harness({ ideas: [idea("one", { workflowRecordId: "record-one" })], taskOptions: bridge.options }); await h.start(); Object.assign(h.server.ideas[0], { body: "电脑确认后的新底稿", revision: 2 }); Object.assign(bridge.context, { body: "电脑确认后的新底稿", revision: 2 }); await h.panel.refresh(); await settle();
+  assert.equal(h.field("想法与任务内容").value, "电脑确认后的新底稿"); assert.equal(bridge.opens.length, 1); assert.equal(bridge.hosts.length, 1); assert.equal(h.panel.hasOpenTask(), true); assert.equal(h.calls.filter(call => call.payload).length, 0); assert.doesNotMatch(h.root.textContent, /工作区尚未载入/);
+});
+await test("computer source writeback retains a newer local edit and its original optimistic revision", async () => {
+  const bridge = taskBridge(), h = harness({ ideas: [idea("one", { workflowRecordId: "record-one" })], taskOptions: bridge.options }); await h.start(); h.type("想法与任务内容", "我的未保存输入"); Object.assign(h.server.ideas[0], { body: "电脑确认后的新底稿", revision: 2 }); Object.assign(bridge.context, { body: "电脑确认后的新底稿", revision: 2 }); await h.panel.refresh(); await settle();
+  assert.equal(h.field("想法与任务内容").value, "我的未保存输入"); assert.equal(bridge.opens.length, 1); assert.equal(h.panel.hasDraft(), true); assert.equal(h.calls.filter(call => call.payload).length, 0); h.button("保存想法").click(); await settle(); assert.equal(h.calls.find(call => call.path === "incubator/update").payload.expectedRevision, 1); assert.equal(h.field("想法与任务内容").value, "我的未保存输入"); assert.match(h.root.textContent, /版本冲突/); assert.equal(h.server.ideas[0].body, "电脑确认后的新底稿");
 });
 console.log(`PASS ${count} incubator UI checks`);

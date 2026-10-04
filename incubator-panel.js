@@ -20,30 +20,32 @@
     let saved;
     try { saved = JSON.parse(localStorage.getItem(key) || "{}"); } catch { saved = {}; }
     if (!saved || typeof saved !== "object") saved = {};
-    const state = { active: false, private: false, generation: 0, reading: false, busy: false, timer: 0, storageFailed: false, ideas: Array.isArray(saved.ideas) ? saved.ideas : [], drafts: saved.drafts && typeof saved.drafts === "object" ? saved.drafts : {}, pending: saved.pending && typeof saved.pending === "object" ? saved.pending : {}, publishPending: saved.publishPending && typeof saved.publishPending === "object" ? saved.publishPending : {}, pausePending: saved.pausePending || {}, publishReview: saved.publishReview || null, targets: [], dispatches: [], refinements: [], selectedId: saved.selectedId || "", mode: saved.mode === "tree" ? "tree" : "list", conflict: null, revision: "", readingSequence: 0 };
+    const state = { active: false, private: false, generation: 0, reading: false, busy: false, timer: 0, storageFailed: false, ideas: Array.isArray(saved.ideas) ? saved.ideas : [], drafts: saved.drafts && typeof saved.drafts === "object" ? saved.drafts : {}, pending: saved.pending && typeof saved.pending === "object" ? saved.pending : {}, publishPending: saved.publishPending && typeof saved.publishPending === "object" ? saved.publishPending : {}, pausePending: saved.pausePending || {}, publishReview: saved.publishReview || null, targets: [], dispatches: [], refinements: [], selectedId: saved.selectedId || "", mode: saved.mode === "tree" ? "tree" : "list", conflict: null, revision: "", readingSequence: 0, taskOpening: false, openTaskId: "", taskRevision: 0 };
     const controllers = new Set();
-    const header = make("header", "", "incubator-header"), heading = make("div"); heading.append(make("h2", "任务孵化器"), make("p", offline ? "想法保存在此手机，与电脑工作区不自动共享。" : "先记下想法，逐步整理，再交给目标聊天。", "incubator-muted"));
+    const header = make("header", "", "incubator-header"), heading = make("div"); heading.append(make("h2", "任务工作区"), make("p", offline ? "想法保存在此手机，与电脑工作区不自动共享。" : "文字与图片作为底稿，在同一任务里讨论、工作，再看结果继续修改。", "incubator-muted"));
     const fresh = button("＋ 新建想法", () => newIdea(), "incubator-primary"), refresh = button(offline ? "读取已保存想法" : "同步", () => void reload()), importIdea = button("导入想法 JSON", () => { migration.hidden = false; importText.focus(); }); header.append(heading, fresh, refresh, importIdea);
     const notice = make("p", "", "incubator-notice"); notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite");
     const main = make("div", "", "incubator-main"), sidebar = make("aside", "", "incubator-sidebar"), tools = make("div", "", "incubator-view-tools"), mode = select([{ id: "list", name: "列表" }, { id: "tree", name: "树状思维导图" }]); mode.setAttribute("aria-label", "想法视图"); mode.value = state.mode;
     tools.append(field("查看", mode)); const list = make("div", "", "incubator-list"); sidebar.append(tools, list);
     const editor = make("section", "", "incubator-editor"), empty = make("div", "", "incubator-empty"); empty.append(make("h3", "每个还没想清楚的念头，都可以从这里开始。"), button("新建一个想法", () => newIdea(), "incubator-primary"));
     const title = input(), body = make("textarea"), stage = select(stages), priority = select(priorities), targetKind = select(targets), targetName = input(), targetThreadId = input(), parent = select([{ id: "", name: "独立想法" }]);
-    title.maxLength = 160; title.placeholder = "一句话记下想法"; body.maxLength = 20000; body.rows = phone ? 8 : 12; body.placeholder = "想解决什么？想到什么就先写下来，后面再补细节。"; targetName.maxLength = 120; targetName.placeholder = "例如：Codex Console"; targetThreadId.maxLength = 160; targetThreadId.placeholder = "可选：准确的聊天 ID";
+    title.maxLength = 160; title.placeholder = "一句话记下想法"; body.maxLength = 20000; body.rows = phone ? 4 : 5; body.placeholder = "想解决什么？想到什么就先写下来，后面再补细节。"; targetName.maxLength = 120; targetName.placeholder = "例如：Codex Console"; targetThreadId.maxLength = 160; targetThreadId.placeholder = "可选：准确的聊天 ID";
     const metadata = make("div", "", "incubator-metadata"); metadata.append(field("阶段", stage), field("优先级", priority), field("归属想法", parent));
     targetThreadId.maxLength = 128;
     const routing = make("details", "", "incubator-routing"), knownTarget = select([{ id: "", name: "选择现有聊天（可稍后指定）" }]), advancedTarget = make("details", "", "incubator-advanced"); advancedTarget.append(make("summary", "高级：手动指定聊天 ID"), field("聊天 ID", targetThreadId)); routing.append(make("summary", "目标聊天"), field("平台", targetKind), field("已有聊天", knownTarget), field("具体聊天名", targetName), advancedTarget, make("p", "用于整理和生成任务稿；保存不会发送给任何聊天。", "incubator-muted"));
     const publication = make("label", "", "incubator-publication"), publishedCheck = input(); publishedCheck.type = "checkbox"; publication.append(publishedCheck, make("span", "我已手动把任务发送到目标聊天"));
-    const saveState = make("p", "", "incubator-save-state"), actions = make("div", "", "incubator-actions"), save = button(offline ? "保存到此手机" : "保存想法", () => void saveIdea(), "incubator-primary"), prepare = button("生成发布任务稿", () => prepareDraft()), refine = button("反复完善任务稿", () => preparePublication("refine")), publish = button("发布到目标聊天", () => preparePublication()), exportIdea = button("带到另一工作区", () => exportCurrent()); actions.append(save, prepare); if (!offline) actions.append(refine, publish); actions.append(exportIdea);
+    const saveState = make("p", "", "incubator-save-state"), actions = make("div", "", "incubator-actions"), save = button(offline ? "保存到此手机" : "保存想法", () => void saveIdea(), "incubator-primary"), prepare = button("生成发布任务稿", () => prepareDraft()), refine = button("反复完善任务稿", () => preparePublication("refine")), publish = button("发布到目标聊天", () => preparePublication()), exportIdea = button("带到另一工作区", () => exportCurrent()); actions.append(save);
+    const planning = make("details", "", "incubator-planning"), planningActions = make("div", "", "incubator-actions"); planning.append(make("summary", "排序、完善与发布"), metadata, routing, publication, planningActions); planningActions.append(prepare); if (!offline) planningActions.append(refine, publish); planningActions.append(exportIdea);
+    const taskWorkspace = make("section", "", "incubator-task-workspace"), taskIntro = make("div", "", "incubator-task-intro"), taskStatus = make("p", "", "incubator-muted"), taskHost = make("div", "", "incubator-task-host"), taskOpen = button("打开任务工作区", () => void openTaskWorkspace(true)); taskIntro.append(make("h3", "Chat · Work · Output"), taskStatus, taskOpen); taskWorkspace.append(taskIntro, taskHost); taskWorkspace.hidden = offline || typeof options.onTaskOpen !== "function"; taskHost.hidden = true;
     const conflict = make("section", "", "incubator-conflict"), conflictText = make("p"); conflict.append(make("strong", "电脑与手机的编辑版本发生冲突"), conflictText, button("保留我的编辑，基于最新版本再保存", () => void resolveConflict()), button("载入服务器内容（替换当前编辑）", () => useServerVersion()));
-    editor.append(field("标题", title), field("想法与任务内容", body), metadata, routing, publication, saveState, actions, conflict);
+    editor.append(field("标题", title), field("想法与任务内容", body), saveState, actions, conflict, taskWorkspace, planning);
     const preview = make("section", "", "incubator-preview"), taskText = make("textarea"), copy = button("复制完整任务稿", () => void copyDraft()), mark = button("我已手动发送，标记已发布", () => void markPublished()); taskText.readOnly = true; taskText.rows = 12; taskText.setAttribute("aria-label", "完整发布任务稿");
-    preview.append(make("h3", "发布任务稿"), make("p", "尚未发送。复制后，打开下面指定的聊天，粘贴并发送。", "incubator-muted"), taskText, copy, mark, button("收起任务稿", () => { preview.hidden = true; })); editor.append(preview);
+    preview.append(make("h3", "发布任务稿"), make("p", "尚未发送。可使用确认发布；需要手动发送时，复制到指定聊天。", "incubator-muted"), taskText, copy, mark, button("收起任务稿", () => { preview.hidden = true; })); planning.append(preview);
     const publishReview = make("section", "", "incubator-publish-review"), publishSnapshot = make("textarea"), publishKind = select(targets.filter(item => item.id !== "none")), publishMode = select([{ id: "new", name: "新建本机 Codex 聊天" }, { id: "existing", name: "已有聊天" }]), publishTarget = select([{ id: "", name: "请选择目标聊天" }]), publishThread = input(), publishName = input(), advancedPublish = make("details", "", "incubator-advanced"); publishSnapshot.readOnly = true; publishSnapshot.rows = 8; publishSnapshot.setAttribute("aria-label", "确认发布的已保存内容"); publishThread.maxLength = 128; publishName.maxLength = 120; advancedPublish.append(make("summary", "高级：目标列表没有所需聊天"), field("发布聊天 ID", publishThread), field("发布聊天名", publishName));
     const confirmPublish = button("确认发布此任务", () => void publishIdea(), "incubator-primary"), cancelPublish = button("取消发布", () => { state.publishReview = null; persist(); update(); });
     const publishHeading = make("h3", "确认发送到目标聊天"), publishExplanation = make("p", "", "incubator-muted"), roundLimit = select([{id:"1",name:"1 轮"},{id:"3",name:"3 轮"},{id:"5",name:"5 轮"},{id:"10",name:"10 轮"}]), roundField = field("完善轮次", roundLimit); roundLimit.value = "3";
     publishReview.append(publishHeading, publishExplanation, publishSnapshot, roundField, field("发布平台", publishKind), field("发布方式", publishMode), field("发布到已有聊天", publishTarget), advancedPublish, confirmPublish, cancelPublish);
-    const dispatches = make("div", "", "incubator-dispatches"); if (!offline) editor.append(publishReview, dispatches);
+    const dispatches = make("div", "", "incubator-dispatches"); if (!offline) planning.append(publishReview, dispatches);
     const migration = make("section", "", "incubator-migration"), exportText = make("textarea"), importText = make("textarea"), importFile = input(); exportText.readOnly = true; exportText.rows = 6; exportText.setAttribute("aria-label", "此想法的导出 JSON"); importText.rows = 6; importText.placeholder = "粘贴从另一工作区导出的想法 JSON"; importFile.type = "file"; importFile.accept = ".json,application/json"; importFile.hidden = true;
     migration.append(make("h3", "跨工作区带入想法"), make("p", "一次仅带一条想法，不携带聊天列表、发布记录或电脑配置。父关系会重置；导入不会发布。", "incubator-muted"), exportText, button("复制想法 JSON", () => void copyText(exportText, "JSON 已复制，可在另一工作区导入。")), button("下载想法 JSON", () => downloadExport()), importText, button("从 JSON 文件选择", () => importFile.click()), importFile, button("导入为新草稿", () => void importCurrent()), button("收起导入导出", () => { migration.hidden = true; }));
     main.append(sidebar, empty, editor); root.replaceChildren(header, notice, migration, main); root.classList.add("incubator-panel"); root.dataset.phone = String(phone);
@@ -66,6 +68,36 @@
       const draft = current(); if (!draft) { update(); return; }
       for (const name of Object.keys(controls)) controls[name].value = draft[name] ?? "";
       publishedCheck.checked = draft.base?.stage === "published"; fillParents(); fillTargets(); preview.hidden = true; update();
+    }
+    function hasOpenTask() { return !state.private && Boolean(state.openTaskId && state.openTaskId === state.selectedId); }
+    function closeTask() {
+      if (state.taskOpening) { say("任务工作区正在读取，请稍后再切换。", true); return false; }
+      if (!offline && typeof options.onTaskLeave === "function" && options.onTaskLeave() === false) { say("请先结束当前录音或等待草稿、附件保存，再切换任务。", true); return false; }
+      state.openTaskId = ""; state.taskRevision = 0; taskHost.hidden = true; options.onTaskStateChange?.(); update(); return true;
+    }
+    async function openTaskWorkspace(saveFirst = false) {
+      if (offline || state.private || !state.active || state.busy || state.taskOpening || !current() || typeof options.onTaskOpen !== "function") return false;
+      remember();
+      if (saveFirst && (changed() || state.pending[state.selectedId]) && !await saveIdea()) return false;
+      const draft = current(), snapshot = serverIdea(draft?.id) || draft?.base;
+      if (!snapshot || localId(draft.id)) { if (saveFirst) say("先保存这条任务，工作区会继续使用同一条任务。", true); return false; }
+      if (!saveFirst && !snapshot.workflowRecordId && !hasOpenTask()) return false;
+      const activeContext = hasOpenTask() && options.getTaskContext?.();
+      if (activeContext?.ideaId === draft.id && activeContext.recordId === snapshot.workflowRecordId && Number(activeContext.revision) === Number(snapshot.revision) && activeContext.title === snapshot.title && (activeContext.body || "") === (snapshot.body || "")) { state.taskRevision = Number(activeContext.revision); update(); return true; }
+      const id = state.selectedId, generation = state.generation;
+      state.taskOpening = true; update();
+      try {
+        const accepted = await options.onTaskOpen({ ideaId: id, recordId: snapshot.workflowRecordId || undefined, revision: Number(snapshot.revision), title: snapshot.title, body: snapshot.body });
+        if (generation !== state.generation || id !== state.selectedId || state.private || !state.active) return false;
+        if (!accepted) { say("请先结束录音或等待草稿、附件保存，再打开这条任务。", true); return false; }
+        const context = options.getTaskContext?.();
+        if (!context || context.ideaId !== id || !context.recordId || Number(context.revision) !== Number(snapshot.revision) || snapshot.workflowRecordId && context.recordId !== snapshot.workflowRecordId) throw Error("任务与工作记录关联没有核验通过，请同步后重试。");
+        snapshot.workflowRecordId = context.recordId;
+        if (draft.base?.id === id) draft.base.workflowRecordId = context.recordId;
+        state.openTaskId = id; state.taskRevision = Number(context.revision); options.onTaskMount?.(taskHost); taskHost.hidden = false; persist(); options.onTaskStateChange?.();
+        say("已打开这条任务。Chat 只讨论；Work 需单独确认，结果会回到这里。"); return true;
+      } catch (error) { if (generation === state.generation && !state.private && state.active) say(error.message || "任务工作区暂时无法打开，原任务和草稿仍保留。", true); return false; }
+      finally { state.taskOpening = false; update(); }
     }
     function isDescendant(candidateId, ancestorId) {
       const seen = new Set(); let next = candidateId;
@@ -100,7 +132,7 @@
       if (!state.publishPending[draft.id] && state.dispatches.some(item => item.ideaId === draft.id && ["pending", "claimed", "waiting", "needs_review"].includes(item.status))) { say("这条想法已有发布在处理中，请查看实际状态，不要重复发布。", true); return; }
       const pending = state.publishPending[draft.id], snapshot = draft.base;
       state.publishReview = pending ? { ...pending.review } : { id: draft.id, expectedRevision: snapshot.revision, prompt: purpose === "refine" ? refinementPrompt(snapshot, 3) : promptFor(snapshot), snapshot: content(snapshot), purpose: purpose === "refine" ? "refine" : "execute", roundLimit: 3, kind: snapshot.targetKind === "chatgpt" ? "chatgpt" : "codex", mode: snapshot.targetThreadId ? "existing" : snapshot.targetKind === "chatgpt" ? "existing" : "new", threadId: snapshot.targetThreadId || "", name: snapshot.targetName || snapshot.title };
-      restorePublication(); persist(); update(); publishReview.scrollIntoView?.({ block: "nearest", behavior: "smooth" }); say("请核对已保存的任务内容与目标聊天。点确认后才进入发布队列。");
+      planning.open = true; restorePublication(); persist(); update(); publishReview.scrollIntoView?.({ block: "nearest", behavior: "smooth" }); say("请核对已保存的任务内容与目标聊天。点确认后才进入发布队列。");
     }
     function publicationError() {
       const review = state.publishReview; if (!review) return "请先打开发布确认。";
@@ -161,22 +193,23 @@
       const url = URL.createObjectURL(new Blob([exportText.value], { type: "application/json" })), anchor = make("a"); anchor.href = url; anchor.download = "codex-incubator-idea.json"; root.append(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
     }
     async function importCurrent() {
-      if (state.busy || state.private || !state.active) return;
+      if (state.busy || state.private || !state.active || state.taskOpening) return;
       try {
         if (!importText.value || importText.value.length > 100000) throw Error("请粘贴单条想法 JSON，文件不超过 200 KB。");
         const data = JSON.parse(importText.value); if (data.format !== "codex-incubator-idea" || data.version !== 1 || !data.idea || typeof data.idea !== "object" || Array.isArray(data.idea) || Object.keys(data).some(name => !["format", "version", "idea"].includes(name)) || Object.keys(data.idea).some(name => !fields.includes(name))) throw Error("请选择从孵化器导出的单条想法 JSON。");
         const value = content(data.idea); if (fields.some(name => name !== "parentId" && typeof value[name] !== "string") || !value.title.trim() || value.title.length > 160 || value.body.length > 20000 || value.targetName.length > 120 || value.targetThreadId.length > 128 || !stages.some(item => item.id === value.stage) || !priorities.some(item => item.id === value.priority) || !targets.some(item => item.id === value.targetKind)) throw Error("想法 JSON 的字段或长度无效。");
-        value.parentId = null; if (value.stage === "published") value.stage = "ready"; remember(); const id = `local-${uuid()}`; state.drafts[id] = { id, ...value, base: null }; state.selectedId = id; state.conflict = null; importText.value = ""; migration.hidden = true; persist(); loadEditor(); renderList(); say("已导入为新草稿，请点保存。父关系已重置，原已发布状态改为待发布；没有发布到任何聊天。");
+        if (!closeTask()) return; value.parentId = null; if (value.stage === "published") value.stage = "ready"; remember(); const id = `local-${uuid()}`; state.drafts[id] = { id, ...value, base: null }; state.selectedId = id; state.conflict = null; importText.value = ""; migration.hidden = true; persist(); loadEditor(); renderList(); say("已导入为新草稿，请点保存。父关系已重置，原已发布状态改为待发布；没有发布到任何聊天。");
       } catch (error) { say(`导入失败：${error.message} 原有想法与草稿保持不变。`, true); }
     }
     function newIdea() {
-      if (state.private || state.busy) return;
+      if (state.private || state.busy || !closeTask()) return;
       remember(); const id = `local-${uuid()}`; state.drafts[id] = { id, ...content(), base: null }; state.selectedId = id; state.conflict = null; const stored = persist(); loadEditor(); renderList(); title.focus(); if (stored) say(offline ? "新想法草稿先保留在此页，点击“保存到此手机”。不会发布。" : "新想法先保存在本地。点击“保存想法”同步到电脑，不会发布。");
     }
     function choose(id) {
-      if (state.private || state.busy) return;
+      if (state.private || state.busy || state.taskOpening) return false;
+      if (id !== state.selectedId && !closeTask()) return false;
       remember(); const idea = serverIdea(id); if (!state.drafts[id] && idea) state.drafts[id] = { ...content(idea), id, base: idea };
-      if (!state.drafts[id]) return; state.selectedId = id; state.conflict = null; persist(); loadEditor(); renderList(); say("编辑草稿会保留在本地；保存不会发布。");
+      if (!state.drafts[id]) return false; state.selectedId = id; state.conflict = null; persist(); loadEditor(); renderList(); say("编辑草稿会保留在本地；保存不会发布。"); void openTaskWorkspace(); return true;
     }
     function allIdeas() {
       const map = new Map(state.ideas.map(idea => [idea.id, idea]));
@@ -207,8 +240,11 @@
       return "";
     }
     function update() {
-      const draft = current(), available = state.active && !state.private; empty.hidden = Boolean(draft); editor.hidden = !draft; conflict.hidden = !state.conflict;
-      fresh.disabled = state.busy || !available; importIdea.disabled = state.busy || !available; refresh.disabled = state.reading || !available; save.disabled = !available || state.busy || !draft || !state.pending[draft.id] && Boolean(validation()); prepare.disabled = !available || state.busy || !draft || !title.value.trim(); exportIdea.disabled = !available || state.busy || !draft; publish.disabled = !available || state.busy || !draft || changed(draft) || Boolean(state.pending[draft.id]) || !state.publishPending[state.selectedId] && state.dispatches.some(item => item.ideaId === state.selectedId && ["pending", "claimed", "waiting", "needs_review"].includes(item.status)); publish.setAttribute("title", "先保存当前想法，再确认发布到目标聊天；处理中不重复发布");
+      const draft = current(), available = state.active && !state.private, working = state.busy || state.taskOpening; empty.hidden = Boolean(draft); editor.hidden = !draft; conflict.hidden = !state.conflict;
+      fresh.disabled = working || !available; importIdea.disabled = working || !available; refresh.disabled = state.reading || working || !available; save.disabled = !available || working || !draft || !state.pending[draft.id] && Boolean(validation()); prepare.disabled = !available || working || !draft || !title.value.trim(); exportIdea.disabled = !available || working || !draft; publish.disabled = !available || working || !draft || changed(draft) || Boolean(state.pending[draft.id]) || !state.publishPending[state.selectedId] && state.dispatches.some(item => item.ideaId === state.selectedId && ["pending", "claimed", "waiting", "needs_review"].includes(item.status)); publish.setAttribute("title", "先保存当前想法，再确认发布到目标聊天；处理中不重复发布");
+      taskOpen.disabled = !available || working || !draft || Boolean(validation()); taskOpen.textContent = state.taskOpening ? "正在打开任务…" : hasOpenTask() ? changed(draft) || state.taskRevision !== Number(draft?.base?.revision) ? "保存并更新任务底稿" : "任务工作区已打开" : changed(draft) ? "保存并打开任务工作区" : "打开任务工作区"; taskOpen.hidden = hasOpenTask() && !changed(draft) && state.taskRevision === Number(draft?.base?.revision);
+      taskHost.hidden = !hasOpenTask(); taskStatus.textContent = hasOpenTask() ? changed(draft) ? "底稿修改尚未保存。先保存并更新，讨论和工作再使用新版本。" : state.taskRevision !== Number(draft?.base?.revision) ? "底稿的新版本已保存，工作区尚未载入。请更新任务底稿后再继续讨论或工作。" : "Chat 讨论 · Work 在电脑 Workspace 工作 · Output 回到本任务" : "在这里添加图片、讨论并工作，不需要打开另一个任务或手机 ChatGPT。";
+      for (const control of [...Object.values(controls), parent, publishedCheck]) control.disabled = state.taskOpening;
       refine.disabled = publish.disabled; publication.hidden = stage.value !== "published" || draft?.base?.stage === "published";
       saveState.textContent = draft ? state.storageFailed ? "草稿目前只在此页，本地保存失败，请复制备份。" : state.pending[draft.id] ? "保存未确认送达；草稿和原请求已保留，可安全重试。" : changed(draft) ? offline ? "此页草稿已保留，点击保存到此手机。" : "本地草稿已保留，尚未同步到电脑。" : offline ? "已保存到此手机。与电脑工作区不自动共享。" : "已保存到电脑。保存不等于发布。" : "";
       save.textContent = draft && state.pending[draft.id] ? "重试原保存请求" : offline ? "保存到此手机" : "保存想法";
@@ -243,7 +279,7 @@
         else if (current() && !changed() && !state.busy) loadEditor(); else fillParents();
         fillTargets(); persist(); renderList();
       } catch (error) { if (!error.cancelled) say(offline ? "暂时无法读取此手机保存的想法，编辑草稿仍在此页。" : error.status ? `同步失败：${error.message} 编辑草稿仍保留。` : "暂时连接不到电脑，本地草稿仍保留。恢复连接后点保存即可同步。", true); }
-      finally { state.reading = false; update(); schedule(); }
+      finally { state.reading = false; update(); schedule(); void openTaskWorkspace(); }
     }
     function mergeAccepted(result, pending) {
       const idea = result.idea; if (!idea?.id) throw new Error("服务器没有返回保存结果，请使用原请求重试。"); state.readingSequence++;
@@ -253,7 +289,7 @@
       say(offline ? "已保存到此手机。想法尚未发送给聊天，与电脑工作区不自动共享。" : "已保存到电脑。想法尚未发送给聊天。");
     }
     async function saveIdea() {
-      if (state.busy || state.private || !state.active || !current()) return false; remember();
+      if (state.busy || state.taskOpening || state.private || !state.active || !current()) return false; remember();
       const id = state.selectedId; let pending = state.pending[id];
       if (!pending) {
         const error = validation(); if (error) { say(error, true); return false; }
@@ -273,7 +309,7 @@
         } else if (error.status >= 400 && error.status < 500) { delete state.pending[id]; persist(); say(`保存未接受：${error.message} 草稿已保留，修改后可重新保存。`, true); }
         else say(`${error.message} 草稿和原保存请求已保留，可重试。`, true);
         return false;
-      } finally { state.busy = false; update(); schedule(); }
+      } finally { state.busy = false; update(); schedule(); if (hasOpenTask()) void openTaskWorkspace(); }
     }
     async function resolveConflict() {
       if (state.busy || !state.conflict || state.conflict.id !== state.selectedId) return;
@@ -292,7 +328,7 @@
       while (id && !seen.has(id)) { seen.add(id); const parentIdea = state.drafts[id] || serverIdea(id); if (!parentIdea) break; ancestors.unshift(parentIdea.title); id = parentIdea.parentId; }
       return [`任务：${idea.title.trim()}`, `目标：${targets.find(item => item.id === idea.targetKind)?.name || "尚未指定"}${idea.targetName ? ` / ${idea.targetName}` : ""}${idea.targetThreadId ? `（聊天 ID：${idea.targetThreadId}）` : ""}`, `优先级：${priorities.find(item => item.id === idea.priority)?.name || "普通"}`, ancestors.length ? `上层想法：${ancestors.join(" → ")}` : "", "", "任务内容：", idea.body || "（请补充任务内容）", "", "请先理解以上目标和约束；需要澄清的地方先提问。新建和保存这条想法不构成对外发布或执行授权。"].filter((line, index, array) => line || index > 0 && array[index - 1]).join("\n");
     }
-    function prepareDraft() { if (state.busy || state.private || !current() || !title.value.trim()) return; remember(); taskText.value = taskDraft(); preview.hidden = false; preview.scrollIntoView?.({ block: "nearest", behavior: "smooth" }); say("任务稿已生成，尚未发送。请复制到目标聊天后手动发送。"); }
+    function prepareDraft() { if (state.busy || state.taskOpening || state.private || !current() || !title.value.trim()) return; remember(); taskText.value = taskDraft(); planning.open = true; preview.hidden = false; preview.scrollIntoView?.({ block: "nearest", behavior: "smooth" }); say("任务稿已生成，尚未发送。可确认发布，或复制后手动发送。"); }
     async function copyDraft() {
       if (state.private || !state.active || !taskText.value) return;
       try { if (window.isSecureContext && navigator.clipboard?.writeText) { await navigator.clipboard.writeText(taskText.value); say("已复制。请在目标聊天粘贴并手动发送。"); return; } } catch { /* Use selected text when clipboard access is refused. */ }
@@ -308,7 +344,7 @@
     async function markPublished() { if (state.busy || state.private || !current() || state.pending[state.selectedId]) return; stage.value = "published"; publishedCheck.checked = true; remember(); await saveIdea(); }
     function clear() {
       state.private = true; state.active = false; state.generation++; state.readingSequence++; window.clearTimeout(state.timer); state.timer = 0; for (const controller of controllers) controller.abort();
-      state.ideas = []; state.drafts = {}; state.pending = {}; state.publishPending = {}; state.pausePending = {}; state.publishReview = null; state.targets = []; state.dispatches = []; state.refinements = []; state.selectedId = ""; state.conflict = null; state.busy = false; state.reading = false;
+      state.ideas = []; state.drafts = {}; state.pending = {}; state.publishPending = {}; state.pausePending = {}; state.publishReview = null; state.targets = []; state.dispatches = []; state.refinements = []; state.selectedId = ""; state.conflict = null; state.busy = false; state.reading = false; state.openTaskId = ""; state.taskRevision = 0;
       for (const control of Object.values(controls)) control.value = ""; taskText.value = ""; publishSnapshot.value = ""; exportText.value = ""; importText.value = ""; publishedCheck.checked = false; preview.hidden = true; migration.hidden = true; notice.textContent = ""; try { localStorage.removeItem(key); } catch { /* Private UI is already cleared. */ } renderList(); update();
     }
     for (const control of Object.values(controls)) { control.addEventListener("input", remember); control.addEventListener("change", remember); }
@@ -327,7 +363,7 @@
     preview.hidden = true; migration.hidden = true; loadEditor(); renderList(); restorePublication(); update();
     return {
       setActive(value) { const next = Boolean(value), changedActive = state.active !== next; state.active = next; if (next && changedActive) { state.private = false; loadEditor(); void reload(); } else if (!next) { remember(); state.generation++; state.readingSequence++; window.clearTimeout(state.timer); state.timer = 0; for (const controller of controllers) controller.abort(); } update(); },
-      refresh: reload, clear, hasDraft() { return Boolean(state.busy || importText.value.trim() || state.publishReview || Object.keys(state.pending).length || Object.keys(state.publishPending).length || Object.keys(state.pausePending).length || Object.values(state.drafts).some(draft => changed(draft) && Boolean(draft.title?.trim() || draft.body?.trim()))); }, canReload() { return !state.busy && !state.storageFailed; }, selectIdea: choose,
+      refresh: reload, clear, hasDraft() { return Boolean(state.busy || state.taskOpening || importText.value.trim() || state.publishReview || Object.keys(state.pending).length || Object.keys(state.publishPending).length || Object.keys(state.pausePending).length || Object.values(state.drafts).some(draft => changed(draft) && Boolean(draft.title?.trim() || draft.body?.trim()))); }, canReload() { return !state.busy && !state.taskOpening && !state.storageFailed; }, selectIdea: choose, openTask: openTaskWorkspace, closeTask, hasOpenTask,
       async useTarget(thread) {
         if (!state.active || state.private || state.busy || !thread || !["codex","chatgpt"].includes(thread.kind)) return false;
         const draft = current(); if (!draft) { say("先选择一条已经准备好的任务，再选择目标会话。", true); return false; }
