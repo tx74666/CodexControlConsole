@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-08-24T10:03:43Z",
+  "capturedAt": "2026-10-05T08:16:45Z",
   "music": {
     "layoutVersion": 1,
     "tiers": {
@@ -36,17 +36,22 @@
   },
   "modules": {
     "order": [
-      "manager",
-      "workspace",
-      "blender",
-      "unity",
-      "steamwork",
-      "randomrealm",
       "music",
-      "wallpaper"
+      "wallpaper",
+      "workspace",
+      "steamwork",
+      "blender",
+      "randomrealm",
+      "manager",
+      "unity"
     ],
-    "archive": [],
-    "deepArchive": [],
+    "archive": [
+      "randomrealm"
+    ],
+    "deepArchive": [
+      "manager",
+      "unity"
+    ],
     "deleted": [],
     "lastModule": "music"
   }
