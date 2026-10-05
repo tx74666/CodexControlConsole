@@ -91,7 +91,9 @@ def approval(value, directory):
             or set(contract["selectors"]) != {"composer", "profile", "messages", "userText", "assistantText", "completion", "send", "stop", "login", "chatMode"}
             or contract["profiles"] != {"fast": {"label": "Instant"}}):
         raise ValueError("relay_dom_contract_invalid")
-    if contract["verified"] and any(not isinstance(item, str) or not item.strip() or len(item) > 1000 for item in contract["selectors"].values()):
+    if contract["verified"] and any(
+            not isinstance(item, str) or not item.strip() or len(item) > 1000
+            for key, item in contract["selectors"].items() if key != "stop" or item is not None):
         raise ValueError("relay_dom_selectors_unverified")
     if any(item is not None and (not isinstance(item, str) or len(item) > 1000) for item in contract["selectors"].values()):
         raise ValueError("relay_dom_selectors_invalid")
@@ -124,6 +126,43 @@ def fixed_approval(environ=None, directory=None):
     if config != read_approval(expected):
         raise ValueError("relay_approval_file_store_not_matching")
     return config
+
+
+def _confirmed_pending(db, config):
+    """Preserve historical rows; select only this approval's new confirmations.
+
+    Production inserts created_at and user_confirmed_at in the same submission.
+    Compare parsed instants so timezone spelling cannot cross the consent fence.
+    The original human approval time stays intact. Actual browser observation
+    also fences out confirmations accumulated before this connection contract.
+    Invalid, split, future or pre-connection times never authorize a relay claim.
+    """
+    eligible_at = max(timestamp(config["approvalConfirmedAt"]),
+                      timestamp(config["domContract"]["capturedAt"]))
+    observed_at = datetime.now(timezone.utc)
+    rows = db.execute("SELECT * FROM idea_dispatches WHERE status='pending' ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,created_at,id")
+    for row in rows:
+        try:
+            created_at = timestamp(row["created_at"])
+            confirmed_at = timestamp(row["user_confirmed_at"])
+            if created_at == confirmed_at and eligible_at <= confirmed_at <= observed_at:
+                yield row
+        except (ValueError, TypeError, OverflowError):
+            continue
+
+
+def _prior_dispatch_evidence(db, row):
+    """Presence, including an empty/malformed attempt, must forbid another send."""
+    if row["claim_token"] or row["target_thread_id"]:
+        return True
+    try:
+        if json.loads(row["result"]) != {}:
+            return True
+    except (ValueError, TypeError):
+        return True
+    if db.execute("SELECT 1 FROM settings WHERE key=? LIMIT 1", (ATTEMPT_PREFIX + row["id"],)).fetchone():
+        return True
+    return bool(db.execute("SELECT 1 FROM requests WHERE kind IN ('incubator_claim','chat_relay_claim') AND json_extract(response,'$.dispatchId')=? LIMIT 1", (row["id"],)).fetchone())
 
 
 class ChatRelayController:
@@ -178,12 +217,15 @@ class ChatRelayController:
             if db.execute("SELECT 1 FROM idea_dispatches WHERE status IN ('claimed','waiting','needs_review') LIMIT 1").fetchone():
                 self.blocked_reason = "dispatch_inflight"
                 return
-            row = db.execute("SELECT * FROM idea_dispatches WHERE status='pending' ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,created_at,id LIMIT 1").fetchone()
+            row = next(_confirmed_pending(db, config), None)
             if row is None:
                 self.blocked_reason = None
                 return
             if row["id"] not in self.events:
                 self.blocked_reason = "older_queue_head_requires_user_review"
+                return
+            if _prior_dispatch_evidence(db, row):
+                self.blocked_reason = "prior_send_evidence_requires_user_review"
                 return
             snapshot = json.loads(row["snapshot"])
             if (not row["user_confirmed_at"] or row["target_kind"] != "chatgpt" or row["target_mode"] != "new"
@@ -192,6 +234,9 @@ class ChatRelayController:
                 self.blocked_reason = "unsupported_queue_head_requires_user_review"
                 return
             job = service._app_dispatch_job(db, row, snapshot)
+            if job["status"] != "waiting" or json.loads(job["result"]) != {}:
+                self.blocked_reason = "prior_job_result_requires_user_review"
+                return
             payload = json.loads(job["payload"])
             target = payload.get("appTarget", {})
             if (target.get("kind") != "chatgpt" or target.get("mode") != "new" or target.get("threadId") not in (None, "")
@@ -217,10 +262,6 @@ class ChatRelayController:
                 service._revision(db, True)
                 self.events.discard(row["id"])
                 return "failed"
-            prior = service._setting(db, ATTEMPT_PREFIX + row["id"])
-            if prior:
-                self.blocked_reason = "prior_send_evidence_requires_user_review"
-                return
             service._check_app_images(payload)
             marker = "[Codex Console 发布编号：" + row["id"] + "]"
             if row["prompt"].count(marker) != 1:
@@ -337,7 +378,7 @@ class ChatRelayController:
                 elif message["type"] == "capture":
                     if not attempt["sendIntentAt"]:
                         raise ValueError("relay_no_send_intent")
-                    self._capture(db, row, attempt, message["evidence"])
+                    self._capture(db, row, attempt, message["evidence"], current_approval["domContract"])
                     outgoing = {"protocol": PROTOCOL, "type": "stored", "dispatchId": attempt["dispatchId"], "attemptId": attempt["attemptId"],
                                 "sourceKind": "browser_dom", "actualProfileObserved": attempt["profileLabel"],
                                 "executionCapabilities": {"verified": False, "source": "browser_dom_ui_label"}}
@@ -363,7 +404,7 @@ class ChatRelayController:
                 self.active = None
                 self._drain()
 
-    def _capture(self, db, row, attempt, evidence):
+    def _capture(self, db, row, attempt, evidence, contract):
         fields = {"source", "conversationUrl", "sourceUserMessageId", "assistantMessageId", "sourceUnitKey", "assistantUnitKey", "promptText", "answerText", "completion", "profile", "observedAt"}
         if not isinstance(evidence, dict) or set(evidence) != fields or evidence["source"] != "browser_dom":
             raise ValueError("relay_capture_fields_invalid")
@@ -384,12 +425,15 @@ class ChatRelayController:
         if not isinstance(answer, str) or not answer.strip() or len(answer) > 20000 or "\0" in answer:
             raise ValueError("relay_capture_answer_empty_or_too_long")
         completion = evidence["completion"]
+        # Unknown stop is retained as null, never fabricated as "not present".
+        # The caller has matched this current contract to the frozen approval SHA.
+        expected_stop = None if contract["selectors"]["stop"] is None else False
         if (not isinstance(completion, dict)
                 or set(completion) != {"text", "observedAfterCommit", "stopPresent"}
                 or not isinstance(completion["text"], str)
                 or completion["text"] not in {"Response complete", "回答已完成"}
                 or completion["observedAfterCommit"] is not True
-                or completion["stopPresent"] is not False):
+                or completion["stopPresent"] is not expected_stop):
             raise ValueError("relay_capture_not_completed")
         snapshot = json.loads(row["snapshot"])
         job = self.service._app_dispatch_job(db, row, snapshot)
@@ -481,20 +525,16 @@ class ChatRelayBroker:
     def _startup_pending(self, config):
         """One bounded adoption of post-approval production confirmations only."""
         eligible = []
-        approved_at = timestamp(config["approvalConfirmedAt"])
         with self.service._db() as db:
-            rows = db.execute("SELECT * FROM idea_dispatches WHERE status='pending' ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,created_at,id LIMIT 50").fetchall()
-            for row in rows:
+            # Apply the consent fence before the adoption limit; historical
+            # pending rows must neither be sent nor starve newer confirmations.
+            for row in _confirmed_pending(db, config):
                 try:
                     snapshot = json.loads(row["snapshot"])
-                    if (not row["user_confirmed_at"] or timestamp(row["user_confirmed_at"]) < approved_at or timestamp(row["created_at"]) < approved_at
-                            or row["claim_token"] or row["target_thread_id"] or json.loads(row["result"]) != {}
+                    if (_prior_dispatch_evidence(db, row)
                             or row["target_kind"] != "chatgpt" or row["target_mode"] != "new"
                             or snapshot.get("origin") != "workflow_discussion" or snapshot.get("purpose") != "discuss"
-                            or snapshot.get("discussionPurpose", "discussion") != "discussion"
-                            or self.service._setting(db, ATTEMPT_PREFIX + row["id"])):
-                        continue
-                    if db.execute("SELECT 1 FROM requests WHERE kind IN ('incubator_claim','chat_relay_claim') AND json_extract(response,'$.dispatchId')=? LIMIT 1", (row["id"],)).fetchone():
+                            or snapshot.get("discussionPurpose", "discussion") != "discussion"):
                         continue
                     job = self.service._app_dispatch_job(db, row, snapshot)
                     payload = json.loads(job["payload"])
@@ -507,6 +547,8 @@ class ChatRelayBroker:
                         continue
                     self.service._check_app_images(payload)
                     eligible.append(row["id"])
+                    if len(eligible) >= 50:
+                        break
                 except (ValueError, OSError, KeyError, TypeError):
                     continue
         return eligible

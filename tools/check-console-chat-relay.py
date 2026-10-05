@@ -1,6 +1,8 @@
 """Disposable relay checks. Synthetic DOM contracts are not real Chat evidence."""
 import copy
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
+import hashlib
 import importlib.util
 import io
 import json
@@ -365,6 +367,9 @@ class RelayChecks(unittest.TestCase):
     def test_startup_adopts_only_post_approval_production_pending_and_never_old_head(self):
         first, _ = self.send()
         old_id = first["job"]["appDispatch"]["id"]
+        old_row = self.row(old_id)
+        with self.service._db() as db:
+            old_job = dict(db.execute("SELECT * FROM jobs WHERE id=?", (first["job"]["id"],)).fetchone())
         self.config["approvalConfirmedAt"] = now()
         self.approve()
         self.new_session()
@@ -375,9 +380,175 @@ class RelayChecks(unittest.TestCase):
         restarted = ChatRelayController(self.service, self.messages.append)
         restarted.handle({"protocol": PROTOCOL, "type": "ready", "hostName": HOST_NAME, "clientReady": True})
         restarted.committed(broker._startup_pending(self.config))
-        self.assertEqual(self.row(old_id)["status"], "pending")
-        self.assertEqual(self.row(new_id)["status"], "pending")
-        self.assertEqual(restarted.status()["message"], "older_queue_head_requires_user_review")
+        self.assertEqual(self.row(old_id), old_row)
+        self.assertIsNone(self.attempt(old_id))
+        with self.service._db() as db:
+            self.assertEqual(dict(db.execute("SELECT * FROM jobs WHERE id=?", (first["job"]["id"],)).fetchone()), old_job)
+        self.assertEqual(self.row(new_id)["status"], "claimed")
+        self.assertEqual([message["dispatchId"] for message in self.messages if message["type"] == "prepare"], [new_id])
+
+    def test_live_commit_and_release_never_adopt_preapproval_pending(self):
+        old, _ = self.send()
+        old_id = old["job"]["appDispatch"]["id"]
+        before = self.row(old_id)
+        self.config["approvalConfirmedAt"] = now()
+        self.approve()
+        self.controller.committed([old_id])
+        self.controller.released()
+        self.assertEqual(self.row(old_id), before)
+        self.assertIsNone(self.attempt(old_id))
+        self.assertFalse(any(message["type"] == "prepare" for message in self.messages))
+        self.new_session()
+        fresh, _ = self.send()
+        fresh_id = fresh["job"]["appDispatch"]["id"]
+        self.controller.committed([fresh_id])
+        self.assertEqual(self.row(old_id), before)
+        self.assertEqual(self.row(fresh_id)["status"], "claimed")
+        self.assertEqual([message["dispatchId"] for message in self.messages if message["type"] == "prepare"], [fresh_id])
+
+    def test_confirmation_fence_rejects_split_invalid_and_future_times_on_both_paths(self):
+        approved = datetime.now(timezone.utc) - timedelta(minutes=10)
+        self.config["approvalConfirmedAt"] = approved.isoformat()
+        self.config["domContract"]["capturedAt"] = approved.isoformat()
+        self.approve()
+        old = (approved - timedelta(seconds=1)).isoformat()
+        recent = (approved + timedelta(seconds=1)).isoformat()
+        later = (approved + timedelta(seconds=2)).isoformat()
+        future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        broker = ChatRelayBroker(self.service)
+        for created, confirmed in ((old, recent), (recent, old), (recent, later),
+                                   (recent, ""), ("invalid", recent), (future, future)):
+            with self.subTest(created=created, confirmed=confirmed):
+                self.new_session()
+                sent, _ = self.send("high")
+                identifier = sent["job"]["appDispatch"]["id"]
+                with self.service._db() as db:
+                    db.execute("UPDATE idea_dispatches SET created_at=?,user_confirmed_at=? WHERE id=?", (created, confirmed, identifier))
+                before = self.row(identifier)
+                self.assertNotIn(identifier, broker._startup_pending(self.config))
+                self.controller.committed([identifier])
+                self.controller.released()
+                self.assertEqual(self.row(identifier), before)
+                self.assertIsNone(self.attempt(identifier))
+                with self.service._db() as db:
+                    self.assertEqual(db.execute("SELECT status FROM jobs WHERE id=?", (sent["job"]["id"],)).fetchone()[0], "waiting")
+        self.assertFalse(any(message["type"] == "prepare" for message in self.messages))
+
+    def test_confirmation_fence_compares_timezone_instants_not_strings(self):
+        approved = datetime.now(timezone.utc) - timedelta(minutes=10)
+        self.config["approvalConfirmedAt"] = approved.isoformat()
+        self.config["domContract"]["capturedAt"] = approved.isoformat()
+        self.approve()
+        sent, _ = self.send()
+        identifier = sent["job"]["appDispatch"]["id"]
+        confirmed = approved + timedelta(seconds=1)
+        with self.service._db() as db:
+            db.execute("UPDATE idea_dispatches SET created_at=?,user_confirmed_at=? WHERE id=?",
+                       (confirmed.isoformat(), confirmed.astimezone(timezone(timedelta(hours=8))).isoformat(), identifier))
+        self.assertEqual(ChatRelayBroker(self.service)._startup_pending(self.config), [identifier])
+        self.controller.committed([identifier])
+        self.assertEqual(self.row(identifier)["status"], "claimed")
+
+    def test_startup_limit_counts_eligible_confirmations_not_historical_rows(self):
+        old, _ = self.send()
+        old_id = old["job"]["appDispatch"]["id"]
+        with self.service._db() as db:
+            template = list(db.execute("SELECT * FROM idea_dispatches WHERE id=?", (old_id,)).fetchone())
+            for _ in range(51):
+                values = template.copy()
+                values[0], values[2] = uuid.uuid4().hex, str(uuid.uuid4())
+                db.execute("INSERT INTO idea_dispatches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values)
+        self.config["approvalConfirmedAt"] = now()
+        self.approve()
+        self.new_session()
+        fresh, _ = self.send()
+        fresh_id = fresh["job"]["appDispatch"]["id"]
+        self.assertEqual(ChatRelayBroker(self.service)._startup_pending(self.config), [fresh_id])
+        self.controller.committed([fresh_id])
+        self.assertEqual(self.row(fresh_id)["status"], "claimed")
+        with self.service._db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM idea_dispatches WHERE status='pending'").fetchone()[0], 52)
+
+    def test_browser_observation_fence_preserves_preconnection_backlog_and_allows_new_confirmation(self):
+        # Both rows are human-confirmed after the original approval, but before
+        # the actual DOM contract observed for the first live connection.
+        first, _ = self.send()
+        self.new_session()
+        second, _ = self.send()
+        old_ids = [sent["job"]["appDispatch"]["id"] for sent in (first, second)]
+        before = {identifier: self.row(identifier) for identifier in old_ids}
+        original_approval = self.config["approvalConfirmedAt"]
+        self.config["domContract"]["capturedAt"] = now()
+        self.approve()
+        broker = ChatRelayBroker(self.service)
+        self.assertEqual(broker._startup_pending(self.config), [])
+        self.controller.committed(old_ids)
+        self.controller.released()
+        self.new_session()
+        fresh, _ = self.send()
+        fresh_id = fresh["job"]["appDispatch"]["id"]
+        self.assertEqual(broker._startup_pending(self.config), [fresh_id])
+        restarted = ChatRelayController(self.service, self.messages.append)
+        restarted.committed(broker._startup_pending(self.config))
+        restarted.handle({"protocol": PROTOCOL, "type": "ready", "hostName": HOST_NAME, "clientReady": True})
+        self.assertEqual(self.config["approvalConfirmedAt"], original_approval)
+        for identifier in old_ids:
+            self.assertEqual(self.row(identifier), before[identifier])
+            self.assertIsNone(self.attempt(identifier))
+        self.assertEqual(self.row(fresh_id)["status"], "claimed")
+        self.assertEqual([message["dispatchId"] for message in self.messages if message["type"] == "prepare"], [fresh_id])
+
+    def test_any_attempt_setting_prevents_reclaim_before_profile_failure_writes(self):
+        self.approve()
+        broker = ChatRelayBroker(self.service)
+        for raw in ("null", "{}", "invalid-json"):
+            with self.subTest(raw=raw):
+                self.new_session()
+                sent, _ = self.send("high")
+                identifier = sent["job"]["appDispatch"]["id"]
+                with self.service._db() as db:
+                    db.execute("INSERT INTO settings(key,value) VALUES (?,?)", (ATTEMPT_PREFIX + identifier, raw))
+                before = self.row(identifier)
+                self.assertNotIn(identifier, broker._startup_pending(self.config))
+                # This isolated row is the only event we authorize to the controller.
+                isolated = ChatRelayController(self.service, self.messages.append)
+                isolated.client_ready = True
+                isolated.committed([identifier])
+                self.assertEqual(self.row(identifier), before)
+                with self.service._db() as db:
+                    self.assertEqual(db.execute("SELECT value FROM settings WHERE key=?", (ATTEMPT_PREFIX + identifier,)).fetchone()[0], raw)
+                    self.assertEqual(db.execute("SELECT status FROM jobs WHERE id=?", (sent["job"]["id"],)).fetchone()[0], "waiting")
+                    # End only this isolated fixture row so the next subcase
+                    # reaches its own attempt guard, rather than the old head.
+                    db.execute("UPDATE idea_dispatches SET status='failed' WHERE id=?", (identifier,))
+        self.assertFalse(any(message["type"] == "prepare" for message in self.messages))
+
+    def test_prior_claim_request_prevents_reclaim_on_startup_and_live_event(self):
+        self.approve()
+        sent, _ = self.send()
+        identifier = sent["job"]["appDispatch"]["id"]
+        with self.service._db() as db:
+            db.execute("INSERT INTO requests(id,kind,fingerprint,response) VALUES (?,?,?,?)",
+                       (str(uuid.uuid4()), "chat_relay_claim", "fixture", json.dumps({"dispatchId": identifier})))
+        before = self.row(identifier)
+        self.assertEqual(ChatRelayBroker(self.service)._startup_pending(self.config), [])
+        self.controller.committed([identifier])
+        self.assertEqual(self.row(identifier), before)
+        self.assertIsNone(self.attempt(identifier))
+        self.assertEqual(self.controller.blocked_reason, "prior_send_evidence_requires_user_review")
+
+    def test_completed_job_cannot_be_claimed_through_a_pending_dispatch(self):
+        self.approve()
+        sent, _ = self.send()
+        identifier = sent["job"]["appDispatch"]["id"]
+        with self.service._db() as db:
+            db.execute("UPDATE jobs SET status='succeeded',result=? WHERE id=?", (json.dumps({"text": "retained result"}), sent["job"]["id"]))
+        before = self.row(identifier)
+        self.assertEqual(ChatRelayBroker(self.service)._startup_pending(self.config), [])
+        self.controller.committed([identifier])
+        self.assertEqual(self.row(identifier), before)
+        self.assertIsNone(self.attempt(identifier))
+        self.assertEqual(self.controller.blocked_reason, "prior_job_result_requires_user_review")
 
     def test_startup_recovers_post_approval_pending_without_any_send_or_claim_evidence(self):
         self.approve()
@@ -503,6 +674,61 @@ class RelayChecks(unittest.TestCase):
 
     def test_incomplete_dom_not_saved(self):
         self.rejected_capture(lambda item: item["completion"].update(stopPresent=True))
+
+    def test_unknown_stop_contract_saves_explicit_terminal_evidence_without_inventing_absence(self):
+        self.config["domContract"]["surface"] = "edge"
+        self.config["domContract"]["selectors"]["stop"] = None
+        sent, prepare = self.begin()
+        self.controller.handle(self.prepared(prepare))
+        evidence = self.evidence(prepare)
+        evidence["completion"].update(text="回答已完成", stopPresent=None)
+        self.controller.handle(self.envelope(prepare, "capture", evidence=evidence))
+        row = self.row(sent["job"]["appDispatch"]["id"])
+        self.assertEqual(row["status"], "completed")
+        result = json.loads(row["result"])
+        self.assertIsNone(result["browserEvidence"]["completion"]["stopPresent"])
+        self.assertEqual(result["browserEvidence"]["completion"]["text"], "回答已完成")
+        self.assertEqual(self.attempt(row["id"])["approvalSha256"], hashlib.sha256(encode(self.config)).hexdigest())
+
+    def test_unknown_stop_contract_cannot_claim_verified_absence(self):
+        self.config["domContract"]["selectors"]["stop"] = None
+        self.rejected_capture(lambda item: item["completion"].update(stopPresent=False))
+
+    def test_unknown_stop_contract_still_rejects_running_evidence(self):
+        self.config["domContract"]["selectors"]["stop"] = None
+        self.rejected_capture(lambda item: item["completion"].update(stopPresent=True))
+
+    def test_known_stop_contract_cannot_use_unknown_evidence(self):
+        self.rejected_capture(lambda item: item["completion"].update(stopPresent=None))
+
+    def test_known_stop_contract_rejects_false_integer_alias(self):
+        self.rejected_capture(lambda item: item["completion"].update(stopPresent=0))
+
+    def test_unknown_stop_does_not_relax_other_verified_selectors(self):
+        self.config["domContract"]["selectors"]["stop"] = None
+        self.assertEqual(approval(self.config, self.service.data_dir), self.config)
+        for key in self.config["domContract"]["selectors"]:
+            if key == "stop":
+                continue
+            with self.subTest(selector=key):
+                other = copy.deepcopy(self.config)
+                other["domContract"]["selectors"][key] = None
+                with self.assertRaisesRegex(ValueError, "relay_dom_selectors_unverified"):
+                    approval(other, self.service.data_dir)
+
+    def test_stop_contract_cannot_change_after_frozen_send_intent(self):
+        sent, prepare = self.begin()
+        self.controller.handle(self.prepared(prepare))
+        evidence = self.evidence(prepare)
+        evidence["completion"]["stopPresent"] = None
+        self.config["domContract"]["selectors"]["stop"] = None
+        with self.service._db() as db:
+            self.service._set_setting(db, APPROVAL_KEY, self.config)
+        self.service.data_dir.joinpath("console-chat-relay-approved.json").write_text(json.dumps(self.config), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "relay_frozen_approval_changed"):
+            self.controller.handle(self.envelope(prepare, "capture", evidence=evidence))
+        self.assertEqual(self.row(prepare["dispatchId"])["status"], "needs_review")
+        self.assertFalse(any(item["role"] == "assistant" for item in self.service.detail(sent["session"]["recordId"])["messages"]))
 
     def test_edge_chinese_completion_typo_not_saved(self):
         self.config["domContract"]["surface"] = "edge"

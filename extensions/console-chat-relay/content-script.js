@@ -32,10 +32,16 @@
       return node.textContent === "" && raw === "\n" ? "" : raw;
     }
     function completion() {
-      return all(selectors().completion).map(node => String(node.textContent || "").trim())
-        .find(text => ["Response complete", "回答已完成"].includes(text)) || "";
+      const markers = all(selectors().completion).map(node => String(node.textContent || "").trim())
+        .filter(text => ["Response complete", "回答已完成"].includes(text));
+      if (markers.length > 1) R.reject("dom_completion_ambiguous", "没有唯一的本次明确结束标记，保留原页面核对。");
+      return markers[0] || "";
     }
-    function stopPresent() { return all(selectors().stop).length > 0; }
+    function stopPresent() {
+      // null records an unobserved control, never a query for the string "null"
+      // or an assertion that a generating Stop control is absent.
+      return selectors().stop === null ? null : all(selectors().stop).length > 0;
+    }
     function messageNodes(readAnswers = true) {
       const entries = new Map();
       for (const node of all(selectors().messages)) {
@@ -63,7 +69,7 @@
       const composer = one(selectors().composer);
       if (composer.getAttribute("role") !== "textbox" || composer.getAttribute("contenteditable") !== "true"
           || composerText(composer) !== expectedComposer) R.reject("composer_changed", "输入框不空或已有用户草稿，不覆盖。");
-      if (messageNodes().length || completion() || stopPresent()) R.reject("not_fresh_chat", "页面已有消息、生成或结束标记，不使用旧聊天。");
+      if (messageNodes().length || completion() || stopPresent() === true) R.reject("not_fresh_chat", "页面已有消息、生成或结束标记，不使用旧聊天。");
       return { composer, profile: profile() };
     }
     function disconnectObserver() {
@@ -98,13 +104,15 @@
         await emit(accepted);
       }
       const completionText = completion();
-      if (!completionText || stopPresent()) return;
+      const observedStop = stopPresent();
+      if (!completionText || observedStop === true || state.completionAbsentAtCommit !== true) return;
       const answers = messageNodes().filter(node => node.role === "assistant");
       if (answers.length !== 1) R.reject("final_source_ambiguous", "结束后没有唯一主回答，不能把工具或多个成果拼作答案。");
       const answer = answers[0];
       const captured = R.envelope("capture", state.prepare, { evidence: { source: "browser_dom", conversationUrl: env.location.href,
         sourceUserMessageId: user.id, assistantMessageId: answer.id, sourceUnitKey: user.unit, assistantUnitKey: answer.unit,
-        promptText: user.text, answerText: answer.text, completion: { text: completionText, observedAfterCommit: true, stopPresent: false },
+        promptText: user.text, answerText: answer.text, completion: { text: completionText,
+          observedAfterCommit: state.completionAbsentAtCommit === true, stopPresent: observedStop },
         profile: profileEvidence, observedAt: seenAt } });
       R.validateCapture(captured, state.prepare);
       await emit(captured); state.phase = "captured"; disconnectObserver();
@@ -138,6 +146,9 @@
       composer.dispatchEvent(new env.InputEvent("input", { bubbles: true, inputType: "insertText", data: state.prepare.prompt }));
       if (composerText(composer) !== state.prepare.prompt) R.reject("composer_not_matching", "页面输入没有完整冻结文字，不能发送。");
       inspectFresh(state.prepare.prompt);
+      // inspectFresh just proved no completion marker on this owned blank
+      // conversation. The observer is installed before its sole Send click.
+      state.completionAbsentAtCommit = true;
       const send = one(selectors().send);
       if (send.disabled || send.getAttribute("aria-disabled") === "true" || send.getAttribute("type") !== "submit")
         R.reject("send_not_available", "未观察到唯一可用的真实 Send 控件。");

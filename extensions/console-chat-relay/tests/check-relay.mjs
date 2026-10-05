@@ -66,6 +66,20 @@ await test("unverified profile mapping/DOM completion source refuses preparation
   delete wrong.domContract.selectors.send;
   rejected(() => relay.validatePrepare(wrong), "dom_contract_unverified");
 });
+await test("only an explicit null Stop is unknown; other selectors remain mandatory and nonempty", () => {
+  const unknown = clone(prepare); unknown.domContract.selectors.stop = null;
+  assert.equal(relay.validatePrepare(unknown), unknown);
+  for (const key of Object.keys(domContract.selectors).filter(key => key !== "stop")) {
+    const wrong = clone(unknown); wrong.domContract.selectors[key] = null;
+    rejected(() => relay.validatePrepare(wrong), "dom_contract_unverified");
+  }
+  for (const stop of ["", " ", false, 0, undefined]) {
+    const wrong = clone(prepare); wrong.domContract.selectors.stop = stop;
+    rejected(() => relay.validatePrepare(wrong), "dom_contract_unverified");
+  }
+  const missing = clone(unknown); delete missing.domContract.selectors.stop;
+  rejected(() => relay.validatePrepare(missing), "dom_contract_unverified");
+});
 await test("only CUA Chrome and Edge surfaces can prepare; other surfaces remain unverified", () => {
   for (const surface of ["chrome", "edge"]) {
     const value = clone(prepare); value.domContract.surface = surface;
@@ -135,6 +149,27 @@ await test("same ID or wrong role DOM keys cannot represent two actual messages"
 await test("old completion/Stop still present/inexact completion reject main answer", () => {
   for (const patch of [{ observedAfterCommit: false }, { stopPresent: true }, { text: "Response started" }])
     rejected(() => relay.validateCapture({ ...capture, evidence: { ...capture.evidence, completion: { ...capture.evidence.completion, ...patch } } }, prepare), "capture_not_complete");
+});
+await test("capture Stop evidence must exactly match the frozen known or unknown selector", () => {
+  const unknown = clone(prepare); unknown.domContract.selectors.stop = null;
+  const value = clone(capture); value.evidence.completion.stopPresent = null;
+  assert.equal(relay.validateCapture(value, unknown), value);
+  for (const stopPresent of [false, true, 0, "", undefined]) {
+    const wrong = clone(value); wrong.evidence.completion.stopPresent = stopPresent;
+    rejected(() => relay.validateCapture(wrong, unknown), "capture_not_complete");
+  }
+  for (const stopPresent of [null, true, 0, "", undefined]) {
+    const wrong = clone(capture); wrong.evidence.completion.stopPresent = stopPresent;
+    rejected(() => relay.validateCapture(wrong, prepare), "capture_not_complete");
+  }
+  for (const patch of [{ observedAfterCommit: false }, { text: "回答已完城" }, { text: "Response started" }]) {
+    const wrong = clone(value); Object.assign(wrong.evidence.completion, patch);
+    rejected(() => relay.validateCapture(wrong, unknown), "capture_not_complete");
+  }
+  const wrongSource = clone(value); wrongSource.evidence.promptText += " ";
+  rejected(() => relay.validateCapture(wrongSource, unknown), "capture_prompt_mismatch");
+  const wrongProfile = clone(value); wrongProfile.evidence.profile.observedAfter = "Pro";
+  rejected(() => relay.validateCapture(wrongProfile, unknown), "profile_changed");
 });
 await test("observed Chinese completion validates exactly and typo/localized guesses never count as final", () => {
   const actual = clone(capture); actual.evidence.completion.text = "回答已完成";
@@ -404,7 +439,7 @@ class Node {
 }
 function contentFixture({ promptText = prompt, completed = false, stop = false, extraUser = false, clickThrows = false, draft = "", answerShell = false,
   emptyInnerText, profileText = "Thinking effortInstant", completionText = "Response complete" } = {}) {
-  const storage = storageFixture(), messages = [], emitted = [], timers = new Map(), location = { href: "https://chatgpt.com/" };
+  const storage = storageFixture(), messages = [], emitted = [], queries = [], timers = new Map(), location = { href: "https://chatgpt.com/" };
   const composer = new Node(draft, { role: "textbox", contenteditable: "true" });
   composer.emptyInnerText = emptyInnerText;
   const model = new Node(profileText, { "data-selected-reasoning-effort": "none" });
@@ -430,10 +465,12 @@ function contentFixture({ promptText = prompt, completed = false, stop = false, 
   items.set("#send", [send]);
   class Observer { constructor(callback) { mutation = callback; } observe() {} disconnect() { mutation = null; } }
   const env = { chrome: { storage, runtime: { async sendMessage(value) { emitted.push(clone(value)); return { received: true }; } } },
-    document: { documentElement: {}, querySelectorAll(selector) { return items.get(selector) || []; } }, location, MutationObserver: Observer,
+    document: { documentElement: {}, querySelectorAll(selector) {
+      assert.equal(typeof selector, "string"); assert.ok(selector); queries.push(selector); return items.get(selector) || [];
+    } }, location, MutationObserver: Observer,
     InputEvent: class { constructor(type, detail) { this.type = type; this.detail = detail; } }, now: () => Date.parse("2026-10-05T12:00:00.000Z"),
     setTimeout(fn, timeout) { const id = nextTimer++; timers.set(id, { fn, timeout }); return id; }, clearTimeout(id) { timers.delete(id); } };
-  return { env, items, storage, emitted, composer, model, messages, timers, controller: context.ConsoleChatRelayContent.createController(env),
+  return { env, items, storage, emitted, queries, composer, model, messages, timers, controller: context.ConsoleChatRelayContent.createController(env),
     clicks: () => clicks, async mutation() { mutation?.(); await this.controller.idle(); await this.controller.idle(); } };
 }
 await test("content prepare is readonly and cannot overwrite any existing user draft", async () => {
@@ -529,6 +566,60 @@ await test("Stop prevents premature final; DOM completion event then returns one
   f.items.set("#stop", []); await f.mutation();
   assert.equal(f.emitted.filter(value => value.type === "capture").length, 1);
   await f.mutation(); assert.equal(f.emitted.filter(value => value.type === "capture").length, 1);
+});
+await test("unknown Stop is never queried or reported absent; only a new explicit completion captures once", async () => {
+  const value = clone(prepare); value.domContract.surface = "edge"; value.domContract.selectors.stop = null;
+  const f = contentFixture({ profileText: "思考强度Instant", stop: true });
+  await f.controller.receive({ type: "relay.content.prepare", prepare: value });
+  await f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", value) });
+  await f.controller.idle();
+  assert.equal(f.emitted.filter(message => message.type === "accepted").length, 1);
+  assert.equal(f.emitted.filter(message => message.type === "capture").length, 0);
+  assert.equal(f.controller.phase(), "waiting"); assert.equal(f.clicks(), 1);
+  await f.mutation();
+  assert.equal(f.emitted.filter(message => message.type === "capture").length, 0);
+  f.items.set("#stop", []);
+  f.items.set("#complete", [new Node("回答已完成")]);
+  await f.mutation();
+  const response = f.emitted.find(message => message.type === "capture");
+  assert.ok(response); relay.validateCapture(response, value);
+  assert.equal(response.evidence.completion.text, "回答已完成");
+  assert.equal(response.evidence.completion.observedAfterCommit, true);
+  assert.equal(response.evidence.completion.stopPresent, null);
+  assert.equal(response.evidence.promptText, prompt); assert.equal(response.evidence.sourceUserMessageId, sourceId);
+  assert.equal(response.evidence.assistantMessageId, answerId); assert.equal(f.queries.includes("#stop"), false);
+  await f.mutation();
+  assert.equal(f.emitted.filter(message => message.type === "capture").length, 1); assert.equal(f.clicks(), 1);
+});
+await test("unknown Stop cannot use a completion already present before its unique Send", async () => {
+  const value = clone(prepare); value.domContract.selectors.stop = null;
+  const f = contentFixture();
+  await f.controller.receive({ type: "relay.content.prepare", prepare: value });
+  f.items.set("#complete", [new Node("回答已完成")]);
+  await assert.rejects(f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", value) }),
+    error => error.code === "not_fresh_chat");
+  assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
+  assert.equal(f.emitted.filter(message => message.type === "capture").length, 0);
+});
+await test("unknown Stop still rejects duplicate completion markers or ambiguous final sources", async () => {
+  const value = clone(prepare); value.domContract.selectors.stop = null;
+  for (const mutate of [
+    f => f.items.set("#complete", [new Node("回答已完成"), new Node("回答已完成")]),
+    f => { f.items.set("#complete", [new Node("回答已完成")]);
+      f.messages[1].children.set(".answer-body", [new Node("answer A"), new Node("answer B")]); },
+    f => { f.items.set("#complete", [new Node("回答已完成")]);
+      const other = new Node("other", { "data-chatgpt-search-message-ids": JSON.stringify(["a2a45678-1234-4567-89ab-1234567890ab"]),
+        "data-chatgpt-search-unit-key": "fallback-turn-1:0:user" });
+      other.children.set(".user-body", [new Node("other")]); f.messages.push(other); },
+    f => { f.items.set("#complete", [new Node("回答已完成")]); f.model.textContent = "Pro"; }
+  ]) {
+    const f = contentFixture();
+    await f.controller.receive({ type: "relay.content.prepare", prepare: value });
+    await f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", value) });
+    await f.controller.idle(); mutate(f); await f.mutation(); await f.controller.idle();
+    assert.equal(f.emitted.filter(message => message.type === "capture").length, 0);
+    assert.equal(f.controller.phase(), "needs_review"); assert.equal(f.clicks(), 1);
+  }
 });
 await test("content preserves actual Chinese completion text and never translates a wrong marker into final evidence", async () => {
   const value = clone(prepare); value.domContract.surface = "edge";

@@ -46,7 +46,12 @@
         || !SHA.test(value.observationSha256) || !isoTime(value.capturedAt))
       reject("dom_contract_unverified", "尚无经实际 Chrome/Edge CUA 核对的 DOM 合同，IAB 与 fixture 不能替代。");
     exact(value.selectors, SELECTOR_KEYS, "dom_contract_unverified");
-    for (const key of SELECTOR_KEYS) nonempty(value.selectors[key], 1000, "dom_contract_unverified");
+    for (const key of SELECTOR_KEYS) {
+      // Only Stop can remain explicitly unknown. Missing/empty selectors are
+      // never an alternative spelling for an unobserved control.
+      if (key === "stop" && value.selectors[key] === null) continue;
+      nonempty(value.selectors[key], 1000, "dom_contract_unverified");
+    }
     exact(value.profiles, ["fast"], "profile_unverified");
     exact(value.profiles.fast, ["label"], "profile_unverified");
     if (value.profiles.fast.label !== "Instant") reject("profile_unverified", "本准备包只包含实际观察过的 Instant 标签。");
@@ -109,6 +114,7 @@
     exact(value, ["protocol", "type", "dispatchId", "attemptId", "evidence"]);
     common(value, "capture");
     if (!sameIdentity(value, prepared)) reject("capture_identity_mismatch", "回答不属于已冻结请求。");
+    const contract = validateDom(prepared.domContract);
     const evidence = exact(value.evidence, ["source", "conversationUrl", "sourceUserMessageId", "assistantMessageId", "sourceUnitKey",
       "assistantUnitKey", "promptText", "answerText", "completion", "profile", "observedAt"]);
     if (evidence.source !== "browser_dom" || !conversationUrl(evidence.conversationUrl)
@@ -122,8 +128,9 @@
     if (text(evidence.promptText, MAX_PROMPT) !== prepared.prompt) reject("capture_prompt_mismatch", "页面用户输入与完整冻结问题不一致。");
     nonempty(evidence.answerText, MAX_ANSWER);
     exact(evidence.completion, ["text", "observedAfterCommit", "stopPresent"]);
+    const expectedStop = contract.selectors.stop === null ? null : false;
     if (!["Response complete", "回答已完成"].includes(evidence.completion.text) || evidence.completion.observedAfterCommit !== true
-        || evidence.completion.stopPresent !== false) reject("capture_not_complete", "没有本次提交后的明确结束证据。");
+        || evidence.completion.stopPresent !== expectedStop) reject("capture_not_complete", "没有本次提交后的明确结束证据，或停止控件观测与冻结契约不符。");
     exact(evidence.profile, ["requestedProfile", "observedBefore", "observedAfter"]);
     if (evidence.profile.requestedProfile !== prepared.requestedProfile || evidence.profile.observedBefore !== "Instant"
         || evidence.profile.observedAfter !== "Instant") reject("profile_changed", "实际档位前后不符，不能冒充所选档位。");
