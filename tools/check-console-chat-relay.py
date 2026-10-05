@@ -220,6 +220,16 @@ class RelayChecks(unittest.TestCase):
         self.assertEqual(self.row(sent["job"]["appDispatch"]["id"])["status"], "needs_review")
         self.assertFalse(any(message["type"] == "commitSend" for message in self.messages))
 
+    def test_current_observed_edge_localized_instant_label_is_exact(self):
+        self.config["domContract"]["surface"] = "edge"
+        sent, prepare = self.begin()
+        prepared = self.prepared(prepare)
+        prepared["observation"]["profileDom"] = {"text": "思考强度即时", "reasoningEffort": "none"}
+        self.controller.handle(prepared)
+        identifier = sent["job"]["appDispatch"]["id"]
+        self.assertEqual(self.attempt(identifier)["preparedObservation"]["profileDom"], prepared["observation"]["profileDom"])
+        self.assertEqual(sum(message["type"] == "commitSend" for message in self.messages), 1)
+
     def test_edge_contract_cannot_accept_chrome_prepare_observation(self):
         self.config["domContract"]["surface"] = "edge"
         sent, prepare = self.begin()
@@ -363,6 +373,216 @@ class RelayChecks(unittest.TestCase):
         self.controller.handle(self.envelope(prepare, "blocked", code="unexpected_phase", message="阶段不明。"))
         self.assertEqual(self.row(identifier)["status"], "needs_review")
         self.assertEqual(self.attempt(identifier)["phase"], "needs_review")
+
+    def retirement_candidate(self, fail=True):
+        sent, prepare = self.begin()
+        self.controller.handle(self.prepared(prepare))
+        self.controller.handle(self.envelope(prepare, "uncertain", code="click_outcome_unknown", message="隔离未知结果，不能重送。"))
+        attempt = self.attempt(prepare["dispatchId"])
+        if fail:
+            self.service.incubator_fail(request(id=prepare["dispatchId"], claimToken=attempt["claimToken"],
+                                               status="failed", error="隔离正常 API 明确终止本轮，发送结果仍未知。"))
+        return sent, prepare, attempt
+
+    def retirement_store_snapshot(self):
+        with self.service._db() as db:
+            tables = sorted(row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"))
+            return {table: [dict(row) for row in db.execute(f'SELECT * FROM "{table}" ORDER BY rowid')] for table in tables}
+
+    def retired_messages(self):
+        return [message for message in self.messages if message["type"] == "retired"]
+
+    def test_explicit_normal_failure_retires_exact_identity_without_rewriting_unknown_attempt(self):
+        sent, prepare, attempt = self.retirement_candidate()
+        identifier = prepare["dispatchId"]
+        before = self.retirement_store_snapshot()
+        self.controller.released([identifier])
+        self.assertEqual(self.retired_messages(), [self.envelope(prepare, "retired", reason="original_dispatch_failed")])
+        self.assertEqual(set(self.retired_messages()[0]), {"protocol", "type", "dispatchId", "attemptId", "reason"})
+        self.assertEqual(self.retirement_store_snapshot(), before)
+        self.assertEqual(self.attempt(identifier), attempt)
+        self.assertEqual(attempt["phase"], "needs_review")
+        self.assertTrue(attempt["sendIntentAt"])
+        self.assertEqual(self.row(identifier)["status"], "failed")
+        self.assertEqual(before["jobs"][-1]["status"], "failed")
+        self.assertIsNone(self.controller.active)
+        for _ in range(2):
+            self.controller.released([identifier])
+        for kind in ("hello", "ready"):
+            self.controller.handle({"protocol": PROTOCOL, "type": kind, "hostName": HOST_NAME,
+                                    **({"clientReady": True} if kind == "ready" else {})})
+        self.assertEqual(len(self.retired_messages()), 1)
+        self.assertEqual(self.retirement_store_snapshot(), before)
+        self.assertEqual(sum(message["type"] == "prepare" for message in self.messages), 1)
+        self.assertEqual(sum(message["type"] == "commitSend" for message in self.messages), 1)
+
+    def test_retired_receipt_replays_on_reconnect_without_send_or_attempt_mutation(self):
+        _, prepare, attempt = self.retirement_candidate()
+        before = self.retirement_store_snapshot()
+        self.controller.disconnect()
+        self.assertEqual(self.retirement_store_snapshot(), before)
+        restarted = ChatRelayController(self.service, self.messages.append)
+        restarted.disconnect("relay_reconnected_requires_review")
+        self.assertEqual(self.retirement_store_snapshot(), before)
+        self.assertFalse(restarted.client_ready)
+        restarted.handle({"protocol": PROTOCOL, "type": "hello", "hostName": HOST_NAME})
+        restarted.handle({"protocol": PROTOCOL, "type": "ready", "hostName": HOST_NAME, "clientReady": True})
+        self.assertEqual(self.retired_messages(), [self.envelope(prepare, "retired", reason="original_dispatch_failed")])
+        self.assertEqual(self.attempt(prepare["dispatchId"]), attempt)
+        self.assertEqual(self.retirement_store_snapshot(), before)
+        self.assertEqual(sum(message["type"] == "prepare" for message in self.messages), 1)
+
+    def test_disconnect_preserves_explicit_failure_with_preexisting_nonterminal_phase(self):
+        _, prepare, _ = self.retirement_candidate()
+        identifier = prepare["dispatchId"]
+        with self.service._db() as db:
+            attempt = self.service._setting(db, ATTEMPT_PREFIX + identifier)
+            attempt["phase"] = "send_intent"
+            self.service._set_setting(db, ATTEMPT_PREFIX + identifier, attempt)
+        before = self.retirement_store_snapshot()
+        self.controller.disconnect()
+        self.assertEqual(self.retirement_store_snapshot(), before)
+        restarted = ChatRelayController(self.service, self.messages.append)
+        restarted.handle({"protocol": PROTOCOL, "type": "hello", "hostName": HOST_NAME})
+        self.assertEqual(self.retired_messages(), [self.envelope(prepare, "retired", reason="original_dispatch_failed")])
+        self.assertEqual(self.retirement_store_snapshot(), before)
+
+    def test_no_retirement_for_nonfailed_unknown_or_completed_original_dispatch(self):
+        _, prepare, _ = self.retirement_candidate()
+        identifier = prepare["dispatchId"]
+        for status in ("pending", "claimed", "waiting", "needs_review", "unknown", "completed"):
+            with self.subTest(status=status):
+                with self.service._db() as db:
+                    db.execute("UPDATE idea_dispatches SET status=? WHERE id=?", (status, identifier))
+                before = self.retirement_store_snapshot()
+                self.controller.released([identifier])
+                self.assertEqual(self.retired_messages(), [])
+                self.assertEqual(self.controller.active, identifier)
+                self.assertEqual(self.retirement_store_snapshot(), before)
+
+    def test_status_only_failed_rows_without_normal_fail_receipt_cannot_retire(self):
+        sent, prepare, _ = self.retirement_candidate(fail=False)
+        identifier = prepare["dispatchId"]
+        with self.service._db() as db:
+            db.execute("UPDATE idea_dispatches SET status='failed' WHERE id=?", (identifier,))
+            db.execute("UPDATE jobs SET status='failed' WHERE id=?", (sent["job"]["id"],))
+        before = self.retirement_store_snapshot()
+        self.controller.released([identifier])
+        self.assertEqual(self.retired_messages(), [])
+        self.assertEqual(self.controller.active, identifier)
+        self.assertEqual(self.retirement_store_snapshot(), before)
+
+    def test_failed_original_dispatch_requires_failed_matching_job(self):
+        sent, prepare, _ = self.retirement_candidate()
+        for status in ("waiting", "running", "succeeded"):
+            with self.subTest(status=status):
+                with self.service._db() as db:
+                    db.execute("UPDATE jobs SET status=? WHERE id=?", (status, sent["job"]["id"]))
+                before = self.retirement_store_snapshot()
+                self.controller.released([prepare["dispatchId"]])
+                self.assertEqual(self.retired_messages(), [])
+                self.assertEqual(self.retirement_store_snapshot(), before)
+
+    def test_retirement_requires_exact_attempt_claim_prompt_job_record_and_frozen_approval(self):
+        _, prepare, original = self.retirement_candidate()
+        identifier = prepare["dispatchId"]
+        changes = {"attemptId": "not-a-uuid", "dispatchId": uuid.uuid4().hex, "claimToken": uuid.uuid4().hex,
+                   "promptSha256": "0" * 64, "jobId": uuid.uuid4().hex, "recordId": uuid.uuid4().hex,
+                   "approvalSha256": "0" * 64}
+        for field, value in changes.items():
+            with self.subTest(field=field):
+                malformed = {**original, field: value}
+                with self.service._db() as db:
+                    self.service._set_setting(db, ATTEMPT_PREFIX + identifier, malformed)
+                before = self.retirement_store_snapshot()
+                self.controller.released([identifier])
+                self.assertEqual(self.retired_messages(), [])
+                self.assertEqual(self.controller.active, identifier)
+                self.assertEqual(self.retirement_store_snapshot(), before)
+
+    def test_retirement_requires_unchanged_source_task_binding(self):
+        sent, prepare, _ = self.retirement_candidate()
+        with self.service._db() as db:
+            job = db.execute("SELECT payload FROM jobs WHERE id=?", (sent["job"]["id"],)).fetchone()
+            payload = json.loads(job["payload"])
+            payload["sourceTask"] = {"unrelated": True}
+            db.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(payload), sent["job"]["id"]))
+        before = self.retirement_store_snapshot()
+        self.controller.released([prepare["dispatchId"]])
+        self.assertEqual(self.retired_messages(), [])
+        self.assertEqual(self.retirement_store_snapshot(), before)
+
+    def test_retirement_never_uses_revoked_unverified_or_changed_approval(self):
+        _, prepare, _ = self.retirement_candidate()
+        variants = [{"version": 1, "enabled": False}, copy.deepcopy(self.config), copy.deepcopy(self.config)]
+        variants[1]["domContract"]["verified"] = False
+        variants[2]["authKeyHex"] = "e" * 64
+        for value in variants:
+            with self.subTest(enabled=value["enabled"], variant=json.dumps(value).count("verified")):
+                with self.service._db() as db:
+                    self.service._set_setting(db, APPROVAL_KEY, value)
+                self.service.data_dir.joinpath("console-chat-relay-approved.json").write_text(json.dumps(value), encoding="utf-8")
+                before = self.retirement_store_snapshot()
+                self.controller.released([prepare["dispatchId"]])
+                self.assertEqual(self.retired_messages(), [])
+                self.assertEqual(self.retirement_store_snapshot(), before)
+
+    def test_retirement_rejects_file_store_approval_mismatch_and_boundary_revocation(self):
+        _, prepare, _ = self.retirement_candidate()
+        path = self.service.data_dir / "console-chat-relay-approved.json"
+        original = path.read_bytes()
+        path.write_text(json.dumps({"version": 1, "enabled": False}), encoding="utf-8")
+        before = self.retirement_store_snapshot()
+        self.controller.released([prepare["dispatchId"]])
+        self.assertEqual(self.retired_messages(), [])
+        path.write_bytes(original)
+        with patch.object(self.controller, "config", side_effect=[self.config, None]):
+            self.controller.released([prepare["dispatchId"]])
+        self.assertEqual(self.retired_messages(), [])
+        self.assertEqual(self.controller.active, prepare["dispatchId"])
+        self.assertEqual(self.retirement_store_snapshot(), before)
+
+    def test_status_does_not_retire_and_wrong_release_identity_cannot_clear_active(self):
+        _, prepare, _ = self.retirement_candidate()
+        identifier = prepare["dispatchId"]
+        self.controller.handle({"protocol": PROTOCOL, "type": "status", "hostName": HOST_NAME})
+        self.controller.released([uuid.uuid4().hex])
+        self.assertEqual(self.retired_messages(), [])
+        self.assertEqual(self.controller.active, identifier)
+        other = uuid.uuid4().hex
+        self.controller.active = other
+        self.controller.released([identifier])
+        self.assertEqual(self.retired_messages(), [self.envelope(prepare, "retired", reason="original_dispatch_failed")])
+        self.assertEqual(self.controller.active, other)
+
+    def test_retired_original_ignores_late_dom_reports_without_output_or_attempt_change(self):
+        _, prepare, attempt = self.retirement_candidate()
+        self.controller.released([prepare["dispatchId"]])
+        before = self.retirement_store_snapshot()
+        messages_before = len(self.messages)
+        late = [self.prepared(prepare), self.envelope(prepare, "sending"),
+                self.envelope(prepare, "capture", evidence=self.evidence(prepare)),
+                self.envelope(prepare, "accepted", evidence={}),
+                self.envelope(prepare, "blocked", code="late", message="late"),
+                self.envelope(prepare, "uncertain", code="late", message="late")]
+        for message in late:
+            self.controller.handle(message)
+        self.assertEqual(self.attempt(prepare["dispatchId"]), attempt)
+        self.assertEqual(self.retirement_store_snapshot(), before)
+        self.assertEqual(len(self.messages), messages_before)
+
+    def test_failed_emit_keeps_receipt_retryable_without_database_mutation(self):
+        _, prepare, _ = self.retirement_candidate()
+        before = self.retirement_store_snapshot()
+        with patch.object(self.controller, "emit", side_effect=OSError("isolated dropped connection")):
+            with self.assertRaises(OSError):
+                self.controller.released([prepare["dispatchId"]])
+        self.assertEqual(self.controller.retired_receipts, set())
+        self.assertEqual(self.controller.active, prepare["dispatchId"])
+        self.assertEqual(self.retirement_store_snapshot(), before)
+        self.controller.released([prepare["dispatchId"]])
+        self.assertEqual(len(self.retired_messages()), 1)
+        self.assertEqual(self.retirement_store_snapshot(), before)
 
     def test_startup_adopts_only_post_approval_production_pending_and_never_old_head(self):
         first, _ = self.send()

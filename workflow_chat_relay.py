@@ -172,6 +172,7 @@ class ChatRelayController:
         self.service, self.emit = service, emit
         self.client_ready = False
         self.events = set()
+        self.retired_receipts = set()
         self.active = None
         self.blocked_reason = None
         self.lock = threading.RLock()
@@ -194,9 +195,86 @@ class ChatRelayController:
             self.events.update(identifiers)
             self._drain()
 
-    def released(self):
+    def released(self, identifiers=None):
         with self.lock:
+            self._retire_failed(identifiers)
             self._drain()
+
+    def _retire_failed(self, identifiers=None):
+        """Release only an explicitly failed original identity, without rewriting it.
+
+        Connection/release events may replay the same receipt on a new connection.
+        An attempt tombstone and its unknown send outcome remain durable forever.
+        """
+        try:
+            config = self.config()
+        except (ValueError, OSError, sqlite3.Error):
+            return
+        if not config or config["domContract"]["verified"] is not True or config["domContract"]["surface"] not in BROWSER_SURFACES:
+            return
+        selected = None if identifiers is None else tuple(dict.fromkeys(identifiers))[:50]
+        if selected == ():
+            return
+        frozen_sha = sha(encode(config).decode())
+        outgoing = []
+        path = self.service.data_dir / "workflow.sqlite3"
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
+            current = approval(self.service._setting(db, APPROVAL_KEY), self.service.data_dir)
+            if current != config:
+                return
+            statement = ("SELECT d.id AS dispatch_id,s.value FROM idea_dispatches d JOIN settings s ON s.key=?||d.id "
+                         "WHERE d.status='failed'")
+            parameters = [ATTEMPT_PREFIX]
+            if selected is not None:
+                statement += " AND d.id IN (" + ",".join("?" for _ in selected) + ")"
+                parameters.extend(selected)
+            if self.retired_receipts:
+                retired_ids = tuple(identifier for identifier, _ in self.retired_receipts)
+                statement += " AND d.id NOT IN (" + ",".join("?" for _ in retired_ids) + ")"
+                parameters.extend(retired_ids)
+            statement += " ORDER BY d.updated_at DESC,d.id LIMIT 50"
+            for entry in db.execute(statement, parameters):
+                try:
+                    saved = json.loads(entry["value"])
+                    if saved["dispatchId"] != entry["dispatch_id"]:
+                        continue
+                    identity = {"protocol": PROTOCOL, "dispatchId": entry["dispatch_id"], "attemptId": saved["attemptId"]}
+                    attempt, row = self._attempt(db, identity)
+                    if row["status"] != "failed" or attempt["approvalSha256"] != frozen_sha:
+                        continue
+                    snapshot = json.loads(row["snapshot"])
+                    if (snapshot.get("origin") != "workflow_discussion" or snapshot.get("purpose") != "discuss"
+                            or row["target_kind"] != "chatgpt" or row["target_mode"] != "new"):
+                        continue
+                    job = self.service._app_dispatch_job(db, row, snapshot)
+                    if job["status"] != "failed" or job["id"] != attempt["jobId"] or job["record_id"] != attempt["recordId"]:
+                        continue
+                    # A status-only change is insufficient: normal incubator/fail
+                    # stores this exact immutable receipt after its explicit fail.
+                    response = encode({"dispatchId": row["id"]}).decode()
+                    if not db.execute("SELECT 1 FROM requests WHERE kind='incubator_fail' AND response=? LIMIT 1", (response,)).fetchone():
+                        continue
+                    outgoing.append({"protocol": PROTOCOL, "type": "retired", "dispatchId": row["id"],
+                                     "attemptId": attempt["attemptId"], "reason": "original_dispatch_failed"})
+                except (ValueError, TypeError, KeyError):
+                    # Corrupt or mismatched history can never release a worker.
+                    continue
+        for message in outgoing:
+            # Keep the fixed file/store approval matched at the emission boundary.
+            try:
+                if self.config() != config:
+                    return
+            except (ValueError, OSError, sqlite3.Error):
+                return
+            identity = (message["dispatchId"], message["attemptId"])
+            self.emit(message)
+            self.retired_receipts.add(identity)
+            self.events.discard(message["dispatchId"])
+            if self.active == message["dispatchId"]:
+                self.active = None
 
     def _drain(self):
         # A known-not-sent failure consumes only its original submission event.
@@ -313,6 +391,8 @@ class ChatRelayController:
                     config = self.config()
                     self.client_ready = bool(message["clientReady"] is True and config and config["domContract"]["verified"] is True and config["domContract"]["surface"] in BROWSER_SURFACES)
                 self.emit(self.status())
+                if message["type"] in {"hello", "ready"}:
+                    self._retire_failed()
                 if self.client_ready:
                     self._drain()
                 return
@@ -332,6 +412,10 @@ class ChatRelayController:
                 current_approval = approval(self.service._setting(db, APPROVAL_KEY), self.service.data_dir)
                 if not current_approval or sha(encode(current_approval).decode()) != attempt["approvalSha256"]:
                     raise ValueError("relay_frozen_approval_changed")
+                if row["status"] == "failed":
+                    # Normal explicit retirement is terminal for this identity.
+                    # A late DOM report must not revive it or rewrite its attempt.
+                    return
                 if attempt["phase"] == "completed":
                     if message["type"] == "capture" and sha(json.dumps(message["evidence"], ensure_ascii=False, sort_keys=True)) == attempt.get("captureSha256"):
                         self.emit({"protocol": PROTOCOL, "type": "stored", "dispatchId": attempt["dispatchId"], "attemptId": attempt["attemptId"],
@@ -355,7 +439,7 @@ class ChatRelayController:
                             or observation["completionInitiallyPresent"] is not False or observation["observedProfile"] != attempt["profileLabel"]
                             or observation["surface"] != config["domContract"]["surface"] or observation["observationSha256"] != attempt["observationSha256"]
                             or not isinstance(observation["profileDom"], dict) or set(observation["profileDom"]) != {"text", "reasoningEffort"}
-                            or observation["profileDom"]["text"] not in {"Instant", "Thinking effortInstant", "思考强度Instant"}
+                            or observation["profileDom"]["text"] not in {"Instant", "Thinking effortInstant", "思考强度Instant", "思考强度即时"}
                             or observation["profileDom"]["reasoningEffort"] != "none"):
                         raise ValueError("relay_prepared_dom_invalid")
                     attempt.update(phase="send_intent", sendIntentAt=now(), preparedObservation=observation)
@@ -485,6 +569,10 @@ class ChatRelayController:
                     if attempt["phase"] in {"completed", "failed", "needs_review"}:
                         continue
                     row = self.service._dispatch(db, attempt["dispatchId"])
+                    if row["status"] == "failed":
+                        # Preserve a normal explicit fail even when the browser
+                        # outcome in the original attempt is still unknown.
+                        continue
                     self._review(db, row, attempt, reason)
                     self.service._set_setting(db, entry["key"], attempt)
                     changed = True
@@ -609,7 +697,7 @@ class ChatRelayBroker:
                 try:
                     controller.committed(pending)
                     if kind == "released":
-                        controller.released()
+                        controller.released(identifiers)
                     # Retain event identities across extension reconnects; completed /
                     # claimed rows are never eligible for a new send on reconnect.
                     with self.service._db() as db:

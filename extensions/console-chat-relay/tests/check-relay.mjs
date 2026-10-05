@@ -107,7 +107,7 @@ await test("prepared accepts only observed English/Chinese Instant labels with n
   for (const surface of ["chrome", "edge"]) {
     const value = clone(prepare); value.domContract.surface = surface;
     const response = preparedFor(value);
-    for (const text of ["Instant", "Thinking effortInstant", "思考强度Instant"]) {
+    for (const text of ["Instant", "Thinking effortInstant", "思考强度Instant", "思考强度即时"]) {
       response.observation.profileDom.text = text;
       assert.equal(relay.validatePrepared(response), response);
     }
@@ -228,7 +228,7 @@ function preparedFor(value) {
 }
 function workerFixture(initial = {}, browserSurface = "chrome") {
   const storage = storageFixture(initial), ports = [], tabs = [], calls = [], updates = new Event();
-  let sendFailure = false, prepareFailure = false, preparedSurface = null;
+  let sendFailure = false, prepareFailure = false, preparedSurface = null, prepareReply = null, commitReply = null;
   const api = { storage, runtime: { id: relay.EXTENSION_ID,
     connectNative(host) {
       assert.equal(host, relay.HOST_NAME);
@@ -240,11 +240,13 @@ function workerFixture(initial = {}, browserSurface = "chrome") {
       async get(id) { return { id, status: "complete" }; },
       async sendMessage(id, value) { calls.push({ id, value: clone(value) });
         if (value.type === "relay.content.prepare") {
+          if (prepareReply) return clone(prepareReply);
           if (prepareFailure) { prepareFailure = false; throw new relay.RelayError("login_required", "隔离页面未登录，本次未发送。"); }
           const response = preparedFor(value.prepare);
           if (preparedSurface !== null) response.observation.surface = preparedSurface;
           return response;
         }
+        if (commitReply) return clone(commitReply);
         if (sendFailure) throw new Error("fixture click outcome unknown");
         return { committed: true };
       } } };
@@ -254,6 +256,8 @@ function workerFixture(initial = {}, browserSurface = "chrome") {
   return { api, storage, ports, tabs, calls, controller, status,
     failSend() { sendFailure = true; },
     failPrepare() { prepareFailure = true; },
+    setPrepareReply(value) { prepareReply = clone(value); },
+    setCommitReply(value) { commitReply = clone(value); },
     setPreparedSurface(surface) { preparedSurface = surface; },
     setOwnSurface(surface) { browserSurface = surface; },
     async enable() { await controller.popup("status"); ports.at(-1).onMessage.emit(status(false));
@@ -491,6 +495,52 @@ await test("known unsent preparation failure durably retains tombstone and relea
   assert.equal(restart.tabs.length, 0); assert.equal(restart.calls.length, 0);
   assert.equal(restart.controller.state().attempts[dispatchId].phase, "failed");
 });
+await test("typed content preparation failure preserves its actual profile error without schema masking or Send", async () => {
+  const f = workerFixture(); await f.enable();
+  f.setPrepareReply(relay.envelope("blocked", prepare, { code: "profile_changed", message: "实际为 Pro/medium，尚未点击 Send。" }));
+  await f.controller.native(prepare);
+  assert.equal(f.ports[0].sent.at(-1).type, "blocked");
+  assert.equal(f.ports[0].sent.at(-1).code, "profile_changed");
+  assert.equal(f.controller.state().active, null);
+  assert.equal(f.controller.state().attempts[dispatchId].phase, "failed");
+  assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
+});
+await test("typed commit failure records the actual click boundary once and keeps unknown intent without resending", async () => {
+  for (const clickStarted of [false, true]) {
+    const f = workerFixture(); await f.enable(); await f.controller.native(prepare);
+    f.setCommitReply(relay.envelope("uncertain", prepare, { code: "send_not_available", message: "真实发送控件未就绪。", clickStarted }));
+    await f.controller.native(relay.envelope("commitSend", prepare));
+    const failures = f.ports[0].sent.filter(value => value.type === "uncertain");
+    assert.equal(failures.length, 1); relay.validateFailure(failures[0]);
+    assert.equal(failures[0].code, "send_not_available");
+    assert.equal("clickStarted" in failures[0], false);
+    assert.match(failures[0].message, clickStarted ? /已开始点击 Send/ : /尚未点击 Send/);
+    assert.equal(f.controller.state().active.phase, "needs_review");
+    await f.controller.native(relay.envelope("commitSend", prepare));
+    assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 1);
+  }
+});
+await test("native failed retirement releases only its matching active attempt and retains all original tombstone fields", async () => {
+  const f = workerFixture(); await f.enable(); await f.controller.native(prepare); f.failSend();
+  await f.controller.native(relay.envelope("commitSend", prepare));
+  const before = clone(f.controller.state().attempts[dispatchId]);
+  const retired = relay.envelope("retired", prepare, { reason: "original_dispatch_failed" });
+  for (const wrong of [{ ...retired, dispatchId: "a".repeat(32) }, { ...retired, attemptId: "a2a45678-1234-4567-89ab-1234567890ab" }, { ...retired, reason: "assumed_unsent" }, { ...retired, sent: false }])
+    await assert.rejects(f.controller.native(wrong));
+  assert.equal(f.controller.state().active.phase, "needs_review");
+  const sender = { id: relay.EXTENSION_ID, tab: { id: 41 }, frameId: 0, url: "https://chatgpt.com/" };
+  await assert.rejects(f.controller.page(retired, sender), error => error.code === "page_not_committed");
+  await f.controller.native(retired); assert.equal(f.controller.state().active, null);
+  const after = f.controller.state().attempts[dispatchId];
+  assert.equal(after.attemptId, before.attemptId); assert.equal(after.promptSha256, before.promptSha256);
+  assert.equal(after.previousPhase, before.phase); assert.equal(after.retirement, "original_dispatch_failed");
+  assert.equal((await f.controller.native(retired)).duplicate, true);
+  await f.controller.native(prepare);
+  assert.equal(f.tabs.length, 1); assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 1);
+  const restart = workerFixture(f.storage.data); await restart.controller.start();
+  restart.ports[0].onMessage.emit(restart.status(true)); await restart.controller.native(prepare);
+  assert.equal(restart.tabs.length, 0); assert.equal(restart.calls.length, 0);
+});
 await test("known blocked validation while prepared releases only exact matching unsent identity", async () => {
   const f = workerFixture(); await f.enable(); await f.controller.native(prepare);
   const invalid = clone(prepare); invalid.domContract.verified = false;
@@ -523,7 +573,9 @@ await test("unknown click/reconnect/duplicate attempt never creates another tab 
   const restart = workerFixture(f.storage.data); await restart.controller.start();
   restart.ports[0].onMessage.emit(restart.status(true));
   await restart.controller.native(prepare);
-  assert.equal(restart.tabs.length, 0); assert.equal(restart.calls.length, 0);
+  assert.equal(restart.tabs.length, 0);
+  assert.equal(restart.calls.filter(call => ["relay.content.prepare", "relay.content.commit"].includes(call.value.type)).length, 0);
+  assert.equal(restart.calls.filter(call => call.value.type === "relay.content.cancel").length, 1);
 });
 await test("failed durable intent write prevents all Send controls", async () => {
   const f = workerFixture(); await f.enable(); await f.controller.native(prepare); f.storage.fail();
@@ -601,9 +653,103 @@ function contentFixture({ promptText = prompt, completed = false, stop = false, 
     } }, location, MutationObserver: Observer,
     InputEvent: class { constructor(type, detail) { this.type = type; this.detail = detail; } }, now: () => Date.parse("2026-10-05T12:00:00.000Z"),
     setTimeout(fn, timeout) { const id = nextTimer++; timers.set(id, { fn, timeout }); return id; }, clearTimeout(id) { timers.delete(id); } };
-  return { env, items, storage, emitted, queries, composer, model, messages, timers, controller: context.ConsoleChatRelayContent.createController(env),
-    clicks: () => clicks, async mutation() { mutation?.(); await this.controller.idle(); await this.controller.idle(); } };
+  return { env, items, storage, emitted, queries, composer, model, messages, timers, send, controller: context.ConsoleChatRelayContent.createController(env),
+    clicks: () => clicks, mutateNow() { mutation?.(); },
+    async mutation() { mutation?.(); await this.controller.idle(); await this.controller.idle(); } };
 }
+async function contentListenerFixture(f) {
+  f.env.chrome.runtime.onMessage = new Event();
+  const isolated = vm.createContext({ ...f.env, crypto: webcrypto, TextEncoder, URL, Date, Uint8Array, Set, Error,
+    structuredClone, addEventListener() {} });
+  vm.runInContext(await readFile(new URL("lib/protocol.js", directory), "utf8"), isolated);
+  vm.runInContext(await readFile(new URL("content-script.js", directory), "utf8"), isolated);
+  const route = [...f.env.chrome.runtime.onMessage.listeners][0];
+  assert.equal(typeof route, "function");
+  return { route, call(value) { return new Promise(resolve => { route(value, { id: relay.EXTENSION_ID }, resolve); }); } };
+}
+await test("input waits for a DOM-enabled Send event and commits exactly once with its durable original intent", async () => {
+  const f = contentFixture({ completed: true }); let inputs = 0;
+  f.composer.dispatchEvent = () => { inputs++; return true; };
+  await f.controller.receive({ type: "relay.content.prepare", prepare }); f.send.disabled = true;
+  const pending = f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.clicks(), 0); assert.equal(inputs, 1); assert.equal(f.timers.size, 1);
+  assert.equal(f.composer.textContent, prompt); assert.equal(f.controller.clickStarted(), false);
+  f.send.disabled = false; f.mutateNow(); assert.equal((await pending).committed, true); await f.controller.idle();
+  assert.equal(f.clicks(), 1); assert.equal(inputs, 1); assert.equal(f.controller.clickStarted(), true);
+  assert.equal(f.emitted.filter(value => value.type === "capture").length, 1);
+  await assert.rejects(f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) }));
+  assert.equal(f.clicks(), 1);
+});
+await test("late draft, tier, URL, duplicate or wrong Send during readiness wait prevents the first physical click", async () => {
+  for (const [change, code] of [
+    [f => { f.composer.textContent = "late user draft"; }, "composer_changed"],
+    [f => { f.model.textContent = "Pro"; }, "profile_changed"],
+    [f => { f.env.location.href = capture.evidence.conversationUrl; }, "not_fresh_chat"],
+    [f => { f.items.set("#send", [f.send, new Node("Other", { type: "submit" })]); }, "send_not_available"],
+    [f => { f.send.attributes.type = "button"; }, "send_not_available"]
+  ]) {
+    const f = contentFixture(); await f.controller.receive({ type: "relay.content.prepare", prepare }); f.send.disabled = true;
+    const pending = f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+    const rejected = assert.rejects(pending, error => error.code === code);
+    await new Promise(resolve => setImmediate(resolve)); change(f); f.mutateNow(); await rejected;
+    assert.equal(f.clicks(), 0); assert.equal(f.controller.clickStarted(), false); assert.equal(f.timers.size, 0);
+    assert.equal(f.controller.phase(), "needs_review"); assert.equal(f.emitted.length, 0);
+    if (code === "composer_changed") assert.equal(f.composer.textContent, "late user draft");
+  }
+});
+await test("bounded readiness timeout or matching cancel retains input and never resumes when Send later becomes ready", async () => {
+  for (const cancel of [false, true]) {
+    const f = contentFixture(); await f.controller.receive({ type: "relay.content.prepare", prepare }); f.send.disabled = true;
+    const pending = f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+    const rejected = assert.rejects(pending, error => error.code === (cancel ? "send_cancelled" : "send_not_available"));
+    await new Promise(resolve => setImmediate(resolve));
+    if (cancel) {
+      assert.throws(() => f.controller.cancel(relay.envelope("cancel", { ...prepare, dispatchId: "a".repeat(32) })), error => error.code === "cancel_identity_mismatch");
+      f.controller.cancel(relay.envelope("cancel", prepare));
+    } else [...f.timers.values()][0].fn();
+    await rejected; f.send.disabled = false; f.mutateNow(); await f.controller.idle();
+    assert.equal(f.clicks(), 0); assert.equal(f.composer.textContent, prompt); assert.equal(f.timers.size, 0);
+    assert.equal(f.storage.data[context.ConsoleChatRelayContent.CONTENT_PREFIX + dispatchId].phase, "send_intent");
+  }
+});
+await test("cancel during asynchronous intent read or write cannot restore sending or type into the page", async () => {
+  for (const operation of ["get", "set"]) {
+    const f = contentFixture(), listener = await contentListenerFixture(f);
+    relay.validatePrepared(await listener.call({ type: "relay.content.prepare", prepare }));
+    let release, reached;
+    const entered = new Promise(resolve => { reached = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const original = f.env.chrome.storage.local[operation].bind(f.env.chrome.storage.local);
+    f.env.chrome.storage.local[operation] = async (...args) => { reached(); await gate; return original(...args); };
+    const pending = listener.call({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+    await entered;
+    assert.equal((await listener.call({ type: "relay.content.cancel", cancel: relay.envelope("cancel", prepare) })).cancelled, true);
+    release();
+    const { clickStarted, ...failure } = await pending;
+    relay.validateFailure(failure); assert.equal(failure.code, "send_cancelled"); assert.equal(clickStarted, false);
+    assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0); assert.equal(f.emitted.length, 0);
+    const retry = await listener.call({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+    assert.equal(retry.code, "commit_not_prepared"); assert.equal(retry.clickStarted, false); assert.equal(f.clicks(), 0);
+    assert.equal(!!f.storage.data[context.ConsoleChatRelayContent.CONTENT_PREFIX + dispatchId], operation === "set");
+  }
+});
+await test("actual content listener returns typed original failures and exact click boundary without a duplicate async report", async () => {
+  const pro = contentFixture({ profileText: "Pro" }), proListener = await contentListenerFixture(pro);
+  const blocked = await proListener.call({ type: "relay.content.prepare", prepare }); relay.validateFailure(blocked);
+  assert.equal(blocked.type, "blocked"); assert.equal(blocked.code, "profile_changed");
+  assert.equal(pro.clicks(), 0); assert.equal(pro.composer.textContent, ""); assert.equal(pro.emitted.length, 0);
+  for (const clickThrows of [false, true]) {
+    const f = contentFixture({ clickThrows }), listener = await contentListenerFixture(f);
+    relay.validatePrepared(await listener.call({ type: "relay.content.prepare", prepare }));
+    if (!clickThrows) f.send.disabled = true;
+    const pending = listener.call({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+    if (!clickThrows) { await new Promise(resolve => setImmediate(resolve)); [...f.timers.values()][0].fn(); }
+    const response = await pending, { clickStarted, ...failure } = response;
+    relay.validateFailure(failure); assert.equal(failure.type, "uncertain"); assert.equal(clickStarted, clickThrows);
+    assert.equal(f.clicks(), clickThrows ? 1 : 0); assert.equal(f.emitted.length, 0);
+  }
+});
 await test("content prepare is readonly and cannot overwrite any existing user draft", async () => {
   const f = contentFixture({ draft: "未发送草稿" });
   await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "composer_changed");
@@ -622,6 +768,15 @@ await test("observed Edge empty editor newline is prepared without typing and re
   await f.controller.idle();
   assert.equal(f.composer.textContent, prompt); assert.equal(f.clicks(), 1);
   assert.equal(f.emitted.filter(message => message.type === "capture").length, 1);
+});
+await test("current observed Edge localized Instant label with none effort prepares and retains its exact DOM text", async () => {
+  const f = contentFixture({ profileText: "思考强度即时" });
+  const response = await f.controller.receive({ type: "relay.content.prepare", prepare });
+  relay.validatePrepared(response); assert.equal(response.observation.profileDom.text, "思考强度即时");
+  assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0);
+  f.model.attributes["data-selected-reasoning-effort"] = "medium";
+  await assert.rejects(f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) }), error => error.code === "profile_changed");
+  assert.equal(f.clicks(), 0);
 });
 await test("real spaces/newlines in textContent stay protected user drafts without trimming", async () => {
   for (const draft of [" ", "\n", "\t\n", " 未发送草稿 \n"]) {
@@ -661,8 +816,38 @@ await test("content persistent intent failure or throwing Send never permits ret
   await assert.rejects(f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) }));
   assert.equal(f.clicks(), 1); assert.equal(f.controller.phase(), "needs_review");
 });
-await test("bidirectional serial worker/content failure replies before uncertain acknowledgement and never retries", async () => {
+await test("matching native retirement or loss of readiness cancels a blocked Send before the worker queue can advance", async () => {
+  for (const trigger of ["retired", "status", "uncertain"]) {
+    const worker = workerFixture(), content = contentFixture(), listener = await contentListenerFixture(content);
+    content.send.disabled = true;
+    worker.api.tabs.sendMessage = async (id, value) => { worker.calls.push({ id, value: clone(value) }); return listener.call(value); };
+    await worker.enable(); await worker.controller.native(prepare);
+    const committing = worker.controller.native(relay.envelope("commitSend", prepare));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(content.timers.size, 1); assert.equal(content.clicks(), 0);
+    let terminal;
+    if (trigger === "retired") {
+      const retired = relay.envelope("retired", prepare, { reason: "original_dispatch_failed" });
+      const invalid = worker.controller.native({ ...retired, attemptId: "a2a45678-1234-4567-89ab-1234567890ab" }).catch(() => {});
+      assert.equal(content.timers.size, 1);
+      terminal = worker.controller.native(retired);
+      await committing; await invalid;
+    } else if (trigger === "status") {
+      worker.ports[0].onMessage.emit({ ...worker.status(false), approved: false });
+    } else {
+      terminal = worker.controller.native(relay.envelope("uncertain", prepare, { code: "fixture_stopped", message: "fixture stop" }));
+    }
+    await committing; if (terminal) await terminal; await worker.controller.idle();
+    content.send.disabled = false; content.mutateNow();
+    assert.equal(content.clicks(), 0); assert.equal(content.timers.size, 0);
+    assert.equal(content.storage.data[context.ConsoleChatRelayContent.CONTENT_PREFIX + dispatchId].phase, "send_intent");
+    assert.equal(worker.calls.filter(call => call.value.type === "relay.content.commit").length, 1);
+    if (trigger === "retired") assert.equal(worker.controller.state().active, null);
+  }
+});
+await test("bidirectional serial worker/content typed failure reports once and never deadlocks or retries", async () => {
   const worker = workerFixture(), content = contentFixture({ clickThrows: true }), notifications = [];
+  const listener = await contentListenerFixture(content);
   content.env.chrome.runtime.sendMessage = async value => {
     notifications.push(clone(value));
     const sender = { id: relay.EXTENSION_ID, tab: { id: 41 }, frameId: 0, url: content.env.location.href };
@@ -671,8 +856,7 @@ await test("bidirectional serial worker/content failure replies before uncertain
   };
   worker.api.tabs.sendMessage = async (id, value) => {
     worker.calls.push({ id, value: clone(value) });
-    try { return await content.controller.receive(value); }
-    catch (error) { return { committed: false, code: error.code || "page_control_rejected" }; }
+    return listener.call(value);
   };
   await worker.enable(); await worker.controller.native(prepare);
   let deadline;
@@ -681,11 +865,12 @@ await test("bidirectional serial worker/content failure replies before uncertain
       new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("bidirectional commit queue deadlocked")), 500); })]);
   } finally { clearTimeout(deadline); }
   await worker.controller.idle(); await content.controller.idle();
-  assert.equal(content.clicks(), 1); assert.equal(content.controller.phase(), "needs_review");
+  assert.equal(content.clicks(), 1);
   assert.equal(worker.controller.state().active.phase, "needs_review");
   assert.equal(worker.storage.data.consoleChatRelayV1.attempts[dispatchId].phase, "needs_review");
   assert.equal(content.storage.data[context.ConsoleChatRelayContent.CONTENT_PREFIX + dispatchId].phase, "send_intent");
-  assert.ok(notifications.some(value => value.type === "uncertain" && relay.sameIdentity(value, prepare)));
+  assert.equal(notifications.filter(value => value.type === "uncertain").length, 0);
+  assert.equal(worker.ports[0].sent.filter(value => value.type === "uncertain").length, 1);
   await worker.controller.native(relay.envelope("commitSend", prepare));
   assert.equal(content.clicks(), 1);
   assert.equal(worker.calls.filter(call => call.value.type === "relay.content.commit").length, 1);

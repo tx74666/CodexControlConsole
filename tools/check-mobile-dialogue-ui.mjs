@@ -39,9 +39,9 @@ function harness({ storage = new Map(), session = true, offline = false, resumed
   const root = new Element(), calls = [], events = new Map(), scrolls = [], copies = [], timers = new Map(), receipts = new Map(), files = fileRows, uploads = [], projects = [], attachments = new Map();
   let current = session ? { id: "session-a", recordId: "record-a", revision: 1, ideaId: null, eligibleAttachmentIds: [], uploadedAttachmentIds: [], draft: { text: "", attachmentIds: [] }, requestedProfile: "high", isCurrent: true } : null;
   if (resumed) current = structuredClone(resumed);
-  let messages = [], jobs = [], responseHook = null, fileQuotaFailure = false, resultCursor = "a".repeat(64), resultStatus = "idle";
+  let messages = [], jobs = [], cancellationReceipts = [], responseHook = null, fileQuotaFailure = false, resultCursor = "a".repeat(64), resultStatus = "idle";
   const ideas = [{ id: "idea-1", revision: 3, title: "裙子双模式", body: "物理与手动模式配合", updatedAt: "2026-10-05T03:00:00Z", archived: false, executionDraft: "", keyPoints: [{ id: "point-1", text: "待确认建议", kind: "suggestion", source: { recordId: "record-a" } }] }];
-  const value = () => { const allowed = new Set([...(current?.eligibleAttachmentIds || []), ...(current?.uploadedAttachmentIds || [])]), eligible = [...attachments.values()].filter(item => allowed.has(item.id)); return structuredClone({ session: current, detail: current ? { record: { id: current.recordId }, messages, jobs, attachments: eligible } : null, eligibleAttachments: eligible, preferences: { requestedProfile: "high" }, execution: { relayStatus: "not_connected", actualReceipt: { verified: false, actualProfile: null }, capability: "unverified" }, resultCursor: current ? resultCursor : null, resultStatus: current ? resultStatus : "idle" }); };
+  const value = () => { const allowed = new Set([...(current?.eligibleAttachmentIds || []), ...(current?.uploadedAttachmentIds || [])]), eligible = [...attachments.values()].filter(item => allowed.has(item.id)); return structuredClone({ session: current, detail: current ? { record: { id: current.recordId }, messages, jobs, attachments: eligible } : null, cancellationReceipts, eligibleAttachments: eligible, preferences: { requestedProfile: "high" }, execution: { relayStatus: "not_connected", actualReceipt: { verified: false, actualProfile: null }, capability: "unverified" }, resultCursor: current ? resultCursor : null, resultStatus: current ? resultStatus : "idle" }); };
   const endpoint = async (action, payload) => {
     calls.push({ action, payload: payload && structuredClone(payload) });
     if (responseHook) { const result = responseHook(action, payload); if (result !== undefined) return result; }
@@ -53,6 +53,16 @@ function harness({ storage = new Map(), session = true, offline = false, resumed
     else if (action === "mobile/dialogue/clear") { current = { ...current, id: transport ? "b".repeat(32) : "session-b", recordId: transport ? "c".repeat(32) : "record-b", revision: 1, ideaId: null, eligibleAttachmentIds: [], uploadedAttachmentIds: [], draft: { text: "", attachmentIds: [] } }; messages = []; jobs = []; }
     else if (action === "mobile/dialogue/draft") { assert.equal(payload.sessionId, current.id); assert.equal(payload.expectedRevision, current.revision); assert.ok(payload.attachmentIds.length <= 4); const allowed = new Set([...(current.eligibleAttachmentIds || []), ...(current.uploadedAttachmentIds || [])]); for (const id of payload.attachmentIds) assert.ok(allowed.has(id), "draft image must belong to this actual session"); current.revision++; current.draft = { text: payload.text, attachmentIds: structuredClone(payload.attachmentIds) }; current.requestedProfile = payload.requestedProfile; }
     else if (action === "mobile/dialogue/send") { assert.equal(payload.expectedRevision, current.revision); current.revision++; messages.push({ id: "sent-a", role: "user", text: payload.text }); current.draft = { text: "", attachmentIds: [] }; jobs = [{ status: "waiting", appDispatch: { status: "pending" } }]; }
+    else if (action === "mobile/dialogue/cancel-pending") {
+      assert.deepEqual(Object.keys(payload).sort(), ["clientId", "dispatchId", "expectedRevision", "recordId", "requestId", "sessionId"]);
+      assert.equal(payload.clientId, current.clientId); assert.equal(payload.sessionId, current.id); assert.equal(payload.recordId, current.recordId); assert.equal(payload.expectedRevision, current.revision);
+      const job = jobs.at(-1); assert.equal(job.appDispatch.id, payload.dispatchId); assert.equal(job.appDispatch.canCancelPending, true);
+      job.status = "failed"; job.appDispatch.status = "failed"; job.appDispatch.canCancelPending = false;
+      const receipt = { ...payload, jobId: job.id, status: "failed", reason: "cancelled_before_send", unsent: true };
+      cancellationReceipts.push(receipt); const cancellation = { ...receipt }; delete cancellation.requestId;
+      const reply = { ...value(), cancellation };
+      receipts.set(payload.requestId, structuredClone(reply)); return reply;
+    }
     else if (action === "mobile/dialogue/save") { assert.equal(payload.expectedRevision, current.revision); current.revision++; current.ideaId = ideas[0].id; current.ideaRevision = ideas[0].revision; current.draft = { text: "", attachmentIds: [] }; }
     else if (action === "mobile/idea/update") { const idea = ideas.find(item => item.id === payload.id); assert.equal(payload.expectedRevision, idea.revision); Object.assign(idea, payload, { revision: idea.revision + 1 }); const reply = { idea: structuredClone(idea) }; receipts.set(payload.requestId, reply); return reply; }
     else if (["mobile/idea/split", "mobile/idea/merge"].includes(action)) {
@@ -70,13 +80,135 @@ function harness({ storage = new Map(), session = true, offline = false, resumed
   const byText = (text, index = 0) => all().filter(item => item.tagName === "BUTTON" && item.textContent === text)[index];
   const byLabel = label => all().find(item => item.attributes["aria-label"] === label);
   const byClass = name => all().find(item => item.className?.split(" ").includes(name));
-  return { panel, root, calls, storage, runtime, events, scrolls, copies, timers, byText, byLabel, byClass, value, uploads, files, quota(value) { fileQuotaFailure = value; }, current: () => current, switchSession(value) { current = structuredClone(value); messages = []; jobs = []; }, result(cursor, status = "succeeded") { resultCursor = cursor; resultStatus = status; }, uploadedImage(id, name = `${id}.png`, size = 8) { current.uploadedAttachmentIds = [...(current.uploadedAttachmentIds || []), id]; attachments.set(id, { id, name, mimeType: "image/png", size, url: `http://fixture.test/images/${id}` }); }, savedImage(ideaId, id, name = `${id}.png`, size = 8) { const idea = ideas.find(item => item.id === ideaId); idea.attachmentIds = [...(idea.attachmentIds || []), id]; attachments.set(id, { id, name, mimeType: "image/png", size, url: `http://fixture.test/images/${id}` }); }, message(value) { messages.push(value); }, hook(fn) { responseHook = fn; }, ideas, projects };
+  return { panel, root, calls, storage, runtime, events, scrolls, copies, timers, byText, byLabel, byClass, value, uploads, files, quota(value) { fileQuotaFailure = value; }, current: () => current, setJobs(value) { jobs = structuredClone(value); }, setCancellationReceipts(value) { cancellationReceipts = structuredClone(value); }, switchSession(value) { current = structuredClone(value); messages = []; jobs = []; cancellationReceipts = []; }, result(cursor, status = "succeeded") { resultCursor = cursor; resultStatus = status; }, uploadedImage(id, name = `${id}.png`, size = 8) { current.uploadedAttachmentIds = [...(current.uploadedAttachmentIds || []), id]; attachments.set(id, { id, name, mimeType: "image/png", size, url: `http://fixture.test/images/${id}` }); }, savedImage(ideaId, id, name = `${id}.png`, size = 8) { const idea = ideas.find(item => item.id === ideaId); idea.attachmentIds = [...(idea.attachmentIds || []), id]; attachments.set(id, { id, name, mimeType: "image/png", size, url: `http://fixture.test/images/${id}` }); }, message(value) { messages.push(value); }, hook(fn) { responseHook = fn; }, ideas, projects };
 }
 function streamHarness(options = {}) { const transport = resultTransport(), h = harness({ transport, options }); h.switchSession({ ...h.current(), id: "1".repeat(32), recordId: "2".repeat(32) }); return { ...h, transport }; }
 const resultFrame = (h, cursor = "b".repeat(64), status = "succeeded") => ({ clientId: h.current().clientId, sessionId: h.current().id, recordId: h.current().recordId, cursor, jobId: null, status });
 const dialogueReads = h => h.calls.filter(item => item.action.startsWith("mobile/dialogue?")).length;
 let count = 0;
 async function test(name, fn) { await fn(); count++; console.log(`PASS ${name}`); }
+const pendingJob = h => ({ id: "3".repeat(32), recordId: h.current().recordId, status: "waiting", result: {},
+  appDispatch: { id: "4".repeat(32), status: "pending", targetThreadId: null, canCancelPending: true } });
+await test("only a current latest job with explicit unsent projection offers manual cancellation", async () => {
+  const h = harness(); h.setJobs([pendingJob(h)]); h.panel.setActive(true); await flush();
+  assert.equal(h.byClass("dialogue-pending").textContent, "尚未发送，等待转发处理结束这条未发送请求");
+  assert.ok(h.byText("结束这条未发送请求")); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/cancel-pending").length, 0);
+  for (const change of [job => { delete job.appDispatch.canCancelPending; }, job => { job.appDispatch.canCancelPending = false; },
+    job => { job.appDispatch.status = "claimed"; }, job => { job.appDispatch.status = "waiting"; }, job => { job.appDispatch.status = "needs_review"; },
+    job => { job.appDispatch.targetThreadId = "sent-thread"; }, job => { job.result = { sendIntentAt: "already" }; },
+    job => { job.recordId = "another-record"; }]) {
+    const job = pendingJob(h); change(job); h.setJobs([job]); await h.panel.refresh();
+    assert.equal(h.byText("结束这条未发送请求"), undefined);
+    assert.doesNotMatch(h.byClass("dialogue-pending").textContent, /尚未发送|尚未接通/);
+  }
+  h.setJobs([pendingJob(h), { id: "5".repeat(32), recordId: h.current().recordId, status: "succeeded", result: {} }]);
+  await h.panel.refresh(); assert.equal(h.byText("结束这条未发送请求"), undefined);
+});
+await test("manual unsent cancellation preserves the session, draft, actual files and selected tier", async () => {
+  const h = harness(); h.setJobs([pendingJob(h)]); h.panel.setActive(true); await flush();
+  const input = h.byLabel("提问或保存想法"); input.value = "下一轮草稿，不能清掉"; input.fire("input");
+  const tier = h.byLabel("回答档位"); tier.value = "pro"; tier.fire("change");
+  const image = new Blob(["original-file"], { type: "image/png" }); image.name = "保留原图.png";
+  h.byLabel("选择图片文件").files = [image]; h.byLabel("选择图片文件").fire("change"); await flush();
+  const before = structuredClone(h.current()), originalFiles = [...h.files.values()].find(item => item.files?.length);
+  h.byText("结束这条未发送请求").click(); await flush();
+  const request = h.calls.find(item => item.action === "mobile/dialogue/cancel-pending"); assert.ok(request);
+  assert.equal(request.payload.dispatchId, "4".repeat(32)); assert.equal(h.current().id, before.id); assert.equal(h.current().revision, before.revision);
+  assert.deepEqual(h.current().draft, before.draft); assert.equal(input.value, "下一轮草稿，不能清掉"); assert.equal(tier.value, "pro");
+  assert.equal([...h.files.values()].find(item => item.files?.length).files[0], originalFiles.files[0]);
+  assert.equal(h.uploads.length, 0); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  assert.equal(JSON.parse([...h.storage.values()][0]).pending, null); assert.equal(h.byText("结束这条未发送请求"), undefined);
+});
+await test("unknown cancellation response keeps the exact nonce for a deliberate retry and never sends the draft", async () => {
+  const h = harness(); h.setJobs([pendingJob(h)]); h.panel.setActive(true); await flush(); let first = true;
+  h.hook(action => { if (action === "mobile/dialogue/cancel-pending" && first) { first = false; throw new TypeError("response unknown"); } });
+  const input = h.byLabel("提问或保存想法"); input.value = "保留新的草稿"; input.fire("input");
+  h.byText("结束这条未发送请求").click(); await flush();
+  const pending = JSON.parse([...h.storage.values()][0]).pending; assert.equal(pending.action, "mobile/dialogue/cancel-pending");
+  assert.equal(input.value, "保留新的草稿"); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/cancel-pending").length, 1);
+  h.byText("结束这条未发送请求").click(); await flush();
+  const attempts = h.calls.filter(item => item.action === "mobile/dialogue/cancel-pending"); assert.equal(attempts.length, 2);
+  assert.deepEqual(attempts[0].payload, attempts[1].payload); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  assert.equal(input.value, "保留新的草稿");
+});
+await test("an applied cancellation with a lost POST response recovers only its exact GET receipt and keeps later edits", async () => {
+  const h = harness(); h.setJobs([pendingJob(h)]); h.panel.setActive(true); await flush();
+  const input = h.byLabel("提问或保存想法"); input.value = "回执丢失后仍保留的新草稿"; input.fire("input");
+  const tier = h.byLabel("回答档位"); tier.value = "pro"; tier.fire("change");
+  const image = new Blob(["retained-file"], { type: "image/png" }); image.name = "下一轮图片.png";
+  h.byLabel("选择图片文件").files = [image]; h.byLabel("选择图片文件").fire("change"); await flush();
+  const originalFiles = [...h.files.values()].find(item => item.files?.length);
+  h.hook((action, payload) => { if (action === "mobile/dialogue/cancel-pending") {
+    const job = pendingJob(h); job.status = job.appDispatch.status = "failed"; job.appDispatch.canCancelPending = false; h.setJobs([job]);
+    h.setCancellationReceipts([{ ...payload, jobId: job.id, status: "failed", reason: "cancelled_before_send", unsent: true }]);
+    h.current().revision++; h.current().draft.text = "电脑上后来保存的版本";
+    throw new TypeError("successful cancellation response lost");
+  } });
+  h.byText("结束这条未发送请求").click(); await flush();
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/cancel-pending").length, 1);
+  assert.equal(JSON.parse([...h.storage.values()][0]).pending, null); assert.equal(h.byText("结束这条未发送请求"), undefined);
+  assert.equal(input.value, "回执丢失后仍保留的新草稿"); assert.equal(tier.value, "pro");
+  assert.equal([...h.files.values()].find(item => item.files?.length).files[0], originalFiles.files[0]);
+  assert.match(h.root.textContent, /这条未发送请求已结束/);
+  assert.equal(h.current().revision, h.calls.find(item => item.action === "mobile/dialogue/cancel-pending").payload.expectedRevision + 1);
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0); assert.equal(h.uploads.length, 0);
+  assert.equal(h.byText("＋").disabled, false);
+});
+await test("failed jobs and wrong receipt identities cannot release an unknown cancellation nonce", async () => {
+  for (const change of [receipt => { receipt.requestId = "wrong-nonce"; }, receipt => { receipt.clientId = "other-client"; },
+    receipt => { receipt.sessionId = "other-session"; }, receipt => { receipt.recordId = "other-record"; },
+    receipt => { receipt.dispatchId = "other-dispatch"; }, receipt => { receipt.jobId = "other-job"; },
+    receipt => { receipt.expectedRevision++; }, receipt => { receipt.unsent = false; }, receipt => { receipt.reason = "different-reason"; },
+    receipt => { receipt.extra = "unexpected"; }, null, (_receipt, job) => { job.recordId = "other-record"; },
+    (_receipt, job) => { job.appDispatch.status = "claimed"; }]) {
+    const h = harness(); h.setJobs([pendingJob(h)]); h.panel.setActive(true); await flush();
+    const input = h.byLabel("提问或保存想法"); input.value = "不能因错误回执释放"; input.fire("input");
+    let original, receipt;
+    h.hook((action, payload) => { if (action === "mobile/dialogue/cancel-pending") {
+      original = structuredClone(payload); const job = pendingJob(h); job.status = job.appDispatch.status = "failed"; job.appDispatch.canCancelPending = false;
+      receipt = { ...payload, jobId: job.id, status: "failed", reason: "cancelled_before_send", unsent: true };
+      change?.(receipt, job); h.setJobs([job]); h.setCancellationReceipts(change === null ? [] : [receipt]);
+      throw new TypeError("receipt unknown");
+    } });
+    h.byText("结束这条未发送请求").click(); await flush();
+    const pending = JSON.parse([...h.storage.values()][0]).pending;
+    assert.equal(pending.action, "mobile/dialogue/cancel-pending"); assert.deepEqual(pending.payload, original);
+    assert.equal(input.value, "不能因错误回执释放"); assert.equal(h.byText("结束这条未发送请求"), undefined);
+    assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/cancel-pending").length, 1);
+    assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  }
+});
+await test("a cancellation GET receipt cannot release a pending send or another kind of durable operation", async () => {
+  const h = harness(); h.setJobs([pendingJob(h)]); h.panel.setActive(true); await flush();
+  const input = h.byLabel("提问或保存想法"); input.value = "其它待核对操作的草稿"; input.fire("input");
+  h.hook(action => { if (action === "mobile/dialogue/cancel-pending") throw new TypeError("unknown response"); });
+  h.byText("结束这条未发送请求").click(); await flush();
+  const [key, raw] = [...h.storage.entries()][0], saved = JSON.parse(raw), original = structuredClone(saved.pending.payload);
+  saved.pending.action = "mobile/dialogue/send"; h.storage.set(key, JSON.stringify(saved));
+  const restored = harness({ storage: h.storage, resumed: h.current() }), job = pendingJob(restored);
+  job.status = job.appDispatch.status = "failed"; job.appDispatch.canCancelPending = false; restored.setJobs([job]);
+  restored.setCancellationReceipts([{ ...original, jobId: job.id, status: "failed", reason: "cancelled_before_send", unsent: true }]);
+  restored.panel.setActive(true); await flush();
+  assert.equal(JSON.parse([...restored.storage.values()][0]).pending.action, "mobile/dialogue/send");
+  assert.deepEqual(JSON.parse([...restored.storage.values()][0]).pending.payload, original);
+  assert.equal(restored.byLabel("提问或保存想法").value, "其它待核对操作的草稿");
+  assert.equal(restored.calls.filter(item => item.payload).length, 0);
+});
+await test("a cancellation race refreshes the actual claimed state while preserving the local draft", async () => {
+  const h = harness(); h.setJobs([pendingJob(h)]); h.panel.setActive(true); await flush();
+  const input = h.byLabel("提问或保存想法"); input.value = "冲突后仍保留"; input.fire("input");
+  h.hook(action => { if (action === "mobile/dialogue/cancel-pending") { const job = pendingJob(h); job.appDispatch.status = "claimed"; job.appDispatch.canCancelPending = false; h.setJobs([job]); throw Object.assign(new Error("已领取，不能结束未发送请求"), { status: 409, data: { code: "dispatch_not_unsent" } }); } });
+  const reads = dialogueReads(h); h.byText("结束这条未发送请求").click(); await flush();
+  assert.ok(dialogueReads(h) > reads); assert.equal(input.value, "冲突后仍保留"); assert.equal(h.byText("结束这条未发送请求"), undefined);
+  assert.equal(JSON.parse([...h.storage.values()][0]).pending, null); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+});
+await test("an old rendered cancellation button cannot act on a newer discussion or another record", async () => {
+  const h = harness(); h.setJobs([pendingJob(h)]); h.panel.setActive(true); await flush(); const old = h.byText("结束这条未发送请求");
+  h.switchSession({ ...h.current(), id: "session-new", recordId: "record-new", draft: { text: "新讨论独立草稿", attachmentIds: [] } });
+  h.setJobs([pendingJob(h)]); h.panel.clear(); h.panel.setActive(true); await flush(); old.click(); await flush();
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/cancel-pending").length, 0);
+  assert.equal(h.byLabel("提问或保存想法").value, "新讨论独立草稿");
+});
 await test("opens ready to compose with high default and honest actual capability", async () => { const h = harness(); h.panel.setActive(true); await flush(); assert.equal(h.byLabel("回答档位").value, "high"); assert.equal(h.byClass("dialogue-capability"), undefined); assert.match(h.root.textContent, /档位待核实/); assert.equal(h.calls.filter(item => item.payload).length, 0); assert.equal(h.byLabel("提问或保存想法").focused, undefined); });
 await test("startup deactivation cannot replace a recovered discussion draft with an empty unopened page", async () => {
   const h = harness(); h.panel.setActive(true); await flush(); await h.panel.openIdea("idea-1"); h.byText("继续讨论").click(); await flush(); const input = h.byLabel("提问或保存想法"), text = "继续思考：双模式切换先保留为建议，还没有决定。"; input.value = text; input.fire("input"); for (const callback of [...h.timers.values()]) callback(); await flush(); assert.equal(h.current().draft.text, text); h.events.get("pagehide")(); const restored = harness({ storage: h.storage, resumed: h.current() }); restored.panel.setActive(false); restored.panel.setActive(true); await flush(); assert.equal(restored.byLabel("提问或保存想法").value, text); assert.equal(restored.current().draft.text, text); assert.equal(restored.calls.filter(item => item.payload).length, 0); await restored.panel.refresh(); assert.equal(restored.byLabel("提问或保存想法").value, text);
@@ -118,7 +250,7 @@ await test("a real computer draft receipt remains synchronized when its local me
   const h = harness(), gate = deferred(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "电脑已实际接收的草稿"; input.fire("input"); h.hook(action => action === "mobile/dialogue/draft" ? gate.promise : undefined); for (const callback of [...h.timers.values()]) callback(); await flush(); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/draft").length, 1); h.runtime.localStorage.setItem = () => { throw new Error("storage rejected after receipt"); }; h.current().revision++; h.current().draft.text = input.value; gate.resolve(h.value()); await flush(); assert.equal(input.value, h.current().draft.text); assert.equal(h.byClass("dialogue-status").children[0].textContent, "草稿已同步电脑；本机保存失败"); assert.match(h.byClass("dialogue-notice").textContent, /暂时无法保存草稿/); assert.equal(h.panel.canReload(), false); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
 });
 await test("only save is one persistence action and never sends a Chat", async () => { const h = harness(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "未成熟的方案"; input.fire("input"); h.byText("只保存").click(); await flush(); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/save").length, 1); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0); assert.equal(input.value, ""); await h.panel.refresh(); assert.equal(input.value, ""); });
-await test("IME Enter and ordinary newline never send; deliberate click sends once", async () => { const h = harness(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "你好"; input.fire("input"); input.fire("compositionstart"); input.fire("keydown", { key: "Enter", ctrlKey: true, isComposing: true }); h.byText("发送 ↑").click(); await flush(); assert.equal(h.calls.filter(item => item.action.endsWith("/send")).length, 0); input.fire("compositionend"); input.fire("keydown", { key: "Enter" }); await flush(); assert.equal(h.calls.filter(item => item.action.endsWith("/send")).length, 0); h.byText("发送 ↑").click(); h.byText("发送 ↑").click(); await flush(); assert.equal(h.calls.filter(item => item.action.endsWith("/send")).length, 1); assert.match(h.root.textContent, /自动转发尚未接通/); });
+await test("IME Enter and ordinary newline never send; deliberate click sends once", async () => { const h = harness(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "你好"; input.fire("input"); input.fire("compositionstart"); input.fire("keydown", { key: "Enter", ctrlKey: true, isComposing: true }); h.byText("发送 ↑").click(); await flush(); assert.equal(h.calls.filter(item => item.action.endsWith("/send")).length, 0); input.fire("compositionend"); input.fire("keydown", { key: "Enter" }); await flush(); assert.equal(h.calls.filter(item => item.action.endsWith("/send")).length, 0); h.byText("发送 ↑").click(); h.byText("发送 ↑").click(); await flush(); assert.equal(h.calls.filter(item => item.action.endsWith("/send")).length, 1); assert.match(h.byClass("dialogue-pending").textContent, /等待转发处理/); assert.doesNotMatch(h.byClass("dialogue-pending").textContent, /尚未接通/); });
 await test("selected Pro survives reopening without claiming actual Pro", async () => { const storage = new Map(), h = harness({ storage }); const select = h.byLabel("回答档位"); select.value = "pro"; select.fire("change"); const restored = harness({ storage }); restored.panel.setActive(true); await flush(); assert.equal(restored.byLabel("回答档位").value, "pro"); assert.match(restored.root.textContent, /档位待核实/); });
 await test("local draft survives refresh before a computer session exists", async () => { const storage = new Map(), h = harness({ storage, session: false }); const input = h.byLabel("提问或保存想法"); input.value = "尚未发送的长想法"; input.fire("input"); const restored = harness({ storage, session: false }); restored.panel.setActive(true); await flush(); assert.equal(restored.byLabel("提问或保存想法").value, input.value); assert.equal(restored.calls.filter(item => item.payload).length, 0); });
 await test("clear creates a new discussion and ignores a late old result event", async () => { const h = harness(); h.panel.setActive(true); await flush(); const oldId = h.current().id; h.byText("清空当前讨论").click(); await flush(); assert.equal(h.current().id, "session-b"); const reads = h.calls.length; h.events.get("codex:dialogue-result")({ detail: { sessionId: oldId } }); await flush(); assert.equal(h.calls.length, reads); assert.doesNotMatch(h.byClass("dialogue-messages").textContent, /旧回答/); });

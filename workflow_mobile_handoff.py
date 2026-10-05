@@ -1,4 +1,4 @@
-"""Import one explicitly saved phone idea; never dispatch or execute its content."""
+"""Preserve phone sources through explicit imports and cancellation before send."""
 from __future__ import annotations
 
 import hashlib
@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import tempfile
 import uuid
 
@@ -16,6 +17,7 @@ from transfer_store import IncomingFile, TransferError, _filename, _image, _safe
 MAX_MANIFEST_BYTES = 80_000
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+CANCEL_RECEIPT_FIELDS = {"clientId", "sessionId", "recordId", "expectedRevision", "dispatchId", "jobId", "status", "reason", "unsent"}
 
 
 def _api():
@@ -125,6 +127,151 @@ def _nonce_body(fields, manifest):
 
 
 class MobileHandoffMixin:
+    def _mobile_cancel_pending_candidate(self, db, session, dispatch_id, *, cancelled=False):
+        """One shared read predicate for hints and the locked cancellation."""
+        api = _api()
+        from workflow_chat_relay import _prior_dispatch_evidence
+
+        client_id, record_id = session["clientId"], session["recordId"]
+        row = self._dispatch(db, dispatch_id)
+        snapshot = json.loads(row["snapshot"])
+        dialogue = snapshot.get("mobileDialogue")
+        if (not isinstance(dialogue, dict) or dialogue.get("id") != session["id"]
+                or dialogue.get("clientId") != client_id or dialogue.get("recordId") != record_id
+                or snapshot.get("recordId") != record_id or snapshot.get("origin") != "workflow_discussion"
+                or snapshot.get("purpose") != "discuss" or row["target_kind"] != "chatgpt" or row["target_mode"] != "new"):
+            raise api.WorkflowError("原请求与当前讨论来源不匹配。", 409, "cancel_context_mismatch")
+        job = self._app_dispatch_job(db, row, snapshot)
+        payload = json.loads(job["payload"])
+        if (job["record_id"] != record_id or payload.get("mobileDialogue") != dialogue
+                or payload.get("appFrozen", {}).get("mobileDialogue") != dialogue
+                or job["request_id"] != row["request_id"]):
+            raise api.WorkflowError("原工作与冻结讨论身份不匹配。", 409, "cancel_context_mismatch")
+        try:
+            original_id = str(uuid.UUID(row["request_id"]))
+        except (ValueError, TypeError, AttributeError):
+            raise api.WorkflowError("原发送凭据无法核对。", 409, "cancel_context_mismatch") from None
+        original = db.execute("SELECT kind,response FROM requests WHERE id=?", (original_id,)).fetchone()
+        if (original is None or original["kind"] != "mobile_dialogue_send"
+                or json.loads(original["response"]) != {"sessionId": session["id"], "jobId": job["id"]}):
+            raise api.WorkflowError("原发送凭据与本条请求不匹配。", 409, "cancel_context_mismatch")
+        if (row["status"] != ("failed" if cancelled else "pending") or job["status"] != ("failed" if cancelled else "waiting")
+                or _prior_dispatch_evidence(db, row) or json.loads(job["result"]) != {}):
+            raise api.WorkflowError("原请求已有认领或送达证据，不能按未发送取消。", 409, "cancel_requires_unclaimed_pending")
+        if not cancelled and (db.execute("SELECT 1 FROM jobs WHERE record_id=? AND status IN ('queued','running') LIMIT 1", (record_id,)).fetchone()
+                or db.execute("SELECT 1 FROM idea_dispatches WHERE json_extract(snapshot,'$.recordId')=? "
+                              "AND status IN ('claimed','waiting','needs_review') LIMIT 1", (record_id,)).fetchone()):
+            raise api.WorkflowError("当前记录还有工作在途，请先核对原工作。", 409, "cancel_requires_unclaimed_pending")
+        return row, job
+
+    def _mobile_can_cancel_pending(self, db, session, public_job):
+        """A boolean hint for this current session; no private receipt is exposed."""
+        try:
+            if not session or session.get("isCurrent") is not True:
+                return False
+            current = self._mobile_session(db, session["clientId"], session["id"])
+            if (self._mobile_client_state(db, session["clientId"])["currentSessionId"] != session["id"]
+                    or current["recordId"] != session["recordId"] or current["revision"] != session["revision"]
+                    or public_job.get("recordId") != session["recordId"]):
+                return False
+            _, job = self._mobile_cancel_pending_candidate(db, current, public_job["appDispatch"]["id"])
+            return job["id"] == public_job["id"]
+        except (ValueError, TypeError, KeyError, AttributeError, sqlite3.Error):
+            return False
+
+    def _mobile_pending_cancellation_receipts(self, db, session):
+        """Read at most twenty exact successful nonces in the current scope."""
+        if not session or session.get("isCurrent") is not True:
+            return []
+        current = self._mobile_session(db, session["clientId"], session["id"])
+        if (self._mobile_client_state(db, session["clientId"])["currentSessionId"] != session["id"]
+                or current["recordId"] != session["recordId"] or current["revision"] != session["revision"]):
+            return []
+        result = []
+        entries = db.execute("SELECT id,fingerprint,response FROM requests WHERE kind='mobile_dialogue_cancel_pending' "
+            "AND json_extract(CASE WHEN json_valid(response) THEN response ELSE '{}' END,'$.sessionId')=? "
+            "AND json_extract(CASE WHEN json_valid(response) THEN response ELSE '{}' END,'$.recordId')=? "
+            "ORDER BY rowid DESC LIMIT 20", (session["id"], session["recordId"]))
+        for entry in entries:
+            try:
+                saved = json.loads(entry["response"])
+                if (not isinstance(saved, dict) or set(saved) != CANCEL_RECEIPT_FIELDS or saved["clientId"] != session["clientId"]
+                        or saved["sessionId"] != session["id"] or saved["recordId"] != session["recordId"]
+                        or type(saved["expectedRevision"]) is not int or not 1 <= saved["expectedRevision"] <= current["revision"]
+                        or saved["status"] != "failed" or saved["reason"] != "cancelled_before_send" or saved["unsent"] is not True
+                        or str(uuid.UUID(entry["id"])) != entry["id"]):
+                    continue
+                original = {key: saved[key] for key in ("clientId", "sessionId", "recordId", "expectedRevision", "dispatchId")}
+                original["requestId"] = entry["id"]
+                if hashlib.sha256(_api()._json(original).encode("utf-8")).hexdigest() != entry["fingerprint"]:
+                    continue
+                _, job = self._mobile_cancel_pending_candidate(db, current, saved["dispatchId"], cancelled=True)
+                if job["id"] == saved["jobId"]:
+                    result.append({"requestId": entry["id"], **saved})
+            except (ValueError, TypeError, KeyError, AttributeError, sqlite3.Error):
+                continue
+        return result
+
+    def mobile_dialogue_cancel_pending(self, body, prefix="/api/workflow", authorize=None):
+        """End one original unclaimed request; never claim, clear or resend it."""
+        api = _api()
+        from workflow_mobile_dialogue import _client
+        fields = {"requestId", "clientId", "sessionId", "recordId", "expectedRevision", "dispatchId"}
+        if not isinstance(body, dict) or set(body) != fields:
+            raise api.WorkflowError("取消未发送请求的内容无效。")
+        client_id = _client(body["clientId"])
+        try:
+            request_id = str(uuid.UUID(body["requestId"]))
+        except (ValueError, TypeError, AttributeError):
+            raise api.WorkflowError("取消请求标识无效。") from None
+        if request_id != body["requestId"] or client_id != body["clientId"]:
+            raise api.WorkflowError("取消请求身份格式无效。")
+        record_id, dispatch_id = api._id(body["recordId"]), api._id(body["dispatchId"])
+        if authorize:
+            authorize()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = self._receipt(db, "mobile_dialogue_cancel_pending", body)
+            session = self._mobile_session(db, client_id, body["sessionId"])
+            if self._mobile_client_state(db, client_id)["currentSessionId"] != session["id"]:
+                raise api.WorkflowError("当前讨论已切换；原请求保留，未取消其它讨论。", 409, "dialogue_changed")
+            if session["recordId"] != record_id:
+                raise api.WorkflowError("取消请求不属于当前讨论记录。", 409, "cancel_context_mismatch")
+            if old:
+                # A matching receipt authorizes only the previous cancellation,
+                # even if its original revision has since gained another draft.
+                if (not isinstance(old, dict) or set(old) != CANCEL_RECEIPT_FIELDS
+                        or old.get("sessionId") != session["id"] or old.get("recordId") != record_id
+                        or old.get("dispatchId") != dispatch_id or old.get("status") != "failed"
+                        or old.get("reason") != "cancelled_before_send" or old.get("unsent") is not True
+                        or old.get("clientId") != client_id or old.get("expectedRevision") != body["expectedRevision"]):
+                    raise api.WorkflowError("原取消回执身份无法核对。", 409, "cancel_context_mismatch")
+                _, job = self._mobile_cancel_pending_candidate(db, session, dispatch_id, cancelled=True)
+                if job["id"] != old["jobId"]:
+                    raise api.WorkflowError("原取消回执工作无法核对。", 409, "cancel_context_mismatch")
+                saved = old
+            else:
+                self._mobile_guard(db, body, client_id)
+                row, job = self._mobile_cancel_pending_candidate(db, session, dispatch_id)
+                error = "已取消未发送请求；原请求未认领，原文、附件、草稿与档位保留。"
+                now = api._now()
+                if db.execute("UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=? AND record_id=? AND status='waiting'",
+                              (error, now, job["id"], record_id)).rowcount != 1:
+                    raise api.WorkflowError("原工作状态已改变，取消未执行。", 409, "cancel_requires_unclaimed_pending")
+                if db.execute("UPDATE idea_dispatches SET status='failed',error=?,updated_at=? WHERE id=? AND status='pending' "
+                              "AND (claim_token IS NULL OR claim_token='')", (error, now, dispatch_id)).rowcount != 1:
+                    raise api.WorkflowError("原请求已被认领，取消未执行。", 409, "cancel_requires_unclaimed_pending")
+                saved = {"clientId": client_id, "sessionId": session["id"], "recordId": record_id,
+                         "expectedRevision": body["expectedRevision"], "dispatchId": dispatch_id,
+                         "jobId": job["id"], "status": "failed", "reason": "cancelled_before_send", "unsent": True}
+                self._receipt(db, "mobile_dialogue_cancel_pending", body, saved)
+                self._revision(db, True)
+            if authorize:
+                authorize()
+        # Return the current session after commit. Cancellation leaves its own
+        # revision, draft, selected profile and all original source bytes intact.
+        return self._mobile_state(client_id, prefix, duplicate=old is not None, cancellation=saved)
+
     def mobile_idea_import_status(self, body, prefix="/api/workflow", authorize=None):
         """Read the exact original import receipt without retrying any import."""
         api = _api()

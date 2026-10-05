@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Exercise atomic saved-idea imports using only isolated databases and files."""
 import copy
+from contextlib import closing
 from email.message import Message
 import hashlib
 import importlib.util
 import io
 import json
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -480,6 +482,373 @@ class MobileHandoffChecks(unittest.TestCase):
         self.assertEqual(result["detail"]["attachments"][0]["name"], "图片.png")
 
 
+class MobilePendingCancellationChecks(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="console-mobile-cancel-isolated-")
+        self.root = Path(self.temporary.name)
+        self.service = WorkflowService(self.root / "private", models=ForbiddenModels(), projects=[
+            {"id": "isolated", "name": "Isolated", "root": str(self.root), "capabilities": ["result_import"]}])
+        self.client = str(uuid.uuid4())
+        self.state = self.post("open", self.request(clientId=self.client))
+        self.sent = self.mutate("send", text="原确认问题，不能重送。", requestedProfile="fast")
+        self.dispatch_id = self.sent["job"]["appDispatch"]["id"]
+        self.job_id = self.sent["job"]["id"]
+
+    def tearDown(self):
+        self.service._dispatch_commit_notifier = None
+        self.service.shutdown()
+        self.temporary.cleanup()
+
+    @staticmethod
+    def request(**fields):
+        return {"requestId": str(uuid.uuid4()), **fields}
+
+    def post(self, action, body, authorize=None):
+        return workflow_post(self.service, "mobile/dialogue/" + action, body,
+                             prefix="/api/phone/workflow", authorize=authorize)
+
+    def mutate(self, action, **fields):
+        session = self.state["session"]
+        body = self.request(clientId=self.client, sessionId=session["id"], expectedRevision=session["revision"])
+        if action in {"send", "draft"}:
+            body.update(text="尚未发送草稿", attachmentIds=[], requestedProfile="fast")
+        body.update(fields)
+        self.state = self.post(action, body)
+        return self.state
+
+    def cancel_body(self, **fields):
+        session = self.state["session"]
+        return self.request(clientId=self.client, sessionId=session["id"], recordId=session["recordId"],
+                            expectedRevision=session["revision"], dispatchId=self.dispatch_id, **fields)
+
+    def snapshot(self):
+        with self.service._db() as db:
+            tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            return {t: [dict(r) for r in db.execute(f'SELECT * FROM "{t}" ORDER BY rowid')] for t in tables}
+
+    def reject(self, body, code=None, authorize=None):
+        before = self.snapshot()
+        with self.assertRaises(WorkflowError) as caught:
+            self.post("cancel-pending", body, authorize)
+        if code:
+            self.assertEqual(caught.exception.code, code)
+        self.assertEqual(self.snapshot(), before)
+        return caught.exception
+
+    def test_cancel_only_original_pending_preserves_all_sources_draft_profile_and_other_queue(self):
+        other_client = str(uuid.uuid4())
+        other = self.post("open", self.request(clientId=other_client))
+        s = other["session"]
+        other = self.post("send", self.request(clientId=other_client, sessionId=s["id"], expectedRevision=s["revision"],
+                         text="另一讨论仍保留", attachmentIds=[], requestedProfile="fast"))
+        spool = self.root / "preserved.png"
+        Image.new("RGB", (2, 2), "blue").save(spool, "PNG")
+        s = self.state["session"]
+        self.state = self.service.mobile_dialogue_upload(self.request(recordId=s["recordId"], text=json.dumps({
+            "clientId": self.client, "sessionId": s["id"], "expectedRevision": s["revision"]})),
+            [IncomingFile(spool, 0, spool.stat().st_size, "原附件.png", "image/png")])
+        attachment = self.state["uploadedAttachmentIds"][0]
+        self.mutate("draft", text="下一轮草稿🧩", attachmentIds=[attachment], requestedProfile="pro")
+        session_before = copy.deepcopy(self.state["session"])
+        files_before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.service.attachments_dir.iterdir()}
+        before = self.snapshot()
+        test = self
+        class NoDispatch:
+            def notify_committed(self, identifiers):
+                test.fail("cancellation must never submit another request")
+            def notify_released(self, identifiers):
+                test.fail("an unclaimed pending row must not be reported as an active release")
+        self.service._dispatch_commit_notifier = NoDispatch()
+        result = self.post("cancel-pending", self.cancel_body())
+        after = self.snapshot()
+        self.assertFalse(result["duplicate"])
+        self.assertEqual(result["cancellation"], {"clientId": self.client, "sessionId": session_before["id"], "recordId": session_before["recordId"],
+            "expectedRevision": session_before["revision"],
+            "dispatchId": self.dispatch_id, "jobId": self.job_id, "status": "failed", "reason": "cancelled_before_send", "unsent": True})
+        self.assertEqual(result["session"], session_before)
+        self.assertEqual(result["resultStatus"], "failed")
+        self.assertEqual(files_before, {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.service.attachments_dir.iterdir()})
+        for table in set(before) - {"settings", "requests", "jobs", "idea_dispatches"}:
+            self.assertEqual(before[table], after[table], table)
+        self.assertEqual([r for r in before["settings"] if r["key"] != "revision"],
+                         [r for r in after["settings"] if r["key"] != "revision"])
+        self.assertEqual(after["requests"][:-1], before["requests"])
+        self.assertEqual(after["requests"][-1]["kind"], "mobile_dialogue_cancel_pending")
+        for table, identifier in (("jobs", self.job_id), ("idea_dispatches", self.dispatch_id)):
+            for old, new in zip(before[table], after[table]):
+                if old["id"] == identifier:
+                    self.assertEqual(new["status"], "failed")
+                    self.assertIn("未发送", new["error"])
+                    self.assertEqual({k: v for k, v in old.items() if k not in {"status", "error", "updated_at"}},
+                                     {k: v for k, v in new.items() if k not in {"status", "error", "updated_at"}})
+                else:
+                    self.assertEqual(old, new)
+        self.assertEqual(other["job"]["appDispatch"]["status"], "pending")
+        self.assertFalse(self.service._wake.is_set())
+
+    def test_can_cancel_projection_is_readonly_and_false_for_old_or_attempted_identity(self):
+        before = self.snapshot()
+        current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+        job = next(j for j in current["detail"]["jobs"] if j["id"] == self.job_id)
+        self.assertIs(job["appDispatch"]["canCancelPending"], True)
+        self.assertEqual(current["cancellationReceipts"], [])
+        self.assertEqual(self.snapshot(), before)
+        with self.service._db() as db:
+            self.service._set_setting(db, "console-chat-relay:attempt:" + self.dispatch_id, {})
+        before = self.snapshot()
+        current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+        self.assertIs(current["detail"]["jobs"][-1]["appDispatch"]["canCancelPending"], False)
+        self.assertEqual(self.snapshot(), before)
+        old_session = self.state["session"]["id"]
+        self.mutate("clear")
+        old = self.service._mobile_state(self.client, "/api/phone/workflow", old_session)
+        self.assertFalse(old["session"]["isCurrent"])
+        self.assertIs(old["detail"]["jobs"][-1]["appDispatch"]["canCancelPending"], False)
+        self.assertEqual(old["cancellationReceipts"], [])
+
+    def test_cancellation_receipt_readback_binds_nonce_original_revision_and_current_scope(self):
+        body = self.cancel_body()
+        result = self.post("cancel-pending", body)
+        expected = {"requestId": body["requestId"], **result["cancellation"]}
+        self.assertEqual(result["cancellationReceipts"], [expected])
+        self.assertIs(result["detail"]["jobs"][-1]["appDispatch"]["canCancelPending"], False)
+        self.mutate("draft", text="不同版本的新草稿", requestedProfile="pro")
+        current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+        self.assertEqual(current["cancellationReceipts"], [expected])
+        self.assertEqual(current["cancellationReceipts"][0]["expectedRevision"], body["expectedRevision"])
+        self.assertNotEqual(current["session"]["revision"], expected["expectedRevision"])
+        self.assertEqual(current["session"]["draft"], self.state["session"]["draft"])
+        self.mutate("clear")
+        current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+        self.assertEqual(current["cancellationReceipts"], [])
+        self.reject(body, "dialogue_changed")
+
+    def test_cancellation_readback_rejects_forged_nonce_scope_reason_or_job_identity(self):
+        body = self.cancel_body()
+        result = self.post("cancel-pending", body)
+        correct = result["cancellation"]
+        for change in ({"clientId": str(uuid.uuid4())}, {"sessionId": uuid.uuid4().hex}, {"recordId": uuid.uuid4().hex}, {"dispatchId": uuid.uuid4().hex},
+                       {"jobId": uuid.uuid4().hex}, {"reason": "some_failure"}, {"unsent": False},
+                       {"expectedRevision": body["expectedRevision"] + 1}):
+            with self.subTest(change=change):
+                saved = {**correct, **change}
+                with self.service._db() as db:
+                    db.execute("UPDATE requests SET response=? WHERE id=?", (json.dumps(saved), body["requestId"]))
+                before = self.snapshot()
+                current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+                self.assertEqual(current["cancellationReceipts"], [])
+                self.assertEqual(self.snapshot(), before)
+        with self.service._db() as db:
+            db.execute("UPDATE requests SET response=?,fingerprint='forged' WHERE id=?", (json.dumps(correct), body["requestId"]))
+        current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+        self.assertEqual(current["cancellationReceipts"], [])
+
+    def test_cancellation_readback_is_bounded_and_requires_original_pair_still_failed(self):
+        body = self.cancel_body()
+        result = self.post("cancel-pending", body)
+        saved = result["cancellation"]
+        with self.service._db() as db:
+            for _ in range(25):
+                candidate = {**body, "requestId": str(uuid.uuid4())}
+                db.execute("INSERT INTO requests VALUES (?,?,?,?)", (candidate["requestId"], "mobile_dialogue_cancel_pending",
+                    hashlib.sha256(json.dumps(candidate, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                    json.dumps(saved)))
+        current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+        self.assertEqual(len(current["cancellationReceipts"]), 20)
+        for table, identifier in (("jobs", self.job_id), ("idea_dispatches", self.dispatch_id)):
+            with self.service._db() as db:
+                db.execute(f'UPDATE "{table}" SET status=? WHERE id=?', ("waiting", identifier))
+            current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+            self.assertEqual(current["cancellationReceipts"], [])
+            with self.service._db() as db:
+                db.execute(f'UPDATE "{table}" SET status=? WHERE id=?', ("failed", identifier))
+
+    def test_cancel_notifies_only_original_subscribed_session_after_durable_commit(self):
+        session = self.state["session"]
+        key = (self.client, session["id"])
+        other_client = str(uuid.uuid4())
+        other = self.post("open", self.request(clientId=other_client))["session"]
+        hub = self.service._mobile_event_hub()
+        token, _ = hub.subscribe(key)
+        other_token, _ = hub.subscribe((other_client, other["id"]))
+        original_notify, notices = hub.notify, []
+        body = self.cancel_body()
+        def notify(keys):
+            keys = tuple(keys)
+            if keys:
+                # A separate reader sees old rows until the transaction commits.
+                with closing(sqlite3.connect((self.service.data_dir / "workflow.sqlite3").resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                    self.assertEqual(db.execute("SELECT status FROM jobs WHERE id=?", (self.job_id,)).fetchone()[0], "failed")
+                    self.assertEqual(db.execute("SELECT status FROM idea_dispatches WHERE id=?", (self.dispatch_id,)).fetchone()[0], "failed")
+                    self.assertIsNotNone(db.execute("SELECT id FROM requests WHERE id=?", (body["requestId"],)).fetchone())
+                notices.extend(keys)
+            return original_notify(keys)
+        with patch.object(hub, "notify", notify):
+            self.post("cancel-pending", body)
+        self.assertEqual(notices, [key])
+        event = self.service._mobile_event_read(key)
+        self.assertEqual(event["jobId"], self.job_id)
+        self.assertEqual(event["status"], "failed")
+        hub.close(token)
+        hub.close(other_token)
+
+    def test_cancel_rollback_has_no_subscriber_result_notification(self):
+        key = (self.client, self.state["session"]["id"])
+        hub = self.service._mobile_event_hub()
+        token, _ = hub.subscribe(key)
+        notices = []
+        original_receipt = self.service._receipt
+        def fail(db, kind, body, response=None):
+            if kind == "mobile_dialogue_cancel_pending" and response is not None:
+                raise WorkflowError("Isolated cancellation rollback", 503)
+            return original_receipt(db, kind, body, response)
+        def notify(keys):
+            notices.extend(keys)
+        with patch.object(self.service, "_receipt", fail), patch.object(hub, "notify", notify):
+            self.reject(self.cancel_body())
+        self.assertEqual(notices, [])
+        event = self.service._mobile_event_read(key)
+        self.assertEqual(event["jobId"], self.job_id)
+        self.assertEqual(event["status"], "waiting")
+        hub.close(token)
+
+    def test_cancel_same_nonce_is_idempotent_and_returns_newer_current_draft(self):
+        body = self.cancel_body()
+        first = self.post("cancel-pending", body)
+        before = self.snapshot()
+        duplicate = self.post("cancel-pending", body)
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(duplicate["cancellation"], first["cancellation"])
+        self.assertEqual(self.snapshot(), before)
+        self.mutate("draft", text="取消之后另存的草稿", requestedProfile="high")
+        before = self.snapshot()
+        duplicate = self.post("cancel-pending", body)
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(duplicate["session"], self.state["session"])
+        self.assertEqual(self.snapshot(), before)
+        self.reject({**body, "dispatchId": uuid.uuid4().hex})
+
+    def test_cancel_checks_exact_current_client_session_record_and_revision(self):
+        body = self.cancel_body()
+        for fields in ({"clientId": str(uuid.uuid4())}, {"sessionId": uuid.uuid4().hex},
+                       {"recordId": uuid.uuid4().hex}, {"expectedRevision": body["expectedRevision"] - 1},
+                       {"expectedRevision": True}):
+            with self.subTest(fields=fields):
+                self.reject({**body, **fields})
+        self.mutate("clear")
+        self.reject(body, "dialogue_changed")
+
+    def test_cancel_schema_is_exact_and_other_request_kinds_cannot_be_reused(self):
+        body = self.cancel_body()
+        for key in body:
+            self.reject({k: v for k, v in body.items() if k != key})
+        for extra in ("claimToken", "force", "send", "requestedProfile", "text"):
+            self.reject({**body, extra: True})
+        with self.service._db() as db:
+            old_id = db.execute("SELECT id FROM requests WHERE kind='mobile_dialogue_send'").fetchone()[0]
+        self.reject({**body, "requestId": old_id})
+
+    def test_cancel_refuses_claimed_waiting_review_completed_and_failed_states(self):
+        body = self.cancel_body()
+        for status in ("claimed", "waiting", "needs_review", "completed", "failed", "unknown"):
+            with self.subTest(status=status):
+                with self.service._db() as db:
+                    db.execute("UPDATE idea_dispatches SET status=? WHERE id=?", (status, self.dispatch_id))
+                self.reject(body, "cancel_requires_unclaimed_pending")
+
+    def test_cancel_refuses_actual_claim_and_keeps_claim_evidence(self):
+        body = self.cancel_body()
+        self.service.incubator_claim(self.request(id=self.dispatch_id))
+        self.reject(body, "cancel_requires_unclaimed_pending")
+
+    def test_cancel_refuses_any_attempt_tombstone_even_without_send_intent(self):
+        body = self.cancel_body()
+        for value in (None, {}, {"phase": "prepared_requested", "sendIntentAt": None},
+                      {"phase": "needs_review", "sendIntentAt": "2026-10-05T14:00:00Z"}):
+            with self.subTest(value=value):
+                with self.service._db() as db:
+                    self.service._set_setting(db, "console-chat-relay:attempt:" + self.dispatch_id, value)
+                self.reject(body, "cancel_requires_unclaimed_pending")
+
+    def test_cancel_refuses_claim_source_result_and_prior_claim_receipt(self):
+        body = self.cancel_body()
+        variants = {"claim_token": uuid.uuid4().hex, "target_thread_id": str(uuid.uuid4()), "result": json.dumps({"unknown": True})}
+        with self.service._db() as db:
+            original = dict(self.service._dispatch(db, self.dispatch_id))
+        for key, value in variants.items():
+            with self.subTest(key=key):
+                with self.service._db() as db:
+                    db.execute(f'UPDATE idea_dispatches SET "{key}"=? WHERE id=?', (value, self.dispatch_id))
+                self.reject(body, "cancel_requires_unclaimed_pending")
+                with self.service._db() as db:
+                    db.execute(f'UPDATE idea_dispatches SET "{key}"=? WHERE id=?', (original[key], self.dispatch_id))
+        with self.service._db() as db:
+            db.execute("INSERT INTO requests VALUES (?,?,?,?)", (str(uuid.uuid4()), "incubator_claim", "fixture",
+                       json.dumps({"dispatchId": self.dispatch_id})))
+        self.reject(body, "cancel_requires_unclaimed_pending")
+
+    def test_cancel_refuses_queued_running_nonempty_job_result_or_unmatched_mobile_binding(self):
+        body = self.cancel_body()
+        for status in ("queued", "running", "succeeded", "failed"):
+            with self.subTest(status=status):
+                with self.service._db() as db:
+                    db.execute("UPDATE jobs SET status=? WHERE id=?", (status, self.job_id))
+                self.reject(body, "cancel_requires_unclaimed_pending")
+        with self.service._db() as db:
+            db.execute("UPDATE jobs SET status='waiting',result=? WHERE id=?", (json.dumps({"sent": True}), self.job_id))
+        self.reject(body, "cancel_requires_unclaimed_pending")
+        with self.service._db() as db:
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (self.job_id,)).fetchone()[0])
+            payload["mobileDialogue"]["clientId"] = str(uuid.uuid4())
+            db.execute("UPDATE jobs SET result='{}',payload=? WHERE id=?", (json.dumps(payload), self.job_id))
+        self.reject(body, "cancel_context_mismatch")
+
+    def test_cancel_refuses_other_active_work_on_original_record(self):
+        body = self.cancel_body()
+        with self.service._db() as db:
+            job = dict(db.execute("SELECT * FROM jobs WHERE id=?", (self.job_id,)).fetchone())
+            job.update(id=uuid.uuid4().hex, request_id=str(uuid.uuid4()), kind="execute", payload="{}", status="queued")
+            columns = list(job)
+            db.execute('INSERT INTO jobs (' + ','.join(columns) + ') VALUES (' + ','.join('?' for _ in columns) + ')', tuple(job.values()))
+        for status in ("queued", "running"):
+            with self.subTest(status=status):
+                with self.service._db() as db:
+                    db.execute("UPDATE jobs SET status=? WHERE id=?", (status, job["id"]))
+                self.reject(body, "cancel_requires_unclaimed_pending")
+        with self.service._db() as db:
+            db.execute("UPDATE jobs SET status='failed' WHERE id=?", (job["id"],))
+            row = dict(self.service._dispatch(db, self.dispatch_id))
+            row.update(id=uuid.uuid4().hex, request_id=str(uuid.uuid4()), status="claimed", claim_token=uuid.uuid4().hex)
+            columns = list(row)
+            db.execute('INSERT INTO idea_dispatches (' + ','.join(columns) + ') VALUES (' + ','.join('?' for _ in columns) + ')', tuple(row.values()))
+        self.reject(body, "cancel_requires_unclaimed_pending")
+
+    def test_cancel_requires_original_mobile_send_receipt(self):
+        body = self.cancel_body()
+        with self.service._db() as db:
+            request_id = db.execute("SELECT request_id FROM idea_dispatches WHERE id=?", (self.dispatch_id,)).fetchone()[0]
+            db.execute("UPDATE requests SET response=? WHERE id=?", (json.dumps({"jobId": self.job_id, "sessionId": uuid.uuid4().hex}), request_id))
+        self.reject(body, "cancel_context_mismatch")
+
+    def test_cancel_authorization_recheck_rolls_back_both_failures_and_receipt(self):
+        calls = []
+        def revoke():
+            calls.append(True)
+            if len(calls) == 2:
+                raise WorkflowError("Isolated authorization revoked", 403)
+        self.reject(self.cancel_body(), authorize=revoke)
+        self.assertEqual(len(calls), 2)
+
+    def test_cancel_late_receipt_failure_rolls_back_all_state(self):
+        original = self.service._receipt
+        def fail(db, kind, body, response=None):
+            if kind == "mobile_dialogue_cancel_pending" and response is not None:
+                raise WorkflowError("Isolated receipt storage failure", 503)
+            return original(db, kind, body, response)
+        with patch.object(self.service, "_receipt", fail):
+            self.reject(self.cancel_body())
+
+
 class MobileHandoffGatewayChecks(unittest.TestCase):
     def setUp(self):
         # Reuse the existing disposable gateway fixture, not a production server.
@@ -532,6 +901,36 @@ class MobileHandoffGatewayChecks(unittest.TestCase):
         self.assertEqual(status, 401, result)
         with self.fixture.workflow._db() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM ideas").fetchone()[0], 0)
+
+    def test_cancel_pending_requires_existing_pairing_and_own_origin(self):
+        endpoint = "/api/phone/workflow/mobile/dialogue/cancel-pending"
+        self.assertEqual(self.fixture.request(endpoint, "POST", {})[0], 401)
+        self.fixture.pair()
+        client = str(uuid.uuid4())
+        s = self.fixture.workflow.mobile_dialogue_open({"requestId": str(uuid.uuid4()), "clientId": client})["session"]
+        sent = self.fixture.workflow.mobile_dialogue_send({"requestId": str(uuid.uuid4()), "clientId": client,
+            "sessionId": s["id"], "expectedRevision": s["revision"], "text": "Isolated unsent request", "attachmentIds": [], "requestedProfile": "fast"})
+        s = sent["session"]
+        body = {"requestId": str(uuid.uuid4()), "clientId": client, "sessionId": s["id"], "recordId": s["recordId"],
+                "expectedRevision": s["revision"], "dispatchId": sent["job"]["appDispatch"]["id"]}
+        status, _, headers = self.fixture.request(endpoint, "POST", body,
+            headers={"Origin": "https://tx74666.github.io", "Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(status, 403)
+        self.assertFalse(any(k.lower() == "access-control-allow-origin" for k, _ in headers))
+        code = self.fixture.companion.renew_pairing()["pairingCode"]
+        token = self.fixture.companion.pair(code, "127.0.0.1", scope="plan-sync")
+        status, denied, _ = self.fixture.request(endpoint, "POST", body,
+            cookie=self.module.phone.COOKIE_NAME + "=" + token)
+        self.assertEqual(status, 401, denied)
+        status, cancelled, _ = self.fixture.request(endpoint, "POST", body)
+        self.assertEqual(status, 200, cancelled)
+        self.assertEqual(cancelled["session"], s)
+        self.assertTrue(cancelled["cancellation"]["unsent"])
+        self.assertEqual(cancelled["resultStatus"], "failed")
+        status, duplicate, _ = self.fixture.request(endpoint, "POST", body)
+        self.assertEqual(status, 200, duplicate)
+        self.assertTrue(duplicate["duplicate"])
+        self.assertFalse(self.fixture.marker.exists())
 
     def test_status_is_paired_same_origin_and_readonly_for_missing_or_found_imports(self):
         fields = {"requestId": self.request_id, "text": json.dumps(self.manifest, ensure_ascii=False)}

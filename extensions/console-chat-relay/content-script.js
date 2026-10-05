@@ -21,7 +21,7 @@
     function profile() {
       const node = one(selectors().profile), raw = String(node.textContent || "").trim();
       const effort = node.getAttribute("data-selected-reasoning-effort");
-      if (!["Instant", "Thinking effortInstant", "思考强度Instant"].includes(raw) || effort !== "none")
+      if (!["Instant", "Thinking effortInstant", "思考强度Instant", "思考强度即时"].includes(raw) || effort !== "none")
         R.reject("profile_changed", "未观察到实际 Instant/none 控件；不切换未知控件或降档。");
       return { label: "Instant", dom: { text: raw, reasoningEffort: effort } };
     }
@@ -73,8 +73,42 @@
       return { composer, profile: profile() };
     }
     function disconnectObserver() {
+      state?.cancelSendWait?.();
       if (state?.observer) state.observer.disconnect();
       if (state?.acceptDeadline) env.clearTimeout(state.acceptDeadline);
+    }
+    function waitForSend() {
+      return new Promise((resolve, reject) => {
+        let done = false, observer, deadline;
+        const finish = (error, send) => {
+          if (done) return;
+          done = true; observer?.disconnect();
+          if (deadline !== undefined) env.clearTimeout(deadline);
+          state.cancelSendWait = null;
+          if (error) reject(error); else resolve(send);
+        };
+        const check = () => {
+          if (done) return;
+          try {
+            if (state.phase !== "send_intent") R.reject("send_cancelled", "本次输入已停止，不能点击 Send。");
+            inspectFresh(state.prepare.prompt);
+            const nodes = all(selectors().send);
+            if (nodes.length > 1) R.reject("send_not_available", "真实发送控件不唯一，不能发送。");
+            if (!nodes.length) return;
+            const send = nodes[0];
+            if (send.getAttribute("type") !== "submit") R.reject("send_not_available", "发送控件类型已经变化。");
+            if (send.disabled || send.getAttribute("aria-disabled") === "true") return;
+            finish(null, send);
+          } catch (error) { finish(error); }
+        };
+        state.cancelSendWait = () => finish(new R.RelayError("send_cancelled", "本次输入已停止，发送意图保留，不自动重发。"));
+        observer = new env.MutationObserver(check);
+        observer.observe(env.document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+        deadline = env.setTimeout(() => finish(new R.RelayError("send_not_available", "十秒内未取得实际可用的 Send 控件，保留输入与意图，不自动重发。")), 10000);
+        // React may publish the enabled button after the input handler returns.
+        // Subscribe first, then inspect; DOM events alone drive this bounded wait.
+        check();
+      });
     }
     async function emit(value) {
       const response = await env.chrome.runtime.sendMessage(value);
@@ -126,7 +160,7 @@
       if (await R.sha256(value.prompt) !== value.promptSha256) R.reject("prompt_hash_mismatch", "完整冻结问题 SHA 不符。");
       const key = CONTENT_PREFIX + value.dispatchId;
       if ((await env.chrome.storage.local.get(key))?.[key]) R.reject("dispatch_already_attempted", "该请求已有页面提交意图，只能核对。");
-      state = { prepare: structuredClone(value), phase: "preparing", key, observedBefore: null, accepted: null };
+      state = { prepare: structuredClone(value), phase: "preparing", key, observedBefore: null, accepted: null, clickStarted: false };
       const fresh = inspectFresh(); state.observedBefore = fresh.profile.label; state.phase = "prepared";
       return R.envelope("prepared", value, { observation: { url: env.location.href, chatMode: true, loginVerified: true, emptyComposer: true,
         observedProfile: fresh.profile.label, completionInitiallyPresent: false, surface: value.domContract.surface,
@@ -137,21 +171,24 @@
       if (!state || state.phase !== "prepared" || !R.sameIdentity(value, state.prepare)) R.reject("commit_not_prepared", "没有本次唯一已准备的页面，不点 Send。");
       inspectFresh();
       if ((await env.chrome.storage.local.get(state.key))?.[state.key]) R.reject("dispatch_already_attempted", "该请求已有提交记录，不重复点击。");
+      if (state.phase !== "prepared") R.reject("send_cancelled", "本次输入已停止，不能恢复提交。");
       state.phase = "send_intent";
       await env.chrome.storage.local.set({ [state.key]: { dispatchId: value.dispatchId, attemptId: value.attemptId,
         promptSha256: state.prepare.promptSha256, phase: "send_intent", at: new Date(env.now()).toISOString() } });
       // Reobserve after async persistence: a user's late draft or tier change must win.
+      if (state.phase !== "send_intent") R.reject("send_cancelled", "本次输入已停止，不能输入或点击 Send。");
       const fresh = inspectFresh(), composer = fresh.composer;
       composer.focus(); composer.textContent = state.prepare.prompt;
       composer.dispatchEvent(new env.InputEvent("input", { bubbles: true, inputType: "insertText", data: state.prepare.prompt }));
       if (composerText(composer) !== state.prepare.prompt) R.reject("composer_not_matching", "页面输入没有完整冻结文字，不能发送。");
       inspectFresh(state.prepare.prompt);
+      const send = await waitForSend();
+      inspectFresh(state.prepare.prompt);
+      if (state.phase !== "send_intent" || one(selectors().send) !== send || send.disabled || send.getAttribute("aria-disabled") === "true"
+          || send.getAttribute("type") !== "submit") R.reject("send_not_available", "点击前真实发送控件或请求状态已经变化。");
       // inspectFresh just proved no completion marker on this owned blank
       // conversation. The observer is installed before its sole Send click.
       state.completionAbsentAtCommit = true;
-      const send = one(selectors().send);
-      if (send.disabled || send.getAttribute("aria-disabled") === "true" || send.getAttribute("type") !== "submit")
-        R.reject("send_not_available", "未观察到唯一可用的真实 Send 控件。");
       state.observer = new env.MutationObserver(observeEvent);
       state.observer.observe(env.document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
       state.phase = "waiting";
@@ -159,7 +196,7 @@
       // Once the exact input is accepted, remain idle on DOM events until its
       // final or an attribution failure. Slow generation is not a send failure.
       // Exactly one click. A throwing click is an unknown outcome, never a retry.
-      send.click();
+      state.clickStarted = true; send.click();
       observeEvent();
       return { committed: true };
     }
@@ -169,15 +206,20 @@
         if (value?.type === "relay.content.commit") { R.exact(value, ["type", "commit"]); return await commit(value.commit); }
         R.reject("unknown_page_control", "网页正文和未知消息不能授权输入或发送。");
       } catch (error) {
-        // Return the failed content reply first: the worker is still awaiting
-        // this commit on its serial queue. Waiting for its page-message reply
-        // here would deadlock both queues. fail marks uncertainty immediately,
-        // retains the durable intent, and reports the original identity async.
-        if (state && ["send_intent", "waiting"].includes(state.phase)) void fail(error.code || "send_unknown", String(error?.message || "提交结果不明，不能重发。"));
+        // The worker alone reports a failed control reply. Emitting a second
+        // asynchronous failure would race it and can deadlock both queues.
+        if (state && value?.type === "relay.content.commit") { state.phase = "needs_review"; disconnectObserver(); }
         throw error;
       }
     }
-    return { receive: value => queue(() => receive(value)), observe: () => queue(observeCommitted), idle: () => serial,
+    function cancel(value) {
+      R.exact(value, ["protocol", "type", "dispatchId", "attemptId"]); R.common(value, "cancel");
+      if (!state || !R.sameIdentity(value, state.prepare)) R.reject("cancel_identity_mismatch", "停止消息不属于当前专用页面。");
+      state.phase = "needs_review"; disconnectObserver();
+      return { cancelled: true };
+    }
+    return { receive: value => queue(() => receive(value)), cancel, clickStarted: () => state?.clickStarted === true,
+      observe: () => queue(observeCommitted), idle: () => serial,
       phase: () => state?.phase || "idle", stop: () => { disconnectObserver(); if (state) state.phase = "needs_review"; } };
   }
   root.ConsoleChatRelayContent = Object.freeze({ createController, CONTENT_PREFIX });
@@ -185,8 +227,20 @@
     const controller = createController({ chrome: root.chrome, document: root.document, location: root.location,
       MutationObserver: root.MutationObserver, InputEvent: root.InputEvent, now: () => Date.now(), setTimeout: root.setTimeout, clearTimeout: root.clearTimeout });
     root.chrome.runtime.onMessage.addListener((value, sender, reply) => {
-      if (sender?.id !== R.EXTENSION_ID || !["relay.content.prepare", "relay.content.commit"].includes(value?.type)) return false;
-      controller.receive(value).then(reply, error => reply({ committed: false, code: error?.code || "page_control_rejected" }));
+      if (sender?.id !== R.EXTENSION_ID || !["relay.content.prepare", "relay.content.commit", "relay.content.cancel"].includes(value?.type)) return false;
+      if (value.type === "relay.content.cancel") {
+        try { R.exact(value, ["type", "cancel"]); reply(controller.cancel(value.cancel)); }
+        catch (error) { reply({ cancelled: false, code: error?.code || "page_control_rejected" }); }
+        return false;
+      }
+      controller.receive(value).then(reply, error => {
+        const identity = value.type === "relay.content.prepare" ? value.prepare : value.commit;
+        try {
+          reply(R.envelope(value.type === "relay.content.prepare" ? "blocked" : "uncertain", identity,
+            { code: error?.code || "page_control_rejected", message: String(error?.message || "页面控制失败，不能重发。"),
+              ...(value.type === "relay.content.commit" ? { clickStarted: controller.clickStarted() } : {}) }));
+        } catch { reply({ committed: false, code: "page_control_rejected" }); }
+      });
       return true;
     });
     root.addEventListener("pagehide", () => controller.stop(), { once: true });

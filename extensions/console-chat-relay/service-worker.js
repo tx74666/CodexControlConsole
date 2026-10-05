@@ -48,9 +48,34 @@ importScripts("lib/protocol.js");
       if (!native) R.reject("native_disconnected", "本机接收端连接已断开。");
       native.postMessage(value);
     }
+    function cancelOwned() {
+      const active = state.active;
+      if (!active || active.phase === "stored" || !Number.isInteger(active.tabId)) return;
+      try {
+        const pending = api.tabs.sendMessage(active.tabId, { type: "relay.content.cancel", cancel: R.envelope("cancel", active.prepare) });
+        pending?.catch?.(() => {});
+      } catch { /* The existing intent remains uncertain; no substitute Send. */ }
+    }
+    function preemptNative(value) {
+      // A terminal receipt must stop an in-progress DOM wait immediately,
+      // before serial handling can be delayed behind that same commit.
+      const active = state.active;
+      if (!active || active.phase === "stored" || !R.sameIdentity(value, active.prepare)) return;
+      try {
+        if (value?.type === "retired") {
+          R.validateRetired(value);
+          const prior = state.attempts[value.dispatchId];
+          if (!prior || prior.attemptId !== value.attemptId || prior.phase === "stored") return;
+        } else if (["blocked", "uncertain"].includes(value?.type)) R.validateFailure(value);
+        else return;
+        cancelOwned();
+      } catch { /* Invalid or foreign receipts cannot cancel an owned page. */ }
+    }
+    function receiveNative(value) { preemptNative(value); return queue(() => handleNative(value)); }
     async function fail(identity, code, message, uncertain = true, notify = true) {
       const value = R.envelope(uncertain ? "uncertain" : "blocked", identity, { code, message });
       if (state.active && state.active.phase !== "stored" && R.sameIdentity(value, state.active.prepare)) {
+        cancelOwned();
         const knownUnsent = uncertain === false && ["preparing", "prepared"].includes(state.active.phase);
         const phase = knownUnsent ? "failed" : "needs_review";
         state.attempts[identity.dispatchId] = { attemptId: identity.attemptId, phase, promptSha256: state.active.prepare.promptSha256 };
@@ -89,16 +114,18 @@ importScripts("lib/protocol.js");
         if (value?.type === "status") {
           try {
             R.validateStatus(value); status = value;
+            if (![value.enabled, value.approved, value.configured, value.clientReady].every(item => item === true)) cancelOwned();
             nativeReady = value.clientReady === true && state.enabled && value.enabled && value.approved && value.configured;
             lastMessage = value.message; askReady();
           } catch { lastMessage = "原生状态回执无效，保持未就绪。"; status = null; nativeReady = false; requestedReady = false; }
           publish();
           return;
         }
-        queue(() => handleNative(value)).then(publish, error => notice(String(error?.message || "原生消息未处理。")));
+        receiveNative(value).then(publish, error => notice(String(error?.message || "原生消息未处理。")));
       });
       port.onDisconnect.addListener(() => {
         if (native !== port) return;
+        cancelOwned();
         native = null; nativeReady = false; requestedReady = false; status = null;
         // Consume callback-scoped runtime.lastError without exposing private paths.
         void api.runtime.lastError;
@@ -149,6 +176,11 @@ importScripts("lib/protocol.js");
         state.active.tabId = tab.id; await save();
         await waitLoaded(tab.id);
         const response = await api.tabs.sendMessage(tab.id, { type: "relay.content.prepare", prepare: value });
+        if (response?.type === "blocked") {
+          R.validateFailure(response);
+          if (!R.sameIdentity(response, value)) R.reject("prepare_identity_mismatch", "准备失败回执不属于本次专用页面。");
+          return fail(value, response.code, response.message, false);
+        }
         R.validatePrepared(response);
         if (!R.sameIdentity(response, value) || response.observation.observationSha256 !== value.domContract.observationSha256
             || response.observation.surface !== value.domContract.surface)
@@ -167,6 +199,14 @@ importScripts("lib/protocol.js");
       active.phase = "send_intent"; state.attempts[value.dispatchId].phase = "send_intent"; await save();
       try {
         const response = await api.tabs.sendMessage(active.tabId, { type: "relay.content.commit", commit: value });
+        if (response?.type === "uncertain") {
+          R.exact(response, ["protocol", "type", "dispatchId", "attemptId", "code", "message", "clickStarted"]);
+          if (typeof response.clickStarted !== "boolean") R.reject("invalid_commit_receipt", "缺少本次实际点击阶段回执。");
+          const { clickStarted, ...failure } = response;
+          R.validateFailure(failure);
+          if (!R.sameIdentity(failure, value)) R.reject("commit_identity_mismatch", "提交失败回执不属于本次专用页面。");
+          return fail(value, failure.code, failure.message + (clickStarted ? " 本次已开始点击 Send，送达需核对。" : " 本次尚未点击 Send；原意图保留，不自动重发。"));
+        }
         if (response?.committed !== true) R.reject("send_unknown", "页面没有返回准确的一次提交回执。");
         active.phase = "waiting"; state.attempts[value.dispatchId].phase = "waiting"; await save();
       } catch (error) { return fail(value, error.code || "send_unknown", String(error?.message || "Send 结果不明，不能重发。")); }
@@ -182,10 +222,29 @@ importScripts("lib/protocol.js");
       state.active = { prepare: { protocol: R.PROTOCOL, dispatchId: value.dispatchId, attemptId: value.attemptId }, phase: "stored", observedProfile: "Instant" };
       await save();
     }
+    async function handleRetired(value) {
+      R.validateRetired(value);
+      const prior = state.attempts[value.dispatchId];
+      if (!prior || prior.attemptId !== value.attemptId) R.reject("retirement_identity_mismatch", "结束回执没有匹配的原防重复记录。");
+      if (state.active && !R.sameIdentity(value, state.active.prepare)) R.reject("retirement_identity_mismatch", "结束回执不能释放另一条当前请求。");
+      if (prior.phase === "stored") R.reject("retirement_completed", "已保存的回答不能改为失败结束。");
+      if (prior.phase === "retired" && !state.active) return { duplicate: true };
+      // Retain the original intent/unknown outcome and every tombstone. A
+      // terminal local receipt releases ownership, never authorizes another send.
+      prior.retirement = value.reason;
+      prior.previousPhase = prior.previousPhase || prior.phase;
+      prior.phase = "retired";
+      cancelOwned();
+      state.active = null;
+      await save();
+      lastMessage = "本机已结束原请求；记录与发送意图保留，不自动重发。";
+      return { retired: true };
+    }
     async function handleNative(value) {
       if (value?.type === "prepare") return handlePrepare(value);
       if (value?.type === "commitSend") return handleCommit(value);
       if (value?.type === "stored") return handleStored(value);
+      if (value?.type === "retired") return handleRetired(value);
       if (["blocked", "uncertain"].includes(value?.type)) {
         R.validateFailure(value);
         if (state.active && R.sameIdentity(value, state.active.prepare)) return fail(value, value.code, value.message, true, false);
@@ -231,9 +290,9 @@ importScripts("lib/protocol.js");
       R.reject("invalid_popup_action", "未知扩展控制动作。");
     }
     async function start() { await load; if (state.enabled) connect(false); publish(); }
-    return { start, view, native: value => queue(() => handleNative(value)), page: (value, sender) => queue(() => handlePage(value, sender)),
+    return { start, view, native: receiveNative, page: (value, sender) => queue(() => handlePage(value, sender)),
       popup: action => queue(() => popup(action)), abandon: (identity, code, message) => queue(() => fail(identity, code, message)),
-      subscribe, notice, idle: () => serial, state: () => structuredClone(state) };
+      subscribe, notice, cancelOwned, idle: () => serial, state: () => structuredClone(state) };
   }
   function ownControlUrl(api) { return `chrome-extension://${api.runtime.id}/popup.html`; }
   function ownControlPage(api, sender) {
@@ -249,6 +308,7 @@ importScripts("lib/protocol.js");
     api.runtime.onMessage.addListener((value, sender, reply) => {
       if (value?.type === "relay.popup") {
         if (!ownControlPage(api, sender)) return false;
+        if (value.action === "disable") controller.cancelOwned();
         controller.popup(value.action).then(reply, error => reply({ ...controller.view(), message: String(error?.message || "扩展操作未完成。") }));
         return true;
       }

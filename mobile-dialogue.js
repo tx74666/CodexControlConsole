@@ -23,7 +23,7 @@
     const pointDrafts = Object.fromEntries(Object.entries(saved.pointDrafts || {}).filter(([id, value]) => value && value.ideaId === id && typeof value.pointId === "string" && Number.isSafeInteger(value.sourceRevision) && value.sourceRevision > 0 && ["sourceText", "text"].every(key => typeof value[key] === "string") && ["sourceKind", "kind"].every(key => ["suggestion", "decision"].includes(value[key]))));
     const state = { active: false, generation: 0, reading: false, busy: false, clientId: typeof saved.clientId === "string" ? saved.clientId : uuid(), session: null, detail: null, execution: null, tier: tiers.some(item => item.id === saved.tier) ? saved.tier : "high", drafts: saved.drafts && typeof saved.drafts === "object" ? saved.drafts : {}, editDrafts: saved.editDrafts && typeof saved.editDrafts === "object" ? saved.editDrafts : {}, pending: saved.pending || null, management: null, manageDirty: false, view: "chat", ideas: [], projects: [], idea: null, ideaDetail: null, search: saved.search || "", project: saved.project || "", archived: false, listScroll: Number(saved.listScroll) || 0, chatScroll: 0, messageIds: new Set(), storageFailed: false, composing: false, dirty: false, editorDirty: false, newResults: false, requestSequence: 0 };
     const controllers = new Set();
-    let eligibleAttachments = [];
+    let eligibleAttachments = [], cancelPendingButton = null;
     state.pointDrafts = pointDrafts;
     let pointEditor = null;
     const editComposing = { body: false, execution: false };
@@ -96,8 +96,9 @@
       finally { controllers.delete(controller); window.clearTimeout(timer); }
     }
     function fail(error) { if (!error.auth && !error.cancelled) say(error.name === "AbortError" ? "电脑连接超时，草稿仍在此手机。" : error.message || "暂时无法完成，草稿已保留。", true); }
-    function applyDialogue(data, expectedSession = "") {
+    function applyDialogue(data, expectedSession = "", readCancellation = false) {
       if (!data || data.session?.isCurrent === false || expectedSession && state.session?.id && expectedSession !== state.session.id || data.session?.id === state.session?.id && data.session?.revision < state.session?.revision) return false;
+      const cancellationRecovered = readCancellation && recoverCancellationReceipt(data);
       const previousSession = state.session?.id;
       state.session = data.session || null; state.detail = data.detail || null; state.execution = data.execution || null;
       eligibleAttachments = Array.isArray(data.eligibleAttachments) ? data.eligibleAttachments : [];
@@ -112,7 +113,7 @@
       const key = currentResultKey();
       if (key !== resultKey) { closeResultStream(); resultKey = key; resultCursor = ""; resultPending = null; resultStopped = false; }
       if (/^[a-f0-9]{64}$/.test(data.resultCursor || "")) { if (!resultCursor || !resultStream && !resultPending) resultCursor = data.resultCursor; if (resultPending?.cursor === data.resultCursor) resultPending = null; }
-      tier.value = state.tier; renderConversation(); renderCapability(); renderFiles(); updateControls(); syncResultStream(); return true;
+      tier.value = state.tier; renderConversation(); renderCapability(); renderFiles(); updateControls(); syncResultStream(); if (cancellationRecovered) say("这条未发送请求已结束，原内容与当前草稿保留。"); return true;
     }
     function currentResultKey() { return state.session ? `${state.clientId}:${state.session.id}:${state.session.recordId}` : ""; }
     function canReadResults() { return !offline && !adapter && state.active && state.view === "chat" && !pageClosed && !document.hidden && navigator.onLine !== false && !resultTransition && /^[a-f0-9]{32}$/.test(state.session?.id || "") && /^[a-f0-9]{32}$/.test(state.session?.recordId || ""); }
@@ -181,12 +182,15 @@
         if (message.truncated) row.append(make("p", "此回答来源已截断，全文请到原 Chat 查看。", "dialogue-message-note")); messages.append(row);
       }
       const jobs = Array.isArray(state.detail?.jobs) ? state.detail.jobs : [], inFlight = jobs.filter(item => ["queued", "running", "pending", "claimed", "waiting", "needs_review"].includes(item.status) || ["pending", "claimed", "waiting", "needs_review"].includes(item.appDispatch?.status)).at(-1);
-      pending.replaceChildren(pendingText); pending.hidden = !inFlight;
+      pending.replaceChildren(pendingText); pending.hidden = !inFlight; cancelPendingButton = null;
       if (inFlight) {
         const dispatchStatus = inFlight.appDispatch?.status || inFlight.status;
         const running = ["running", "waiting"].includes(dispatchStatus);
         if (running) pending.prepend(make("span", "", "dialogue-spinner"));
-        pendingText.textContent = dispatchStatus === "needs_review" ? "送达情况需要核对，未重复发送。" : running ? "正在等原聊天回答…" : "消息已保存，自动转发尚未接通。";
+        const target = cancellablePending();
+        const unsent = target?.jobId === inFlight.id;
+        pendingText.textContent = dispatchStatus === "needs_review" ? "送达情况需要核对，未重复发送。" : running ? "正在等原聊天回答…" : unsent ? "尚未发送，等待转发处理" : dispatchStatus === "pending" ? "等待转发处理，发送状态尚未核实。" : "请求已保存，等待处理。";
+        if (unsent) { cancelPendingButton = button("结束这条未发送请求", () => void cancelUnsentRequest(target)); pending.append(cancelPendingButton); }
       }
       context.hidden = !state.session?.ideaId; contextText.textContent = state.session?.ideaId ? `围绕「${state.detail?.sourceTask?.title || state.idea?.title || "这条想法"}」继续聊` : "";
       welcome.hidden = Boolean(values.length || state.session?.ideaId); messages.hidden = !values.length;
@@ -200,7 +204,7 @@
       if (state.view === "chat") renderConversation(); newResult.hidden = state.view !== "chat" || !state.newResults; renderEditReviews(); updateControls(); syncResultStream(); options.onViewChange?.(state.view);
     }
     function currentFiles() { return !fileOwner || fileOwner === state.session?.id ? files : []; }
-    function updateControls() { const empty = !composerInput.value.trim(); send.disabled = state.busy || empty || state.composing; saveOnly.disabled = state.busy || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy; saveEdit.hidden = !state.editorDirty; saveEdit.disabled = state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = state.busy || state.editorDirty; executionDraft.disabled = state.busy || state.editorDirty; carryIdea.disabled = state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = state.busy || Boolean(state.pending); void drainResults(); }
+    function updateControls() { const empty = !composerInput.value.trim(); send.disabled = state.busy || empty || state.composing; saveOnly.disabled = state.busy || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy; if (cancelPendingButton) cancelPendingButton.disabled = state.busy || state.composing || Boolean(state.pending && state.pending.action !== "mobile/dialogue/cancel-pending"); saveEdit.hidden = !state.editorDirty; saveEdit.disabled = state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = state.busy || state.editorDirty; executionDraft.disabled = state.busy || state.editorDirty; carryIdea.disabled = state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = state.busy || Boolean(state.pending); void drainResults(); }
     async function writeFiles(value) { fileWriting++; try { await blobs.put(value); } catch (error) { fileError = true; throw error; } finally { fileWriting--; } }
     async function saveFiles() { try { await writeFiles({ id: filesKey, files, fileOwner, uploadRequest }); fileError = false; } catch (error) { fileError = true; fail(error); throw error; } }
     async function restoreSessionFiles(id) {
@@ -250,6 +254,56 @@
       state.pending = { action, payload: candidate }; if (!persist()) { state.pending = null; throw new Error("操作凭据无法保存在手机，请保留或复制原内容。"); } return candidate;
     }
     function writeRejected(error) { return error.status >= 400 && error.status < 500 && error.status !== 409 || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch", "dispatch_in_progress"].includes(error.data?.code || error.code); }
+    function recoverCancellationReceipt(data) {
+      const operation = state.pending, payload = operation?.payload;
+      if (operation?.action !== "mobile/dialogue/cancel-pending" || !payload
+          || Object.keys(payload).sort().join(",") !== "clientId,dispatchId,expectedRevision,recordId,requestId,sessionId"
+          || payload.clientId !== state.clientId || data.session?.id !== payload.sessionId || data.session?.recordId !== payload.recordId
+          || data.detail?.record?.id !== payload.recordId || !Array.isArray(data.cancellationReceipts) || !Array.isArray(data.detail?.jobs)) return false;
+      const receipt = data.cancellationReceipts.slice(0, 20).find(item => item && typeof item === "object"
+        && Object.keys(item).sort().join(",") === "clientId,dispatchId,expectedRevision,jobId,reason,recordId,requestId,sessionId,status,unsent"
+        && Object.keys(payload).every(key => item[key] === payload[key])
+        && item.status === "failed" && item.reason === "cancelled_before_send" && item.unsent === true
+        && data.detail.jobs.filter(job => job?.id === item.jobId && job.recordId === payload.recordId
+          && job.status === "failed" && job.appDispatch?.id === payload.dispatchId && job.appDispatch.status === "failed").length === 1);
+      if (!receipt) return false;
+      state.pending = null; persist(); return true;
+    }
+    function cancellablePending() {
+      const session = state.session, job = Array.isArray(state.detail?.jobs) ? state.detail.jobs.at(-1) : null, dispatch = job?.appDispatch;
+      if (offline || state.view !== "chat" || !session?.id || !session.recordId || state.detail?.record?.id !== session.recordId
+          || job?.recordId !== session.recordId || job.status !== "waiting" || !job.id || !dispatch?.id
+          || dispatch.status !== "pending" || dispatch.canCancelPending !== true || ![null, ""].includes(dispatch.targetThreadId)
+          || !job.result || typeof job.result !== "object" || Array.isArray(job.result) || Object.keys(job.result).length) return null;
+      return { sessionId: session.id, recordId: session.recordId, dispatchId: dispatch.id, jobId: job.id };
+    }
+    async function cancelUnsentRequest(target) {
+      if (state.busy || state.composing) return;
+      const matches = () => { const current = cancellablePending(); return current && ["sessionId", "recordId", "dispatchId", "jobId"].every(key => current[key] === target[key]); };
+      if (!matches()) { say("请求状态已变化，请刷新当前讨论后核对。", true); return; }
+      state.busy = true; saveLocalDraft(); updateControls();
+      try {
+        if (draftSync) await draftSync;
+        if (!matches()) throw new Error("请求状态已变化，尚未结束；请核对当前讨论。");
+        const candidate = { requestId: uuid(), clientId: state.clientId, sessionId: target.sessionId, recordId: target.recordId,
+          expectedRevision: state.session.revision, dispatchId: target.dispatchId };
+        const payload = durablePayload("mobile/dialogue/cancel-pending", candidate, ["clientId", "sessionId", "recordId", "dispatchId"]);
+        const data = await call("mobile/dialogue/cancel-pending", payload), receipt = data?.cancellation;
+        if (!receipt || Object.keys(receipt).sort().join(",") !== "clientId,dispatchId,expectedRevision,jobId,reason,recordId,sessionId,status,unsent"
+            || receipt.clientId !== payload.clientId || receipt.expectedRevision !== payload.expectedRevision
+            || receipt.sessionId !== payload.sessionId || receipt.recordId !== payload.recordId || receipt.dispatchId !== payload.dispatchId
+            || receipt.jobId !== target.jobId || receipt.status !== "failed" || receipt.reason !== "cancelled_before_send" || receipt.unsent !== true
+            || data.session?.id !== payload.sessionId || data.session?.recordId !== payload.recordId || !applyDialogue(data, payload.sessionId))
+          throw new Error("结束结果尚未核实，原请求编号与草稿保留；请刷新核对。");
+        state.pending = null; persist(); say("这条未发送请求已结束，原内容与当前草稿保留。");
+      } catch (error) {
+        if (error.status >= 400 && error.status < 500 && state.pending?.action === "mobile/dialogue/cancel-pending") { state.pending = null; persist(); }
+        const unknownRequestId = state.pending?.action === "mobile/dialogue/cancel-pending" ? state.pending.payload.requestId : "";
+        if (!error.cancelled && state.session?.id === target.sessionId && state.session?.recordId === target.recordId) await refresh(false);
+        if (unknownRequestId && !state.pending) return;
+        fail(error);
+      } finally { state.busy = false; updateControls(); }
+    }
     async function syncDraft() {
       if (draftSync || !state.active || state.busy || !state.dirty || state.storageFailed || offline) return;
       const intent = composeIntent(), text = intent.text;
@@ -292,7 +346,7 @@
     }
     async function refresh(recoverEvents = true) {
       if (!state.active || state.reading || state.composing && state.view === "chat" || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return false; if (recoverEvents && !resultStream) resultStopped = false; capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
-      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); return applied; } }
+      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); return applied; } }
       catch (error) { fail(error); } finally { state.reading = false; updateControls(); syncResultStream(); }
     }
     async function showIdeas() { if (state.busy) return; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } state.view = "ideas"; say(""); renderView(); await loadIdeas(); requestAnimationFrame(() => window.scrollTo({ top: state.listScroll, behavior: "auto" })); }

@@ -98,7 +98,7 @@
         || !["chrome", "edge"].includes(observation.surface) || !SHA.test(observation.observationSha256))
       reject("prepare_observation_mismatch", "新 Chat、登录、空输入、结束标记或实际 Instant 观测不符。");
     exact(observation.profileDom, ["text", "reasoningEffort"]);
-    if (!["Instant", "Thinking effortInstant", "思考强度Instant"].includes(observation.profileDom.text) || observation.profileDom.reasoningEffort !== "none")
+    if (!["Instant", "Thinking effortInstant", "思考强度Instant", "思考强度即时"].includes(observation.profileDom.text) || observation.profileDom.reasoningEffort !== "none")
       reject("profile_unverified", "缺少实际 Instant 标签与 none effort 属性。");
     return value;
   }
@@ -161,6 +161,12 @@
       reject("invalid_capability_receipt", "DOM 标签不能冒充底层推理能力验收。");
     return value;
   }
+  function validateRetired(value) {
+    exact(value, ["protocol", "type", "dispatchId", "attemptId", "reason"]);
+    common(value, "retired");
+    if (value.reason !== "original_dispatch_failed") reject("retirement_unverified", "本机未确认原请求已经结束。");
+    return value;
+  }
   function isoTime(value) {
     // Accept the UTC ISO forms emitted by both JavaScript and Python. Never
     // turn an invalid calendar date or non-UTC offset into an observation.
@@ -193,5 +199,5 @@
   }
   root.ConsoleChatRelay = Object.freeze({ PROTOCOL, HOST_NAME, EXTENSION_ID, MAX_PROMPT, MAX_ANSWER, RelayError, reject, exact, text, nonempty, common,
     envelope, sameIdentity, validateDom, validatePrepare, validateCommit, validatePrepared, validateFailure,
-    validateCapture, validateAccepted, validateStored, rootUrl, conversationUrl, sha256, messageIds, isoTime, handshake, validateStatus });
+    validateCapture, validateAccepted, validateStored, validateRetired, rootUrl, conversationUrl, sha256, messageIds, isoTime, handshake, validateStatus });
 })(globalThis);

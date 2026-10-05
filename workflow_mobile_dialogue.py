@@ -457,12 +457,21 @@ class MobileDialogueMixin:
             revision = self._revision(db)
         profile = session["requestedProfile"] if session else client["requestedProfile"]
         detail = self.detail(session["recordId"], prefix) if session else None
+        cancellation_receipts = []
+        if detail:
+            with self._db() as db:
+                db.execute("BEGIN")
+                for job in detail["jobs"]:
+                    if isinstance(job.get("appDispatch"), dict):
+                        job["appDispatch"]["canCancelPending"] = self._mobile_can_cancel_pending(db, session, job)
+                cancellation_receipts = self._mobile_pending_cancellation_receipts(db, session)
         eligible_ids = set(session.get("eligibleAttachmentIds", [])) | set(session.get("uploadedAttachmentIds", [])) if session else set()
         return {"session": session, "detail": detail,
             "eligibleAttachments": [item for item in detail["attachments"] if item["id"] in eligible_ids] if detail else [],
             "preferences": {"requestedProfile": client["requestedProfile"]}, "execution": self._mobile_execution(profile, observation),
             "resultCursor": result_state["cursor"] if result_state else None,
             "resultStatus": result_state["status"] if result_state else "idle",
+            "cancellationReceipts": cancellation_receipts,
             "revision": revision, **extra}
 
     def mobile_dialogue_get(self, query="", prefix="/api/workflow"):

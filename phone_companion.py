@@ -460,6 +460,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 elif action in {"create", "message", "submit", "discuss", "transcribe", "retry", "task-record", "app-work", "app-work/end",
                                 "incubator/create", "incubator/update", "incubator/publish", "incubator/refinement/pause", "conversations/request",
                                 "mobile/dialogue/open", "mobile/dialogue/draft", "mobile/dialogue/clear", "mobile/dialogue/send",
+                                "mobile/dialogue/cancel-pending",
                                 "mobile/dialogue/save", "mobile/dialogue/remember", "mobile/idea/update", "mobile/idea/archive", "mobile/idea/split", "mobile/idea/merge", "mobile/idea/import-status"}:
                     # This read-only lookup wraps the exact frozen manifest in
                     # JSON, whose escaping can double its bounded 80 KB text.

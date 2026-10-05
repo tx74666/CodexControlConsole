@@ -118,6 +118,7 @@ def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=Fals
                   "conversations/request": "conversations_request"}
     operations.update({"mobile/dialogue/open": "mobile_dialogue_open", "mobile/dialogue/draft": "mobile_dialogue_draft",
         "mobile/dialogue/clear": "mobile_dialogue_clear", "mobile/dialogue/send": "mobile_dialogue_send",
+        "mobile/dialogue/cancel-pending": "mobile_dialogue_cancel_pending",
         "mobile/dialogue/save": "mobile_dialogue_save", "mobile/dialogue/remember": "mobile_dialogue_remember",
         "mobile/idea/update": "mobile_idea_update", "mobile/idea/archive": "mobile_idea_archive",
         "mobile/idea/split": "mobile_idea_split", "mobile/idea/merge": "mobile_idea_merge",
