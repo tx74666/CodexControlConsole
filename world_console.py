@@ -59,6 +59,7 @@ from phone_device_store import PhoneDeviceStore
 from phone_discovery import DiscoveryAnnouncer
 from transfer_store import TransferStore, TransferError, read_transfer_request, send_transfer_attachment
 from workflow_service import WorkflowError, WorkflowService
+from workflow_chat_relay import ChatRelayBroker
 from workflow_models import WorkflowModels, WorkflowModelError
 from workflow_http import workflow_get, workflow_post, workflow_upload_dialogue
 from phone_offline import build_phone_export
@@ -399,6 +400,8 @@ WORKFLOW_SERVICE = WorkflowService(
                "allowGeneratedScripts": False}],
 )
 PHONE_COMPANION.workflow_service = WORKFLOW_SERVICE
+CHAT_RELAY_BROKER = ChatRelayBroker(WORKFLOW_SERVICE)
+WORKFLOW_SERVICE._chat_relay_broker = CHAT_RELAY_BROKER
 
 WORLD_CACHE = CACHE_DIR / "world.geojson"
 TRANSLATION_CACHE = CACHE_DIR / "translations.json"
@@ -1770,6 +1773,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/console/config":
             self.send_json(console_edition_payload())
             return
+        if parsed.path == "/api/console/chat-relay/status":
+            if not self.require_local_request():
+                return
+            self.send_json(CHAT_RELAY_BROKER.public_status())
+            return
         if parsed.path == "/api/console/package-check":
             if not self.require_local_request():
                 return
@@ -2351,6 +2359,23 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if not self.require_local_request():
                     return
                 self.send_json(CONSOLE_UPDATE.install())
+                return
+            if parsed.path == "/api/console/chat-relay/start":
+                if not self.require_local_request():
+                    return
+                if parsed.query or not isinstance(payload, dict) or set(payload) != {"requestId"}:
+                    raise ValueError("转发启动请求无效。")
+                if not isinstance(payload["requestId"], str) or str(uuid.UUID(payload["requestId"])) != payload["requestId"]:
+                    raise ValueError("转发启动请求编号无效。")
+                # This endpoint can only use an approval already stored locally;
+                # it cannot register a host or grant browser permissions.
+                try:
+                    CHAT_RELAY_BROKER.start()
+                except (OSError, sqlite3.Error):
+                    CHAT_RELAY_BROKER.close()
+                    self.send_json({"error": "本机转发入口不可用；审批与待发送内容保留。", "code": "relay_start_unavailable"}, status=503)
+                    return
+                self.send_json(CHAT_RELAY_BROKER.public_status())
                 return
             if parsed.path == "/api/console/update/open":
                 if not self.require_local_request():
@@ -12094,12 +12119,19 @@ def main():
             })
             server_thread.start()
             WORKFLOW_SERVICE.start()
+            try:
+                CHAT_RELAY_BROKER.start()
+            except (OSError, ValueError, sqlite3.Error):
+                # A missing or invalid opt-in transport never prevents Console
+                # from starting and never grants browser access on its own.
+                CHAT_RELAY_BROKER.close()
             threading.Thread(target=PHONE_COMPANION.restore, name="console-phone-startup-restore", daemon=True).start()
             # Keep the gate until the browser window is registered; the pending
             # record also suppresses duplicates during a slow Edge cold start.
             if not args.no_browser:
                 open_console_window(url, replace=replace_window)
         except BaseException:
+            CHAT_RELAY_BROKER.close()
             if server_thread.is_alive():
                 server.shutdown()
             CONSOLE_WINDOW_SESSIONS.stop()
@@ -12122,6 +12154,7 @@ def main():
     except KeyboardInterrupt:
         server.shutdown()
     finally:
+        CHAT_RELAY_BROKER.close()
         WORKFLOW_SERVICE.shutdown()
         PHONE_COMPANION.shutdown()
         CONSOLE_WINDOW_SESSIONS.stop()

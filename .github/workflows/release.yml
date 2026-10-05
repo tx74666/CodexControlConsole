@@ -150,7 +150,7 @@ jobs:
           ./tools/check-authenticode-signatures.ps1 `
             -Root "build\console-installer\dist\Codex Console" `
             -Extensions @("exe", "dll", "pyd") `
-            -RequiredRelativePaths @("Codex Console.exe", "_internal\tools\NativeFileDrag.exe")
+            -RequiredRelativePaths @("Codex Console.exe", "_internal\tools\NativeFileDrag.exe", "_internal\tools\Codex Chat Relay.exe")
 
       - name: Build Windows x64 Setup
         shell: pwsh
@@ -164,6 +164,7 @@ jobs:
         shell: pwsh
         run: |
           python tools/check-package-resources.py
+          python tools/check-chat-relay-package.py
           python tools/check-clean-install-media.py
           python tools/check-package-footprint.py
 
@@ -210,6 +211,7 @@ jobs:
           ./tools/check-defender-artifacts.ps1 -Files @(
             "build\console-installer\dist\Codex Console\Codex Console.exe",
             "build\console-installer\dist\Codex Console\_internal\tools\NativeFileDrag.exe",
+            "build\console-installer\dist\Codex Console\_internal\tools\Codex Chat Relay.exe",
             "dist\CodexControlConsole-Setup-x64.exe",
             "dist\CodexControlConsole-Windows-x64.zip"
           )

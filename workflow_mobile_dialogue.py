@@ -199,11 +199,21 @@ class MobileDialogueMixin:
         session["requestedProfile"] = profile
         return text, context
 
-    @staticmethod
-    def _mobile_execution(profile):
-        return {"requestedProfile": profile, "actualReceipt": {"verified": False, "actualProfile": None,
+    def _mobile_execution(self, profile):
+        execution = {"requestedProfile": profile, "actualReceipt": {"verified": False, "actualProfile": None,
             "status": "unverified", "source": None}, "supportedProfiles": [], "capability": "unverified",
             "relayStatus": "not_connected", "message": "已保留所选档位；当前普通 Chat 通道尚未验证档位切换，事件转发器尚未接通。"}
+        broker = getattr(self, "_chat_relay_broker", None)
+        if broker is not None:
+            status = broker.public_status()
+            if status.get("clientReady") is True:
+                execution.update(relayStatus="connected", message="普通 Chat 转发已连接；实际模型与推理档位仍待回执核实。")
+                if profile != "fast":
+                    execution["message"] = "转发器已连接；所选高／Pro档位尚未核实，本次不会降档发送。"
+                if status.get("message") in {"older_queue_head_requires_user_review", "unsupported_queue_head_requires_user_review",
+                                              "frozen_target_requires_user_review", "prior_send_evidence_requires_user_review"}:
+                    execution["message"] = "前一条请求需要核对，当前消息尚未发送；内容与所选档位保留。"
+        return execution
 
     def _mobile_state(self, client_id, prefix, session_id=None, **extra):
         with self._db() as db:

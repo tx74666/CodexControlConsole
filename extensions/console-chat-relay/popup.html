@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Console Chat 转发</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header><span class="mark" aria-hidden="true">C</span><div><h1>Console Chat 转发</h1><p>专用页面 · 已确认请求</p></div></header>
+  <section class="status" aria-live="polite"><span id="status-dot"></span><div><strong id="status-label">默认停用</strong><p id="status-detail">正在读取扩展状态。</p></div></section>
+  <dl><dt>浏览器档位</dt><dd id="profile">尚未核验</dd><dt>当前请求</dt><dd id="attempt">无</dd></dl>
+  <section class="permission"><h2>启用范围</h2><p>只读取并操作本扩展创建的专用 ChatGPT 页面，接收本机 Console 已确认的一条请求，并回传该请求的实际回答。</p><p>不读取登录凭据、其他聊天或普通草稿。档位不符、页面结构变化及送达不明时停止，不自动重发。</p></section>
+  <p id="approval" class="note">准备包没有获得生产启用批准，也没有完成真实 Chat 往返验收。</p>
+  <div class="actions"><button id="refresh" type="button">查看连接</button><button id="enable" type="button" disabled>启用</button><button id="disable" type="button">停用</button></div>
+  <p id="error" role="alert" hidden></p>
+  <script src="popup.js"></script>
+</body></html>

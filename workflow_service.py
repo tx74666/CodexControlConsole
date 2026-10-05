@@ -86,6 +86,7 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
         self.models, self.callbacks = models, callbacks or {}
         self._lock, self._wake, self._stop = threading.RLock(), threading.Event(), threading.Event()
         self._thread, self._process = None, None
+        self._dispatch_commit_notifier = None
         with self._db() as db:
             if self._setting(db, "computer") is None:
                 self._set_setting(db, "computer", {"id": computer_id or uuid.uuid4().hex, "name": computer_name or socket.gethostname()})
@@ -149,8 +150,28 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
                         error TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
                     CREATE INDEX IF NOT EXISTS conversation_request_status ON conversation_requests(status,created_at);
                 """)
+                notifier = self._dispatch_commit_notifier
+                before_dispatch_rowid = db.execute("SELECT COALESCE(MAX(rowid),0) FROM idea_dispatches").fetchone()[0] if notifier else None
+                before_dispatch_open = {row[0] for row in db.execute("SELECT id FROM idea_dispatches WHERE status IN ('claimed','waiting','needs_review')")} if notifier else set()
                 yield db
+                committed_dispatches = [row[0] for row in db.execute(
+                    "SELECT id FROM idea_dispatches WHERE rowid>? AND status='pending' AND user_confirmed_at<>''", (before_dispatch_rowid,))] if notifier else []
+                released_dispatches = [row[0] for row in db.execute(
+                    "SELECT id FROM idea_dispatches WHERE id IN (" + ",".join("?" for _ in before_dispatch_open) + ") AND status IN ('completed','failed')",
+                    tuple(before_dispatch_open))] if notifier and before_dispatch_open else []
                 db.commit()
+                if notifier and committed_dispatches:
+                    # Enqueue only after durable commit. The opt-in broker owns delivery;
+                    # callback failure cannot turn an accepted request into a retry.
+                    try:
+                        notifier.notify_committed(committed_dispatches)
+                    except Exception:
+                        pass
+                if notifier and released_dispatches:
+                    try:
+                        notifier.notify_released(released_dispatches)
+                    except Exception:
+                        pass
             except BaseException:
                 db.rollback()
                 raise

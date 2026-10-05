@@ -85,6 +85,7 @@ $PythonSources = @(
   "workflow_service.py",
   "workflow_mobile_dialogue.py",
   "workflow_mobile_handoff.py",
+  "workflow_chat_relay.py",
   "workflow_script_proposals.py",
   "workflow_native_work.py",
   "workflow_process.py",
@@ -100,7 +101,10 @@ $PythonSources = @(
   "world_console.py",
   "world_update.py",
   "tools/thread-cache-import.py",
-  "tools/build-update-manifest.py"
+  "tools/build-update-manifest.py",
+  "tools/console-chat-relay-host.py",
+  "tools/prepare-console-chat-relay.py",
+  "tools/check-chat-relay-package.py"
 )
 
 $PythonChecks = @(
@@ -136,6 +140,9 @@ $PythonChecks = @(
   "tools/check-workflow.py",
   "tools/check-mobile-dialogue.py",
   "tools/check-mobile-dialogue-http.py",
+  "tools/check-console-chat-relay.py",
+  "tools/check-console-chat-relay-integration.py",
+  "tools/check-console-chat-relay-preparation.py",
   "tools/check-mobile-handoff.py",
   "tools/check-workflow-app-bridge.py",
   "tools/check-chat-capture.py",
@@ -234,6 +241,7 @@ try {
   Invoke-QualityStep "Mobile JavaScript syntax" { & $Node --check mobile.js }
   Invoke-QualityStep "Mobile dialogue syntax" { & $Node --check mobile-dialogue.js }
   Invoke-QualityStep "Mobile dialogue behavior" { & $Node tools/check-mobile-dialogue-ui.mjs }
+  Invoke-QualityStep "Optional ordinary Chat relay protocol and permissions" { & $Node extensions/console-chat-relay/tests/check-relay.mjs }
   Invoke-QualityStep "Mobile idea handoff syntax" { & $Node --check mobile-handoff.js }
   Invoke-QualityStep "Mobile idea handoff behavior" { & $Node tools/check-mobile-handoff-ui.mjs }
   Invoke-QualityStep "Mobile companion UI" { & $Node tools/check-mobile-ui.mjs }

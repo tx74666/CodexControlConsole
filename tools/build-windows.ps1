@@ -220,6 +220,22 @@ if ($BuildApplication) {
     throw "NativeFileDrag.exe could not be compiled from source."
   }
 
+  # Native Messaging requires real stdin/stdout; the windowed Console executable
+  # cannot serve this role. Bundling this host never registers or enables it.
+  $ChatRelayHostExe = Join-Path $GeneratedToolsDir "Codex Chat Relay.exe"
+  if ($InstallMode -ne "store") {
+    $RelayBuildRoot = Join-Path $BuildRoot "chat-relay-host"
+    & $Python -m PyInstaller --noconfirm --clean --noupx --onefile --console `
+      --name "Codex Chat Relay" --distpath $GeneratedToolsDir `
+      --workpath (Join-Path $RelayBuildRoot "work") `
+      --specpath (Join-Path $RelayBuildRoot "spec") `
+      --paths $ProjectRoot --exclude-module tkinter `
+      (Join-Path $ProjectRoot "tools\console-chat-relay-host.py")
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ChatRelayHostExe -PathType Leaf)) {
+      throw "The optional Chat relay Native Messaging host could not be compiled."
+    }
+  }
+
   $PublicWallpaperFiles = @(
   "README.txt",
   "SOURCES.md",
@@ -289,6 +305,8 @@ if ($BuildApplication) {
 
   if ($InstallMode -ne "store") {
     $DataItems += @{ Source = "public-music"; Destination = "music" }
+    $DataItems += @{ Source = $ChatRelayHostExe; Destination = "tools" }
+    $DataItems += @{ Source = "extensions\console-chat-relay"; Destination = "extensions" }
   }
 
   foreach ($wallpaper in $PublicWallpaperFiles) {
