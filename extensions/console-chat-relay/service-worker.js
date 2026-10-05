@@ -21,7 +21,9 @@ importScripts("lib/protocol.js");
     const surface = [...surfaces][0];
     return ua && uaSurface !== surface ? null : surface;
   }
-  function createController(api, resolveBrowserSurface = () => detectBrowserSurface(root.navigator), timers = { setTimeout, clearTimeout }) {
+  function createController(api, resolveBrowserSurface = () => detectBrowserSurface(root.navigator), timers = {
+    setTimeout: (...args) => root.setTimeout(...args), clearTimeout: (...args) => root.clearTimeout(...args)
+  }) {
     let state = { enabled: false, attempts: {}, active: null }, native = null, status = null, nativeReady = false, requestedReady = false;
     let readinessWait = null, preparationGuard = null;
     let lastMessage = "准备包默认停用；尚无生产启用批准或浏览器页面实机验收。", serial = Promise.resolve(), reconnectUsed = false;

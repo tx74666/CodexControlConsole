@@ -402,7 +402,8 @@
   root.ConsoleChatRelayContent = Object.freeze({ createController, CONTENT_PREFIX });
   if (root.chrome?.runtime?.onMessage && root.document && root.location && root.MutationObserver) {
     const controller = createController({ chrome: root.chrome, document: root.document, location: root.location,
-      MutationObserver: root.MutationObserver, InputEvent: root.InputEvent, KeyboardEvent: root.KeyboardEvent, now: () => Date.now(), setTimeout: root.setTimeout, clearTimeout: root.clearTimeout });
+      MutationObserver: root.MutationObserver, InputEvent: root.InputEvent, KeyboardEvent: root.KeyboardEvent, now: () => Date.now(),
+      setTimeout: (...args) => root.setTimeout(...args), clearTimeout: (...args) => root.clearTimeout(...args) });
     root.chrome.runtime.onMessage.addListener((value, sender, reply) => {
       if (sender?.id !== R.EXTENSION_ID || !["relay.content.readiness", "relay.content.prepare", "relay.content.commit", "relay.content.cancel"].includes(value?.type)) return false;
       if (value.type === "relay.content.cancel") {

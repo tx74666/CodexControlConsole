@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Codex Console · 普通 Chat 转发",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx0L0p7KU31uo5DzXYDO+roX0zkf/s9O8qpIl/U7lU6xKupcv5lFy7BbTS2gZl7sw3AD3S5kTCan7dwlF2Q7ur9aemycSNoXJ13GA18Ic04oh+Q7tbM2VVosP8SQIYjKmr9YelToE/Htbxbqd9jeB3RPF56hW3hBzyrsb4Ur9gB6WsBfA4Drcu4dHPxgBjc2k4Q4csBcH2Ae92+92kjb/KcVerHytL+vbDhwkjFvGaIDJg4gG5tHp1wYpGQ2iOjNSiQoIub/nj07G8BcVCCLK4o5WohmT1hTrpjPeH5ml8xEI+KdwU86goKaQBiWqXygmg3rFpO+LqVr/6Y5bpqLPCQIDAQAB",
   "description": "默认停用。仅在明确批准后，使用专用 ChatGPT 页面处理 Console 已确认请求。",
   "permissions": ["nativeMessaging", "storage"],

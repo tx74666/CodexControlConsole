@@ -1476,4 +1476,133 @@ await test("matching cancel timeout or page stop cleans picker waits and late st
     assert.equal(f.timers.size, 0); assert.equal(f.clicks(), 0); assert.equal(f.composer.textContent, ""); assert.equal(f.storage.writes.length, 0);
   }
 });
+function browserBrandTimers(isolated) {
+  const store = { timers: new Map(), next: 0, scheduled: 0, cleared: 0, illegal: 0 };
+  isolated.__brandTimerStore = store;
+  vm.runInContext(`((owner, store) => {
+    owner.setTimeout = function (callback, timeout, ...args) {
+      if (this !== owner) { store.illegal++; throw new TypeError("Illegal invocation"); }
+      const id = ++store.next; store.scheduled++;
+      store.timers.set(id, { fn: () => callback(...args), timeout }); return id;
+    };
+    owner.clearTimeout = function (id) {
+      if (this !== owner) { store.illegal++; throw new TypeError("Illegal invocation"); }
+      store.cleared++; store.timers.delete(id);
+    };
+  })(globalThis, __brandTimerStore);`, isolated);
+  return store;
+}
+async function brandSettled(promise, label) {
+  // A test watchdog prevents a broken clearTimeout from leaving this fixture
+  // hung. This host timer is never passed to the production controller.
+  let watchdog;
+  try { return await Promise.race([promise, new Promise((_, reject) => {
+    watchdog = setTimeout(() => reject(new Error(label)), 2000);
+  })]); }
+  finally { clearTimeout(watchdog); }
+}
+async function brandTurnUntil(predicate, label) {
+  for (let step = 0; step < 32 && !predicate(); step++) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(predicate(), label);
+}
+async function brandContentBootstrap(f) {
+  f.env.chrome.runtime.onMessage = new Event();
+  const isolated = vm.createContext({ ...f.env, crypto: webcrypto, TextEncoder, URL, Date, Uint8Array, Set, Error,
+    structuredClone, addEventListener() {} });
+  const timing = browserBrandTimers(isolated);
+  vm.runInContext(await readFile(new URL("lib/protocol.js", directory), "utf8"), isolated);
+  // The real bootstrap creates its own env. Never call createController with
+  // a fixture timing object, which would bypass the failing browser binding.
+  vm.runInContext(await readFile(new URL("content-script.js", directory), "utf8"), isolated);
+  const route = [...f.env.chrome.runtime.onMessage.listeners][0]; assert.equal(typeof route, "function");
+  return { isolated, timing, call(value) { return new Promise(resolve => { route(value, { id: relay.EXTENSION_ID }, resolve); }); } };
+}
+async function brandWorkerRuntime() {
+  // Reuse only API stubs; its ordinary fixture controller/timing are unused.
+  const f = workerFixture({ consoleChatRelayV1: { enabled: true, attempts: {}, active: null } });
+  Object.assign(f.api.runtime, { onMessage: new Event(), onConnect: new Event(), onInstalled: new Event() });
+  f.api.tabs.onRemoved = new Event();
+  const isolated = vm.createContext({ crypto: webcrypto, TextEncoder, URL, Date, Uint8Array, Set, Error,
+    structuredClone, importScripts() {} });
+  const timing = browserBrandTimers(isolated);
+  vm.runInContext(await readFile(new URL("lib/protocol.js", directory), "utf8"), isolated);
+  vm.runInContext(await readFile(new URL("service-worker.js", directory), "utf8"), isolated);
+  // registerRuntime is the production entry point and selects the default
+  // timers internally. No third createController argument is supplied here.
+  const controller = isolated.ConsoleChatRelayWorker.registerRuntime(f.api, () => "chrome");
+  await controller.start(); f.ports.at(-1).onMessage.emit(f.status(true));
+  return { ...f, isolated, timing, controller };
+}
+await test("browser timer brands reject extracted functions called with ordinary object receivers", () => {
+  const isolated = vm.createContext({}), timing = browserBrandTimers(isolated);
+  for (const expression of ["({ setTimeout }).setTimeout(() => {}, 1)", "({ clearTimeout }).clearTimeout(1)"])
+    assert.throws(() => vm.runInContext(expression, isolated), /Illegal invocation/);
+  assert.equal(timing.illegal, 2); assert.equal(timing.scheduled, 0); assert.equal(timing.cleared, 0); assert.equal(timing.timers.size, 0);
+  const identifier = vm.runInContext("globalThis.setTimeout(() => {}, 1)", isolated);
+  isolated.__timerToClear = identifier; vm.runInContext("globalThis.clearTimeout(__timerToClear)", isolated);
+  assert.equal(timing.scheduled, 1); assert.equal(timing.cleared, 1); assert.equal(timing.timers.size, 0);
+});
+await test("actual content bootstrap binds Window timers for readiness and all Instant preparation waits", async () => {
+  const f = pickerFixture(), listener = await brandContentBootstrap(f), request = readinessFor();
+  const ready = await brandSettled(listener.call({ type: "relay.content.readiness", readiness: request }), "Window readiness did not settle");
+  relay.validatePageReady(ready, request);
+  const prepared = await brandSettled(listener.call({ type: "relay.content.prepare", prepare }), "Window prepare did not settle");
+  relay.validatePrepared(prepared);
+  assert.deepEqual(f.seen, [...pickerRows].reverse()); assert.equal(f.keys.length, 8); assert.equal(f.profileClicks(), 2);
+  assert.equal(listener.timing.scheduled, 7); assert.equal(listener.timing.cleared, 7); assert.equal(listener.timing.illegal, 0);
+  assert.equal(listener.timing.timers.size, 0); assert.equal(f.timers.size, 0);
+  assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
+});
+await test("actual content bootstrap clears branded Window timers on cancellation and DOM rejection", async () => {
+  for (const trigger of ["cancel", "error"]) {
+    const f = contentFixture(), composer = f.items.get("#composer"); f.items.set("#composer", []);
+    const listener = await brandContentBootstrap(f);
+    const pending = listener.call({ type: "relay.content.readiness", readiness: readinessFor() });
+    await brandTurnUntil(() => listener.timing.timers.size === 1, "Window readonly wait never registered its root timer");
+    if (trigger === "cancel") {
+      const cancelled = await listener.call({ type: "relay.content.cancel", cancel: relay.envelope("cancel", prepare) });
+      assert.equal(cancelled.cancelled, true);
+    } else { f.composer.textContent = "用户在等待期间写下的草稿"; f.items.set("#composer", composer); f.mutateNow(); }
+    const response = await brandSettled(pending, "Window cancellation/error did not settle"); relay.validateFailure(response);
+    assert.equal(response.code, trigger === "cancel" ? "readiness_cancelled" : "composer_changed");
+    assert.equal(listener.timing.scheduled, 1); assert.equal(listener.timing.cleared, 1); assert.equal(listener.timing.illegal, 0);
+    assert.equal(listener.timing.timers.size, 0); assert.equal(f.timers.size, 0); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
+    f.items.set("#composer", composer); f.mutateNow(); assert.equal(f.clicks(), 0);
+    if (trigger === "error") assert.equal(f.composer.textContent, "用户在等待期间写下的草稿");
+  }
+});
+await test("production worker runtime uses branded WorkerGlobalScope default timers before prepared without Send", async () => {
+  const f = await brandWorkerRuntime();
+  await brandSettled(f.controller.native(prepare), "Worker preparation did not settle");
+  assert.equal(f.controller.state().active.phase, "prepared");
+  assert.equal(f.ports[0].sent.filter(value => value.type === "prepared").length, 1);
+  assert.equal(f.calls.filter(value => value.value.type === "relay.content.readiness").length, 1);
+  assert.equal(f.calls.filter(value => value.value.type === "relay.content.prepare").length, 1);
+  assert.equal(f.calls.filter(value => value.value.type === "relay.content.commit").length, 0);
+  assert.equal(f.timing.scheduled, 1); assert.equal(f.timing.cleared, 1); assert.equal(f.timing.illegal, 0);
+  assert.equal(f.timing.timers.size, 0); assert.equal(f.timers.size, 0); assert.equal(f.updates.listeners.size, 0);
+});
+await test("production worker default timers clear on readiness cancellation or error and never deliver prepare", async () => {
+  for (const trigger of ["cancel", "error"]) {
+    const f = await brandWorkerRuntime(), send = f.api.tabs.sendMessage.bind(f.api.tabs); let release;
+    f.api.tabs.sendMessage = (id, value, options) => {
+      if (value.type !== "relay.content.readiness") return send(id, value, options);
+      f.calls.push({ id, value: clone(value), options: clone(options) });
+      if (trigger === "error") return Promise.reject(new Error("fixture readonly DOM rejected"));
+      return new Promise(resolve => { release = resolve; });
+    };
+    const pending = f.controller.native(prepare);
+    if (trigger === "cancel") {
+      await brandTurnUntil(() => typeof release === "function", "Worker readonly probe was never reached");
+      assert.equal(f.timing.timers.size, 1); f.controller.cancelOwned();
+    }
+    await brandSettled(pending, "Worker cancellation/error did not settle");
+    if (release) { release(pageReadyFor(prepare)); await f.controller.idle(); }
+    assert.equal(f.timing.scheduled, 1); assert.equal(f.timing.cleared, 1); assert.equal(f.timing.illegal, 0);
+    assert.equal(f.timing.timers.size, 0); assert.equal(f.timers.size, 0); assert.equal(f.updates.listeners.size, 0);
+    assert.equal(f.calls.filter(value => value.value.type === "relay.content.prepare").length, 0);
+    assert.equal(f.calls.filter(value => value.value.type === "relay.content.commit").length, 0);
+    assert.equal(f.ports[0].sent.some(value => value.type === "prepared" || value.type === "sending"), false);
+  }
+});
 console.log(`PASS ${tests} isolated relay checks; no real Chat/browser or production state accessed.`);
