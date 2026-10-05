@@ -1,6 +1,6 @@
 # Codex Console Privacy Notice
 
-Last updated: October 3, 2026
+Last updated: October 6, 2026
 
 Codex Console is a local Windows control center. Music, wallpapers, desktop layouts, Blender project settings, and other workspace data stay on the device unless the user explicitly opens or synchronizes content with a third-party service.
 
@@ -26,6 +26,10 @@ The feedback service transforms installation identifiers and network addresses i
 Codex Console does not sell personal information, show advertising, or use cross-app tracking. Users should avoid including passwords, account tokens, private documents, or unrelated personal information in reports or screenshots.
 
 ## Third-party services
+
+The optional Sign in with ChatGPT connection sends only a newly confirmed Console discussion's frozen text, context from its originating record, and explicitly selected images to OpenAI's official Responses service. It uses the authorized account's shared plan quota according to OpenAI's usage and credits settings. Existing ChatGPT chats and memory are not imported. The request uses `store: false`; this flag does not replace OpenAI's applicable service and privacy terms. Answers and completion receipts are saved locally to the originating Console record.
+
+The formal connection's access and refresh credentials are protected with Windows current-user DPAPI and are not exposed to the paired phone, source repository, GitHub release, or logs. Account authorization is performed by the user on OpenAI's official page. Disconnecting stops new requests and attempts to revoke that application connection; when remote revocation cannot be verified, Console reports it rather than claiming the remote grant has been removed. Old discussions, images and drafts are retained. No browser relay or subscription request is issued just because a draft is saved or the connection status is viewed.
 
 Features that open GitHub, GitHub Desktop, Blender, Steamworks, Microsoft Store, or other external tools are governed by those services' own privacy terms. Codex Console does not receive those account passwords.
 

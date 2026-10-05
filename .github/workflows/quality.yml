@@ -45,6 +45,8 @@ jobs:
           qrcode==8.2
           ifaddr==0.2.0
           zeroconf==0.151.5
+          PyJWT[crypto]==2.15.1
+          cryptography==50.0.1
 
       - name: Run shared quality checks
         shell: pwsh

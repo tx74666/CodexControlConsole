@@ -60,6 +60,7 @@ from phone_discovery import DiscoveryAnnouncer
 from transfer_store import TransferStore, TransferError, read_transfer_request, send_transfer_attachment
 from workflow_service import WorkflowError, WorkflowService
 from workflow_chat_relay import ChatRelayBroker
+from workflow_subscription import SubscriptionBroker
 from workflow_models import WorkflowModels, WorkflowModelError
 from workflow_http import workflow_get, workflow_post, workflow_upload_dialogue, send_workflow_events
 from phone_offline import build_phone_export
@@ -402,6 +403,8 @@ WORKFLOW_SERVICE = WorkflowService(
 PHONE_COMPANION.workflow_service = WORKFLOW_SERVICE
 CHAT_RELAY_BROKER = ChatRelayBroker(WORKFLOW_SERVICE)
 WORKFLOW_SERVICE._chat_relay_broker = CHAT_RELAY_BROKER
+SUBSCRIPTION_BROKER = SubscriptionBroker(WORKFLOW_SERVICE)
+WORKFLOW_SERVICE.subscription = SUBSCRIPTION_BROKER
 
 WORLD_CACHE = CACHE_DIR / "world.geojson"
 TRANSLATION_CACHE = CACHE_DIR / "translations.json"
@@ -1792,11 +1795,43 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             except (ImportError, OSError):
                 yt_dlp_version = ""
                 yt_dlp_ready = False
+            jwt_version = ""
+            cryptography_version = ""
+            subscription_modules_ready = False
+            subscription_runtime_ready = False
+            try:
+                import jwt
+                import cryptography
+                from cryptography.hazmat.primitives import hashes
+                import workflow_subscription
+                import workflow_subscription_delivery
+                import workflow_subscription_stream
+
+                jwt_version = str(getattr(jwt, "__version__", ""))
+                cryptography_version = str(getattr(cryptography, "__version__", ""))
+                subscription_modules_ready = all((
+                    callable(getattr(workflow_subscription, "SubscriptionBroker", None)),
+                    callable(getattr(workflow_subscription_delivery, "SubscriptionDeliveryMixin", None)),
+                    callable(getattr(workflow_subscription_stream, "run_response", None)),
+                ))
+                digest = hashes.Hash(hashes.SHA256())
+                digest.update(b"Codex Console packaged runtime check")
+                subscription_runtime_ready = (
+                    subscription_modules_ready
+                    and "RS256" in jwt.algorithms.get_default_algorithms()
+                    and len(digest.finalize()) == 32
+                )
+            except (ImportError, OSError, ValueError, RuntimeError):
+                subscription_runtime_ready = False
             self.send_json({
-                "ok": yt_dlp_ready,
+                "ok": yt_dlp_ready and (subscription_runtime_ready or not getattr(sys, "frozen", False)),
                 "version": APP_VERSION,
                 "ytDlp": yt_dlp_ready,
                 "ytDlpVersion": yt_dlp_version,
+                "subscriptionRuntime": subscription_runtime_ready,
+                "subscriptionModules": subscription_modules_ready,
+                "jwtVersion": jwt_version,
+                "cryptographyVersion": cryptography_version,
             })
             return
         if parsed.path == "/api/feedback/config":
@@ -12122,6 +12157,7 @@ def main():
             })
             server_thread.start()
             WORKFLOW_SERVICE.start()
+            SUBSCRIPTION_BROKER.start()
             try:
                 CHAT_RELAY_BROKER.start()
             except (OSError, ValueError, sqlite3.Error):
@@ -12134,6 +12170,7 @@ def main():
             if not args.no_browser:
                 open_console_window(url, replace=replace_window)
         except BaseException:
+            SUBSCRIPTION_BROKER.close()
             CHAT_RELAY_BROKER.close()
             if server_thread.is_alive():
                 server.shutdown()
@@ -12157,6 +12194,7 @@ def main():
     except KeyboardInterrupt:
         server.shutdown()
     finally:
+        SUBSCRIPTION_BROKER.close()
         CHAT_RELAY_BROKER.close()
         WORKFLOW_SERVICE.shutdown()
         PHONE_COMPANION.shutdown()

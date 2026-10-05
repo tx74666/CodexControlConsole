@@ -3,6 +3,7 @@
   "use strict";
   const PROTOCOL = "console_chat_relay/v1";
   const MAX_PROMPT = 120000, MAX_ANSWER = 20000;
+  const IMAGE_CHUNK_BYTES = 128 * 1024, MAX_IMAGE_BYTES = 8 * 1024 * 1024, MAX_IMAGE_TOTAL = 24 * 1024 * 1024;
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   const DISPATCH = /^[0-9a-f]{32}$/, SHA = /^[0-9a-f]{64}$/;
   const PROFILE = new Set(["fast", "high", "pro"]);
@@ -58,7 +59,9 @@
     return value;
   }
   function validatePrepare(value) {
-    exact(value, ["protocol", "type", "dispatchId", "attemptId", "prompt", "promptSha256", "requestedProfile", "target", "domContract"]);
+    const keys = ["protocol", "type", "dispatchId", "attemptId", "prompt", "promptSha256", "requestedProfile", "target", "domContract"];
+    if (Object.prototype.hasOwnProperty.call(value || {}, "images")) keys.push("images", "attachmentsContract");
+    exact(value, keys);
     common(value, "prepare");
     nonempty(value.prompt, MAX_PROMPT);
     if (!SHA.test(value.promptSha256) || !PROFILE.has(value.requestedProfile)) reject("invalid_prompt", "问题哈希或所选档位无效。");
@@ -68,6 +71,7 @@
     exact(value.target, ["kind", "mode"]);
     if (value.target.kind !== "chatgpt" || value.target.mode !== "new") reject("wrong_target", "只接受普通 ChatGPT 新 Chat。");
     validateDom(value.domContract);
+    if (keys.includes("images")) { validateImages(value.images); validateAttachmentsContract(value.attachmentsContract, value.domContract.surface); }
     if (value.requestedProfile !== "fast") reject("profile_unverified", "高与 Pro 尚无实际档位映射，保留请求并停止，不降档。");
     return value;
   }
@@ -89,10 +93,10 @@
         && !url.search && !url.hash;
     } catch { return false; }
   }
-  function validatePrepared(value) {
+  function validatePrepared(value, prepared = null) {
     exact(value, ["protocol", "type", "dispatchId", "attemptId", "observation"]);
     common(value, "prepared");
-    validateFreshObservation(value.observation);
+    validateFreshObservation(value.observation, prepared);
     return value;
   }
   function validateReadiness(value) {
@@ -115,8 +119,11 @@
       reject("readiness_identity_mismatch", "只读就绪回执不属于本次页面与冻结 DOM 合同。");
     return value;
   }
-  function validateFreshObservation(value) {
-    const observation = exact(value, ["url", "chatMode", "loginVerified", "emptyComposer", "observedProfile", "completionInitiallyPresent", "surface", "observationSha256", "profileDom"]);
+  function validateFreshObservation(value, prepared = null) {
+    const keys = ["url", "chatMode", "loginVerified", "emptyComposer", "observedProfile", "completionInitiallyPresent", "surface", "observationSha256", "profileDom"];
+    if (prepared?.images) keys.push("images");
+    const observation = exact(value, keys);
+    if (prepared?.images) validateImageEvidence(observation.images, prepared.images, "ready");
     if (!rootUrl(observation.url) || observation.chatMode !== true || observation.loginVerified !== true
         || observation.emptyComposer !== true || observation.completionInitiallyPresent !== false || observation.observedProfile !== "Instant"
         || !["chrome", "edge"].includes(observation.surface) || !SHA.test(observation.observationSha256))
@@ -139,8 +146,11 @@
     common(value, "capture");
     if (!sameIdentity(value, prepared)) reject("capture_identity_mismatch", "回答不属于已冻结请求。");
     const contract = validateDom(prepared.domContract);
-    const evidence = exact(value.evidence, ["source", "conversationUrl", "sourceUserMessageId", "assistantMessageId", "sourceUnitKey",
-      "assistantUnitKey", "promptText", "answerText", "completion", "profile", "observedAt"]);
+    const keys = ["source", "conversationUrl", "sourceUserMessageId", "assistantMessageId", "sourceUnitKey",
+      "assistantUnitKey", "promptText", "answerText", "completion", "profile", "observedAt"];
+    if (prepared.images) keys.push("images");
+    const evidence = exact(value.evidence, keys);
+    if (prepared.images) validateImageEvidence(evidence.images, prepared.images, "attached");
     if (evidence.source !== "browser_dom" || !conversationUrl(evidence.conversationUrl)
         || !UUID.test(evidence.sourceUserMessageId) || !UUID.test(evidence.assistantMessageId)
         || evidence.sourceUserMessageId === evidence.assistantMessageId) reject("capture_source_mismatch", "缺少准确的实际页面对话与消息来源。");
@@ -165,7 +175,10 @@
     exact(value, ["protocol", "type", "dispatchId", "attemptId", "evidence"]);
     common(value, "accepted");
     if (!sameIdentity(value, prepared)) reject("capture_identity_mismatch", "输入不属于已冻结请求。");
-    const evidence = exact(value.evidence, ["source", "conversationUrl", "sourceUserMessageId", "sourceUnitKey", "promptText", "observedAt", "profile"]);
+    const keys = ["source", "conversationUrl", "sourceUserMessageId", "sourceUnitKey", "promptText", "observedAt", "profile"];
+    if (prepared.images) keys.push("images");
+    const evidence = exact(value.evidence, keys);
+    if (prepared.images) validateImageEvidence(evidence.images, prepared.images, "attached");
     const unit = DOM_UNIT.exec(evidence.sourceUnitKey);
     if (evidence.source !== "browser_dom" || !conversationUrl(evidence.conversationUrl) || !UUID.test(evidence.sourceUserMessageId)
         || !unit || unit[3] !== "user" || evidence.promptText !== prepared.prompt || !isoTime(evidence.observedAt))
@@ -207,8 +220,59 @@
     return value;
   }
   async function sha256(value) {
-    const bytes = await root.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return sha256Bytes(new TextEncoder().encode(value));
+  }
+  async function sha256Bytes(value) {
+    const bytes = await root.crypto.subtle.digest("SHA-256", value);
     return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+  }
+  function validateImages(value) {
+    if (!Array.isArray(value) || !value.length || value.length > 4) reject("images_invalid", "本次确切图片数量无效。");
+    const ids = new Set(); let total = 0;
+    for (const image of value) {
+      exact(image, ["id", "name", "mimeType", "size", "sha256"], "images_invalid");
+      const suffixes = { "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif" };
+      const suffix = typeof image.mimeType === "string" && Object.prototype.hasOwnProperty.call(suffixes, image.mimeType) ? suffixes[image.mimeType] : null;
+      if (typeof image.id !== "string" || !DISPATCH.test(image.id) || ids.has(image.id) || !suffix || image.name !== `console-${image.id}${suffix}`
+          || !Number.isInteger(image.size) || image.size <= 0 || image.size > MAX_IMAGE_BYTES || typeof image.sha256 !== "string" || !SHA.test(image.sha256))
+        reject("images_invalid", "图片身份、名称、格式或大小与冻结内容不符。");
+      ids.add(image.id); total += image.size;
+    }
+    if (total > MAX_IMAGE_TOTAL) reject("images_invalid", "本次选图总大小超过上限。");
+    return value;
+  }
+  function validateAttachmentsContract(value, surface) {
+    exact(value, ["version", "verified", "surface", "capturedAt", "source", "observationSha256", "selectors"], "images_contract_unverified");
+    if (value.version !== 1 || value.verified !== true || value.surface !== surface || !["chrome", "edge"].includes(surface)
+        || value.source !== "cua" || !isoTime(value.capturedAt) || !SHA.test(value.observationSha256))
+      reject("images_contract_unverified", "没有实际浏览器核对的图片上传与来源契约。");
+    exact(value.selectors, ["input", "ready", "pending", "source"], "images_contract_unverified");
+    for (const selector of Object.values(value.selectors)) nonempty(selector, 1000, "images_contract_unverified");
+    return value;
+  }
+  function sameImages(left, right) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
+      && left.every((image, index) => ["id", "name", "mimeType", "size", "sha256"].every(key => image[key] === right[index]?.[key]));
+  }
+  function validateImageEvidence(value, images, status) {
+    exact(value, ["status", "items"], "images_evidence_mismatch");
+    validateImages(value.items);
+    if (value.status !== status || !sameImages(value.items, images)) reject("images_evidence_mismatch", "图片上传或实际消息附件与本轮选择不一致。");
+    return value;
+  }
+  function validateImageChunk(value) {
+    exact(value, ["protocol", "type", "dispatchId", "attemptId", "image", "index", "count", "data", "chunkSha256"]);
+    common(value, "imageChunk"); validateImages([value.image]);
+    const count = Math.ceil(value.image.size / IMAGE_CHUNK_BYTES);
+    if (!Number.isInteger(value.index) || value.index < 0 || value.index >= count || value.count !== count || !SHA.test(value.chunkSha256)
+        || typeof value.data !== "string" || value.data.length > Math.ceil(IMAGE_CHUNK_BYTES / 3) * 4
+        || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.data))
+      reject("image_chunk_invalid", "图片分片身份、顺序或大小无效。");
+    const expected = Math.min(IMAGE_CHUNK_BYTES, value.image.size - value.index * IMAGE_CHUNK_BYTES);
+    let binary;
+    try { binary = root.atob(value.data); } catch { reject("image_chunk_invalid", "图片分片编码无效。"); }
+    if (binary.length !== expected || root.btoa(binary) !== value.data) reject("image_chunk_invalid", "图片分片字节数量不符。");
+    return Uint8Array.from(binary, character => character.charCodeAt(0));
   }
   function messageIds(value) {
     text(value, 1000, "capture_source_mismatch");
@@ -221,7 +285,8 @@
     if (unique.length !== 1) reject("capture_source_mismatch", "页面消息 ID 归属不唯一。");
     return unique[0];
   }
-  root.ConsoleChatRelay = Object.freeze({ PROTOCOL, HOST_NAME, EXTENSION_ID, MAX_PROMPT, MAX_ANSWER, RelayError, reject, exact, text, nonempty, common,
+  root.ConsoleChatRelay = Object.freeze({ PROTOCOL, HOST_NAME, EXTENSION_ID, MAX_PROMPT, MAX_ANSWER, IMAGE_CHUNK_BYTES, MAX_IMAGE_BYTES, MAX_IMAGE_TOTAL,
+    validateImages, validateAttachmentsContract, validateImageEvidence, sameImages, validateImageChunk, sha256Bytes, RelayError, reject, exact, text, nonempty, common,
     envelope, sameIdentity, validateDom, validatePrepare, validateCommit, validatePrepared, validateReadiness, validatePageReady, validateFailure,
     validateCapture, validateAccepted, validateStored, validateRetired, rootUrl, conversationUrl, sha256, messageIds, isoTime, handshake, validateStatus });
 })(globalThis);

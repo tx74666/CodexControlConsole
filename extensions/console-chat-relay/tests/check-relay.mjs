@@ -1299,7 +1299,7 @@ const pickerRows = [
 ];
 const fixtureSliderSelector = '[role="menuitem"][data-reasoning-slider="true"][aria-label="强度"][aria-keyshortcuts="ArrowLeft ArrowRight"]';
 const fixtureStatusSelector = '[role="status"][aria-live="polite"]';
-function pickerFixture({ pauseKeys = false, pauseOpen = false, pauseClose = false } = {}) {
+function pickerFixture({ pauseKeys = false, pauseOpen = false, pauseClose = false, escapeCloseOn = "keydown" } = {}) {
   const f = contentFixture({ profileText: "Pro" }); let index = 4, profileClicks = 0;
   const menu = new Node("", { role: "menu", id: "menu-owned", "aria-labelledby": "profile-original" });
   const slider = new Node("", { role: "menuitem", "data-reasoning-slider": "true", "aria-label": "强度", "aria-keyshortcuts": "ArrowLeft ArrowRight" });
@@ -1324,25 +1324,28 @@ function pickerFixture({ pauseKeys = false, pauseOpen = false, pauseClose = fals
   menu.children.set(fixtureSliderSelector, [slider]); menu.children.set(fixtureStatusSelector, [status]);
   f.items.set('[role="menu"]', []); f.model.attributes["data-selected-reasoning-effort"] = "medium";
   const show = value => { index = value; status.textContent = pickerRows[value][0]; f.model.attributes["data-selected-reasoning-effort"] = pickerRows[value][1]; seen.push([...pickerRows[value]]); f.mutateNow(); };
+  const closeMenu = () => {
+    f.model.attributes["aria-expanded"] = "false"; f.model.textContent = "思考强度" + pickerRows[index][0].split("，")[0];
+    f.model.attributes["data-selected-reasoning-effort"] = pickerRows[index][1]; f.items.set('[role="menu"]', []); f.mutateNow();
+  };
   f.model.click = () => {
     profileClicks++; publishCount(profileClicks, clickWaiters);
     if (f.model.attributes["aria-expanded"] === "false") {
       if (pauseOpen) return;
       f.model.attributes["aria-expanded"] = "true"; f.model.attributes["aria-controls"] = "menu-owned";
       f.model.textContent = "思考强度思考强度"; f.items.set('[role="menu"]', [menu]); show(index);
-    } else {
-      if (pauseClose) return;
-      f.model.attributes["aria-expanded"] = "false"; f.model.textContent = "思考强度Instant";
-      f.model.attributes["data-selected-reasoning-effort"] = "none"; f.items.set('[role="menu"]', []); f.mutateNow();
     }
+    // Matches the real failure: clicking an already-open trigger did not
+    // close the menu, even though its exact status had reached Instant.
   };
   slider.dispatchEvent = event => {
     keys.push({ type: event.type, key: event.key, code: event.code, bubbles: event.bubbles, cancelable: event.cancelable, repeat: event.repeat });
     publishCount(keys.length, keyWaiters);
-    if (event.type === "keydown" && !pauseKeys) show(Math.max(0, index - 1));
+    if (event.type === "keydown" && event.key === "ArrowLeft" && !pauseKeys) show(Math.max(0, index - 1));
+    if (event.key === "Escape" && event.type === escapeCloseOn && !pauseClose) closeMenu();
     return true;
   };
-  return { ...f, menu, slider, status, keys, seen, show, index: () => index, profileClicks: () => profileClicks,
+  return { ...f, menu, slider, status, keys, seen, show, closeMenu, index: () => index, profileClicks: () => profileClicks,
     whenKeys: count => waitForCount(count, () => keys.length, keyWaiters, "keyboard events"),
     whenProfileClicks: count => waitForCount(count, () => profileClicks, clickWaiters, "original control clicks") };
 }
@@ -1361,16 +1364,17 @@ await test("generic readonly readiness reports control presence without profile 
 await test("full frozen Fast prepare selects only the observed four left steps and closes the original control before proving Instant", async () => {
   const f = pickerFixture();
   const result = await f.controller.receive({ type: "relay.content.prepare", prepare }); relay.validatePrepared(result);
-  assert.deepEqual(f.seen, [...pickerRows].reverse()); assert.equal(f.profileClicks(), 2);
-  assert.deepEqual(f.keys.map(item => item.type), ["keydown", "keyup", "keydown", "keyup", "keydown", "keyup", "keydown", "keyup"]);
-  assert.ok(f.keys.every(item => item.key === "ArrowLeft" && item.code === "ArrowLeft" && item.bubbles && item.cancelable && item.repeat === false));
+  assert.deepEqual(f.seen, [...pickerRows].reverse()); assert.equal(f.profileClicks(), 1);
+  assert.deepEqual(f.keys.map(item => item.type), ["keydown", "keyup", "keydown", "keyup", "keydown", "keyup", "keydown", "keyup", "keydown"]);
+  assert.ok(f.keys.slice(0, 8).every(item => item.key === "ArrowLeft" && item.code === "ArrowLeft" && item.bubbles && item.cancelable && item.repeat === false));
+  assert.deepEqual(f.keys[8], { type: "keydown", key: "Escape", code: "Escape", bubbles: true, cancelable: true, repeat: false });
   assert.equal(result.observation.profileDom.text, "思考强度Instant"); assert.equal(result.observation.profileDom.reasoningEffort, "none");
   assert.equal(f.model.attributes["aria-expanded"], "false"); assert.equal(f.composer.textContent, "");
   assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.timers.size, 0);
   await f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
   assert.equal(f.clicks(), 1); assert.equal(f.composer.textContent, prompt);
   await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "page_already_prepared");
-  assert.equal(f.profileClicks(), 2); assert.equal(f.keys.length, 8); f.controller.stop();
+  assert.equal(f.profileClicks(), 1); assert.equal(f.keys.length, 9); f.controller.stop();
 });
 await test("profile selection waits only on actual DOM changes and never proves the open menu placeholder", async () => {
   const f = pickerFixture({ pauseKeys: true }), pending = f.controller.receive({ type: "relay.content.prepare", prepare });
@@ -1379,12 +1383,78 @@ await test("profile selection waits only on actual DOM changes and never proves 
     f.show(index);
     if (index > 0) { await f.whenKeys((5 - index) * 2); assert.equal(f.controller.phase(), "preparing"); }
   }
-  const result = await pending; relay.validatePrepared(result); assert.equal(f.profileClicks(), 2); assert.equal(f.keys.length, 8); assert.equal(f.timers.size, 0);
+  const result = await pending; relay.validatePrepared(result); assert.equal(f.profileClicks(), 1); assert.equal(f.keys.length, 9); assert.equal(f.timers.size, 0);
   const open = pickerFixture({ pauseClose: true }), blocked = open.controller.receive({ type: "relay.content.prepare", prepare });
-  const rejection = assert.rejects(blocked, error => error.code === "profile_selection_timeout");
-  await open.whenProfileClicks(2); assert.equal(open.index(), 0); assert.equal(open.model.textContent, "思考强度思考强度");
+  const rejection = assert.rejects(blocked, error => error.code === "profile_selection_timeout" && error.message.includes("已选到 Instant") && error.message.includes("菜单未关闭"));
+  await open.whenKeys(10); assert.equal(open.index(), 0); assert.equal(open.model.textContent, "思考强度思考强度");
   assert.equal(open.controller.phase(), "preparing"); [...open.timers.values()][0].fn(); await rejection;
   assert.equal(open.clicks(), 0); assert.equal(open.storage.writes.length, 0); assert.equal(open.timers.size, 0);
+});
+await test("Instant closes on Escape keyup or later DOM evidence without clicking the open trigger again", async () => {
+  const keyup = pickerFixture({ escapeCloseOn: "keyup" });
+  relay.validatePrepared(await keyup.controller.receive({ type: "relay.content.prepare", prepare }));
+  assert.deepEqual(keyup.keys.slice(8).map(event => [event.type, event.key]), [["keydown", "Escape"], ["keyup", "Escape"]]);
+  assert.equal(keyup.profileClicks(), 1); assert.equal(keyup.timers.size, 0); assert.equal(keyup.clicks(), 0);
+  const delayed = pickerFixture({ pauseClose: true });
+  const pending = delayed.controller.receive({ type: "relay.content.prepare", prepare });
+  await delayed.whenKeys(10);
+  assert.equal(delayed.controller.phase(), "preparing"); assert.equal(delayed.model.attributes["aria-expanded"], "true");
+  assert.equal(delayed.composer.textContent, ""); assert.equal(delayed.clicks(), 0); assert.equal(delayed.storage.writes.length, 0);
+  delayed.closeMenu(); relay.validatePrepared(await pending);
+  assert.equal(delayed.profileClicks(), 1); assert.equal(delayed.timers.size, 0); assert.equal(delayed.keys.length, 10);
+});
+await test("Escape cannot send keyup to a replaced disconnected hidden or inert original menu control", async () => {
+  for (const [change, code] of [
+    [f => { f.menu.children.set(fixtureSliderSelector, [new Node("", f.slider.attributes)]); }, "profile_picker_unverified"],
+    [f => { f.menu.children.set(fixtureStatusSelector, [new Node(f.status.textContent, f.status.attributes)]); }, "profile_picker_unverified"],
+    [f => { f.items.set('[role="menu"]', [new Node("Other", { role: "menu" })]); }, "profile_picker_unverified"],
+    [f => { f.slider.isConnected = false; }, "profile_picker_unverified"],
+    [f => { f.slider.hidden = true; }, "profile_picker_unverified"],
+    [f => { f.status.inert = true; }, "profile_picker_unverified"],
+    [f => { f.menu.attributes["aria-hidden"] = "true"; }, "profile_selection_timeout"]
+  ]) {
+    const f = pickerFixture({ pauseClose: true }), dispatch = f.slider.dispatchEvent;
+    f.slider.dispatchEvent = event => { const result = dispatch(event); if (event.type === "keydown" && event.key === "Escape") change(f); return result; };
+    const pending = f.controller.receive({ type: "relay.content.prepare", prepare });
+    const rejection = assert.rejects(pending, error => error.code === code);
+    await f.whenKeys(9);
+    if (code === "profile_selection_timeout") [...f.timers.values()][0].fn();
+    await rejection;
+    assert.deepEqual(f.keys.slice(8).map(event => [event.type, event.key]), [["keydown", "Escape"]]);
+    assert.equal(f.profileClicks(), 1); assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.timers.size, 0);
+  }
+});
+await test("late draft cancellation or page stop during Escape cannot resume prepared or Send", async () => {
+  for (const trigger of ["draft", "cancel", "stop"]) {
+    const f = pickerFixture({ pauseClose: true }), dispatch = f.slider.dispatchEvent;
+    f.slider.dispatchEvent = event => {
+      const result = dispatch(event);
+      if (event.type === "keydown" && event.key === "Escape") {
+        if (trigger === "draft") f.composer.textContent = "用户在关闭菜单时留下的草稿";
+        else if (trigger === "cancel") f.controller.cancel(relay.envelope("cancel", prepare));
+        else f.controller.stop();
+      }
+      return result;
+    };
+    await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === (trigger === "draft" ? "composer_changed" : "prepare_cancelled"));
+    assert.deepEqual(f.keys.slice(8).map(event => [event.type, event.key]), [["keydown", "Escape"]]);
+    f.closeMenu(); await new Promise(resolve => setImmediate(resolve));
+    assert.notEqual(f.controller.phase(), "prepared"); assert.equal(f.keys.length, 9); assert.equal(f.profileClicks(), 1);
+    assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.timers.size, 0);
+    if (trigger === "draft") assert.equal(f.composer.textContent, "用户在关闭菜单时留下的草稿");
+  }
+});
+await test("profile timeouts distinguish opening stepping and closing while leaving old attempts untouched", async () => {
+  for (const [settings, count, fragment] of [
+    [{ pauseOpen: true }, 1, "档位菜单状态"],
+    [{ pauseKeys: true }, 2, "按已观察步骤切换"]
+  ]) {
+    const f = pickerFixture(settings), pending = f.controller.receive({ type: "relay.content.prepare", prepare });
+    const rejection = assert.rejects(pending, error => error.code === "profile_selection_timeout" && error.message.includes(fragment));
+    if (settings.pauseOpen) await f.whenProfileClicks(count); else await f.whenKeys(count);
+    [...f.timers.values()][0].fn(); await rejection;
+    assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.timers.size, 0);
+  }
 });
 await test("positive client rectangles cannot activate controls in hidden or inert ancestors", async () => {
   for (const flag of ["hidden", "inert", "inertAttribute", "ariaHidden"]) {
@@ -1403,7 +1473,7 @@ await test("positive client rectangles cannot activate controls in hidden or ine
     click(); if (f.model.attributes["aria-expanded"] === "true") f.items.set('[role="menu"]', [f.menu, inactiveMenu]);
   };
   const result = await f.controller.receive({ type: "relay.content.prepare", prepare }); relay.validatePrepared(result);
-  assert.equal(f.profileClicks(), 2); assert.equal(f.keys.length, 8); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
+  assert.equal(f.profileClicks(), 1); assert.equal(f.keys.length, 9); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
 });
 await test("keydown replacement or deactivation cannot send keyup to the retired slider", async () => {
   for (const change of [
@@ -1548,7 +1618,7 @@ await test("actual content bootstrap binds Window timers for readiness and all I
   relay.validatePageReady(ready, request);
   const prepared = await brandSettled(listener.call({ type: "relay.content.prepare", prepare }), "Window prepare did not settle");
   relay.validatePrepared(prepared);
-  assert.deepEqual(f.seen, [...pickerRows].reverse()); assert.equal(f.keys.length, 8); assert.equal(f.profileClicks(), 2);
+  assert.deepEqual(f.seen, [...pickerRows].reverse()); assert.equal(f.keys.length, 9); assert.equal(f.profileClicks(), 1);
   assert.equal(listener.timing.scheduled, 7); assert.equal(listener.timing.cleared, 7); assert.equal(listener.timing.illegal, 0);
   assert.equal(listener.timing.timers.size, 0); assert.equal(f.timers.size, 0);
   assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);

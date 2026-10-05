@@ -8,6 +8,14 @@ Ordinary Chat uses the signed-in ChatGPT account rather than a model API key. Th
 
 A Windows control console for music, wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.
 
+## ChatGPT subscription connection
+
+Console provides an explicit optional Sign in with ChatGPT connection at `subscription.html`. Authorize the formal Console connection on this PC, then choose **ChatGPT 订阅** from the paired phone conversation's More menu and select a model returned by the account's actual catalog. This route uses the account's shared ChatGPT plan usage; it requires no API key. Browser Chat and its separate tier preferences remain available. Catalog reads, saved drafts and model selection never send messages.
+
+Each new confirmed submission freezes its connection, model, current record, context and selected images. A durable reservation precedes the single Responses request; only a validated `response.completed` event with nonempty complete text saves an answer to the originating record. Unknown requests and old browser failures are never silently retried. This connection does not import existing ChatGPT chats or memory and does not generate images, transcribe audio or accept video. Windows protects this connection's credentials with current-user DPAPI; the separate verification entry's credentials are not reused.
+
+The isolated third text/image test on October 6 passed with GPT-6-Astra and correctly reported the test image's blue left half and green right half. This test establishes subscription inference, not a completed phone round trip; formal authorization and a newly confirmed phone message remain separate acceptance steps.
+
 ## Download / 下载
 
 Recommended: [CodexControlConsole-Setup-x64.exe](https://github.com/tx74666/CodexControlConsole/releases/latest/download/CodexControlConsole-Setup-x64.exe), the Windows installer with the simplest update path. Check the release's stated signing status.

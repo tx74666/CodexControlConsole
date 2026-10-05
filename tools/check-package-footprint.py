@@ -77,6 +77,11 @@ def main():
             require(startup_seconds <= args.startup_limit, f"packaged startup took {startup_seconds:.2f}s")
             package = read_json(f"http://127.0.0.1:{port}/api/console/package-check", timeout=30)
             require(package.get("ytDlp"), "the packaged YouTube importer cannot load yt-dlp")
+            require(package.get("ok"), "the packaged runtime check failed")
+            require(package.get("subscriptionModules"), "the packaged subscription modules cannot load")
+            require(package.get("subscriptionRuntime"), "the packaged subscription signing runtime cannot load")
+            require(package.get("jwtVersion") == "2.15.1", "the packaged PyJWT version differs from the release pin")
+            require(package.get("cryptographyVersion") == "50.0.1", "the packaged cryptography version differs from the release pin")
         finally:
             if process.poll() is None:
                 process.terminate()

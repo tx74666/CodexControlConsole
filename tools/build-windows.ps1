@@ -261,6 +261,9 @@ if ($BuildApplication) {
   @{ Source = "mobile.js"; Destination = "." },
   @{ Source = "mobile-dialogue.js"; Destination = "." },
   @{ Source = "mobile-dialogue.css"; Destination = "." },
+  @{ Source = "subscription.html"; Destination = "." },
+  @{ Source = "subscription.js"; Destination = "." },
+  @{ Source = "subscription.css"; Destination = "." },
   @{ Source = "mobile-handoff.js"; Destination = "." },
   @{ Source = "mobile.css"; Destination = "." },
   @{ Source = "transfer-panel.js"; Destination = "." },
@@ -328,6 +331,8 @@ if ($BuildApplication) {
   "--paths", $ProjectRoot,
   "--collect-submodules", "zeroconf",
   "--collect-submodules", "ifaddr",
+  "--collect-submodules", "jwt",
+  "--collect-submodules", "cryptography",
   "--exclude-module", "tkinter"
 )
 

@@ -376,10 +376,9 @@ class AppBridgeChecks(unittest.TestCase):
         self.assertFalse(self.service._wake.is_set())
         self.assertIsNone(self.service._thread)
 
-    def test_chatgpt_new_requires_empty_image_selection_and_no_existing_thread_id(self):
+    def test_chatgpt_new_allows_confirmed_image_selection_but_no_existing_thread_id(self):
         self.upload()
         target = self.target("chatgpt", "new")
-        self.error(lambda: self.service.discuss(request(recordId=self.record, text="Image question", appTarget=target)), "app_images_unavailable")
         self.error(lambda: self.service.discuss(request(recordId=self.record, text="Text", context={"attachmentIds": []},
             appTarget={**target, "threadId": self.chatgpt})), "app_target_unavailable")
         self.assertEqual(self.service.incubator_dispatches()["dispatches"], [])
@@ -387,6 +386,31 @@ class AppBridgeChecks(unittest.TestCase):
         self.assertEqual(accepted["job"]["appDispatch"]["targetKind"], "chatgpt")
         self.assertEqual(accepted["job"]["appDispatch"]["targetMode"], "new")
         self.assertNotIn(str(self.service.attachments_dir), self.service.incubator_dispatches(private=True)["dispatches"][0]["prompt"])
+
+    def test_new_chat_image_confirmation_freezes_exact_record_bytes_without_claiming_upload(self):
+        selected = self.upload()
+        body = request(recordId=self.record, text="请看这张确切的图", context={"attachmentIds": [selected]}, appTarget=self.target("chatgpt", "new"))
+        sent = self.service.discuss(body)
+        with self.service._db() as db:
+            job = dict(db.execute("SELECT * FROM jobs WHERE id=?", (sent["job"]["id"],)).fetchone())
+            payload = json.loads(job["payload"])
+            dispatch = dict(self.service._dispatch(db, payload["appDispatchId"]))
+        image = payload["appFrozen"]["images"][0]
+        self.assertEqual(image["id"], selected)
+        self.assertEqual(image["sha256"], hashlib.sha256(Path(image["path"]).read_bytes()).hexdigest())
+        self.assertEqual(image["originalSha256"], image["sha256"])
+        self.assertEqual(json.loads(dispatch["snapshot"])["attachmentIds"], [selected])
+        self.assertEqual(self.service.detail(self.record)["messages"][-1]["attachmentIds"], [selected])
+        self.assertEqual(dispatch["status"], "pending")
+        self.assertIsNone(dispatch["claim_token"])
+        self.assertIsNone(dispatch["target_thread_id"])
+        self.assertEqual(json.loads(dispatch["result"]), {})
+        replay = self.service.discuss(body)
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["job"]["id"], job["id"])
+        with self.service._db() as db:
+            self.assertEqual(db.execute("SELECT payload FROM jobs WHERE id=?", (job["id"],)).fetchone()[0], job["payload"])
+        self.assertFalse(self.service._wake.is_set())
 
     def test_chatgpt_new_incubator_publish_preserves_prompt_and_confirmation(self):
         idea = self.service.incubator_create(request(title="Explicit ChatGPT task", body="Original authorized plain text"))["idea"]

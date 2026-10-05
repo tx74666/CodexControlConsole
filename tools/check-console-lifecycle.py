@@ -313,6 +313,7 @@ def check_main_older_handoff():
             thread = stack.enter_context(mock.patch.object(world_console.threading, "Thread"))
             companion = stack.enter_context(mock.patch.object(world_console, "PHONE_COMPANION"))
             workflow = stack.enter_context(mock.patch.object(world_console, "WORKFLOW_SERVICE"))
+            subscription = stack.enter_context(mock.patch.object(world_console, "SUBSCRIPTION_BROKER"))
             backend_thread = mock.Mock()
             backend_thread.is_alive.return_value = False
             restore_thread = mock.Mock()
@@ -349,6 +350,8 @@ def check_main_older_handoff():
                 companion.restore.assert_not_called()
                 companion.shutdown.assert_called_once_with()
                 workflow.start.assert_called_once_with()
+                subscription.start.assert_called_once_with()
+                subscription.close.assert_called_once_with()
                 workflow.shutdown.assert_called_once_with()
                 require(world_console.ACTIVE_SERVER is None, "finished backend left ACTIVE_SERVER registered")
             else:

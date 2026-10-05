@@ -25,7 +25,7 @@ importScripts("lib/protocol.js");
     setTimeout: (...args) => root.setTimeout(...args), clearTimeout: (...args) => root.clearTimeout(...args)
   }) {
     let state = { enabled: false, attempts: {}, active: null }, native = null, status = null, nativeReady = false, requestedReady = false;
-    let readinessWait = null, preparationGuard = null;
+    let readinessWait = null, preparationGuard = null, imageTransfer = null;
     let lastMessage = "准备包默认停用；尚无生产启用批准或浏览器页面实机验收。", serial = Promise.resolve(), reconnectUsed = false;
     const viewers = new Set();
     const load = api.storage.local.get(STORAGE_KEY).then(result => {
@@ -51,7 +51,13 @@ importScripts("lib/protocol.js");
       if (!native) R.reject("native_disconnected", "本机接收端连接已断开。");
       native.postMessage(value);
     }
+    function discardImages() {
+      const transfer = imageTransfer; imageTransfer = null;
+      if (transfer?.deadline !== undefined) timers.clearTimeout(transfer.deadline);
+      if (transfer) { transfer.cancelled = true; transfer.items.length = 0; }
+    }
     function cancelOwned(code = "page_ready_cancelled", message = "本次专用页就绪等待已停止，不输入或发送。") {
+      discardImages();
       const active = state.active;
       if (!active || active.phase === "stored") return;
       // Cancellation is monotonic even while creation/persistence is awaiting
@@ -73,7 +79,9 @@ importScripts("lib/protocol.js");
       // A terminal receipt must stop an in-progress DOM wait immediately,
       // before serial handling can be delayed behind that same commit.
       const active = state.active;
-      if (!active || active.phase === "stored" || !R.sameIdentity(value, active.prepare)) return;
+      const transfer = imageTransfer;
+      if ((!active || active.phase === "stored" || !R.sameIdentity(value, active.prepare))
+          && (!transfer || !R.sameIdentity(value, transfer.identity))) return;
       try {
         if (value?.type === "retired") {
           R.validateRetired(value);
@@ -87,6 +95,11 @@ importScripts("lib/protocol.js");
     function receiveNative(value) { preemptNative(value); return queue(() => handleNative(value)); }
     async function fail(identity, code, message, uncertain = true, notify = true) {
       const value = R.envelope(uncertain ? "uncertain" : "blocked", identity, { code, message });
+      if (imageTransfer && R.sameIdentity(identity, imageTransfer.identity)) discardImages();
+      const received = state.attempts[identity.dispatchId];
+      if (received?.phase === "receiving_images" && received.attemptId === identity.attemptId) {
+        received.phase = uncertain ? "needs_review" : "failed"; await save();
+      }
       if (state.active && state.active.phase !== "stored" && R.sameIdentity(value, state.active.prepare)) {
         cancelOwned();
         const knownUnsent = uncertain === false && ["preparing", "prepared"].includes(state.active.phase);
@@ -221,6 +234,70 @@ importScripts("lib/protocol.js");
         }, finish);
       });
     }
+    async function handleImageChunk(value) {
+      try {
+        const bytes = R.validateImageChunk(value);
+        if (!state.enabled || !nativeReady) R.reject("relay_not_ready", "扩展未就绪，不接收图片。");
+        if (state.active && state.active.phase !== "stored") R.reject("dispatch_busy", "当前专用页面已有请求，不能混入图片。");
+        if (!imageTransfer) {
+          if (state.attempts[value.dispatchId]) R.reject("dispatch_already_attempted", "本请求已有记录，不能重新传送图片。");
+          if (value.index !== 0 || Object.keys(state.attempts).length >= MAX_TOMBSTONES) R.reject("image_chunk_invalid", "缺少首片或账本已满。");
+          const identity = { protocol: value.protocol, dispatchId: value.dispatchId, attemptId: value.attemptId };
+          imageTransfer = { identity, items: [], total: 0, cancelled: false, deadline: undefined };
+          state.attempts[value.dispatchId] = { attemptId: value.attemptId, phase: "receiving_images" };
+          await save();
+          if (!imageTransfer || !R.sameIdentity(value, imageTransfer.identity) || !nativeReady || !state.enabled)
+            R.reject("image_transfer_cancelled", "图片接收已停止。");
+          const transfer = imageTransfer;
+          transfer.deadline = timers.setTimeout(() => {
+            if (imageTransfer !== transfer) return;
+            discardImages();
+            queue(() => fail(transfer.identity, "image_transfer_timeout", "六十秒内图片字节未收齐，本次未发送。", false)).then(publish, () => {});
+          }, 60000);
+        }
+        const transfer = imageTransfer;
+        if (!transfer || !R.sameIdentity(value, transfer.identity)) R.reject("image_transfer_identity_mismatch", "图片分片属于另一轮请求。");
+        let item = transfer.items.at(-1);
+        if (!item || item.image.id !== value.image.id) {
+          if (item && item.next !== item.count || value.index !== 0 || transfer.items.some(prior => prior.image.id === value.image.id)
+              || transfer.items.length >= 4 || transfer.total + value.image.size > R.MAX_IMAGE_TOTAL)
+            R.reject("image_chunk_invalid", "图片分片重复、乱序或超过本次总量。");
+          item = { image: structuredClone(value.image), count: value.count, next: 0, bytes: new Uint8Array(value.image.size) };
+          transfer.items.push(item); transfer.total += value.image.size;
+        }
+        if (!R.sameImages([item.image], [value.image]) || item.next !== value.index || item.count !== value.count)
+          R.reject("image_chunk_invalid", "图片描述或分片顺序发生改变。");
+        if (await R.sha256Bytes(bytes) !== value.chunkSha256) R.reject("image_chunk_hash_mismatch", "图片分片校验失败，不上传。");
+        if (imageTransfer !== transfer || transfer.cancelled || !nativeReady || !state.enabled)
+          R.reject("image_transfer_cancelled", "图片校验期间连接已停止。");
+        item.bytes.set(bytes, value.index * R.IMAGE_CHUNK_BYTES); item.next++;
+        return { received: true };
+      } catch (error) {
+        if (imageTransfer && !R.sameIdentity(value, imageTransfer.identity)) throw error;
+        return fail(value, error.code || "image_transfer_failed", String(error?.message || "图片接收失败。"), false);
+      }
+    }
+    async function takeImages(value) {
+      if (!value.images) {
+        if (imageTransfer) R.reject("image_transfer_identity_mismatch", "纯文字请求不能认领已接收图片。");
+        return null;
+      }
+      const transfer = imageTransfer;
+      if (!transfer || !R.sameIdentity(value, transfer.identity) || !R.sameImages(transfer.items.map(item => item.image), value.images)
+          || transfer.items.some(item => item.next !== item.count)) R.reject("images_incomplete", "没有收齐本轮确切图片，不能准备页面。");
+      const data = [];
+      for (const item of transfer.items) {
+        if (await R.sha256Bytes(item.bytes) !== item.image.sha256) R.reject("image_hash_mismatch", "完整图片校验失败，不上传。");
+        if (imageTransfer !== transfer || transfer.cancelled || !nativeReady || !state.enabled)
+          R.reject("image_transfer_cancelled", "图片校验期间接收已停止。");
+        const parts = [];
+        // Keep each conversion well below the engine's argument stack limit.
+        for (let offset = 0; offset < item.bytes.length; offset += 8192)
+          parts.push(String.fromCharCode(...item.bytes.subarray(offset, offset + 8192)));
+        data.push({ id: item.image.id, data: root.btoa(parts.join("")) });
+      }
+      discardImages(); return data;
+    }
     async function handlePrepare(value) {
       try {
         R.validatePrepare(value);
@@ -232,9 +309,12 @@ importScripts("lib/protocol.js");
         throw error;
       }
       if (!state.enabled || !nativeReady) return fail(value, "relay_not_ready", "扩展未获批准或接收端未就绪，不发送。", false);
-      if (state.attempts[value.dispatchId]) return fail(value, "dispatch_already_attempted", "该请求已有转发记录；只能核对，不能再次创建或发送。");
+      const prior = state.attempts[value.dispatchId];
+      const receiving = value.images && prior?.phase === "receiving_images" && prior.attemptId === value.attemptId
+        && imageTransfer && R.sameIdentity(value, imageTransfer.identity);
+      if (prior && !receiving) return fail(value, "dispatch_already_attempted", "该请求已有转发记录；只能核对，不能再次创建或发送。");
       if (state.active && state.active.phase !== "stored") return fail(value, "dispatch_busy", "已有请求在途或需要核对，不能处理下一条。", false);
-      if (Object.keys(state.attempts).length >= MAX_TOMBSTONES) return fail(value, "ledger_full", "扩展防重复账本已达上限，保留请求并停止。", false);
+      if (!receiving && Object.keys(state.attempts).length >= MAX_TOMBSTONES) return fail(value, "ledger_full", "扩展防重复账本已达上限，保留请求并停止。", false);
       state.active = { prepare: structuredClone(value), phase: "preparing", tabId: null, observedProfile: null, accepted: null };
       state.attempts[value.dispatchId] = { attemptId: value.attemptId, promptSha256: value.promptSha256, phase: "preparing" };
       const guard = preparationGuard = { identity: value, cancelled: false, code: null, message: null };
@@ -247,6 +327,7 @@ importScripts("lib/protocol.js");
         await save(); stillPreparing();
         const actualSha = await R.sha256(value.prompt); stillPreparing();
         if (actualSha !== value.promptSha256) R.reject("prompt_hash_mismatch", "冻结问题与实际 SHA 不匹配，不发送。");
+        const imageData = await takeImages(value); stillPreparing();
         const tab = await api.tabs.create({ url: "https://chatgpt.com/", active: true });
         stillPreparing();
         if (!Number.isInteger(tab?.id) || tab.id < 0) R.reject("tab_not_created", "未取得扩展自己创建的准确 tab。");
@@ -255,14 +336,16 @@ importScripts("lib/protocol.js");
         await waitReady(tab.id, value);
         stillPreparing();
         if (state.active.tabId !== tab.id) R.reject("page_ready_cancelled", "只读就绪后专用页面身份已失效，不发送准备请求。");
-        const response = await api.tabs.sendMessage(tab.id, { type: "relay.content.prepare", prepare: value }, { frameId: 0 });
+        const pageRequest = { type: "relay.content.prepare", prepare: value };
+        if (imageData) pageRequest.imageData = imageData;
+        const response = await api.tabs.sendMessage(tab.id, pageRequest, { frameId: 0 });
         stillPreparing();
         if (response?.type === "blocked") {
           R.validateFailure(response);
           if (!R.sameIdentity(response, value)) R.reject("prepare_identity_mismatch", "准备失败回执不属于本次专用页面。");
           return fail(value, response.code, response.message, false);
         }
-        R.validatePrepared(response);
+        R.validatePrepared(response, value);
         if (!R.sameIdentity(response, value) || response.observation.observationSha256 !== value.domContract.observationSha256
             || response.observation.surface !== value.domContract.surface)
           R.reject("prepare_identity_mismatch", "页面准备回执身份、浏览器或 DOM 观察证据不符。");
@@ -323,6 +406,7 @@ importScripts("lib/protocol.js");
       return { retired: true };
     }
     async function handleNative(value) {
+      if (value?.type === "imageChunk") return handleImageChunk(value);
       if (value?.type === "prepare") return handlePrepare(value);
       if (value?.type === "commitSend") return handleCommit(value);
       if (value?.type === "stored") return handleStored(value);

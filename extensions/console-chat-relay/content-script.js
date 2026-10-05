@@ -163,7 +163,7 @@
       if (index < 0) R.reject("profile_picker_unverified", "档位状态与实际属性不属于已观察的五项表，不猜测。");
       return { ...binding, index };
     }
-    function waitProfile(current, stillPreparing, checkState, action) {
+    function waitProfile(current, stillPreparing, checkState, action, timeoutMessage) {
       return new Promise((resolve, reject) => {
         let done = false, observer, deadline;
         const finish = (error, value) => {
@@ -181,7 +181,7 @@
         current.cancelProfileWait = () => finish(new R.RelayError("prepare_cancelled", "本次档位准备已停止，不能恢复选择或发送。"));
         observer = new env.MutationObserver(check);
         observer.observe(env.document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
-        deadline = env.setTimeout(() => finish(new R.RelayError("profile_selection_timeout", "十秒内未取得准确档位状态，保留原请求，不输入或发送。")), 10000);
+        deadline = env.setTimeout(() => finish(new R.RelayError("profile_selection_timeout", timeoutMessage)), 10000);
         try { stillPreparing(); inspectFresh("", false); action?.(); check(); }
         catch (error) { finish(error); }
       });
@@ -198,7 +198,8 @@
         stillPreparing();
         if (inspectFresh("", false).profileControl !== button) R.reject("profile_changed", "原档位控件已被替换，停止选择。");
       };
-      let snapshot = await waitProfile(current, stillPreparing, () => { originalButton(); return pickerSnapshot(button); }, () => { originalButton(); button.click(); });
+      let snapshot = await waitProfile(current, stillPreparing, () => { originalButton(); return pickerSnapshot(button); },
+        () => { originalButton(); button.click(); }, "十秒内未取得准确档位菜单状态，保留原请求，不输入或发送。");
       const boundMenu = snapshot.menu, boundSlider = snapshot.slider, boundStatus = snapshot.status;
       const boundIdentity = () => {
         originalButton(); const found = pickerBinding(button);
@@ -228,7 +229,7 @@
           // inactive original slider must never receive the keyup operation.
           boundIdentity();
           boundSlider.dispatchEvent(new env.KeyboardEvent("keyup", { key: "ArrowLeft", code: "ArrowLeft", bubbles: true, cancelable: true, repeat: false }));
-        });
+        }, "十秒内未确认档位按已观察步骤切换，保留原请求，不输入或发送。");
       }
       await waitProfile(current, stillPreparing, () => {
         originalButton(); const menus = all('[role="menu"]');
@@ -236,7 +237,24 @@
         if (button.getAttribute("aria-expanded") === "true" || menus.length) return null;
         if (String(button.textContent || "").trim() === "思考强度思考强度") return null;
         return inspectFresh();
-      }, () => { if (boundSnapshot().index !== 0) R.reject("profile_changed", "关闭前 Instant 观测已改变，不操作。"); button.click(); });
+      }, () => {
+        if (boundSnapshot().index !== 0) R.reject("profile_changed", "关闭前 Instant 观测已改变，不操作。");
+        boundSlider.focus();
+        if (boundSnapshot().index !== 0) R.reject("profile_changed", "聚焦后 Instant 观测已改变，不关闭未知菜单。");
+        // CUA observed Escape closing this exact bound menu after the first
+        // four left steps. Clicking the now-open trigger did not close it.
+        boundSlider.dispatchEvent(new env.KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true, repeat: false }));
+        originalButton();
+        const remainingMenus = all('[role="menu"]');
+        if (!remainingMenus.length) return;
+        if (remainingMenus.length !== 1 || remainingMenus[0] !== boundMenu)
+          R.reject("profile_picker_unverified", "Escape 后出现其它档位菜单，不操作。");
+        // A synchronously closed or inactive menu must not receive keyup on
+        // its retired slider. An active original menu may close on keyup.
+        if (button.getAttribute("aria-expanded") !== "true") return;
+        if (boundSnapshot().index !== 0) R.reject("profile_changed", "Escape 后 Instant 观测已改变，不继续关闭。");
+        boundSlider.dispatchEvent(new env.KeyboardEvent("keyup", { key: "Escape", code: "Escape", bubbles: true, cancelable: true, repeat: false }));
+      }, "已选到 Instant，但十秒内档位菜单未关闭，保留原请求，不输入或发送。");
       stillPreparing(); inspectFresh();
     }
     function waitForSend() {

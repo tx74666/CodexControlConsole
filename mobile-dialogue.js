@@ -27,7 +27,7 @@
     try { saved = JSON.parse(localStorage.getItem(storageKey) || "{}"); } catch { saved = {}; }
     if (!saved || typeof saved !== "object") saved = {};
     const pointDrafts = Object.fromEntries(Object.entries(saved.pointDrafts || {}).filter(([id, value]) => value && value.ideaId === id && typeof value.pointId === "string" && Number.isSafeInteger(value.sourceRevision) && value.sourceRevision > 0 && ["sourceText", "text"].every(key => typeof value[key] === "string") && ["sourceKind", "kind"].every(key => ["suggestion", "decision"].includes(value[key]))));
-    const state = { active: false, generation: 0, reading: false, busy: false, clientId: typeof saved.clientId === "string" ? saved.clientId : uuid(), session: null, detail: null, execution: null, tier: tiers.some(item => item.id === saved.tier) ? saved.tier : "high", drafts: saved.drafts && typeof saved.drafts === "object" ? saved.drafts : {}, editDrafts: saved.editDrafts && typeof saved.editDrafts === "object" ? saved.editDrafts : {}, pending: saved.pending || null, management: null, manageDirty: false, view: "chat", ideas: [], projects: [], idea: null, ideaDetail: null, search: saved.search || "", project: saved.project || "", archived: false, listScroll: Number(saved.listScroll) || 0, chatScroll: 0, messageIds: new Set(), storageFailed: false, composing: false, dirty: false, editorDirty: false, newResults: false, requestSequence: 0 };
+    const state = { active: false, generation: 0, reading: false, busy: false, clientId: typeof saved.clientId === "string" ? saved.clientId : uuid(), session: null, detail: null, execution: null, tier: tiers.some(item => item.id === saved.tier) ? saved.tier : "high", chatTransport: saved.chatTransport === "chatgpt_subscription" ? "chatgpt_subscription" : "browser_chat", subscription: subscriptionChoice(saved.subscription), subscriptionStatus: null, subscriptionReading: false, drafts: saved.drafts && typeof saved.drafts === "object" ? saved.drafts : {}, editDrafts: saved.editDrafts && typeof saved.editDrafts === "object" ? saved.editDrafts : {}, pending: saved.pending || null, management: null, manageDirty: false, view: "chat", ideas: [], projects: [], idea: null, ideaDetail: null, search: saved.search || "", project: saved.project || "", archived: false, listScroll: Number(saved.listScroll) || 0, chatScroll: 0, messageIds: new Set(), storageFailed: false, composing: false, dirty: false, editorDirty: false, newResults: false, requestSequence: 0 };
     const controllers = new Set();
     let eligibleAttachments = [], cancelPendingButton = null;
     state.pointDrafts = pointDrafts;
@@ -41,7 +41,11 @@
     const more = make("details", "", "dialogue-more"), summary = make("summary", "更多"), menu = make("div", "", "dialogue-menu"), menuMeta = make("p", "", "dialogue-menu-meta");
     const clearMenuAction = button("清空当前讨论", () => { more.open = false; void clearDiscussion(); }); menu.append(clearMenuAction);
     for (const item of [{ label: "刷新当前页面", action: () => void refresh() }, { label: "Transfer · 互传", action: () => openModule("transfer") }, { label: "音乐", action: () => openModule("music") }, { label: "资料", action: () => openModule("documents") }, { label: offline ? "连接电脑继续" : "Projects / Recents", action: () => offline ? options.onConnect?.() : openModule("conversations") }, { label: "原工作区与导入", action: () => openModule("legacy") }]) menu.append(button(item.label, () => { more.open = false; item.action(); }));
-    menu.append(make("hr"), menuMeta); more.append(summary, menu); topLeft.append(back, title); topActions.append(ideasButton, more); top.append(topLeft, topActions);
+    const chatTransport = field("select", "讨论通道", "dialogue-channel"), connectionNote = make("p", "", "dialogue-source-note");
+    for (const choice of [{ id: "browser_chat", name: "浏览器普通 Chat" }, { id: "chatgpt_subscription", name: "ChatGPT 订阅" }]) { const item = make("option", choice.name); item.value = choice.id; chatTransport.append(item); }
+    chatTransport.value = state.chatTransport;
+    const checkConnection = button("查看订阅连接", () => void readSubscriptionStatus(true));
+    menu.append(make("hr"), make("label", "讨论通道"), chatTransport, checkConnection, connectionNote, menuMeta); more.append(summary, menu); topLeft.append(back, title); topActions.append(ideasButton, more); top.append(topLeft, topActions);
     if (offline) menu.insertBefore(button("资料与更新", () => openModule("settings")), menuMeta);
     const packInput = field("input", "导入手机想法包"); packInput.type = "file"; packInput.accept = ".console-idea,application/json"; packInput.hidden = true;
     if (!offline && options.onImportPack) { menu.insertBefore(button("导入手机想法包", () => packInput.click()), menuMeta); menu.append(packInput); }
@@ -69,11 +73,12 @@
     const saveOnly = button("只保存", () => void saveIdea()), send = button("发送 ↑", () => void sendMessage(), "dialogue-send"), attach = button("＋", () => imageInput.click()), imageInput = field("input", "选择图片文件"), pendingImages = make("div", "", "dialogue-attachment-grid"); attach.setAttribute("aria-label", "添加图片"); imageInput.type = "file"; imageInput.accept = "image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"; imageInput.multiple = true; imageInput.hidden = true;
     const status = make("div", "", "dialogue-status"), draftStatus = make("p"), capabilityStatus = make("p"); status.setAttribute("role", "status"); status.append(draftStatus, capabilityStatus); composeLeft.append(attach, tier); composeRight.append(saveOnly, send); composeActions.append(composeLeft, composeRight); shell.append(pendingImages, composerInput, composeActions, imageInput); composer.append(shell, status); root.classList.add("mobile-dialogue"); root.replaceChildren(top, notice, content, newResult, composer);
     const savedImagePicker = make("details", "", "dialogue-saved-image-picker"), savedImageChoices = make("div", "", "dialogue-attachment-grid"); savedImagePicker.append(make("summary", "已保存图片"), make("p", "选择本次引用的图片；未选择的图片不会发送。", "dialogue-source-note"), savedImageChoices); savedImagePicker.hidden = true; shell.insertBefore(savedImagePicker, composerInput);
+    const modelRow = make("div", "", "dialogue-model-row"), modelLabel = make("label", "模型"), subscriptionModel = field("select", "ChatGPT 订阅实际模型", "dialogue-model"); modelRow.append(modelLabel, subscriptionModel); shell.insertBefore(modelRow, composeActions);
     const storageFailureNotice = "这台手机暂时无法保存草稿，请保留页面并复制内容。";
-    const acceptedSendNotices = ["请求已接收，等待原聊天的实际回答。", "请求已保存；普通 Chat 自动转发尚未接通。"];
+    const acceptedSendNotices = ["请求已接收，等待原聊天的实际回答。", "请求已保存；普通 Chat 自动转发尚未接通。", "请求已接收，等待本轮真实回答；接收不等于完成。"];
     function persist() {
       const recovering = state.storageFailed;
-      try { localStorage.setItem(storageKey, JSON.stringify({ clientId: state.clientId, tier: state.tier, drafts: state.drafts, editDrafts: state.editDrafts, pointDrafts: state.pointDrafts, pending: state.pending, search: state.search, project: state.project, listScroll: state.listScroll })); state.storageFailed = false; if (recovering && notice.textContent === storageFailureNotice) say(); renderDraftStatus(); return true; }
+      try { localStorage.setItem(storageKey, JSON.stringify({ clientId: state.clientId, tier: state.tier, chatTransport: state.chatTransport, subscription: state.subscription, drafts: state.drafts, editDrafts: state.editDrafts, pointDrafts: state.pointDrafts, pending: state.pending, search: state.search, project: state.project, listScroll: state.listScroll })); state.storageFailed = false; if (recovering && notice.textContent === storageFailureNotice) say(); renderDraftStatus(); return true; }
       catch { state.storageFailed = true; renderDraftStatus(); say(storageFailureNotice, true); return false; }
     }
     function say(text = "", error = false) { notice.textContent = text; notice.dataset.error = String(error); }
@@ -86,9 +91,41 @@
       const local = state.drafts[draftKey()];
       // Capturing a blank page before its session loads is not an edit or a clear.
       if (!state.session && !userEdited && !composerInput.value && local?.userEdited !== true) return !state.storageFailed;
-      state.drafts[draftKey()] = { text: composerInput.value, tier: state.tier, updatedAt: new Date().toISOString(), unsynced: true, ...(!state.session ? { waitingForSession: true, ...(userEdited || local?.userEdited === true ? { userEdited: true } : {}) } : {}) }; state.dirty = true; const stored = persist(); autosize(composerInput); updateControls(); return stored;
+      state.drafts[draftKey()] = { text: composerInput.value, tier: state.tier, chatTransport: state.chatTransport, subscription: state.subscription, updatedAt: new Date().toISOString(), unsynced: true, ...(!state.session ? { waitingForSession: true, ...(userEdited || local?.userEdited === true ? { userEdited: true } : {}) } : {}) }; state.dirty = true; const stored = persist(); autosize(composerInput); updateControls(); return stored;
     }
     function restoreDraft() { const local = state.drafts[draftKey()], localDirty = Boolean(local?.unsynced && (state.session || local.userEdited === true || local.text)); composerInput.value = localDirty ? local.text || "" : state.session?.draft?.text ?? local?.text ?? ""; state.dirty = localDirty; autosize(composerInput); renderDraftStatus(); }
+    function subscriptionChoice(value) {
+      const keys = ["provider", "connectionId", "catalogRevision", "modelSlug"];
+      if (!value || Object.keys(value).sort().join(",") !== keys.slice().sort().join(",") || value.provider !== "chatgpt_subscription" || keys.slice(1).some(key => typeof value[key] !== "string" || value[key].length > 200 || /[\u0000-\u001f]/.test(value[key]))) return null;
+      return Object.fromEntries(keys.map(key => [key, value[key]]));
+    }
+    function safeSubscriptionStatus(value) {
+      if (!value || typeof value.connected !== "boolean" || typeof value.busy !== "boolean" || !Array.isArray(value.models) || value.models.length > 1000 || value.models.some(item => !item || typeof item.slug !== "string" || !item.slug || item.slug.length > 200 || /[\u0000-\u001f]/.test(item.slug) || typeof item.displayName !== "string" || !item.displayName || item.displayName.length > 300) || new Set(value.models.map(item => item.slug)).size !== value.models.length || value.connected && [value.connectionId, value.catalogRevision].some(item => typeof item !== "string" || !item || item.length > 200 || /[\u0000-\u001f]/.test(item))) return { connected: false, busy: false, models: [], status: "invalid", error: "订阅连接状态尚未核实，请在电脑检查连接。" };
+      return { connected: value.connected, busy: value.busy, connectionId: value.connectionId, catalogRevision: value.catalogRevision, models: value.models.map(item => ({ slug: item.slug, displayName: item.displayName })), status: typeof value.status === "string" ? value.status : "unknown", error: typeof value.error === "string" ? value.error.slice(0, 1000) : "" };
+    }
+    function subscriptionReady() {
+      const status = state.subscriptionStatus, selected = state.subscription;
+      return !offline && status?.connected === true && !status.busy && !state.subscriptionReading && selected && selected.connectionId === status.connectionId && selected.catalogRevision === status.catalogRevision && status.models.some(item => item.slug === selected.modelSlug);
+    }
+    function renderSubscription() {
+      const selected = state.chatTransport === "chatgpt_subscription", catalog = state.subscriptionStatus;
+      chatTransport.value = state.chatTransport; tier.hidden = selected; modelRow.hidden = !selected;
+      subscriptionModel.replaceChildren();
+      const empty = make("option", state.subscriptionReading ? "正在读取实际模型…" : catalog?.connected ? "请选择实际模型" : "连接电脑上的 ChatGPT 后选择模型"); empty.value = ""; subscriptionModel.append(empty);
+      const valid = state.subscription && catalog?.connected && state.subscription.connectionId === catalog.connectionId && state.subscription.catalogRevision === catalog.catalogRevision && catalog.models.some(item => item.slug === state.subscription.modelSlug);
+      if (state.subscription && !valid) { const previous = make("option", `${state.subscription.modelSlug}（旧选择，请重新选择）`); previous.value = `stale:${state.subscription.modelSlug}`; previous.disabled = true; subscriptionModel.append(previous); }
+      for (const model of catalog?.models || []) { const choice = make("option", `${model.displayName} · ${model.slug}`); choice.value = model.slug; subscriptionModel.append(choice); }
+      subscriptionModel.value = valid ? state.subscription.modelSlug : state.subscription ? `stale:${state.subscription.modelSlug}` : "";
+      connectionNote.textContent = offline ? "连接电脑后才能使用订阅。" : state.subscriptionReading ? "正在读取电脑保存的连接状态；不会发送消息。" : catalog?.connected ? "订阅已连接。明确选择实际模型后，发送使用账户共享额度；费用和 credits 由官方设置控制。" : catalog?.error || "请先在电脑 Console 连接 ChatGPT 订阅；手机不保存连接凭据。";
+      checkConnection.disabled = state.busy || state.subscriptionReading;
+    }
+    async function readSubscriptionStatus(visible = false) {
+      if (offline || state.subscriptionReading) { if (offline && visible) say("请先连接电脑；草稿和图片保留。"); return; }
+      const generation = state.generation; state.subscriptionReading = true; renderSubscription(); updateControls();
+      try { const value = await call("subscription/status"); if (generation !== state.generation) return; state.subscriptionStatus = safeSubscriptionStatus(value); if (visible) say(state.subscriptionStatus.connected ? "订阅连接状态已读取，尚未发送。" : connectionNote.textContent); }
+      catch (error) { if (generation === state.generation && !error.cancelled) { state.subscriptionStatus = { connected: false, busy: false, models: [], status: "unavailable", error: error.message || "订阅连接暂不可用，原草稿保留。" }; if (visible || state.chatTransport === "chatgpt_subscription") fail(error); } }
+      finally { if (generation === state.generation) { state.subscriptionReading = false; renderSubscription(); renderCapability(); updateControls(); } }
+    }
     async function call(action, body) {
       const generation = state.generation;
       if (adapter) { const result = await adapter(action, body); if (generation !== state.generation) throw Object.assign(new Error("已切换页面。"), { cancelled: true }); return result; }
@@ -117,6 +154,7 @@
       }
       if (state.session?.id && previousSession !== state.session.id) void restoreSessionFiles(state.session.id);
       const selectedTier = data.preferences?.requestedProfile || data.session?.requestedProfile; if (!saved.tier && !state.dirty && tiers.some(item => item.id === selectedTier)) state.tier = selectedTier;
+      if (!saved.chatTransport && !state.dirty && !state.pending) { state.chatTransport = data.preferences?.chatTransport === "chatgpt_subscription" ? "chatgpt_subscription" : "browser_chat"; state.subscription = subscriptionChoice(data.preferences?.subscription); }
       const key = currentResultKey();
       if (key !== resultKey) { closeResultStream(); resultKey = key; resultCursor = ""; resultPending = null; resultStopped = false; }
       if (/^[a-f0-9]{64}$/.test(data.resultCursor || "")) { if (!resultCursor || !resultStream && !resultPending) resultCursor = data.resultCursor; if (resultPending?.cursor === data.resultCursor) resultPending = null; }
@@ -170,6 +208,13 @@
       finally { resultDraining = false; if (resultPending && resultPending !== pending) void drainResults(); }
     }
     function renderCapability() {
+      renderSubscription();
+      if (state.chatTransport === "chatgpt_subscription") {
+        capabilityStatus.textContent = offline ? "电脑未连接" : subscriptionReady() ? `已选 ${state.subscription.modelSlug}` : state.subscriptionStatus?.connected ? "请选择实际模型" : "订阅未连接";
+        capabilityStatus.title = "模型以本轮真实完成回执为准；连接或选择模型不会发送。";
+        menuMeta.textContent = `${options.getVersion?.() || "Codex Console"}\nChatGPT 订阅只发送本轮明确确认的文字和选图，回答回到同一讨论。Work 仍需另行核对工作区。`;
+        return;
+      }
       const actual = state.execution?.actualReceipt?.actualProfile, verified = state.execution?.actualReceipt?.verified === true && tiers.some(item => item.id === actual);
       const observed = state.execution?.profileObservation, observation = observed && Object.keys(observed).sort().join(",") === "actualProfileObserved,capabilitiesVerified,dispatchId,jobId,messageId,observedAt,requestedProfile,source" && observed.requestedProfile === "fast" && observed.actualProfileObserved === "Instant" && observed.source === "browser_dom_ui_label" && observed.capabilitiesVerified === false && [observed.dispatchId, observed.jobId, observed.messageId].every(id => typeof id === "string" && /^[a-f0-9]{32}$/.test(id)) && typeof observed.observedAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(observed.observedAt) && !Number.isNaN(Date.parse(observed.observedAt)) ? "上一轮页面显示 Instant；实际模型／推理未核实" : "";
       capabilityStatus.textContent = offline ? "电脑未连接" : verified ? `实际 ${tiers.find(item => item.id === actual).label}` : "档位待核实";
@@ -189,6 +234,19 @@
         if (time.textContent !== "时间未记录") time.setAttribute("datetime", message.createdAt);
         meta.append(make("p", message.role === "assistant" ? "ChatGPT" : "你", "dialogue-message-label"), time);
         row.append(meta, make("p", message.text || "", "dialogue-message-text"));
+        const roundImages = make("div", "", "dialogue-attachment-grid");
+        for (const id of message.attachmentIds || []) {
+          const attachment = (state.detail?.attachments || []).find(item => item.id === id);
+          if (!attachment || !/^image\//.test(attachment.mimeType || "")) continue;
+          try {
+            const source = new URL(attachment.previewUrl || attachment.url, window.location.href);
+            if (source.origin !== location.origin) continue;
+            const image = make("img"); image.src = source.href; image.alt = attachment.name || "本轮已确认图片"; roundImages.append(image);
+          } catch { /* Missing/foreign URLs do not become model-visible images. */ }
+        }
+        if (roundImages.children.length) row.append(roundImages);
+        const receipt = (state.detail?.jobs || []).find(job => job.recordId === state.session?.recordId && job.status === "succeeded" && job.result?.messageId === message.id && job.result.text === message.text && job.result.source === "chatgpt_subscription" && job.result.terminalEventObserved === true && job.result.terminalStatus === "completed" && job.result.completionEvidence === "response.completed" && typeof job.result.actualModel === "string" && job.result.actualModel.length <= 200 && message.text?.trim());
+        if (message.role === "assistant" && receipt) { row.append(make("p", `实际模型：${receipt.result.actualModel} · 回答已保存`, "dialogue-message-note")); if (acceptedSendNotices.includes(notice.textContent)) say(); }
         if (message.role === "assistant") { const actions = make("div", "", "dialogue-message-actions"); actions.append(button(state.session?.ideaId ? "补充到此想法" : "存为想法", () => void rememberAnswer(message.id)), button("复制", () => void copyText(message.text || ""))); row.append(actions); }
         if (message.truncated) row.append(make("p", "此回答来源已截断，全文请到原 Chat 查看。", "dialogue-message-note")); messages.append(row);
       }
@@ -200,7 +258,9 @@
         if (running) pending.prepend(make("span", "", "dialogue-spinner"));
         const target = cancellablePending();
         const unsent = target?.jobId === inFlight.id;
-        pendingText.textContent = dispatchStatus === "needs_review" ? "送达情况需要核对，未重复发送。" : running ? "正在等原聊天回答…" : unsent ? "尚未发送，等待转发处理" : dispatchStatus === "pending" ? "等待转发处理，发送状态尚未核实。" : "请求已保存，等待处理。";
+        const subscription = inFlight.chatTransport === "chatgpt_subscription" && inFlight.subscription?.provider === "chatgpt_subscription";
+        const stages = { accepted: "请求已接收，尚未发送。", started: "正在核对已确认的模型和选图，尚未发送。", generating: "正在等待本轮实际回答…", unknown: "发送或完成情况需要核对，原请求保留，未重复发送。" };
+        pendingText.textContent = subscription ? stages[inFlight.subscriptionPhase] || "请求已接收，发送状态尚未核实。" : dispatchStatus === "needs_review" ? "送达情况需要核对，未重复发送。" : running ? "正在等原聊天回答…" : unsent ? "尚未发送，等待转发处理" : dispatchStatus === "pending" ? "等待转发处理，发送状态尚未核实。" : "请求已保存，等待处理。";
         if (unsent) { cancelPendingButton = button("结束这条未发送请求", () => void cancelUnsentRequest(target)); pending.append(cancelPendingButton); }
       } else if (failure) {
         const error = typeof failure.error === "string" && failure.error ? failure.error : typeof failure.appDispatch.error === "string" && failure.appDispatch.error ? failure.appDispatch.error : "未取得实际回答，请核对电脑上的原请求。";
@@ -229,7 +289,7 @@
       if (state.view === "chat") renderConversation(); newResult.hidden = state.view !== "chat" || !state.newResults; renderEditReviews(); updateControls(); syncResultStream(); options.onViewChange?.(state.view);
     }
     function currentFiles() { return !fileOwner || fileOwner === state.session?.id ? files : []; }
-    function updateControls() { const empty = !composerInput.value.trim(); send.disabled = state.busy || empty || state.composing; saveOnly.disabled = state.busy || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy; if (cancelPendingButton) cancelPendingButton.disabled = state.busy || state.composing || Boolean(state.pending && state.pending.action !== "mobile/dialogue/cancel-pending"); saveEdit.hidden = !state.editorDirty; saveEdit.disabled = state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = state.busy || state.editorDirty; executionDraft.disabled = state.busy || state.editorDirty; carryIdea.disabled = state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = state.busy || Boolean(state.pending); void drainResults(); }
+    function updateControls() { const empty = !composerInput.value.trim(), hasImages = currentFiles().length > 0 || (state.session?.draft?.attachmentIds || []).length > 0; send.disabled = state.busy || empty && !hasImages || state.composing || state.chatTransport === "chatgpt_subscription" && !subscriptionReady(); saveOnly.disabled = state.busy || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy; chatTransport.disabled = state.busy || Boolean(state.pending) || offline; subscriptionModel.disabled = state.busy || Boolean(state.pending) || state.subscriptionReading || !state.subscriptionStatus?.connected; if (cancelPendingButton) cancelPendingButton.disabled = state.busy || state.composing || Boolean(state.pending && state.pending.action !== "mobile/dialogue/cancel-pending"); saveEdit.hidden = !state.editorDirty; saveEdit.disabled = state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = state.busy || state.editorDirty; executionDraft.disabled = state.busy || state.editorDirty; carryIdea.disabled = state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = state.busy || Boolean(state.pending); void drainResults(); }
     async function writeFiles(value) { fileWriting++; try { await blobs.put(value); } catch (error) { fileError = true; throw error; } finally { fileWriting--; } }
     async function saveFiles() { try { await writeFiles({ id: filesKey, files, fileOwner, uploadRequest }); fileError = false; } catch (error) { fileError = true; fail(error); throw error; } }
     async function restoreSessionFiles(id) {
@@ -272,13 +332,13 @@
       if (state.session) return state.session;
       const data = await call("mobile/dialogue/open", { requestId: uuid(), clientId: state.clientId }); applyDialogue(data); restoreDraft(); return state.session;
     }
-    function composeIntent() { return { sessionId: state.session?.id || "", text: composerInput.value, attachmentIds: [...(state.session?.draft?.attachmentIds || [])], requestedProfile: state.tier, files: [...currentFiles()] }; }
-    function submission(intent = composeIntent(), uploadedIds = []) { if (intent.sessionId && intent.sessionId !== state.session?.id) throw new Error("讨论已切换，原输入保留，未发送到其它讨论。"); return { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision, text: intent.text, attachmentIds: [...new Set([...intent.attachmentIds, ...uploadedIds])], requestedProfile: intent.requestedProfile }; }
+    function composeIntent() { return { sessionId: state.session?.id || "", text: composerInput.value, attachmentIds: [...(state.session?.draft?.attachmentIds || [])], requestedProfile: state.tier, chatTransport: state.chatTransport, subscription: subscriptionChoice(state.subscription), files: [...currentFiles()] }; }
+    function submission(intent = composeIntent(), uploadedIds = []) { if (intent.sessionId && intent.sessionId !== state.session?.id) throw new Error("讨论已切换，原输入保留，未发送到其它讨论。"); return { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision, text: intent.text, attachmentIds: [...new Set([...intent.attachmentIds, ...uploadedIds])], requestedProfile: intent.requestedProfile, ...(!offline ? { chatTransport: intent.chatTransport, ...(intent.chatTransport === "chatgpt_subscription" ? { subscription: intent.subscription } : {}) } : {}) }; }
     function durablePayload(action, candidate, identity) {
       if (state.pending) { if (state.pending.action !== action || identity.some(key => JSON.stringify(state.pending.payload[key]) !== JSON.stringify(candidate[key]))) throw new Error("上一项操作结果尚未核对。先刷新核对，原请求不会重复创建。"); return state.pending.payload; }
       state.pending = { action, payload: candidate }; if (!persist()) { state.pending = null; throw new Error("操作凭据无法保存在手机，请保留或复制原内容。"); } return candidate;
     }
-    function writeRejected(error) { return error.status >= 400 && error.status < 500 && error.status !== 409 || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch", "dispatch_in_progress"].includes(error.data?.code || error.code); }
+    function writeRejected(error) { return error.status >= 400 && error.status < 500 && error.status !== 409 || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch", "dispatch_in_progress", "subscription_not_connected", "subscription_selection_stale", "subscription_model_unavailable"].includes(error.data?.code || error.code); }
     function recoverCancellationReceipt(data) {
       const operation = state.pending, payload = operation?.payload;
       if (operation?.action !== "mobile/dialogue/cancel-pending" || !payload
@@ -339,14 +399,16 @@
       try { await draftSync; } finally { draftSync = null; }
     }
     async function sendMessage() {
-      if (state.busy || state.composing || !composerInput.value.trim()) return;
+      if (state.busy || state.composing || !composerInput.value.trim() && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length) return;
       if (offline) { if (!saveLocalDraft()) return; say("请连接电脑后发送；这段草稿已保存在此手机。"); options.onConnect?.(); return; }
+      if (state.chatTransport === "chatgpt_subscription" && !subscriptionReady()) { say("请先在电脑连接订阅，并重新选择目录中的实际模型；原文字和图片保留。", true); return; }
       const intent = composeIntent(), text = intent.text; state.busy = true; updateControls(); say("");
-      try { if (draftSync) await draftSync; await ensureSession(); const uploadedIds = !state.pending ? await uploadFiles(intent) : []; const payload = durablePayload("mobile/dialogue/send", submission(intent, uploadedIds), ["sessionId", "text", "requestedProfile"]);
+      try { if (draftSync) await draftSync; await ensureSession(); const uploadedIds = !state.pending ? await uploadFiles(intent) : []; const payload = durablePayload("mobile/dialogue/send", submission(intent, uploadedIds), ["sessionId", "text", "attachmentIds", "requestedProfile", "chatTransport", "subscription"]);
         const data = await call("mobile/dialogue/send", payload); state.pending = null;
         if (applyDialogue(data, payload.sessionId) && composerInput.value === text) { composerInput.value = ""; state.drafts[payload.sessionId] = { text: "", tier: state.tier, unsynced: false }; state.dirty = false; autosize(composerInput); }
-        persist(); if (!latestDialogueFailure()) say(acceptedSendNotices[data.execution?.relayStatus === "connected" ? 0 : 1]);
-      } catch (error) { if (writeRejected(error)) { state.pending = null; persist(); } fail(error); }
+        const result = data.job?.result, savedAnswer = payload.chatTransport === "chatgpt_subscription" && data.job?.status === "succeeded" && result?.source === "chatgpt_subscription" && result.terminalEventObserved === true && result.terminalStatus === "completed" && result.completionEvidence === "response.completed" && result.text?.trim() && data.detail?.messages?.some(message => message.role === "assistant" && message.id === result.messageId && message.text === result.text);
+        persist(); if (!latestDialogueFailure()) say(savedAnswer ? "本轮回答已保存。" : payload.chatTransport === "chatgpt_subscription" ? acceptedSendNotices[2] : acceptedSendNotices[data.execution?.relayStatus === "connected" ? 0 : 1]);
+      } catch (error) { if (writeRejected(error)) { state.pending = null; persist(); if (intent.chatTransport === "chatgpt_subscription" && ["subscription_not_connected", "subscription_selection_stale", "subscription_model_unavailable"].includes(error.data?.code || error.code)) await readSubscriptionStatus(); } fail(error); }
       finally { state.busy = false; updateControls(); }
     }
     async function saveIdea() {
@@ -371,7 +433,7 @@
     }
     async function refresh(recoverEvents = true) {
       if (!state.active || state.reading || state.composing && state.view === "chat" || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return false; if (recoverEvents && !resultStream) resultStopped = false; capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
-      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); return applied; } }
+      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); if (applied && state.chatTransport === "chatgpt_subscription") await readSubscriptionStatus(); return applied; } }
       catch (error) { fail(error); } finally { state.reading = false; updateControls(); syncResultStream(); }
     }
     async function showIdeas() { if (state.busy) return; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } state.view = "ideas"; say(""); renderView(); await loadIdeas(); requestAnimationFrame(() => window.scrollTo({ top: state.listScroll, behavior: "auto" })); }
@@ -639,6 +701,8 @@
     composerInput.addEventListener("input", () => { saveLocalDraft(true); window.clearTimeout(draftTimer); draftTimer = window.setTimeout(() => void syncDraft(), 800); }); composerInput.addEventListener("compositionstart", () => { state.composing = true; updateControls(); }); composerInput.addEventListener("compositionend", () => { state.composing = false; saveLocalDraft(true); });
     composerInput.addEventListener("keydown", event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing && !state.composing) { event.preventDefault(); void sendMessage(); } });
     tier.addEventListener("change", () => { state.tier = tier.value; saved.tier = state.tier; persist(); saveLocalDraft(); void syncDraft(); });
+    chatTransport.addEventListener("change", () => { if (state.busy || state.pending || offline || !["browser_chat", "chatgpt_subscription"].includes(chatTransport.value)) { chatTransport.value = state.chatTransport; return; } state.chatTransport = chatTransport.value; saved.chatTransport = state.chatTransport; persist(); saveLocalDraft(); renderCapability(); updateControls(); void syncDraft(); if (state.chatTransport === "chatgpt_subscription") void readSubscriptionStatus(); });
+    subscriptionModel.addEventListener("change", () => { if (state.busy || state.pending || state.subscriptionReading || !state.subscriptionStatus?.connected || !state.subscriptionStatus.models.some(item => item.slug === subscriptionModel.value)) { renderSubscription(); return; } state.subscription = { provider: "chatgpt_subscription", connectionId: state.subscriptionStatus.connectionId, catalogRevision: state.subscriptionStatus.catalogRevision, modelSlug: subscriptionModel.value }; saved.chatTransport = state.chatTransport; persist(); saveLocalDraft(); renderCapability(); updateControls(); void syncDraft(); });
     ideaTitle.addEventListener("input", persistEditor); ideaBody.addEventListener("input", persistEditor); executionText.addEventListener("input", persistExecution);
     for (const [input, kind] of [[ideaTitle, "body"], [ideaBody, "body"], [executionText, "execution"]]) { input.addEventListener("compositionstart", () => { editComposing[kind] = true; updateControls(); }); input.addEventListener("compositionend", () => { editComposing[kind] = false; kind === "body" ? persistEditor() : persistExecution(); }); }
     search.addEventListener("input", () => { state.search = search.value; state.listScroll = 0; persist(); void loadIdeas(); }); project.addEventListener("change", () => { state.project = project.value; state.listScroll = 0; persist(); void loadIdeas(); });
@@ -651,7 +715,7 @@
     window.addEventListener("codex:dialogue-result", event => { if (state.active && event.detail?.clientId === state.clientId && event.detail?.sessionId === state.session?.id && event.detail?.recordId === state.session?.recordId) void refresh(); });
     persist(); restoreDraft(); renderCapability(); renderView();
     fileReading = blobs.get(filesKey).then(value => { if (value?.files) { files = value.files; fileOwner = value.fileOwner || null; uploadRequest = value.uploadRequest || null; renderFiles(); } }).catch(() => { /* No claim of file recovery is made without a readable store. */ }).finally(() => { fileReading = null; });
-    return { setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { closeResultStream(); capturePointEditor(); saveLocalDraft(); more.open = false; } }, refresh, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { closeResultStream(); resultKey = resultCursor = ""; resultPending = null; capturePointEditor(); pointEditor = null; state.generation += 1; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.idea = state.ideaDetail = state.management = null; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
+    return { setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { closeResultStream(); capturePointEditor(); saveLocalDraft(); more.open = false; } }, refresh, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { closeResultStream(); resultKey = resultCursor = ""; resultPending = null; capturePointEditor(); pointEditor = null; state.generation += 1; state.subscriptionReading = false; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.idea = state.ideaDetail = state.management = null; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
   }
   window.CodexMobileDialogue = Object.freeze({ create });
 })();

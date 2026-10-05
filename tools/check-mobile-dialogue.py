@@ -29,6 +29,37 @@ class ForbiddenModels:
         raise AssertionError("Phone dialogue must never call a model API")
 
 
+class CachedSubscription:
+    """Only a frozen synthetic catalog; no credentials or HTTP client."""
+    def __init__(self):
+        self.connected = True
+        self.catalog = "catalog-fixture-1"
+        self.connection = "connection-fixture-1"
+        self.calls = []
+
+    def get_status(self):
+        return {"connected": self.connected, "connectionId": self.connection,
+            "catalogRevision": self.catalog, "models": [{"slug": "fixture-model", "displayName": "实际目录模型"}],
+            "status": "ready" if self.connected else "expired", "busy": False, "error": ""}
+
+    public_status = get_status
+
+    def validate_selection(self, model, catalog, connection):
+        self.calls.append((model, catalog, connection))
+        if not self.connected:
+            raise WorkflowError("订阅已过期，草稿保留。", 409, "subscription_not_connected")
+        if catalog != self.catalog or connection != self.connection:
+            raise WorkflowError("实际模型目录已变化。", 409, "subscription_selection_stale")
+        if model != "fixture-model":
+            raise WorkflowError("所选实际模型不可用。", 409, "subscription_model_unavailable")
+        return {"provider": "chatgpt_subscription", "connectionId": connection,
+            "catalogRevision": catalog, "modelSlug": model}
+
+    def choice(self):
+        return {"provider": "chatgpt_subscription", "connectionId": self.connection,
+            "catalogRevision": self.catalog, "modelSlug": "fixture-model"}
+
+
 class MobileDialogueChecks(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="console-mobile-dialogue-")
@@ -106,6 +137,117 @@ class MobileDialogueChecks(unittest.TestCase):
 
     def files_snapshot(self):
         return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in self.service.attachments_dir.iterdir() if path.is_file()}
+
+    def assert_frozen_images(self, sent, identifiers, text):
+        with self.service._db() as db:
+            job = db.execute("SELECT * FROM jobs WHERE id=?", (sent["job"]["id"],)).fetchone()
+            payload = json.loads(job["payload"])
+            dispatch = dict(self.service._dispatch(db, payload["appDispatchId"]))
+            originals = [dict(db.execute("SELECT * FROM attachments WHERE id=?", (identifier,)).fetchone())
+                for identifier in identifiers]
+        self.assertEqual(job["status"], "waiting")
+        self.assertEqual(json.loads(job["result"]), {})
+        self.assertEqual(dispatch["status"], "pending")
+        self.assertIsNone(dispatch["claim_token"])
+        self.assertIsNone(dispatch["target_thread_id"])
+        self.assertEqual(payload["text"], text)
+        self.assertEqual(payload["context"]["attachmentIds"], identifiers)
+        self.assertEqual(payload["mobileDialogue"]["id"], sent["session"]["id"])
+        self.assertEqual(payload["mobileDialogue"]["recordId"], sent["session"]["recordId"])
+        self.assertEqual(payload["appTarget"]["kind"], "chatgpt")
+        self.assertEqual(payload["appTarget"]["mode"], "new")
+        images = payload["appFrozen"]["images"]
+        self.assertEqual([image["id"] for image in images], identifiers)
+        for image, original in zip(images, originals):
+            self.assertEqual(original["record_id"], sent["session"]["recordId"])
+            original_path = self.service.attachments_dir / original["filename"]
+            self.assertEqual(image["originalFilename"], original["filename"])
+            self.assertEqual(image["originalSha256"], hashlib.sha256(original_path.read_bytes()).hexdigest())
+            self.assertEqual(image["originalSize"], original_path.stat().st_size)
+            self.assertEqual(image["originalMimeType"], original["mime_type"])
+            self.assertEqual(image["sha256"], hashlib.sha256(Path(image["path"]).read_bytes()).hexdigest())
+        snapshot = json.loads(dispatch["snapshot"])
+        self.assertEqual(snapshot["attachmentIds"], identifiers)
+        self.assertEqual(snapshot["actualReceipt"], {"verified": False, "actualProfile": None, "status": "unverified", "source": None})
+        self.assertEqual(snapshot["requestedProfile"], payload["requestedProfile"])
+        prompt_data = json.loads(dispatch["prompt"][dispatch["prompt"].rfind("\n\n") + 2:])
+        self.assertEqual(prompt_data["question"], text)
+        self.assertEqual(prompt_data["selectedImages"], images)
+        self.assertFalse(self.service._wake.is_set())
+        return payload
+
+    def test_subscription_model_and_transport_are_frozen_without_a_tier_mapping_or_browser_claim(self):
+        adapter = self.service.subscription = CachedSubscription()
+        state = self.open()
+        sent = self.mutate("send", state, text="明确选择目录中的实际模型", requestedProfile="pro",
+            chatTransport="chatgpt_subscription", subscription=adapter.choice())
+        payload = self.assert_frozen_images(sent, [], "明确选择目录中的实际模型")
+        self.assertEqual(payload["chatTransport"], "chatgpt_subscription")
+        self.assertEqual(payload["subscription"], adapter.choice())
+        self.assertEqual(payload["appFrozen"]["subscription"], adapter.choice())
+        self.assertEqual(payload["requestedProfile"], "pro")
+        self.assertIs(sent["job"]["actualReceipt"]["verified"], False)
+        self.assertEqual(sent["job"]["subscriptionPhase"], "accepted")
+        with self.service._db() as db:
+            snapshot = json.loads(self.service._dispatch(db, payload["appDispatchId"])["snapshot"])
+        self.assertEqual(snapshot["subscription"], adapter.choice())
+        self.error(lambda: self.service.incubator_claim(request(id=payload["appDispatchId"])), "subscription_route_required")
+        self.assertEqual(len(adapter.calls), 1)
+
+    def test_subscription_image_only_nonce_replay_keeps_exact_image_and_does_not_revalidate_expired_grant(self):
+        adapter = self.service.subscription = CachedSubscription()
+        state = self.open()
+        image = self.image(state)
+        session = state["session"]
+        body = request(clientId=self.client, sessionId=session["id"], expectedRevision=session["revision"],
+            text="", attachmentIds=[image], requestedProfile="high", chatTransport="chatgpt_subscription",
+            subscription=adapter.choice())
+        sent = self.post("dialogue/send", body)
+        self.assert_frozen_images(sent, [image], "")
+        self.assertEqual(sent["detail"]["messages"][-1]["attachmentIds"], [image])
+        before = self.db_snapshot()
+        adapter.connected = False
+        duplicate = self.post("dialogue/send", body)
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(duplicate["job"]["id"], sent["job"]["id"])
+        self.assertEqual(len(adapter.calls), 1)
+        self.assertEqual(self.db_snapshot(), before)
+        self.error(lambda: self.post("dialogue/send", {**body, "subscription": {**body["subscription"], "modelSlug": "changed-model"}}))
+        self.assertEqual(self.db_snapshot(), before)
+
+    def test_subscription_draft_and_save_work_offline_but_new_sends_reject_stale_or_missing_selection(self):
+        adapter = self.service.subscription = CachedSubscription()
+        adapter.connected = False
+        state = self.open()
+        image = self.image(state)
+        drafted = self.mutate("draft", state, text="断线仍保留文字与选图", attachmentIds=[image],
+            chatTransport="chatgpt_subscription", subscription=adapter.choice())
+        self.assertEqual(adapter.calls, [])
+        before = self.db_snapshot()
+        self.error(lambda: self.mutate("send", drafted, text="断线仍保留文字与选图", attachmentIds=[image],
+            chatTransport="chatgpt_subscription", subscription=adapter.choice()), "subscription_not_connected")
+        self.assertEqual(self.db_snapshot(), before)
+        saved = self.mutate("save", drafted, text="断线仍保留文字与选图", attachmentIds=[image],
+            chatTransport="chatgpt_subscription", subscription=adapter.choice())
+        self.assertEqual(saved["idea"]["body"], "断线仍保留文字与选图")
+        self.assertEqual(self.counts()["jobs"], 0)
+        adapter.connected = True
+        self.error(lambda: self.mutate("send", saved, chatTransport="chatgpt_subscription", subscription=None), "subscription_not_connected")
+        adapter.catalog = "catalog-fixture-2"
+        self.error(lambda: self.mutate("send", saved, chatTransport="chatgpt_subscription",
+            subscription=drafted["session"]["subscription"]), "subscription_selection_stale")
+        self.error(lambda: self.mutate("send", saved, chatTransport="chatgpt_subscription",
+            subscription={**adapter.choice(), "modelSlug": "missing-model"}), "subscription_model_unavailable")
+        self.assertEqual(self.counts()["jobs"], 0)
+
+    def test_legacy_browser_send_is_not_redirected_by_an_available_subscription(self):
+        adapter = self.service.subscription = CachedSubscription()
+        sent = self.mutate("send", self.open(), requestedProfile="fast")
+        payload = self.assert_frozen_images(sent, [], "本轮问题")
+        self.assertEqual(payload["chatTransport"], "browser_chat")
+        self.assertNotIn("subscription", payload)
+        self.assertNotIn("subscription", payload["appFrozen"])
+        self.assertEqual(adapter.calls, [])
 
     def test_phone_confirmation_time_is_shared_by_saved_message_and_frozen_chat_on_replay(self):
         state = self.open()
@@ -308,11 +450,12 @@ class MobileDialogueChecks(unittest.TestCase):
         self.service = WorkflowService(self.root / "unclassified-scope-private", models=ForbiddenModels(), projects=[], recover_jobs=False)
         state = self.open()
         original = self.image(state)
-        drafted = self.mutate("draft", state, text="有图不假称传给普通 Chat", attachmentIds=[original])
+        drafted = self.mutate("draft", state, text="有图先冻结，不假称已经发送", attachmentIds=[original])
+        sent = self.mutate("send", drafted, text="图像问题", attachmentIds=[original], requestedProfile="fast")
+        payload = self.assert_frozen_images(sent, [original], "图像问题")
+        self.assertEqual(payload["projectId"], "")
+        self.assertEqual(payload["appFrozen"]["projectName"], "未归类")
         before = self.db_snapshot()
-        self.error(lambda: self.mutate("send", drafted, text="图像问题", attachmentIds=[original]), "app_images_unavailable")
-        self.assertEqual(self.db_snapshot(), before)
-        self.assertEqual(self.current()["session"]["draft"], drafted["session"]["draft"])
         with self.service._db() as db:
             record = self.service._record(db, state["session"]["recordId"])
             payload = {"context": {"attachmentIds": [], "selectedText": "", "referenceIds": ["private-ref"]},
@@ -326,8 +469,8 @@ class MobileDialogueChecks(unittest.TestCase):
                 self.error(lambda: self.service._freeze_app_discussion(db, record,
                     {**payload, "mobileDialogue": mobile, "purpose": purpose, "appTarget": target}, None), "project_not_authorized")
         self.assertEqual(self.db_snapshot(), before)
-        self.assertEqual(self.counts()["jobs"], 0)
-        self.assertEqual(self.counts()["idea_dispatches"], 0)
+        self.assertEqual(self.counts()["jobs"], 1)
+        self.assertEqual(self.counts()["idea_dispatches"], 1)
 
     def test_open_nonce_is_idempotent_and_open_without_idea_recovers_current(self):
         body = request(clientId=self.client)
@@ -458,22 +601,25 @@ class MobileDialogueChecks(unittest.TestCase):
         self.assertEqual(provenance["destinationRevision"], 2)
         self.assertEqual(self.counts()["idea_dispatches"], 0)
 
-    def test_saved_attachments_remain_and_chat_image_rejection_keeps_draft(self):
+    def test_saved_attachments_remain_after_confirmed_image_chat_freezes_pending(self):
         state = self.open(); image = self.image(state)
         draft = self.mutate("draft", state, text="有原图的草稿", attachmentIds=[image])
-        self.error(lambda: self.mutate("send", draft, text="有原图的草稿", attachmentIds=[image]), "app_images_unavailable")
-        self.assertEqual(self.current()["session"]["draft"], draft["session"]["draft"])
-        saved = self.mutate("save", draft, text="", attachmentIds=[image])
+        files_before = self.files_snapshot()
+        sent = self.mutate("send", draft, text="有原图的草稿", attachmentIds=[image])
+        self.assert_frozen_images(sent, [image], "有原图的草稿")
+        self.assertEqual(self.files_snapshot(), files_before)
+        saved = self.mutate("save", sent, text="", attachmentIds=[image])
         self.assertEqual(saved["idea"]["imageCount"], 1)
         self.assertEqual(saved["idea"]["provenance"][-1]["attachmentIds"], [image])
         self.mutate("clear", saved)
         self.assertEqual(len(self.service.detail(saved["session"]["recordId"])["attachments"]), 1)
-        self.assertEqual(self.counts()["idea_dispatches"], 0)
+        self.assertEqual(self.counts()["idea_dispatches"], 1)
 
     def test_other_record_attachment_cannot_enter_current_draft(self):
         first = self.open(); image = self.image(first)
         second = self.mutate("clear", first)
         self.error(lambda: self.mutate("draft", second, attachmentIds=[image]))
+        self.error(lambda: self.mutate("send", second, text="", attachmentIds=[image]), "image_source_mismatch")
         self.assertEqual(self.current()["session"]["draft"]["attachmentIds"], [])
 
     def test_saved_originals_are_frozen_candidates_and_selection_survives_restart(self):
@@ -491,7 +637,44 @@ class MobileDialogueChecks(unittest.TestCase):
         draft = self.mutate("draft", reopened, text="明确复用原图", attachmentIds=[original])
         self.service = WorkflowService(self.root / "private", models=ForbiddenModels(), recover_jobs=False)
         self.assertEqual(self.current()["session"]["draft"], draft["session"]["draft"])
-        self.error(lambda: self.mutate("send", self.current(), text="明确复用原图", attachmentIds=[original]), "app_images_unavailable")
+        sent = self.mutate("send", self.current(), text="明确复用原图", attachmentIds=[original])
+        frozen = self.assert_frozen_images(sent, [original], "明确复用原图")
+        self.assertEqual(frozen["sourceTask"]["ideaId"], idea["id"])
+        self.assertEqual(frozen["sourceTask"]["revision"], idea["revision"])
+        self.assertEqual(self.counts()["idea_dispatches"], 1)
+
+    def test_image_only_confirmation_freezes_once_and_nonce_replay_cannot_retarget_after_clear(self):
+        state = self.open(); original = self.image(state)
+        body = request(clientId=self.client, sessionId=state["session"]["id"], expectedRevision=state["session"]["revision"],
+            text="", attachmentIds=[original], requestedProfile="fast")
+        original_files = self.files_snapshot()
+        accepted = self.post("dialogue/send", body)
+        self.assert_frozen_images(accepted, [original], "")
+        confirmed_message = accepted["detail"]["messages"][-1]
+        self.assertEqual(confirmed_message["text"], "")
+        self.assertEqual(confirmed_message["attachmentIds"], [original])
+        before = self.db_snapshot()
+        duplicate = self.post("dialogue/send", body)
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(duplicate["job"]["id"], accepted["job"]["id"])
+        self.assertEqual(self.db_snapshot(), before)
+        self.assertEqual(self.files_snapshot(), original_files)
+        current = self.mutate("clear", accepted)
+        after_clear = self.db_snapshot()
+        replay = self.post("dialogue/send", body)
+        self.assertTrue(replay["duplicate"])
+        self.assertFalse(replay["session"]["isCurrent"])
+        self.assertEqual(replay["job"]["id"], accepted["job"]["id"])
+        self.assertEqual(self.current()["session"]["id"], current["session"]["id"])
+        self.assertEqual(self.db_snapshot(), after_clear)
+        self.assertEqual(self.counts()["idea_dispatches"], 1)
+        self.assertEqual(self.service.detail(accepted["session"]["recordId"])["messages"][-1], confirmed_message)
+
+    def test_blank_confirmation_without_selected_images_is_rejected_without_a_dispatch(self):
+        state = self.open(); self.image(state)
+        before = self.db_snapshot(), self.files_snapshot()
+        self.error(lambda: self.mutate("send", state, text=" \n", attachmentIds=[]))
+        self.assertEqual((self.db_snapshot(), self.files_snapshot()), before)
         self.assertEqual(self.counts()["idea_dispatches"], 0)
 
     def test_another_session_same_record_upload_is_not_eligible(self):
@@ -504,6 +687,7 @@ class MobileDialogueChecks(unittest.TestCase):
         self.assertEqual(reopened["session"]["recordId"], other["session"]["recordId"])
         self.assertEqual(reopened["eligibleAttachments"], [])
         self.error(lambda: self.mutate("draft", reopened, attachmentIds=[uploaded]), "image_source_mismatch")
+        self.error(lambda: self.mutate("send", reopened, text="", attachmentIds=[uploaded]), "image_source_mismatch")
 
     def test_source_revision_and_actual_original_bytes_are_checked_before_selection(self):
         state = self.open(); original = self.image(state)

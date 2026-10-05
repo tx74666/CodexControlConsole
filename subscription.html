@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Console · ChatGPT 订阅</title><link rel="stylesheet" href="subscription.css"><script src="subscription.js" defer></script></head>
+<body><main>
+  <a class="back" href="./index.html#console">← 返回 Console</a>
+  <p class="eyebrow">Console · 连接</p><h1>使用 ChatGPT 订阅</h1>
+  <p>把新消息和本次选中的图片交给你授权的 ChatGPT 模型，完整回答保存回同一条 Console 记录，手机继续留在 Console。</p>
+  <section><h2>正式连接</h2><p id="connectionStatus" role="status" aria-live="polite">正在读取本机连接状态…</p>
+    <p class="muted">使用订阅的共享额度，与 Work / Codex 共用；额外 credits 与应用上限由 OpenAI 的使用设置控制。不需要填写 API key。</p>
+    <div class="actions"><button id="signin" type="button">连接 ChatGPT</button><button id="status" type="button" class="secondary">查看连接</button><button id="models" type="button" class="secondary">重新读取模型</button></div>
+    <a id="authorizationLink" class="primary" href="#" target="_blank" rel="noopener noreferrer" hidden>前往 OpenAI，选择账号并授权</a>
+    <p id="operationStatus" class="muted" role="status" aria-live="polite"></p>
+    <ul id="modelList"></ul>
+  </section>
+  <section><h2>连接后怎么发送</h2><p>在手机当前对话的「更多」中选择「ChatGPT 订阅」，再选择账号实际提供的模型。核对文字和选图后点击发送。切换通道、选择模型和查看连接都不会发送消息。</p>
+    <p class="muted">这条连接不会读取已有 ChatGPT 会话或记忆。Console 只提交当前记录冻结的相关文字和明确选中的图片；当前连接不提供生成图片、录音转写或视频输入。</p>
+    <p class="muted">授权凭据由 Windows 加密保存在这台电脑，只供 Console 正式连接使用。隔离测试入口的凭据不会复制到这里。</p>
+    <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">查看官方使用设置</a>
+  </section>
+  <details><summary>断开连接</summary><p class="muted">停止新请求并撤销此应用连接。已经确认发送的记录会保留，发送状态不明的消息不会重发。</p><button id="disconnect" class="secondary" type="button">断开本机订阅连接</button></details>
+</main></body></html>

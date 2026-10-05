@@ -68,6 +68,13 @@ def workflow_upload_dialogue(service, fields, files, *, prefix="/api/workflow", 
 def workflow_get(service, action, query, *, prefix="/api/workflow", authorize=None):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    if action == "subscription/status":
+        if query:
+            raise WorkflowError("订阅连接请求地址无效。")
+        subscription = getattr(service, "subscription", None)
+        return subscription.get_status() if subscription else {
+            "connected": False, "connectionId": None, "catalogRevision": None,
+            "models": [], "status": "请在电脑连接 ChatGPT 订阅。", "busy": False, "error": None}
     if action == "app-work-review":
         operation = getattr(service, "app_work_review", None)
         if not callable(operation):
@@ -108,6 +115,25 @@ def workflow_get(service, action, query, *, prefix="/api/workflow", authorize=No
 def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=False, authorize=None):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    if action.startswith("subscription/"):
+        if not desktop:
+            raise WorkflowError("请在电脑完成订阅连接设置。", 403)
+        if not isinstance(body, dict) or body:
+            raise WorkflowError("请从订阅连接页面明确操作。")
+        if authorize:
+            authorize()
+        subscription = getattr(service, "subscription", None)
+        if subscription is None:
+            raise WorkflowError("订阅连接组件尚未更新。", 503)
+        operations = {"subscription/signin": "begin_signin", "subscription/models": "refresh_catalog",
+                      "subscription/disconnect": "disconnect"}
+        operation = operations.get(action)
+        if operation is None:
+            raise WorkflowError("订阅接口不存在。", 404)
+        result = getattr(subscription, operation)()
+        if authorize:
+            authorize()
+        return result
     operations = {"create": "create", "message": "add_message",
                   "submit": "submit", "discuss": "discuss",
                   "transcribe": "transcribe", "retry": "retry",

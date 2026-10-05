@@ -86,6 +86,10 @@ $PythonSources = @(
   "workflow_mobile_dialogue.py",
   "workflow_mobile_handoff.py",
   "workflow_chat_relay.py",
+  "workflow_chat_relay_images.py",
+  "workflow_subscription.py",
+  "workflow_subscription_stream.py",
+  "workflow_subscription_delivery.py",
   "workflow_script_proposals.py",
   "workflow_native_work.py",
   "workflow_process.py",
@@ -140,6 +144,9 @@ $PythonChecks = @(
   "tools/check-conversations.py",
   "tools/check-thread-cache-import.py",
   "tools/check-workflow.py",
+  "tools/check-workflow-subscription.py",
+  "tools/check-workflow-subscription-stream.py",
+  "tools/check-workflow-subscription-delivery.py",
   "tools/check-mobile-dialogue.py",
   "tools/check-mobile-dialogue-events.py",
   "tools/check-mobile-dialogue-http.py",
@@ -192,6 +199,10 @@ try {
     "mobile.js",
     "mobile.css",
     "mobile-dialogue.js",
+    "subscription.html",
+    "subscription.css",
+    "subscription.js",
+    "tools/check-subscription-ui.mjs",
     "mobile-handoff.js",
     "mobile-dialogue.css",
     "tools/check-mobile-dialogue-ui.mjs",
@@ -245,6 +256,8 @@ try {
   Invoke-QualityStep "Offline phone UI" { & $Node tools/check-phone-offline-ui.mjs }
   Invoke-QualityStep "Mobile JavaScript syntax" { & $Node --check mobile.js }
   Invoke-QualityStep "Mobile dialogue syntax" { & $Node --check mobile-dialogue.js }
+  Invoke-QualityStep "ChatGPT subscription connection syntax" { & $Node --check subscription.js }
+  Invoke-QualityStep "ChatGPT subscription connection behavior" { & $Node tools/check-subscription-ui.mjs }
   Invoke-QualityStep "Mobile dialogue behavior" { & $Node tools/check-mobile-dialogue-ui.mjs }
   Invoke-QualityStep "Optional ordinary Chat relay protocol and permissions" { & $Node extensions/console-chat-relay/tests/check-relay.mjs }
   Invoke-QualityStep "Mobile idea handoff syntax" { & $Node --check mobile-handoff.js }

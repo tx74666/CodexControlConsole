@@ -17,6 +17,7 @@ import threading
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
+from workflow_chat_relay_images import frozen_images, image_frames, image_evidence, read_image_contract
 
 PROTOCOL = "console_chat_relay/v1"
 HOST_NAME = "com.tx74666.codex_console_chat_relay"
@@ -140,7 +141,7 @@ def _confirmed_pending(db, config):
     eligible_at = max(timestamp(config["approvalConfirmedAt"]),
                       timestamp(config["domContract"]["capturedAt"]))
     observed_at = datetime.now(timezone.utc)
-    rows = db.execute("SELECT * FROM idea_dispatches WHERE status='pending' ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,created_at,id")
+    rows = db.execute("SELECT * FROM idea_dispatches WHERE status='pending' AND json_extract(snapshot,'$.subscription') IS NULL ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,created_at,id")
     for row in rows:
         try:
             created_at = timestamp(row["created_at"])
@@ -321,8 +322,10 @@ class ChatRelayController:
                     or target.get("name") != row["target_name"] or payload.get("purpose") != "discussion"):
                 self.blocked_reason = "frozen_target_requires_user_review"
                 return
-            if snapshot.get("attachmentIds") or payload.get("context", {}).get("attachmentIds") or payload.get("appFrozen", {}).get("images"):
-                reason = "unsupported_images: 普通 Chat 转发只接受纯文字；原图与草稿保留，本次未发送。"
+            has_images = bool(snapshot.get("attachmentIds") or payload.get("context", {}).get("attachmentIds") or payload.get("appFrozen", {}).get("images"))
+            attachments_contract = read_image_contract(config["domContract"]["surface"]) if has_images else None
+            if has_images and attachments_contract is None:
+                reason = "images_contract_unverified: 尚未核对真实图片上传控件与附件证据；原图保留，本次未发送。"
                 db.execute("UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=?", (reason, now(), job["id"]))
                 db.execute("UPDATE idea_dispatches SET status='failed',error=?,updated_at=? WHERE id=?", (reason, now(), row["id"]))
                 service._revision(db, True)
@@ -341,6 +344,7 @@ class ChatRelayController:
                 self.events.discard(row["id"])
                 return "failed"
             service._check_app_images(payload)
+            images = frozen_images(service, db, payload, snapshot, snapshot["recordId"]) if has_images else []
             marker = "[Codex Console 发布编号：" + row["id"] + "]"
             if row["prompt"].count(marker) != 1:
                 return
@@ -350,15 +354,31 @@ class ChatRelayController:
                        "observationSha256": config["domContract"]["observationSha256"],
                        "approvalSha256": sha(encode(config).decode()),
                        "createdAt": now(), "sendIntentAt": None, "conversationUrl": None}
+            if images:
+                attempt["images"] = [item for item, _data in images]
+                attempt["attachmentsContract"] = attachments_contract
             service._set_setting(db, ATTEMPT_PREFIX + row["id"], attempt)
             db.execute("UPDATE idea_dispatches SET status='claimed',claim_token=?,updated_at=? WHERE id=?", (attempt["claimToken"], now(), row["id"]))
             service._revision(db, True)
             outgoing = {"protocol": PROTOCOL, "type": "prepare", "dispatchId": row["id"], "attemptId": attempt["attemptId"],
                         "prompt": row["prompt"], "promptSha256": attempt["promptSha256"], "requestedProfile": profile,
-                        "target": {"kind": "chatgpt", "mode": "new"}, "domContract": config["domContract"]}
+                         "target": {"kind": "chatgpt", "mode": "new"}, "domContract": config["domContract"]}
+            if images:
+                outgoing["images"] = attempt["images"]
+                outgoing["attachmentsContract"] = attachments_contract
         self.active = attempt["dispatchId"]
         self.events.discard(attempt["dispatchId"])
         self.blocked_reason = None
+        # Emit all immutable bytes before prepare. The worker's serial prepare
+        # never waits for chunks queued behind itself, and no bytes are persisted.
+        for frame in image_frames(PROTOCOL, attempt, images):
+            if self.config() != config or not self.client_ready:
+                self.disconnect("relay_image_transfer_cancelled")
+                return
+            self.emit(frame)
+        if self.config() != config or not self.client_ready:
+            self.disconnect("relay_prepare_cancelled")
+            return
         self.emit(outgoing)
         return "prepared"
 
@@ -434,7 +454,8 @@ class ChatRelayController:
                     if attempt["sendIntentAt"] or attempt["phase"] != "prepared_requested":
                         raise ValueError("relay_send_already_committed")
                     observation = message["observation"]
-                    if (not isinstance(observation, dict) or set(observation) != {"url", "chatMode", "loginVerified", "emptyComposer", "observedProfile", "completionInitiallyPresent", "surface", "observationSha256", "profileDom"}
+                    observation_fields = {"url", "chatMode", "loginVerified", "emptyComposer", "observedProfile", "completionInitiallyPresent", "surface", "observationSha256", "profileDom"} | ({"images"} if attempt.get("images") else set())
+                    if (not isinstance(observation, dict) or set(observation) != observation_fields
                             or observation["url"] != "https://chatgpt.com/" or any(observation[key] is not True for key in ("chatMode", "loginVerified", "emptyComposer"))
                             or observation["completionInitiallyPresent"] is not False or observation["observedProfile"] != attempt["profileLabel"]
                             or observation["surface"] != config["domContract"]["surface"] or observation["observationSha256"] != attempt["observationSha256"]
@@ -442,6 +463,8 @@ class ChatRelayController:
                             or observation["profileDom"]["text"] not in {"Instant", "Thinking effortInstant", "思考强度Instant", "思考强度即时"}
                             or observation["profileDom"]["reasoningEffort"] != "none"):
                         raise ValueError("relay_prepared_dom_invalid")
+                    if attempt.get("images"):
+                        image_evidence(observation["images"], attempt["images"], "ready")
                     attempt.update(phase="send_intent", sendIntentAt=now(), preparedObservation=observation)
                     outgoing = {"protocol": PROTOCOL, "type": "commitSend", "dispatchId": attempt["dispatchId"], "attemptId": attempt["attemptId"]}
                 elif message["type"] in {"sending", "accepted"}:
@@ -450,7 +473,8 @@ class ChatRelayController:
                     attempt["phase"] = "waiting"
                     if message["type"] == "accepted":
                         evidence = message["evidence"]
-                        if not isinstance(evidence, dict) or set(evidence) != {"source", "conversationUrl", "sourceUserMessageId", "sourceUnitKey", "promptText", "observedAt", "profile"}:
+                        evidence_fields = {"source", "conversationUrl", "sourceUserMessageId", "sourceUnitKey", "promptText", "observedAt", "profile"} | ({"images"} if attempt.get("images") else set())
+                        if not isinstance(evidence, dict) or set(evidence) != evidence_fields:
                             raise ValueError("relay_accepted_fields_invalid")
                         conversation = self._source_evidence(row, attempt, evidence)
                         if attempt["conversationUrl"] and attempt["conversationUrl"] != evidence["conversationUrl"]:
@@ -490,6 +514,8 @@ class ChatRelayController:
 
     def _capture(self, db, row, attempt, evidence, contract):
         fields = {"source", "conversationUrl", "sourceUserMessageId", "assistantMessageId", "sourceUnitKey", "assistantUnitKey", "promptText", "answerText", "completion", "profile", "observedAt"}
+        if attempt.get("images"):
+            fields.add("images")
         if not isinstance(evidence, dict) or set(evidence) != fields or evidence["source"] != "browser_dom":
             raise ValueError("relay_capture_fields_invalid")
         conversation = self._source_evidence(row, attempt, evidence)
@@ -503,7 +529,8 @@ class ChatRelayController:
         if not assistant_unit or assistant_unit[1] != source_unit[1] or int(assistant_unit[2]) <= int(source_unit[2]):
             raise ValueError("relay_capture_unit_not_same_dom_turn")
         accepted = attempt.get("acceptedEvidence")
-        if accepted and any(accepted[key] != evidence[key] for key in ("conversationUrl", "sourceUserMessageId", "sourceUnitKey", "promptText", "profile")):
+        source_fields = ("conversationUrl", "sourceUserMessageId", "sourceUnitKey", "promptText", "profile") + (("images",) if attempt.get("images") else ())
+        if accepted and any(accepted[key] != evidence[key] for key in source_fields):
             raise ValueError("relay_capture_accepted_source_changed")
         answer = evidence["answerText"]
         if not isinstance(answer, str) or not answer.strip() or len(answer) > 20000 or "\0" in answer:
@@ -537,6 +564,8 @@ class ChatRelayController:
         # Current mobile session is intentionally untouched; an A reply stays on A's record.
 
     def _source_evidence(self, row, attempt, evidence):
+        if attempt.get("images"):
+            image_evidence(evidence.get("images"), attempt["images"], "attached")
         if evidence["source"] != "browser_dom":
             raise ValueError("relay_capture_source_invalid")
         conversation = conversation_id(evidence["conversationUrl"])
@@ -656,7 +685,7 @@ class ChatRelayBroker:
         from multiprocessing.connection import Listener
         self.listener = Listener(config["pipeName"], family="AF_PIPE", authkey=bytes.fromhex(config["authKeyHex"]))
         self.approved_config = config
-        self.service._dispatch_commit_notifier = self
+        self.service.register_dispatch_notifier(self)
         self.thread = threading.Thread(target=self._listen, args=(self.listener, self.stop_event), name="console-chat-relay-pipe", daemon=True)
         self.event_thread = threading.Thread(target=self._events, args=(self.events, self.stop_event), name="console-chat-relay-events", daemon=True)
         self.thread.start()
@@ -736,8 +765,7 @@ class ChatRelayBroker:
 
     def close(self):
         self.stop_event.set()
-        if self.service._dispatch_commit_notifier is self:
-            self.service._dispatch_commit_notifier = None
+        self.service.unregister_dispatch_notifier(self)
         self.events.put(None)
         if self.controller:
             self.controller.disconnect("relay_product_closed_requires_review")

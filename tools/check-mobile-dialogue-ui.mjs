@@ -39,20 +39,21 @@ function harness({ storage = new Map(), session = true, offline = false, resumed
   const root = new Element(), calls = [], events = new Map(), scrolls = [], copies = [], timers = new Map(), receipts = new Map(), files = fileRows, uploads = [], projects = [], attachments = new Map();
   let current = session ? { id: "session-a", recordId: "record-a", revision: 1, ideaId: null, eligibleAttachmentIds: [], uploadedAttachmentIds: [], draft: { text: "", attachmentIds: [] }, requestedProfile: "high", isCurrent: true } : null;
   if (resumed) current = structuredClone(resumed);
-  let messages = [], jobs = [], cancellationReceipts = [], responseHook = null, fileQuotaFailure = false, resultCursor = "a".repeat(64), resultStatus = "idle";
+  let messages = [], jobs = [], cancellationReceipts = [], responseHook = null, fileQuotaFailure = false, resultCursor = "a".repeat(64), resultStatus = "idle", subscriptionStatus = { connected: false, connectionId: null, catalogRevision: null, models: [], status: "not_connected", busy: false, error: "" };
   const ideas = [{ id: "idea-1", revision: 3, title: "裙子双模式", body: "物理与手动模式配合", updatedAt: "2026-10-05T03:00:00Z", archived: false, executionDraft: "", keyPoints: [{ id: "point-1", text: "待确认建议", kind: "suggestion", source: { recordId: "record-a" } }] }];
   const value = () => { const allowed = new Set([...(current?.eligibleAttachmentIds || []), ...(current?.uploadedAttachmentIds || [])]), eligible = [...attachments.values()].filter(item => allowed.has(item.id)); return structuredClone({ session: current, detail: current ? { record: { id: current.recordId }, messages, jobs, attachments: eligible } : null, cancellationReceipts, eligibleAttachments: eligible, preferences: { requestedProfile: "high" }, execution: { relayStatus: "not_connected", actualReceipt: { verified: false, actualProfile: null }, capability: "unverified" }, resultCursor: current ? resultCursor : null, resultStatus: current ? resultStatus : "idle" }); };
   const endpoint = async (action, payload) => {
     calls.push({ action, payload: payload && structuredClone(payload) });
     if (responseHook) { const result = responseHook(action, payload); if (result !== undefined) return result; }
     if (payload && receipts.has(payload.requestId)) return structuredClone(receipts.get(payload.requestId));
+    if (action === "subscription/status") return structuredClone(subscriptionStatus);
     if (action.startsWith("mobile/dialogue?")) return value();
     if (action.startsWith("mobile/ideas?")) { const filter = new URLSearchParams(action.split("?")[1]); return { ideas: structuredClone(ideas.filter(item => Boolean(item.archived) === (filter.get("archived") === "1"))), projects: structuredClone(projects) }; }
     if (action.startsWith("mobile/idea?")) return { idea: structuredClone(ideas.find(item => item.id === new URLSearchParams(action.split("?")[1]).get("id"))), detail: null };
     if (action === "mobile/dialogue/open") { const idea = ideas.find(item => item.id === payload.ideaId); current = { id: transport ? randomUUID().replaceAll("-", "") : `session-${randomUUID()}`, clientId: payload.clientId, recordId: idea?.workflowRecordId || (transport ? randomUUID().replaceAll("-", "") : `record-${randomUUID()}`), revision: 1, ideaId: payload.ideaId || null, ideaRevision: idea?.revision ?? null, eligibleAttachmentIds: [...(idea?.attachmentIds || [])], uploadedAttachmentIds: [], draft: { text: "", attachmentIds: [] }, requestedProfile: "high", isCurrent: true }; messages = []; jobs = []; }
     else if (action === "mobile/dialogue/clear") { current = { ...current, id: transport ? "b".repeat(32) : "session-b", recordId: transport ? "c".repeat(32) : "record-b", revision: 1, ideaId: null, eligibleAttachmentIds: [], uploadedAttachmentIds: [], draft: { text: "", attachmentIds: [] } }; messages = []; jobs = []; }
-    else if (action === "mobile/dialogue/draft") { assert.equal(payload.sessionId, current.id); assert.equal(payload.expectedRevision, current.revision); assert.ok(payload.attachmentIds.length <= 4); const allowed = new Set([...(current.eligibleAttachmentIds || []), ...(current.uploadedAttachmentIds || [])]); for (const id of payload.attachmentIds) assert.ok(allowed.has(id), "draft image must belong to this actual session"); current.revision++; current.draft = { text: payload.text, attachmentIds: structuredClone(payload.attachmentIds) }; current.requestedProfile = payload.requestedProfile; }
-    else if (action === "mobile/dialogue/send") { assert.equal(payload.expectedRevision, current.revision); current.revision++; messages.push({ id: "sent-a", role: "user", text: payload.text }); current.draft = { text: "", attachmentIds: [] }; jobs = [{ status: "waiting", appDispatch: { status: "pending" } }]; }
+    else if (action === "mobile/dialogue/draft") { assert.equal(payload.sessionId, current.id); assert.equal(payload.expectedRevision, current.revision); assert.ok(payload.attachmentIds.length <= 4); const allowed = new Set([...(current.eligibleAttachmentIds || []), ...(current.uploadedAttachmentIds || [])]); for (const id of payload.attachmentIds) assert.ok(allowed.has(id), "draft image must belong to this actual session"); current.revision++; current.draft = { text: payload.text, attachmentIds: structuredClone(payload.attachmentIds) }; current.requestedProfile = payload.requestedProfile; current.chatTransport = payload.chatTransport || "browser_chat"; if (payload.subscription) current.subscription = structuredClone(payload.subscription); }
+    else if (action === "mobile/dialogue/send") { assert.equal(payload.expectedRevision, current.revision); current.revision++; messages.push({ id: "sent-a", role: "user", text: payload.text, attachmentIds: structuredClone(payload.attachmentIds) }); current.draft = { text: "", attachmentIds: [] }; jobs = [{ status: "waiting", appDispatch: { status: "pending" }, ...(payload.subscription ? { chatTransport: "chatgpt_subscription", subscription: structuredClone(payload.subscription), subscriptionPhase: "accepted" } : {}) }]; }
     else if (action === "mobile/dialogue/cancel-pending") {
       assert.deepEqual(Object.keys(payload).sort(), ["clientId", "dispatchId", "expectedRevision", "recordId", "requestId", "sessionId"]);
       assert.equal(payload.clientId, current.clientId); assert.equal(payload.sessionId, current.id); assert.equal(payload.recordId, current.recordId); assert.equal(payload.expectedRevision, current.revision);
@@ -72,7 +73,7 @@ function harness({ storage = new Map(), session = true, offline = false, resumed
     }
     const answer = value(); if (action === "mobile/dialogue/save") answer.idea = structuredClone(ideas[0]); if (payload) receipts.set(payload.requestId, structuredClone(answer)); return answer;
   };
-  const runtime = { URL, URLSearchParams, FormData, Blob, structuredClone, console, AbortController, TextDecoder, crypto: { randomUUID }, localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) }, navigator: { onLine: true, clipboard: { async writeText(text) { copies.push(text); } } }, document: { createElement: tag => new Element(tag), documentElement: { scrollHeight: 2000 }, addEventListener(event, callback) { events.set(event, callback); } }, location: { origin: "http://fixture.test" }, requestAnimationFrame: callback => callback(), window: { innerHeight: 700, scrollY: 0, addEventListener(event, callback) { events.set(event, callback); }, scrollTo(value) { scrolls.push(value); this.scrollY = value.top; }, setTimeout(callback) { const id = randomUUID(); timers.set(id, callback); return id; }, clearTimeout(id) { timers.delete(id); } } };
+  const runtime = { URL, URLSearchParams, FormData, Blob, structuredClone, console, AbortController, TextDecoder, crypto: { randomUUID }, localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) }, navigator: { onLine: true, clipboard: { async writeText(text) { copies.push(text); } } }, document: { createElement: tag => new Element(tag), documentElement: { scrollHeight: 2000 }, addEventListener(event, callback) { events.set(event, callback); } }, location: { origin: "http://fixture.test" }, requestAnimationFrame: callback => callback(), window: { location: { href: "http://fixture.test/" }, innerHeight: 700, scrollY: 0, addEventListener(event, callback) { events.set(event, callback); }, scrollTo(value) { scrolls.push(value); this.scrollY = value.top; }, setTimeout(callback) { const id = randomUUID(); timers.set(id, callback); return id; }, clearTimeout(id) { timers.delete(id); } } };
   if (transport) runtime.fetch = async (url, fetchOptions) => { const parsed = new URL(url, runtime.location.origin), action = parsed.pathname.replace(/^\/api\/phone\/workflow\//, "") + parsed.search; if (parsed.pathname.endsWith("/mobile/dialogue/events")) return transport.open(parsed.href, fetchOptions); const data = await endpoint(action, fetchOptions.body ? JSON.parse(fetchOptions.body) : undefined); return { ok: true, status: 200, async json() { return data; } }; };
   runInNewContext(source, runtime); const panel = runtime.window.CodexMobileDialogue.create(root, { endpoint: transport ? "/api/phone/workflow" : endpoint, offline, blobStore: { async get(key) { return files.get(key); }, async put(value) { if (fileQuotaFailure) throw new Error("图片存储空间不足"); files.set(value.id, value); } }, async uploadAttachments(items, expected, uploadRequest) { assert.equal(uploadRequest.route, "mobile/dialogue/upload"); assert.deepEqual(Object.keys(uploadRequest.scope).sort(), ["clientId", "expectedRevision", "sessionId"]); assert.equal(uploadRequest.recordId, current.recordId); assert.equal(uploadRequest.scope.sessionId, current.id); assert.equal(uploadRequest.scope.clientId, current.clientId); assert.equal(uploadRequest.scope.expectedRevision, current.revision); uploads.push({ sessionId: current.id, recordId: current.recordId, count: items.length, request: structuredClone(uploadRequest) }); const incoming = items.map((file, index) => ({ id: `attachment-${index}`, name: file.name, mimeType: file.type, size: file.size, url: `http://fixture.test/images/attachment-${index}` })); for (const item of incoming) attachments.set(item.id, item); current.uploadedAttachmentIds = [...(current.uploadedAttachmentIds || []), ...incoming.map(item => item.id)]; current.revision++; return { ...value(), uploadedAttachmentIds: incoming.map(item => item.id) }; }, ...options });
   if (current && !current.clientId) current.clientId = JSON.parse([...storage.values()][0]).clientId;
@@ -80,7 +81,7 @@ function harness({ storage = new Map(), session = true, offline = false, resumed
   const byText = (text, index = 0) => all().filter(item => item.tagName === "BUTTON" && item.textContent === text)[index];
   const byLabel = label => all().find(item => item.attributes["aria-label"] === label);
   const byClass = name => all().find(item => item.className?.split(" ").includes(name));
-  return { panel, root, calls, storage, runtime, events, scrolls, copies, timers, byText, byLabel, byClass, value, uploads, files, quota(value) { fileQuotaFailure = value; }, current: () => current, setJobs(value) { jobs = structuredClone(value); }, setCancellationReceipts(value) { cancellationReceipts = structuredClone(value); }, switchSession(value) { current = structuredClone(value); messages = []; jobs = []; cancellationReceipts = []; }, result(cursor, status = "succeeded") { resultCursor = cursor; resultStatus = status; }, uploadedImage(id, name = `${id}.png`, size = 8) { current.uploadedAttachmentIds = [...(current.uploadedAttachmentIds || []), id]; attachments.set(id, { id, name, mimeType: "image/png", size, url: `http://fixture.test/images/${id}` }); }, savedImage(ideaId, id, name = `${id}.png`, size = 8) { const idea = ideas.find(item => item.id === ideaId); idea.attachmentIds = [...(idea.attachmentIds || []), id]; attachments.set(id, { id, name, mimeType: "image/png", size, url: `http://fixture.test/images/${id}` }); }, message(value) { messages.push(value); }, hook(fn) { responseHook = fn; }, ideas, projects };
+  return { panel, root, calls, storage, runtime, events, scrolls, copies, timers, byText, byLabel, byClass, value, uploads, files, quota(value) { fileQuotaFailure = value; }, current: () => current, setSubscriptionStatus(value) { subscriptionStatus = structuredClone(value); }, setJobs(value) { jobs = structuredClone(value); }, setCancellationReceipts(value) { cancellationReceipts = structuredClone(value); }, switchSession(value) { current = structuredClone(value); messages = []; jobs = []; cancellationReceipts = []; }, result(cursor, status = "succeeded") { resultCursor = cursor; resultStatus = status; }, uploadedImage(id, name = `${id}.png`, size = 8) { current.uploadedAttachmentIds = [...(current.uploadedAttachmentIds || []), id]; attachments.set(id, { id, name, mimeType: "image/png", size, url: `http://fixture.test/images/${id}` }); }, savedImage(ideaId, id, name = `${id}.png`, size = 8) { const idea = ideas.find(item => item.id === ideaId); idea.attachmentIds = [...(idea.attachmentIds || []), id]; attachments.set(id, { id, name, mimeType: "image/png", size, url: `http://fixture.test/images/${id}` }); }, message(value) { messages.push(value); }, hook(fn) { responseHook = fn; }, ideas, projects };
 }
 function streamHarness(options = {}) { const transport = resultTransport(), h = harness({ transport, options }); h.switchSession({ ...h.current(), id: "1".repeat(32), recordId: "2".repeat(32) }); return { ...h, transport }; }
 const resultFrame = (h, cursor = "b".repeat(64), status = "succeeded") => ({ clientId: h.current().clientId, sessionId: h.current().id, recordId: h.current().recordId, cursor, jobId: null, status });
@@ -89,6 +90,65 @@ let count = 0;
 async function test(name, fn) { await fn(); count++; console.log(`PASS ${name}`); }
 const pendingJob = h => ({ id: "3".repeat(32), recordId: h.current().recordId, status: "waiting", result: {},
   appDispatch: { id: "4".repeat(32), status: "pending", targetThreadId: null, canCancelPending: true } });
+const subscriptionCatalog = () => ({ connected: true, connectionId: "connection-actual", catalogRevision: "catalog-actual", models: [{ slug: "model-first", displayName: "目录第一模型" }, { slug: "model-second", displayName: "目录第二模型" }], status: "ready", busy: false, error: "" });
+const chooseSubscription = async (h, model = "model-second") => { h.setSubscriptionStatus(subscriptionCatalog()); const channel = h.byLabel("讨论通道"); channel.value = "chatgpt_subscription"; channel.fire("change"); await flush(); const picker = h.byLabel("ChatGPT 订阅实际模型"); picker.value = model; picker.fire("change"); await flush(); };
+await test("subscription availability never redirects browser drafts and model selection never sends", async () => {
+  const h = harness(); h.setSubscriptionStatus(subscriptionCatalog()); h.panel.setActive(true); await flush();
+  const input = h.byLabel("提问或保存想法"); input.value = "原草稿仍走旧通道"; input.fire("input");
+  assert.equal(h.byLabel("讨论通道").value, "browser_chat"); assert.equal(h.calls.some(item => item.action === "subscription/status"), false);
+  const channel = h.byLabel("讨论通道"); channel.value = "chatgpt_subscription"; channel.fire("change"); await flush();
+  const models = h.byLabel("ChatGPT 订阅实际模型"); assert.equal(models.value, ""); assert.deepEqual(models.children.map(item => item.value), ["", "model-first", "model-second"]);
+  assert.equal(h.byText("发送 ↑").disabled, true); assert.equal(h.byLabel("回答档位").hidden, true); assert.equal(input.value, "原草稿仍走旧通道");
+  models.value = "model-second"; models.fire("change"); await flush(); assert.equal(h.byText("发送 ↑").disabled, false);
+  assert.match(h.byClass("dialogue-status").textContent, /已选 model-second/); assert.doesNotMatch(h.byClass("dialogue-status").textContent, /实际 高|实际 Pro|实际 极速/);
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+});
+await test("subscription pure-image send freezes the exact original and real model once", async () => {
+  const h = harness(); h.savedImage("idea-1", "only-original", "订阅原图.png"); await h.panel.openIdea("idea-1"); h.byText("继续讨论").click(); await flush(); await chooseSubscription(h);
+  const source = structuredClone(h.current()), choice = h.byLabel("本次引用 订阅原图.png"); choice.checked = true; choice.fire("change"); await flush();
+  assert.equal(h.byText("发送 ↑").disabled, false); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  h.byText("发送 ↑").click(); h.byText("发送 ↑").click(); await flush(); const sent = h.calls.filter(item => item.action === "mobile/dialogue/send"); assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.text, ""); assert.deepEqual(sent[0].payload.attachmentIds, ["only-original"]); assert.equal(sent[0].payload.sessionId, source.id);
+  assert.equal(sent[0].payload.chatTransport, "chatgpt_subscription"); assert.deepEqual(sent[0].payload.subscription, { provider: "chatgpt_subscription", connectionId: "connection-actual", catalogRevision: "catalog-actual", modelSlug: "model-second" });
+  assert.equal(h.uploads.length, 0); const images = h.byClass("dialogue-message").children.find(item => item.className === "dialogue-attachment-grid"); assert.equal(images.children[0].alt, "订阅原图.png");
+  assert.match(h.byClass("dialogue-pending").textContent, /已接收，尚未发送/); assert.doesNotMatch(h.root.textContent, /实际模型：/);
+});
+await test("catalog changes or expiry preserve model choice and draft without a fallback or resend", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); await chooseSubscription(h); const input = h.byLabel("提问或保存想法"); input.value = "刷新目录时保留原文"; input.fire("input");
+  const newer = { ...subscriptionCatalog(), catalogRevision: "catalog-new" }; h.setSubscriptionStatus(newer); h.byText("查看订阅连接").click(); await flush();
+  assert.equal(input.value, "刷新目录时保留原文"); assert.equal(h.byText("发送 ↑").disabled, true); assert.equal(h.byLabel("ChatGPT 订阅实际模型").value, "stale:model-second");
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0); const models = h.byLabel("ChatGPT 订阅实际模型"); models.value = "model-second"; models.fire("change"); await flush();
+  assert.equal(h.byText("发送 ↑").disabled, false); h.setSubscriptionStatus({ ...newer, connected: false, status: "expired", error: "订阅已过期" }); h.byText("查看订阅连接").click(); await flush();
+  assert.equal(h.byText("发送 ↑").disabled, true); assert.equal(h.byText("只保存").disabled, false); assert.equal(input.value, "刷新目录时保留原文"); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+});
+await test("unknown subscription send retains its frozen model nonce and later draft without replay", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); await chooseSubscription(h); const input = h.byLabel("提问或保存想法"); input.value = "A：唯一确认的订阅消息"; input.fire("input");
+  h.hook(action => { if (action === "mobile/dialogue/send") throw new TypeError("result unknown"); }); h.byText("发送 ↑").click(); await flush();
+  const pending = JSON.parse([...h.storage.values()][0]).pending; assert.equal(pending.payload.subscription.modelSlug, "model-second"); assert.equal(h.byLabel("讨论通道").disabled, true); assert.equal(h.byLabel("ChatGPT 订阅实际模型").disabled, true);
+  input.value = "B：留给下一轮"; input.fire("input"); h.setSubscriptionStatus({ ...subscriptionCatalog(), catalogRevision: "different-catalog" }); h.hook(null); await h.panel.refresh(); await flush();
+  assert.deepEqual(JSON.parse([...h.storage.values()][0]).pending, pending); assert.equal(input.value, "B：留给下一轮"); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1);
+});
+await test("a definite subscription selection rejection releases only the unsent nonce and preserves text and image", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); await chooseSubscription(h); h.uploadedImage("chosen-image", "确认原图.png"); h.current().draft.attachmentIds = ["chosen-image"]; await h.panel.refresh();
+  const input = h.byLabel("提问或保存想法"); input.value = "目录刚刚失效时保留这段文字"; input.fire("input");
+  h.hook(action => { if (action === "mobile/dialogue/send") { h.setSubscriptionStatus({ ...subscriptionCatalog(), catalogRevision: "changed-at-send" }); throw Object.assign(new Error("模型目录变化，消息尚未发送。"), { status: 409, data: { code: "subscription_selection_stale" } }); } });
+  h.byText("发送 ↑").click(); await flush(); assert.equal(JSON.parse([...h.storage.values()][0]).pending, null);
+  assert.equal(input.value, "目录刚刚失效时保留这段文字"); assert.deepEqual(h.current().draft.attachmentIds, ["chosen-image"]); assert.equal(h.byText("发送 ↑").disabled, true); assert.equal(h.byLabel("ChatGPT 订阅实际模型").disabled, false); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1);
+});
+await test("an already completed exact subscription send receipt does not regress to waiting", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); await chooseSubscription(h); const input = h.byLabel("提问或保存想法"); input.value = "这轮立即完成的真实回答"; input.fire("input");
+  h.hook((action, payload) => { if (action !== "mobile/dialogue/send") return; h.current().revision++; h.current().draft = { text: "", attachmentIds: [] }; h.message({ id: "completed-now", role: "assistant", text: "确实完成的回答" }); const job = { ...pendingJob(h), status: "succeeded", chatTransport: "chatgpt_subscription", result: { source: "chatgpt_subscription", messageId: "completed-now", text: "确实完成的回答", actualModel: payload.subscription.modelSlug, terminalEventObserved: true, terminalStatus: "completed", completionEvidence: "response.completed" }, appDispatch: { ...pendingJob(h).appDispatch, status: "completed" } }; h.setJobs([job]); return { ...h.value(), job }; });
+  h.byText("发送 ↑").click(); await flush(); assert.match(h.byClass("dialogue-notice").textContent, /本轮回答已保存/); assert.doesNotMatch(h.byClass("dialogue-notice").textContent, /等待/); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1);
+});
+await test("subscription stages and actual model require a same-record explicit completed receipt", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); await chooseSubscription(h);
+  const job = { ...pendingJob(h), chatTransport: "chatgpt_subscription", subscription: { provider: "chatgpt_subscription" }, subscriptionPhase: "started", appDispatch: { ...pendingJob(h).appDispatch, status: "claimed", canCancelPending: false } };
+  h.setJobs([job]); await h.panel.refresh(); assert.match(h.byClass("dialogue-pending").textContent, /核对.*尚未发送/);
+  h.setJobs([{ ...job, subscriptionPhase: "generating" }]); await h.panel.refresh(); assert.match(h.byClass("dialogue-pending").textContent, /等待本轮实际回答/);
+  h.message({ id: "actual-answer", role: "assistant", text: "完整真实回答" }); const receipt = { source: "chatgpt_subscription", messageId: "actual-answer", text: "完整真实回答", actualModel: "model-second" };
+  h.setJobs([{ ...job, status: "succeeded", result: receipt, appDispatch: { ...job.appDispatch, status: "completed" } }]); await h.panel.refresh(); assert.doesNotMatch(h.byClass("dialogue-messages").textContent, /实际模型：/);
+  h.setJobs([{ ...job, status: "succeeded", result: { ...receipt, terminalEventObserved: true, terminalStatus: "completed", completionEvidence: "response.completed" }, appDispatch: { ...job.appDispatch, status: "completed" } }]); await h.panel.refresh(); assert.match(h.byClass("dialogue-messages").textContent, /实际模型：model-second · 回答已保存/);
+});
 await test("only a current latest job with explicit unsent projection offers manual cancellation", async () => {
   const h = harness(); h.setJobs([pendingJob(h)]); h.panel.setActive(true); await flush();
   assert.equal(h.byClass("dialogue-pending").textContent, "尚未发送，等待转发处理结束这条未发送请求");
@@ -339,6 +399,99 @@ await test("continuing a saved idea offers only its eligible images and never se
 });
 await test("explicit saved image selection and removal persist only the current draft", async () => {
   const h = harness(); h.savedImage("idea-1", "saved-a", "原图A.png"); await h.panel.openIdea("idea-1"); h.byText("继续讨论").click(); await flush(); const firstRevision = h.current().revision, choice = h.byLabel("本次引用 原图A.png"); choice.checked = true; choice.fire("change"); await flush(); assert.deepEqual(h.current().draft.attachmentIds, ["saved-a"]); let writes = h.calls.filter(item => item.action === "mobile/dialogue/draft"); assert.equal(writes.length, 1); assert.equal(writes[0].payload.expectedRevision, firstRevision); assert.equal(h.byLabel("本次引用 原图A.png").checked, true); const remove = h.byLabel("本次引用 原图A.png"); remove.checked = false; remove.fire("change"); await flush(); writes = h.calls.filter(item => item.action === "mobile/dialogue/draft"); assert.equal(writes.length, 2); assert.equal(writes[1].payload.expectedRevision, firstRevision + 1); assert.deepEqual(h.current().draft.attachmentIds, []); assert.equal(h.byLabel("本次引用 原图A.png").checked, false); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0); assert.equal(h.uploads.length, 0);
+});
+await test("saved-image-only Chat stays disabled until explicit selection and sends its exact source once", async () => {
+  const h = harness(); h.savedImage("idea-1", "saved-original", "明确原图.png");
+  await h.panel.openIdea("idea-1"); h.byText("继续讨论").click(); await flush();
+  const sourceSession = h.current().id, sourceRecord = h.current().recordId;
+  assert.equal(h.byText("发送 ↑").disabled, true);
+  h.byText("发送 ↑").click(); await flush();
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  const choice = h.byLabel("本次引用 明确原图.png"); choice.checked = true; choice.fire("change"); await flush();
+  assert.equal(h.byLabel("提问或保存想法").value, ""); assert.equal(h.byText("发送 ↑").disabled, false);
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  const tier = h.byLabel("回答档位"); tier.value = "fast"; tier.fire("change"); await flush();
+  const revision = h.current().revision;
+  h.byText("发送 ↑").click(); h.byText("发送 ↑").click(); await flush();
+  const sends = h.calls.filter(item => item.action === "mobile/dialogue/send"); assert.equal(sends.length, 1);
+  assert.equal(sends[0].payload.text, ""); assert.deepEqual(sends[0].payload.attachmentIds, ["saved-original"]);
+  assert.equal(sends[0].payload.requestedProfile, "fast"); assert.equal(sends[0].payload.sessionId, sourceSession);
+  assert.equal(sends[0].payload.clientId, h.current().clientId); assert.equal(sends[0].payload.expectedRevision, revision);
+  assert.equal(h.current().recordId, sourceRecord); assert.equal(h.uploads.length, 0);
+  assert.deepEqual(h.current().draft.attachmentIds, []); assert.equal(h.byText("发送 ↑").disabled, true);
+  const round = h.byClass("dialogue-message"), images = round.children.find(item => item.className === "dialogue-attachment-grid");
+  assert.equal(images.children.length, 1); assert.equal(images.children[0].alt, "明确原图.png");
+  assert.equal(images.children[0].src, "http://fixture.test/images/saved-original");
+  assert.match(h.root.textContent, /自动转发尚未接通/); assert.doesNotMatch(h.root.textContent, /回答已完成/);
+});
+await test("message thumbnails use only exact same-record attachment ids and same-origin URLs", async () => {
+  const h = harness(); h.uploadedImage("known", "本轮原图.png"); h.uploadedImage("foreign", "外部来源.png");
+  h.message({ id: "confirmed-image-round", role: "user", text: "", attachmentIds: ["known", "missing", "foreign"] });
+  h.hook(action => { if (!action.startsWith("mobile/dialogue?")) return; const value = h.value();
+    value.detail.attachments.find(item => item.id === "foreign").url = "https://unrelated.example/private.png"; return value; });
+  h.panel.setActive(true); await flush();
+  const round = h.byClass("dialogue-message"), images = round.children.find(item => item.className === "dialogue-attachment-grid");
+  assert.equal(images.children.length, 1); assert.equal(images.children[0].alt, "本轮原图.png");
+  assert.equal(images.children[0].src, "http://fixture.test/images/known");
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0); assert.equal(h.uploads.length, 0);
+});
+await test("removing the only selected original disables empty Chat without uploading or sending", async () => {
+  const h = harness(); h.savedImage("idea-1", "saved-original", "可取消原图.png");
+  await h.panel.openIdea("idea-1"); h.byText("继续讨论").click(); await flush();
+  let choice = h.byLabel("本次引用 可取消原图.png"); choice.checked = true; choice.fire("change"); await flush();
+  assert.equal(h.byText("发送 ↑").disabled, false);
+  choice = h.byLabel("本次引用 可取消原图.png"); choice.checked = false; choice.fire("change"); await flush();
+  assert.equal(h.byText("发送 ↑").disabled, true); h.byText("发送 ↑").click(); await flush();
+  assert.deepEqual(h.current().draft.attachmentIds, []); assert.equal(h.uploads.length, 0);
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+});
+await test("local-image-only Chat uploads then freezes the same session draft before one confirmed send", async () => {
+  const h = harness(); h.panel.setActive(true); await flush();
+  const image = new Blob(["only-selected-local-image"], { type: "image/png" }); image.name = "手机原图.png";
+  const source = structuredClone(h.current()), input = h.byLabel("选择图片文件");
+  input.files = [image]; input.fire("change"); await flush();
+  assert.equal(h.byText("发送 ↑").disabled, false); assert.equal(h.uploads.length, 0);
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  h.byText("发送 ↑").click(); h.byText("发送 ↑").click(); await flush();
+  assert.equal(h.uploads.length, 1); const uploaded = h.uploads[0];
+  assert.equal(uploaded.recordId, source.recordId); assert.equal(uploaded.sessionId, source.id); assert.equal(uploaded.count, 1);
+  assert.equal(uploaded.request.scope.clientId, source.clientId); assert.equal(uploaded.request.scope.expectedRevision, source.revision);
+  const draft = h.calls.find(item => item.action === "mobile/dialogue/draft").payload;
+  const sends = h.calls.filter(item => item.action === "mobile/dialogue/send"); assert.equal(sends.length, 1);
+  assert.equal(draft.sessionId, source.id); assert.equal(draft.expectedRevision, source.revision + 1);
+  assert.deepEqual(draft.attachmentIds, ["attachment-0"]); assert.equal(draft.text, "");
+  assert.equal(sends[0].payload.sessionId, source.id); assert.equal(sends[0].payload.text, "");
+  assert.deepEqual(sends[0].payload.attachmentIds, draft.attachmentIds); assert.equal(sends[0].payload.expectedRevision, source.revision + 2);
+  assert.equal(sends[0].payload.requestedProfile, source.requestedProfile); assert.equal(h.current().recordId, source.recordId);
+  const savedOriginal = h.value().eligibleAttachments.find(item => item.id === "attachment-0");
+  assert.equal(savedOriginal.name, image.name); assert.equal(savedOriginal.size, image.size); assert.equal(savedOriginal.mimeType, image.type);
+  assert.equal([...h.files.values()].some(row => row.files?.includes(image)), false);
+});
+await test("unknown image-send receipt preserves frozen ids nonce and later draft file without automatic resend", async () => {
+  const h = harness(); h.panel.setActive(true); await flush();
+  const first = new Blob(["confirmed-image-A"], { type: "image/png" }); first.name = "A原图.png";
+  let fileInput = h.byLabel("选择图片文件"); fileInput.files = [first]; fileInput.fire("change"); await flush();
+  h.hook(action => { if (action === "mobile/dialogue/send") throw new TypeError("image-send receipt unavailable"); });
+  h.byText("发送 ↑").click(); await flush();
+  const frozen = JSON.parse([...h.storage.values()][0]).pending;
+  assert.equal(frozen.action, "mobile/dialogue/send"); assert.equal(frozen.payload.text, "");
+  assert.deepEqual(frozen.payload.attachmentIds, ["attachment-0"]); assert.equal(h.uploads.length, 1);
+  const input = h.byLabel("提问或保存想法"); input.value = "B：稍后另发的草稿"; input.fire("input");
+  const later = new Blob(["retained-image-B"], { type: "image/png" }); later.name = "B原图.png";
+  fileInput = h.byLabel("选择图片文件"); fileInput.files = [later]; fileInput.fire("change"); await flush();
+  assert.equal([...h.files.values()].find(row => row.files?.length).files[0], later);
+  await h.panel.refresh(); await flush(); h.events.get("pagehide")();
+  const restored = harness({ storage: h.storage, resumed: h.current(), fileRows: h.files });
+  restored.panel.setActive(true); await flush();
+  assert.deepEqual(JSON.parse([...restored.storage.values()][0]).pending, frozen);
+  assert.equal(restored.byLabel("提问或保存想法").value, "B：稍后另发的草稿");
+  assert.equal([...restored.files.values()].find(row => row.files?.length).files[0], later);
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1);
+  assert.equal(restored.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  restored.byText("发送 ↑").click(); await flush();
+  assert.deepEqual(JSON.parse([...restored.storage.values()][0]).pending, frozen);
+  assert.equal(restored.calls.filter(item => item.action === "mobile/dialogue/send").length, 0); assert.equal(restored.uploads.length, 0);
+  assert.equal([...restored.files.values()].find(row => row.files?.length).files[0], later);
 });
 await test("three selected originals plus one scoped upload keep all four ids and advance the actual revision", async () => {
   const h = harness(); for (let n = 1; n <= 3; n++) h.savedImage("idea-1", `saved-${n}`, `原图${n}.png`); await h.panel.openIdea("idea-1"); h.byText("继续讨论").click(); await flush(); for (let n = 1; n <= 3; n++) { const choice = h.byLabel(`本次引用 原图${n}.png`); choice.checked = true; choice.fire("change"); await flush(); } const image = new Blob(["new-image"], { type: "image/png" }); image.name = "新图.png"; const input = h.byLabel("选择图片文件"); input.files = [image]; input.fire("change"); await flush(); const beforeUpload = h.current().revision; assert.equal(beforeUpload, 4); h.byText("只保存").click(); await flush(); assert.equal(h.uploads.length, 1); const upload = h.uploads[0]; assert.equal(upload.request.route, "mobile/dialogue/upload"); assert.equal(upload.request.scope.sessionId, upload.sessionId); assert.equal(upload.request.scope.expectedRevision, beforeUpload); const afterUploadDraft = h.calls.filter(item => item.action === "mobile/dialogue/draft").at(-1).payload; assert.equal(afterUploadDraft.expectedRevision, beforeUpload + 1); assert.deepEqual(afterUploadDraft.attachmentIds, ["saved-1", "saved-2", "saved-3", "attachment-0"]); const saved = h.calls.find(item => item.action === "mobile/dialogue/save").payload; assert.equal(saved.expectedRevision, beforeUpload + 2); assert.deepEqual(saved.attachmentIds, afterUploadDraft.attachmentIds); assert.equal(saved.attachmentIds.length, 4); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);

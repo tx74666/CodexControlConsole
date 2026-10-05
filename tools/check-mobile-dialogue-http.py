@@ -5,6 +5,7 @@ The desktop dispatch method is compiled from its source without importing the
 production bootstrap. All listeners, images, sessions and databases are fixtures.
 """
 import ast
+import hashlib
 import http.client
 import io
 import json
@@ -58,6 +59,42 @@ def multipart(fields, files):
     return b"".join(chunks), "multipart/form-data; boundary=" + boundary
 
 
+class CachedSubscription:
+    """Synthetic cached account catalog; all account mutations are forbidden."""
+    def __init__(self):
+        self.reads, self.selections = 0, []
+        self.status = {"connected": True, "connectionId": "http-fixture-connection",
+            "catalogRevision": "http-fixture-catalog", "models": [{"slug": "http-fixture-model", "displayName": "HTTP实际模型"}],
+            "status": "ready", "busy": False, "error": None}
+
+    def get_status(self):
+        self.reads += 1
+        return json.loads(json.dumps(self.status))
+
+    public_status = get_status
+
+    def choice(self):
+        return {"provider": "chatgpt_subscription", "connectionId": self.status["connectionId"],
+            "catalogRevision": self.status["catalogRevision"], "modelSlug": self.status["models"][0]["slug"]}
+
+    def validate_selection(self, model, catalog, connection):
+        self.selections.append((model, catalog, connection))
+        selection = {"provider": "chatgpt_subscription", "connectionId": connection,
+            "catalogRevision": catalog, "modelSlug": model}
+        if not self.status["connected"] or selection != self.choice():
+            raise WorkflowError("模拟目录无效，尚未发送。", 409, "subscription_selection_stale")
+        return selection
+
+    def begin_signin(self):
+        raise AssertionError("Phone must not start account authorization")
+
+    def refresh_catalog(self):
+        raise AssertionError("Phone must not refresh the provider catalog")
+
+    def disconnect(self):
+        raise AssertionError("Phone must not mutate the account connection")
+
+
 class MobileDialogueHttpChecks(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="console-mobile-http-")
@@ -103,6 +140,21 @@ class MobileDialogueHttpChecks(unittest.TestCase):
         finally:
             connection.close()
 
+    def get(self, path, *, headers=None, cookie=None):
+        values = {"Host": self.host, "Origin": self.origin, "X-Codex-Phone": "1"}
+        active_cookie = self.cookie if cookie is None else cookie
+        if active_cookie:
+            values["Cookie"] = active_cookie
+        values.update(headers or {})
+        values = {name: value for name, value in values.items() if value is not None}
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=4)
+        try:
+            connection.request("GET", path, headers=values)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read()), dict(response.getheaders())
+        finally:
+            connection.close()
+
     def pair(self):
         status, data, headers = self.call("/api/phone/pair", {"code": self.companion.state(False)["pairingCode"]})
         self.assertEqual(status, 200, data)
@@ -129,6 +181,26 @@ class MobileDialogueHttpChecks(unittest.TestCase):
             return {name: db.execute("SELECT COUNT(*) FROM " + name).fetchone()[0]
                     for name in ("attachments", "messages", "jobs", "idea_dispatches")}
 
+    def snapshot(self):
+        with self.service._db() as db:
+            return {table: [tuple(row) for row in db.execute("SELECT * FROM " + table + " ORDER BY rowid")]
+                for table in ("settings", "requests", "records", "attachments", "messages", "jobs", "idea_dispatches")}
+
+    @staticmethod
+    def completion_receipt(selection, text="HTTP订阅完成回答"):
+        return {"ok": True, "status": "completed", "output": text,
+            "requestedModel": selection["modelSlug"], "actualModel": selection["modelSlug"],
+            "responseId": "resp_http_fixture_" + uuid.uuid4().hex,
+            "terminalEventObserved": True, "terminalStatus": "completed", "responseCompleted": True,
+            "completionEvidence": "response.completed", "completionSource": "completed_stream_deltas",
+            "providerErrorObserved": False}
+
+    def claim_subscription(self, sent, selection):
+        identifier = sent["job"]["appDispatch"]["id"]
+        claim = self.service.subscription_claim(identifier, selection)
+        self.service.subscription_send_intent(identifier, claim["claimToken"], selection)
+        return identifier, claim
+
     def events(self, session, *, headers=None, method="GET", cursor=""):
         params = urllib.parse.urlencode({"clientId": session["clientId"], "sessionId": session["id"], "cursor": cursor})
         values = {"Host": self.host, "Origin": self.origin, "X-Codex-Phone": "1"}
@@ -152,6 +224,135 @@ class MobileDialogueHttpChecks(unittest.TestCase):
             lines.append(line.decode("utf-8").rstrip("\n"))
         return {"event": next(line[7:] for line in lines if line.startswith("event: ")),
             "data": json.loads(next(line[6:] for line in lines if line.startswith("data: ")))}
+
+    def test_subscription_status_is_paired_same_origin_cache_only_without_workflow_writes(self):
+        adapter = self.service.subscription = CachedSubscription()
+        before = self.snapshot()
+        self.assertEqual(self.get(PREFIX + "subscription/status")[0], 401)
+        self.assertEqual(adapter.reads, 0)
+        self.pair()
+        for headers in ({"Origin": "https://other.invalid"}, {"Sec-Fetch-Site": "cross-site"}, {"Origin": "null"}):
+            self.assertEqual(self.get(PREFIX + "subscription/status", headers=headers)[0], 403)
+        self.assertEqual(adapter.reads, 0)
+        with patch.object(http.client.HTTPSConnection, "connect", side_effect=AssertionError("Cached GET cannot contact OpenAI")):
+            for _ in range(2):
+                status, data, headers = self.get(PREFIX + "subscription/status")
+                self.assertEqual(status, 200, data)
+                self.assertEqual(data, adapter.status)
+                self.assertEqual(set(data), {"connected", "connectionId", "catalogRevision", "models", "status", "busy", "error"})
+                self.assertNotIn("Access-Control-Allow-Origin", headers)
+            self.assertEqual(self.get(PREFIX + "subscription/status?refresh=1")[0], 400)
+        self.assertEqual(adapter.reads, 2)
+        self.assertEqual(adapter.selections, [])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_phone_subscription_mutation_routes_are_rejected_before_any_account_operation(self):
+        adapter = self.service.subscription = CachedSubscription()
+        self.pair()
+        before = self.snapshot()
+        with patch.object(http.client.HTTPSConnection, "connect", side_effect=AssertionError("Phone mutations cannot contact OpenAI")):
+            for action in ("signin", "models", "disconnect"):
+                status, _, headers = self.call(PREFIX + "subscription/" + action, {})
+                self.assertEqual(status, 404, action)
+                self.assertNotIn("Access-Control-Allow-Origin", headers)
+        self.assertEqual(adapter.reads, 0)
+        self.assertEqual(adapter.selections, [])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_subscription_pure_image_send_freezes_real_model_and_completed_callback_pushes_original_answer(self):
+        adapter = self.service.subscription = CachedSubscription()
+        self.pair()
+        session = self.open()
+        status, uploaded, _ = self.upload(self.fields(session))
+        self.assertEqual(status, 200, uploaded)
+        session, image_id = uploaded["session"], uploaded["uploadedAttachmentIds"][0]
+        response = self.events(session)
+        self.assertEqual(self.event(response)["event"], "dialogue.ready")
+        selection = adapter.choice()
+        body = request(clientId=session["clientId"], sessionId=session["id"], expectedRevision=session["revision"],
+            text="", attachmentIds=[image_id], requestedProfile="pro", chatTransport="chatgpt_subscription", subscription=selection)
+        with patch.object(http.client.HTTPSConnection, "connect", side_effect=AssertionError("Fixture must never infer")):
+            status, sent, _ = self.call(PREFIX + "mobile/dialogue/send", body)
+            self.assertEqual(status, 200, sent)
+            accepted = self.event(response)
+            self.assertEqual((accepted["event"], accepted["data"]["recordId"]), ("dialogue.result", session["recordId"]))
+            self.assertEqual(sent["job"]["subscriptionPhase"], "accepted")
+            identifier, claim = self.claim_subscription(sent, selection)
+            self.assertEqual(claim["text"], "")
+            self.assertEqual(claim["subscription"], selection)
+            frozen = claim["frozen"]
+            self.assertEqual(frozen["subscription"], selection)
+            self.assertEqual(frozen["chatTransport"], "chatgpt_subscription")
+            self.assertEqual(frozen["mobileDialogue"]["id"], session["id"])
+            self.assertEqual(frozen["images"][0]["id"], image_id)
+            self.assertEqual(frozen["images"][0]["originalSha256"], hashlib.sha256(self.png).hexdigest())
+            descriptor, actual_bytes = claim["imageBytes"][0]
+            self.assertEqual(descriptor["id"], image_id)
+            self.assertEqual(actual_bytes, self.png)
+            receipt = self.completion_receipt(selection)
+            completed = self.service.subscription_complete(identifier, claim["claimToken"], receipt)
+            self.assertFalse(completed["duplicate"])
+            for _ in range(5):
+                pushed = self.event(response)
+                if pushed["data"]["status"] == "succeeded":
+                    break
+            self.assertEqual(pushed["data"]["status"], "succeeded")
+            self.assertEqual(pushed["data"]["jobId"], sent["job"]["id"])
+            self.assertEqual(pushed["data"]["recordId"], session["recordId"])
+            self.assertNotIn(receipt["output"], json.dumps(pushed, ensure_ascii=False))
+            status, current, _ = self.get(PREFIX + "mobile/dialogue?clientId=" + session["clientId"])
+            self.assertEqual(status, 200, current)
+            self.assertEqual(current["detail"]["messages"][0]["attachmentIds"], [image_id])
+            self.assertEqual(current["detail"]["messages"][-1]["text"], receipt["output"])
+            self.assertEqual(current["detail"]["jobs"][-1]["result"]["actualModel"], selection["modelSlug"])
+            before = self.snapshot()
+            self.assertTrue(self.service.subscription_complete(identifier, claim["claimToken"], receipt)["duplicate"])
+            self.assertTrue(self.call(PREFIX + "mobile/dialogue/send", body)[1]["duplicate"])
+            self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.counts(), {"attachments": 1, "messages": 2, "jobs": 1, "idea_dispatches": 1})
+        status, _, _ = self.call(PREFIX + "mobile/dialogue/clear", request(clientId=session["clientId"],
+            sessionId=session["id"], expectedRevision=current["session"]["revision"]))
+        self.assertEqual(status, 200)
+        self.assertEqual(response.readline(), b"")
+
+    def test_late_subscription_answer_after_leaving_and_clearing_a_never_updates_b(self):
+        adapter = self.service.subscription = CachedSubscription()
+        self.pair()
+        a = self.open()
+        selection = adapter.choice()
+        status, sent, _ = self.call(PREFIX + "mobile/dialogue/send", request(clientId=a["clientId"], sessionId=a["id"],
+            expectedRevision=a["revision"], text="A独立订阅问题", attachmentIds=[], requestedProfile="high",
+            chatTransport="chatgpt_subscription", subscription=selection))
+        self.assertEqual(status, 200, sent)
+        identifier, claim = self.claim_subscription(sent, selection)
+        status, cleared, _ = self.call(PREFIX + "mobile/dialogue/clear", request(clientId=a["clientId"], sessionId=a["id"],
+            expectedRevision=sent["session"]["revision"]))
+        self.assertEqual(status, 200, cleared)
+        b = cleared["session"]
+        self.assertNotEqual((a["id"], a["recordId"]), (b["id"], b["recordId"]))
+        stream_b = self.events(b)
+        ready_b = self.event(stream_b)
+        self.assertEqual(ready_b["data"]["recordId"], b["recordId"])
+        status, drafted, _ = self.call(PREFIX + "mobile/dialogue/draft", request(clientId=b["clientId"], sessionId=b["id"],
+            expectedRevision=b["revision"], text="B仍未发送的草稿", attachmentIds=[], requestedProfile="high", chatTransport="browser_chat"))
+        self.assertEqual(status, 200, drafted)
+        receipt = self.completion_receipt(selection, "A迟到但完整的真实回答")
+        with patch.object(http.client.HTTPSConnection, "connect", side_effect=AssertionError("Late callback must never infer")):
+            self.service.subscription_complete(identifier, claim["claimToken"], receipt)
+            self.assertEqual(self.get(PREFIX + "mobile/dialogue?clientId=" + b["clientId"], cookie="")[0], 401)
+            status, current, _ = self.get(PREFIX + "mobile/dialogue?clientId=" + b["clientId"])
+        self.assertEqual(status, 200, current)
+        self.assertEqual(current["session"]["id"], b["id"])
+        self.assertEqual(current["session"]["draft"]["text"], "B仍未发送的草稿")
+        self.assertEqual(current["detail"]["messages"], [])
+        self.assertEqual(current["resultCursor"], ready_b["data"]["cursor"])
+        original = self.service.detail(a["recordId"])
+        self.assertEqual(original["messages"][-1]["text"], receipt["output"])
+        self.assertEqual(original["jobs"][-1]["result"]["subscription"], selection)
+        self.assertEqual(self.counts()["jobs"], 1)
+        self.assertEqual(self.counts()["idea_dispatches"], 1)
+        self.service.mobile_dialogue_clear(request(clientId=b["clientId"], sessionId=b["id"], expectedRevision=current["session"]["revision"]))
+        self.assertEqual(stream_b.readline(), b"")
 
     def test_result_stream_preserves_paired_origin_and_get_only_boundary(self):
         self.pair()

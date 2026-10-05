@@ -21,6 +21,7 @@ import uuid
 
 
 PROFILES = {"fast", "high", "pro"}
+CHAT_TRANSPORTS = {"browser_chat", "chatgpt_subscription"}
 MOBILE_IMAGE_BYTES = 8 * 1024 * 1024
 _EVENT_HUB_LOCK = threading.Lock()
 _EVENT_STREAM_LIMIT = 16
@@ -400,7 +401,8 @@ class MobileDialogueMixin:
         session = {"id": identifier, "clientId": client_id, "recordId": record_id,
             "ideaId": idea["id"] if idea else None, "ideaRevision": idea["revision"] if idea else None,
             "revision": 1, "draft": {"text": "", "attachmentIds": []},
-            "requestedProfile": client["requestedProfile"], "createdAt": now, "updatedAt": now}
+            "requestedProfile": client["requestedProfile"], "createdAt": now, "updatedAt": now,
+            "chatTransport": client.get("chatTransport", "browser_chat"), "subscription": client.get("subscription")}
         ids, proofs = self._mobile_freeze_originals(db, idea["id"]) if idea else ([], {})
         session.update(eligibleAttachmentIds=ids, eligibleAttachmentProofs=proofs,
             uploadedAttachmentIds=[], uploadedAttachmentProofs={})
@@ -413,7 +415,22 @@ class MobileDialogueMixin:
         session["updatedAt"] = _api()._now()
         self._set_setting(db, "mobile-dialogue:session:" + session["id"], session)
         client = self._mobile_client_state(db, session["clientId"])
-        self._set_setting(db, "mobile-dialogue:client:" + session["clientId"], {**client, "requestedProfile": session["requestedProfile"]})
+        self._set_setting(db, "mobile-dialogue:client:" + session["clientId"], {**client,
+            "requestedProfile": session["requestedProfile"], "chatTransport": session.get("chatTransport", "browser_chat"),
+            "subscription": session.get("subscription")})
+
+    @staticmethod
+    def _mobile_subscription_choice(value):
+        # Saving a choice is not authentication, catalog refresh or inference.
+        if value is None:
+            return None
+        if (not isinstance(value, dict) or set(value) != {"provider", "connectionId", "catalogRevision", "modelSlug"}
+                or value.get("provider") != "chatgpt_subscription"
+                or any(not isinstance(value.get(key), str) or len(value[key]) > 200
+                    or any(ord(character) < 32 for character in value[key])
+                    for key in ("connectionId", "catalogRevision", "modelSlug"))):
+            raise _api().WorkflowError("订阅模型选择格式无效，原草稿保留。", 400, "subscription_selection_invalid")
+        return {key: value[key] for key in ("provider", "connectionId", "catalogRevision", "modelSlug")}
 
     def _mobile_draft(self, db, body, session):
         api = _api()
@@ -424,8 +441,17 @@ class MobileDialogueMixin:
             raise api.WorkflowError("请选择极速、高或 Pro 档位。")
         identifiers = self._mobile_selected_images(db, session, body.get("attachmentIds", []))
         context = self._context(db, session["recordId"], {"attachmentIds": identifiers})
+        transport = body.get("chatTransport", "browser_chat")
+        if not isinstance(transport, str) or transport not in CHAT_TRANSPORTS:
+            raise api.WorkflowError("请选择明确的讨论通道。", 400, "chat_transport_invalid")
+        choice = self._mobile_subscription_choice(body.get("subscription"))
+        if transport == "browser_chat" and choice is not None:
+            raise api.WorkflowError("浏览器通道不能同时提交订阅模型。", 400, "chat_transport_invalid")
         session["draft"] = {"text": text, "attachmentIds": context["attachmentIds"]}
         session["requestedProfile"] = profile
+        session["chatTransport"] = transport
+        if transport == "chatgpt_subscription":
+            session["subscription"] = choice
         return text, context
 
     def _mobile_execution(self, profile, observation=None):
@@ -468,7 +494,9 @@ class MobileDialogueMixin:
         eligible_ids = set(session.get("eligibleAttachmentIds", [])) | set(session.get("uploadedAttachmentIds", [])) if session else set()
         return {"session": session, "detail": detail,
             "eligibleAttachments": [item for item in detail["attachments"] if item["id"] in eligible_ids] if detail else [],
-            "preferences": {"requestedProfile": client["requestedProfile"]}, "execution": self._mobile_execution(profile, observation),
+            "preferences": {"requestedProfile": client["requestedProfile"],
+                "chatTransport": client.get("chatTransport", "browser_chat"), "subscription": client.get("subscription")},
+            "execution": self._mobile_execution(profile, observation),
             "resultCursor": result_state["cursor"] if result_state else None,
             "resultStatus": result_state["status"] if result_state else "idle",
             "cancellationReceipts": cancellation_receipts,
@@ -655,7 +683,7 @@ class MobileDialogueMixin:
 
     def _mobile_dialogue_write(self, action, body, prefix, authorize):
         api = _api()
-        _body(body, {"requestId", "clientId", "sessionId", "expectedRevision", "text", "attachmentIds", "requestedProfile"})
+        _body(body, {"requestId", "clientId", "sessionId", "expectedRevision", "text", "attachmentIds", "requestedProfile", "chatTransport", "subscription"})
         client_id = _client(body.get("clientId"))
         if authorize:
             authorize()
@@ -672,22 +700,35 @@ class MobileDialogueMixin:
                 if action != "draft" and not text.strip() and not context["attachmentIds"]:
                     raise api.WorkflowError("请输入内容或选择附件。")
                 if action == "send":
-                    if not text.strip():
-                        raise api.WorkflowError("普通 Chat 当前仅支持纯文字；附件和草稿已保留，请先保存为想法。", 400, "chatgpt_images_unavailable")
                     if db.execute("SELECT 1 FROM idea_dispatches WHERE json_extract(snapshot,'$.recordId')=? AND status IN ('pending','claimed','waiting','needs_review')", (session["recordId"],)).fetchone():
                         raise api.WorkflowError("当前讨论已有请求在途，请等待回答或核对送达。", 409, "dispatch_in_progress")
                     record = self._record(db, session["recordId"])
                     source = self._source_task(db, record["id"], {"ideaId": session["ideaId"], "revision": session["ideaRevision"]} if session["ideaId"] else None)
                     if source and not session["ideaId"]:
                         raise api.WorkflowError("讨论来源已改变，请重新打开此想法。", 409, "task_source_mismatch")
+                    subscription = None
+                    if session["chatTransport"] == "chatgpt_subscription":
+                        adapter = getattr(self, "subscription", None)
+                        selection = session.get("subscription")
+                        if adapter is None or selection is None:
+                            raise api.WorkflowError("请先在电脑连接 ChatGPT 订阅，并明确选择实际模型。", 409, "subscription_not_connected")
+                        subscription = adapter.validate_selection(selection["modelSlug"], selection["catalogRevision"], selection["connectionId"])
+                        if subscription != selection:
+                            raise api.WorkflowError("订阅模型目录已改变，请重新选择；原草稿保留。", 409, "subscription_selection_stale")
                     target = self._app_target(db, {"kind": "chatgpt", "mode": "new", "threadId": "", "name": "Console 手机讨论"}, bool(context["attachmentIds"]))
                     dialogue = {key: session[key] for key in ("id", "clientId", "recordId", "ideaId", "ideaRevision", "revision")}
                     payload = {"computerId": self._setting(db, "computer")["id"], "projectId": record["project_id"],
                         "text": text, "context": context, "purpose": "discussion", "sourceTask": source,
                         "appTarget": target, "requestedProfile": session["requestedProfile"], "mobileDialogue": dialogue}
+                    payload["chatTransport"] = session["chatTransport"]
+                    if subscription is not None:
+                        payload["subscription"] = subscription
                     payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, None)
                     payload["appFrozen"].pop("actionPlanning", None)
                     payload["appFrozen"].update(requestedProfile=session["requestedProfile"], mobileDialogue=dialogue)
+                    payload["appFrozen"]["chatTransport"] = session["chatTransport"]
+                    if subscription is not None:
+                        payload["appFrozen"]["subscription"] = subscription
                     if source:
                         meta = self._mobile_metadata(db, source["ideaId"])
                         payload["appFrozen"]["mobileIdeaContext"] = self._mobile_current_idea_context(db, source)
@@ -696,8 +737,10 @@ class MobileDialogueMixin:
                     job_id, now = uuid.uuid4().hex, api._now()
                     self._insert_app_dispatch(db, job_id, record, payload, now, body["requestId"])
                     db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, record["id"], "discuss", body["requestId"],
-                        api._json(payload), "waiting", 1, None, now, now, "已确认此消息；等待普通 Chat 转发器核对所选档位，尚未发送。", "", "{}"))
-                    self._message(db, record["id"], "user", text, created_at=now)
+                        api._json(payload), "waiting", 1, None, now, now,
+                        "已确认此消息；等待 ChatGPT 订阅连接发送，尚未发送。" if subscription is not None else
+                        "已确认此消息；等待普通 Chat 转发器核对所选档位，尚未发送。", "", "{}"))
+                    self._message(db, record["id"], "user", text, attachment_ids=context["attachmentIds"], created_at=now)
                     session["draft"] = {"text": "", "attachmentIds": []}
                     saved["jobId"] = job_id
                 elif action == "save":

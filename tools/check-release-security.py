@@ -105,6 +105,8 @@ def main():
         "zeroconf==0.151.5",
         "altgraph==0.17.5",
         "packaging==26.2",
+        "PyJWT[crypto]==2.15.1",
+        "cryptography==50.0.1",
         "pefile==2024.8.26",
         "pillow==12.3.0",
         "pyinstaller==6.21.0",

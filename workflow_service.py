@@ -25,6 +25,7 @@ from workflow_script_proposals import script_blocks, action_blocks
 from workflow_native_work import NativeWorkMixin
 from workflow_mobile_dialogue import MobileDialogueMixin
 from workflow_mobile_handoff import MobileHandoffMixin
+from workflow_subscription_delivery import SubscriptionDeliveryMixin
 
 MAX_TEXT = 20000
 MAX_UPLOAD = 24 * 1024 * 1024
@@ -75,7 +76,7 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
+class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, SubscriptionDeliveryMixin):
     def __init__(self, data_dir, models=None, callbacks=None, projects=None, *, computer_id=None, computer_name=None, recover_jobs=True):
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -87,6 +88,7 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
         self._lock, self._wake, self._stop = threading.RLock(), threading.Event(), threading.Event()
         self._thread, self._process = None, None
         self._dispatch_commit_notifier = None
+        self.subscription = None
         with self._db() as db:
             if self._setting(db, "computer") is None:
                 self._set_setting(db, "computer", {"id": computer_id or uuid.uuid4().hex, "name": computer_name or socket.gethostname()})
@@ -94,7 +96,8 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
                 self._set_setting(db, "projects", self._validate_projects(projects))
             recovered = 0
             if recover_jobs:
-                recovered = db.execute("UPDATE jobs SET status='interrupted',error='电脑进程已中断；请明确重试，新尝试不会自动重复执行。',updated_at=? WHERE status='running'", (_now(),)).rowcount
+                recovered += self._recover_subscription_pending(db)
+                recovered += db.execute("UPDATE jobs SET status='interrupted',error='电脑进程已中断；请明确重试，新尝试不会自动重复执行。',updated_at=? WHERE status='running'", (_now(),)).rowcount
                 recovered += db.execute("UPDATE idea_dispatches SET status='needs_review',error='发布过程中电脑服务重启；请核对目标聊天，不能自动重发。',updated_at=? WHERE status='claimed'", (_now(),)).rowcount
                 db.execute("""UPDATE jobs SET status='waiting',error='App 讨论发送结果需要核对，不能自动重发。',updated_at=?
                     WHERE id IN (SELECT json_extract(snapshot,'$.jobId') FROM idea_dispatches
@@ -362,6 +365,14 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
             value["mobileDialogue"] = payload["mobileDialogue"]
             value["requestedProfile"] = payload["requestedProfile"]
             value["actualReceipt"] = {"verified": False, "actualProfile": None, "status": "unverified", "source": None}
+        if payload.get("subscription"):
+            value["chatTransport"] = "chatgpt_subscription"
+            value["subscription"] = payload["subscription"]
+            value["subscriptionPhase"] = ("completed" if row["status"] == "succeeded" else
+                "unknown" if app_dispatch is not None and app_dispatch["status"] == "needs_review" else
+                "failed" if row["status"] == "failed" else
+                "generating" if app_dispatch is not None and app_dispatch["status"] == "claimed" and "请求已开始" in row["error"] else
+                "started" if app_dispatch is not None and app_dispatch["status"] == "claimed" else "accepted")
         if app_dispatch is not None:
             value["appDispatch"] = {"id": app_dispatch["id"], "sourceType": json.loads(app_dispatch["snapshot"]).get("origin", "workflow_discussion"),
                 "status": app_dispatch["status"], "targetKind": app_dispatch["target_kind"],
@@ -1148,12 +1159,14 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
                     if row["status"] != "pending":
                         raise WorkflowError("这次发布已认领或已结束，不能重复发送。", 409, "dispatch_not_pending")
                 else:
-                    row = db.execute("SELECT * FROM idea_dispatches WHERE status='pending' ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,created_at,id LIMIT 1").fetchone()
+                    row = db.execute("SELECT * FROM idea_dispatches WHERE status='pending' AND json_extract(snapshot,'$.subscription') IS NULL ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,created_at,id LIMIT 1").fetchone()
                     if row is None:
                         self._receipt(db, "incubator_claim", body, {"dispatchId": None})
                         return {"dispatch": None, "revision": self._revision(db), "duplicate": False, "shouldDispatch": False}
                 dispatch_id = row["id"]
                 snapshot = json.loads(row["snapshot"])
+                if snapshot.get("subscription"):
+                    raise WorkflowError("订阅消息只能由已授权的订阅连接处理。", 409, "subscription_route_required")
                 if snapshot.get("origin") in {"workflow_discussion", "workflow_work"}:
                     job = self._app_dispatch_job(db, row, snapshot)
                     try:
@@ -1208,6 +1221,8 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = self._dispatch(db, dispatch_id)
+            if json.loads(row["snapshot"]).get("subscription"):
+                raise WorkflowError("订阅消息必须核对真实订阅完成回执。", 409, "subscription_route_required")
             if token != row["claim_token"]:
                 raise WorkflowError("发布认领标识不匹配。", 403)
             old = self._receipt(db, kind, body)
@@ -1633,11 +1648,11 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
             db.execute("INSERT INTO requests VALUES (?,?,?,?)", (request_id, kind, fingerprint, _json(response)))
         return None
 
-    def _message(self, db, record_id, role, text, attachment_ids=None, options=None, *, created_at=None):
+    def _message(self, db, record_id, role, text, attachment_ids=None, options=None, *, created_at=None, text_limit=MAX_TEXT):
         identifier = uuid.uuid4().hex
         saved_at = _now() if created_at is None else created_at
         self._source_time(saved_at)
-        db.execute("INSERT INTO messages VALUES (?,?,?,?,?,?,?)", (identifier, record_id, role, _text(text), saved_at, _json(attachment_ids or []), _json(options or [])))
+        db.execute("INSERT INTO messages VALUES (?,?,?,?,?,?,?)", (identifier, record_id, role, _text(text, text_limit), saved_at, _json(attachment_ids or []), _json(options or [])))
         db.execute("UPDATE records SET updated_at=? WHERE id=?", (_now(), record_id))
         return identifier
 
@@ -1851,8 +1866,6 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
         if mode == "new":
             if value.get("threadId") not in (None, ""):
                 raise WorkflowError("新聊天不能同时指定已有聊天标识。", 400, "app_target_unavailable")
-            if has_images and kind == "chatgpt":
-                raise WorkflowError("图片讨论需要本机 Codex；ChatGPT 新聊天当前只接受文字。", 400, "app_images_unavailable")
             return {"kind": kind, "mode": mode, "threadId": "", "name": name or "Console 图片讨论"}
         identifier = self._thread_id(value.get("threadId"))
         cached = next((item for item in self._setting(db, "incubator_targets") or []
@@ -1964,6 +1977,11 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
         target, frozen = payload["appTarget"], payload["appFrozen"]
         snapshot = {"origin": "workflow_discussion", "purpose": "discuss", "recordId": record["id"],
             "jobId": job_id, "title": frozen["recordTitle"], "attachmentIds": payload["context"]["attachmentIds"], "submissionTime": submitted}
+        if payload.get("chatTransport") == "chatgpt_subscription":
+            if payload.get("subscription") != frozen.get("subscription"):
+                raise WorkflowError("订阅来源与冻结内容不一致。", 409, "subscription_source_mismatch")
+            snapshot.update(chatTransport="chatgpt_subscription", subscription=payload["subscription"])
+            frozen["text"] = payload["text"]
         if payload.get("sourceTask"):
             snapshot["sourceTask"] = payload["sourceTask"]
         if payload.get("mobileDialogue"):
@@ -2062,7 +2080,7 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
                 db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, record["id"], "discuss",
                     body["requestId"], _json(payload), "waiting", 1, None, now, now,
                     "等待电脑通过已登录 App 发送这轮讨论；尚未得到回答。", "", "{}"))
-                self._message(db, record["id"], "user", text, created_at=now)
+                self._message(db, record["id"], "user", text, attachment_ids=context["attachmentIds"], created_at=now)
                 self._receipt(db, "discuss", body, {"jobId": job_id})
                 self._revision(db, True)
             if authorize:
