@@ -92,7 +92,27 @@
   function validatePrepared(value) {
     exact(value, ["protocol", "type", "dispatchId", "attemptId", "observation"]);
     common(value, "prepared");
-    const observation = exact(value.observation, ["url", "chatMode", "loginVerified", "emptyComposer", "observedProfile", "completionInitiallyPresent", "surface", "observationSha256", "profileDom"]);
+    validateFreshObservation(value.observation);
+    return value;
+  }
+  function validateReadiness(value) {
+    exact(value, ["protocol", "type", "dispatchId", "attemptId", "domContract"]);
+    common(value, "checkReady");
+    validateDom(value.domContract);
+    return value;
+  }
+  function validatePageReady(value, readiness) {
+    exact(value, ["protocol", "type", "dispatchId", "attemptId", "observation"]);
+    common(value, "pageReady");
+    validateReadiness(readiness);
+    validateFreshObservation(value.observation);
+    if (!sameIdentity(value, readiness) || value.observation.surface !== readiness.domContract.surface
+        || value.observation.observationSha256 !== readiness.domContract.observationSha256)
+      reject("readiness_identity_mismatch", "只读就绪回执不属于本次页面与冻结 DOM 合同。");
+    return value;
+  }
+  function validateFreshObservation(value) {
+    const observation = exact(value, ["url", "chatMode", "loginVerified", "emptyComposer", "observedProfile", "completionInitiallyPresent", "surface", "observationSha256", "profileDom"]);
     if (!rootUrl(observation.url) || observation.chatMode !== true || observation.loginVerified !== true
         || observation.emptyComposer !== true || observation.completionInitiallyPresent !== false || observation.observedProfile !== "Instant"
         || !["chrome", "edge"].includes(observation.surface) || !SHA.test(observation.observationSha256))
@@ -100,7 +120,7 @@
     exact(observation.profileDom, ["text", "reasoningEffort"]);
     if (!["Instant", "Thinking effortInstant", "思考强度Instant", "思考强度即时"].includes(observation.profileDom.text) || observation.profileDom.reasoningEffort !== "none")
       reject("profile_unverified", "缺少实际 Instant 标签与 none effort 属性。");
-    return value;
+    return observation;
   }
   function validateFailure(value) {
     exact(value, ["protocol", "type", "dispatchId", "attemptId", "code", "message"]);
@@ -198,6 +218,6 @@
     return unique[0];
   }
   root.ConsoleChatRelay = Object.freeze({ PROTOCOL, HOST_NAME, EXTENSION_ID, MAX_PROMPT, MAX_ANSWER, RelayError, reject, exact, text, nonempty, common,
-    envelope, sameIdentity, validateDom, validatePrepare, validateCommit, validatePrepared, validateFailure,
+    envelope, sameIdentity, validateDom, validatePrepare, validateCommit, validatePrepared, validateReadiness, validatePageReady, validateFailure,
     validateCapture, validateAccepted, validateStored, validateRetired, rootUrl, conversationUrl, sha256, messageIds, isoTime, handshake, validateStatus });
 })(globalThis);

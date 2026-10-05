@@ -3,9 +3,9 @@
   "use strict";
   const R = root.ConsoleChatRelay, CONTENT_PREFIX = "consoleChatRelayAttempt:";
   function createController(env) {
-    let state = null, serial = Promise.resolve();
+    let state = null, readiness = null, serial = Promise.resolve();
     const queue = fn => { const next = serial.then(fn); serial = next.catch(() => {}); return next; };
-    const selectors = () => state.prepare.domContract.selectors;
+    const selectors = () => (state?.prepare || readiness?.request).domContract.selectors;
     function visible(node) {
       return !!node && node.isConnected !== false && node.hidden !== true && typeof node.getClientRects === "function" && node.getClientRects().length > 0;
     }
@@ -71,6 +71,50 @@
           || composerText(composer) !== expectedComposer) R.reject("composer_changed", "输入框不空或已有用户草稿，不覆盖。");
       if (messageNodes().length || completion() || stopPresent() === true) R.reject("not_fresh_chat", "页面已有消息、生成或结束标记，不使用旧聊天。");
       return { composer, profile: profile() };
+    }
+    function freshObservation(contract, fresh) {
+      return { url: env.location.href, chatMode: true, loginVerified: true, emptyComposer: true,
+        observedProfile: fresh.profile.label, completionInitiallyPresent: false, surface: contract.surface,
+        observationSha256: contract.observationSha256, profileDom: fresh.profile.dom };
+    }
+    function checkReadiness(value) {
+      R.validateReadiness(value);
+      if (state || readiness) R.reject("page_already_checked", "专用页面已有本次就绪或准备记录，不能重新绑定。");
+      const current = readiness = { request: structuredClone(value), phase: "checking", cancel: null };
+      return new Promise((resolve, reject) => {
+        let done = false, observer, deadline;
+        const finish = (error, fresh) => {
+          if (done) return;
+          done = true; observer?.disconnect();
+          if (deadline !== undefined) env.clearTimeout(deadline);
+          current.cancel = null; current.phase = error ? "cancelled" : "ready";
+          if (error) reject(error);
+          else resolve(R.envelope("pageReady", value, { observation: freshObservation(value.domContract, fresh) }));
+        };
+        const check = () => {
+          if (done) return;
+          try {
+            if (current.phase !== "checking") R.reject("readiness_cancelled", "本次只读就绪等待已停止。");
+            if (!R.rootUrl(env.location.href)) R.reject("not_fresh_chat", "页面不是本次专用普通新 Chat。");
+            // Missing initial React controls may arrive after document_idle.
+            // Duplicate controls, drafts, another tier or prior turns fail closed.
+            let missing = false;
+            for (const key of ["chatMode", "login", "composer", "profile"]) {
+              const nodes = all(selectors()[key]);
+              if (nodes.length > 1) R.reject("dom_contract_changed", "只读就绪检查发现重复的可见控件。");
+              if (!nodes.length) missing = true;
+            }
+            if (missing) return;
+            finish(null, inspectFresh());
+          } catch (error) { finish(error); }
+        };
+        current.cancel = () => finish(new R.RelayError("readiness_cancelled", "本次只读就绪等待已停止，不输入或发送。"));
+        observer = new env.MutationObserver(check);
+        observer.observe(env.document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+        deadline = env.setTimeout(() => finish(new R.RelayError("page_ready_timeout", "六十秒内未核对到实际空白 Chat/登录/Instant 控件，不输入或发送。")), 60000);
+        // Subscribe before the first state check. No periodic DOM probes.
+        check();
+      });
     }
     function disconnectObserver() {
       state?.cancelSendWait?.();
@@ -157,14 +201,22 @@
     async function prepare(value) {
       R.validatePrepare(value);
       if (state) R.reject("page_already_prepared", "页面已有准备记录，不能重复准备或重发。");
-      if (await R.sha256(value.prompt) !== value.promptSha256) R.reject("prompt_hash_mismatch", "完整冻结问题 SHA 不符。");
+      if (readiness && (readiness.phase !== "ready" || !R.sameIdentity(value, readiness.request)
+          || JSON.stringify(value.domContract) !== JSON.stringify(readiness.request.domContract)))
+        R.reject("readiness_identity_mismatch", "准备请求没有匹配本次已核对的只读就绪记录。");
       const key = CONTENT_PREFIX + value.dispatchId;
-      if ((await env.chrome.storage.local.get(key))?.[key]) R.reject("dispatch_already_attempted", "该请求已有页面提交意图，只能核对。");
-      state = { prepare: structuredClone(value), phase: "preparing", key, observedBefore: null, accepted: null, clickStarted: false };
-      const fresh = inspectFresh(); state.observedBefore = fresh.profile.label; state.phase = "prepared";
-      return R.envelope("prepared", value, { observation: { url: env.location.href, chatMode: true, loginVerified: true, emptyComposer: true,
-        observedProfile: fresh.profile.label, completionInitiallyPresent: false, surface: value.domContract.surface,
-        observationSha256: value.domContract.observationSha256, profileDom: fresh.profile.dom } });
+      // Claim the in-memory identity before the first async boundary. Cancel
+      // can then stop SHA/storage waits without a later assignment reviving it.
+      const current = state = { prepare: structuredClone(value), phase: "preparing", key, observedBefore: null, accepted: null, clickStarted: false };
+      const stillPreparing = () => {
+        if (state !== current || current.phase !== "preparing") R.reject("prepare_cancelled", "本次页面准备已停止，不能恢复输入或发送。");
+      };
+      const actualSha = await R.sha256(value.prompt); stillPreparing();
+      if (actualSha !== value.promptSha256) R.reject("prompt_hash_mismatch", "完整冻结问题 SHA 不符。");
+      const prior = await env.chrome.storage.local.get(key); stillPreparing();
+      if (prior?.[key]) R.reject("dispatch_already_attempted", "该请求已有页面提交意图，只能核对。");
+      const fresh = inspectFresh(); current.observedBefore = fresh.profile.label; current.phase = "prepared";
+      return R.envelope("prepared", value, { observation: freshObservation(value.domContract, fresh) });
     }
     async function commit(value) {
       R.validateCommit(value);
@@ -202,6 +254,7 @@
     }
     async function receive(value) {
       try {
+        if (value?.type === "relay.content.readiness") { R.exact(value, ["type", "readiness"]); return await checkReadiness(value.readiness); }
         if (value?.type === "relay.content.prepare") { R.exact(value, ["type", "prepare"]); return await prepare(value.prepare); }
         if (value?.type === "relay.content.commit") { R.exact(value, ["type", "commit"]); return await commit(value.commit); }
         R.reject("unknown_page_control", "网页正文和未知消息不能授权输入或发送。");
@@ -214,35 +267,46 @@
     }
     function cancel(value) {
       R.exact(value, ["protocol", "type", "dispatchId", "attemptId"]); R.common(value, "cancel");
+      if (!state && readiness && R.sameIdentity(value, readiness.request)) {
+        readiness.cancel?.(); readiness.phase = "cancelled";
+        return { cancelled: true };
+      }
       if (!state || !R.sameIdentity(value, state.prepare)) R.reject("cancel_identity_mismatch", "停止消息不属于当前专用页面。");
       state.phase = "needs_review"; disconnectObserver();
       return { cancelled: true };
     }
     return { receive: value => queue(() => receive(value)), cancel, clickStarted: () => state?.clickStarted === true,
       observe: () => queue(observeCommitted), idle: () => serial,
-      phase: () => state?.phase || "idle", stop: () => { disconnectObserver(); if (state) state.phase = "needs_review"; } };
+      phase: () => state?.phase || "idle", stop: () => { readiness?.cancel?.(); if (readiness) readiness.phase = "cancelled";
+        disconnectObserver(); if (state) state.phase = "needs_review"; } };
   }
   root.ConsoleChatRelayContent = Object.freeze({ createController, CONTENT_PREFIX });
   if (root.chrome?.runtime?.onMessage && root.document && root.location && root.MutationObserver) {
     const controller = createController({ chrome: root.chrome, document: root.document, location: root.location,
       MutationObserver: root.MutationObserver, InputEvent: root.InputEvent, now: () => Date.now(), setTimeout: root.setTimeout, clearTimeout: root.clearTimeout });
     root.chrome.runtime.onMessage.addListener((value, sender, reply) => {
-      if (sender?.id !== R.EXTENSION_ID || !["relay.content.prepare", "relay.content.commit", "relay.content.cancel"].includes(value?.type)) return false;
+      if (sender?.id !== R.EXTENSION_ID || !["relay.content.readiness", "relay.content.prepare", "relay.content.commit", "relay.content.cancel"].includes(value?.type)) return false;
       if (value.type === "relay.content.cancel") {
         try { R.exact(value, ["type", "cancel"]); reply(controller.cancel(value.cancel)); }
         catch (error) { reply({ cancelled: false, code: error?.code || "page_control_rejected" }); }
         return false;
       }
       controller.receive(value).then(reply, error => {
-        const identity = value.type === "relay.content.prepare" ? value.prepare : value.commit;
+        const identity = value.type === "relay.content.readiness" ? value.readiness : value.type === "relay.content.prepare" ? value.prepare : value.commit;
         try {
-          reply(R.envelope(value.type === "relay.content.prepare" ? "blocked" : "uncertain", identity,
+          reply(R.envelope(value.type === "relay.content.commit" ? "uncertain" : "blocked", identity,
             { code: error?.code || "page_control_rejected", message: String(error?.message || "页面控制失败，不能重发。"),
               ...(value.type === "relay.content.commit" ? { clickStarted: controller.clickStarted() } : {}) }));
         } catch { reply({ committed: false, code: "page_control_rejected" }); }
       });
       return true;
     });
+    // document_idle registers the real receiver independently of slow page
+    // assets. This carries neither a prompt nor permission to prepare or send.
+    if (R.rootUrl(root.location.href)) {
+      try { root.chrome.runtime.sendMessage({ protocol: R.PROTOCOL, type: "contentAvailable" })?.catch?.(() => {}); }
+      catch { /* The worker's event-first initial probe covers startup races. */ }
+    }
     root.addEventListener("pagehide", () => controller.stop(), { once: true });
   }
 })(globalThis);

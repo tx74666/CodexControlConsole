@@ -226,8 +226,13 @@ function preparedFor(value) {
     emptyComposer: true, observedProfile: "Instant", completionInitiallyPresent: false, surface: value.domContract.surface,
     observationSha256: value.domContract.observationSha256, profileDom: { text: "Thinking effortInstant", reasoningEffort: "none" } } });
 }
-function workerFixture(initial = {}, browserSurface = "chrome") {
-  const storage = storageFixture(initial), ports = [], tabs = [], calls = [], updates = new Event();
+function readinessFor(value = prepare) {
+  return relay.envelope("checkReady", value, { domContract: clone(value.domContract) });
+}
+function workerFixture(initial = {}, browserSurface = "chrome", worker = context.ConsoleChatRelayWorker) {
+  const storage = storageFixture(initial), ports = [], tabs = [], calls = [], updates = new Event(), timers = new Map();
+  let timerId = 0;
+  const timing = { setTimeout(fn, timeout) { const id = ++timerId; timers.set(id, { fn, timeout }); return id; }, clearTimeout(id) { timers.delete(id); } };
   let sendFailure = false, prepareFailure = false, preparedSurface = null, prepareReply = null, commitReply = null;
   const api = { storage, runtime: { id: relay.EXTENSION_ID,
     connectNative(host) {
@@ -238,7 +243,8 @@ function workerFixture(initial = {}, browserSurface = "chrome") {
     } }, tabs: { onUpdated: updates,
       async create(value) { tabs.push(clone(value)); return { id: 40 + tabs.length, status: "complete" }; },
       async get(id) { return { id, status: "complete" }; },
-      async sendMessage(id, value) { calls.push({ id, value: clone(value) });
+      async sendMessage(id, value, options) { calls.push({ id, value: clone(value), options: options === undefined ? undefined : clone(options) });
+        if (value.type === "relay.content.readiness") return { ...preparedFor(value.readiness), type: "pageReady" };
         if (value.type === "relay.content.prepare") {
           if (prepareReply) return clone(prepareReply);
           if (prepareFailure) { prepareFailure = false; throw new relay.RelayError("login_required", "隔离页面未登录，本次未发送。"); }
@@ -250,10 +256,10 @@ function workerFixture(initial = {}, browserSurface = "chrome") {
         if (sendFailure) throw new Error("fixture click outcome unknown");
         return { committed: true };
       } } };
-  const controller = context.ConsoleChatRelayWorker.createController(api, () => browserSurface);
+  const controller = worker.createController(api, () => browserSurface, timing);
   const status = clientReady => ({ protocol: relay.PROTOCOL, type: "status", hostName: relay.HOST_NAME, enabled: true,
     approved: true, configured: true, message: "fixture-only approved endpoint", clientReady });
-  return { api, storage, ports, tabs, calls, controller, status,
+  return { api, storage, ports, tabs, calls, updates, timers, timing, controller, status,
     failSend() { sendFailure = true; },
     failPrepare() { prepareFailure = true; },
     setPrepareReply(value) { prepareReply = clone(value); },
@@ -448,6 +454,202 @@ await test("worker owns one exact fresh tab and persists intent before a unique 
   assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 1);
   assert.equal(f.controller.state().active.phase, "needs_review");
 });
+await test("readiness has no prompt or send permission and requires the exact frozen identity/observation", () => {
+  const request = readinessFor(); relay.validateReadiness(request);
+  assert.deepEqual(Object.keys(request).sort(), ["attemptId", "dispatchId", "domContract", "protocol", "type"].sort());
+  for (const patch of [{ prompt }, { promptSha256: prepare.promptSha256 }, { requestedProfile: "fast" }, { claimToken: "private" }])
+    rejected(() => relay.validateReadiness({ ...request, ...patch }), "invalid_schema");
+  const reply = { ...preparedFor(request), type: "pageReady" }; relay.validatePageReady(reply, request);
+  for (const patch of [{ dispatchId: "a".repeat(32) }, { attemptId: "a2a45678-1234-4567-89ab-1234567890ab" }])
+    rejected(() => relay.validatePageReady({ ...reply, ...patch }, request), "readiness_identity_mismatch");
+  for (const patch of [{ surface: "edge" }, { observationSha256: "b".repeat(64) }])
+    rejected(() => relay.validatePageReady({ ...reply, observation: { ...reply.observation, ...patch } }, request), "readiness_identity_mismatch");
+});
+await test("loading owned tab waits for actual readonly DOM receipt then prepares exactly once without Send", async () => {
+  const f = workerFixture(); let release, reached;
+  const entered = new Promise(resolve => { reached = resolve; });
+  f.api.tabs.get = async id => ({ id, status: "loading" });
+  const send = f.api.tabs.sendMessage.bind(f.api.tabs);
+  f.api.tabs.sendMessage = (id, value, options) => value.type === "relay.content.readiness"
+    ? (f.calls.push({ id, value: clone(value), options: clone(options) }), new Promise(resolve => { release = resolve; reached(); })) : send(id, value, options);
+  await f.enable(); const pending = f.controller.native(prepare); await entered;
+  assert.equal(f.controller.state().active.phase, "preparing"); assert.equal(f.calls.length, 1);
+  assert.deepEqual(f.calls[0].options, { frameId: 0 }); assert.equal("prompt" in f.calls[0].value.readiness, false);
+  assert.equal([...f.timers.values()][0].timeout, 60000);
+  f.updates.emit(999, { status: "complete" }); f.updates.emit(41, { status: "complete" });
+  assert.equal(f.calls.length, 1);
+  release({ ...preparedFor(prepare), type: "pageReady" }); await pending;
+  assert.equal(f.controller.state().active.phase, "prepared"); assert.equal(f.timers.size, 0); assert.equal(f.updates.listeners.size, 0);
+  assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, 1);
+  assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
+  assert.equal(f.ports[0].sent.some(value => value.type === "sending"), false);
+});
+await test("event-first available handshake covers receiver-install race and rejects foreign tab/frame/source", async () => {
+  const f = workerFixture(); let rejectAbsent, reached;
+  const entered = new Promise(resolve => { reached = resolve; });
+  f.api.tabs.get = async id => ({ id, status: "loading" });
+  const send = f.api.tabs.sendMessage.bind(f.api.tabs); let probes = 0;
+  f.api.tabs.sendMessage = (id, value, options) => {
+    if (value.type === "relay.content.readiness" && ++probes === 1) {
+      f.calls.push({ id, value: clone(value), options: clone(options) });
+      return new Promise((_, reject) => { rejectAbsent = reject; reached(); });
+    }
+    return send(id, value, options);
+  };
+  await f.enable(); const pending = f.controller.native(prepare); await entered;
+  const notification = { protocol: relay.PROTOCOL, type: "contentAvailable" };
+  const sender = { id: relay.EXTENSION_ID, tab: { id: 41 }, frameId: 0, url: "https://chatgpt.com/" };
+  for (const patch of [{ id: "foreign" }, { frameId: 1 }, { tab: { id: 99 } }, { url: capture.evidence.conversationUrl }, { url: "https://evil.test/" }])
+    rejected(() => f.controller.available(notification, { ...sender, ...patch }), "wrong_page_source");
+  rejected(() => f.controller.available({ ...notification, prompt }, sender), "invalid_schema");
+  assert.equal(f.controller.available(notification, sender).received, true);
+  rejectAbsent(new Error("Could not establish connection. Receiving end does not exist.")); await pending;
+  assert.equal(probes, 2); assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, 1);
+  assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
+  assert.equal(f.timers.size, 0); assert.equal(f.updates.listeners.size, 0);
+});
+await test("readiness timeout/native cancellation cannot resurrect an unsent attempt on a late ready reply", async () => {
+  for (const trigger of ["timeout", "not_ready", "retired", "blocked", "disconnect"]) {
+    const f = workerFixture(); let release, reached;
+    const entered = new Promise(resolve => { reached = resolve; });
+    const send = f.api.tabs.sendMessage.bind(f.api.tabs);
+    f.api.tabs.sendMessage = (id, value, options) => value.type === "relay.content.readiness"
+      ? (f.calls.push({ id, value: clone(value), options: clone(options) }), new Promise(resolve => { release = resolve; reached(); })) : send(id, value, options);
+    await f.enable(); const pending = f.controller.native(prepare); await entered;
+    let terminal;
+    if (trigger === "timeout") [...f.timers.values()][0].fn();
+    if (trigger === "not_ready") f.ports[0].onMessage.emit(f.status(false));
+    if (trigger === "retired") terminal = f.controller.native(relay.envelope("retired", prepare, { reason: "original_dispatch_failed" }));
+    if (trigger === "blocked") terminal = f.controller.native(relay.envelope("blocked", prepare, { code: "original_failed", message: "原请求已停止" })).catch(() => {});
+    if (trigger === "disconnect") f.ports[0].disconnect();
+    await pending; if (terminal) await terminal; await f.controller.idle();
+    assert.equal(f.controller.state().active, null);
+    assert.ok(["failed", "retired"].includes(f.controller.state().attempts[dispatchId].phase));
+    release({ ...preparedFor(prepare), type: "pageReady" }); await new Promise(resolve => setImmediate(resolve));
+    f.updates.emit(41, { status: "complete" });
+    assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, 0);
+    assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
+    assert.equal(f.ports[0].sent.some(value => value.type === "prepared"), false);
+    assert.equal(f.timers.size, 0); assert.equal(f.updates.listeners.size, 0); assert.equal(f.tabs.length, 1);
+    await f.controller.native(prepare); assert.equal(f.tabs.length, 1);
+  }
+});
+await test("wrong readiness receipt or inaccurate tab identity fails closed before the original prepare", async () => {
+  for (const invalid of ["tab", "identity", "contract", "profile"]) {
+    const f = workerFixture();
+    if (invalid === "tab") f.api.tabs.get = async () => ({ id: 999, status: "complete" });
+    else {
+      const send = f.api.tabs.sendMessage.bind(f.api.tabs);
+      f.api.tabs.sendMessage = (id, value, options) => {
+        if (value.type !== "relay.content.readiness") return send(id, value, options);
+        f.calls.push({ id, value: clone(value), options: clone(options) });
+        const response = { ...preparedFor(prepare), type: "pageReady" };
+        if (invalid === "identity") response.attemptId = "a2a45678-1234-4567-89ab-1234567890ab";
+        if (invalid === "contract") response.observation.observationSha256 = "c".repeat(64);
+        if (invalid === "profile") response.observation.profileDom.reasoningEffort = "high";
+        return Promise.resolve(response);
+      };
+    }
+    await f.enable(); await f.controller.native(prepare);
+    assert.equal(f.controller.state().active, null); assert.equal(f.controller.state().attempts[dispatchId].phase, "failed");
+    assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, 0);
+    assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
+    assert.equal(f.timers.size, 0); assert.equal(f.updates.listeners.size, 0);
+  }
+});
+await test("closing only the owned preparing tab cancels readiness immediately and late pageReady cannot prepare", async () => {
+  const f = runtimeFixture(), value = clone(prepare); value.domContract.surface = "edge";
+  let release, reached; const send = f.api.tabs.sendMessage.bind(f.api.tabs);
+  const entered = new Promise(resolve => { reached = resolve; });
+  f.api.tabs.sendMessage = (id, message, options) => message.type === "relay.content.readiness"
+    ? (f.calls.push({ id, value: clone(message), options: clone(options) }), new Promise(resolve => { release = resolve; reached(); })) : send(id, message, options);
+  await f.controller.popup("status"); f.ports[0].onMessage.emit(f.status(false));
+  await f.controller.popup("enable"); f.ports[0].onMessage.emit(f.status(true));
+  const pending = f.controller.native(value); await entered;
+  f.api.tabs.onRemoved.emit(999); assert.equal(f.controller.state().active.phase, "preparing");
+  f.api.tabs.onRemoved.emit(41); await pending; await f.controller.idle();
+  assert.equal(f.controller.state().active, null); assert.equal(f.controller.state().attempts[dispatchId].phase, "failed");
+  assert.equal(f.ports[0].sent.filter(message => message.type === "blocked").length, 1);
+  assert.equal(f.ports[0].sent.at(-1).code, "owned_tab_closed");
+  release({ ...preparedFor(value), type: "pageReady" }); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, 0);
+  assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
+  assert.equal(f.updates.listeners.size, 0);
+});
+await test("cancel during creation or preparation persistence remains final after readiness recovers", async () => {
+  for (const boundary of ["initial_save", "create", "tab_save", "prepared_save"]) {
+    for (const trigger of ["status_recovers", "retired"]) {
+      const f = workerFixture(); let release, reached, paused = false;
+      const entered = new Promise(resolve => { reached = resolve; }), gate = new Promise(resolve => { release = resolve; });
+      await f.enable();
+      if (boundary === "create") {
+        const create = f.api.tabs.create.bind(f.api.tabs);
+        f.api.tabs.create = async value => { const tab = await create(value); reached(); await gate; return tab; };
+      } else {
+        const persist = f.storage.local.set.bind(f.storage.local);
+        f.storage.local.set = async value => {
+          const active = value.consoleChatRelayV1?.active;
+          const matches = boundary === "initial_save" ? active?.phase === "preparing" && active.tabId === null
+            : boundary === "tab_save" ? active?.phase === "preparing" && Number.isInteger(active.tabId)
+            : active?.phase === "prepared";
+          if (!paused && matches) { paused = true; reached(); await gate; }
+          return persist(value);
+        };
+      }
+      const pending = f.controller.native(prepare); await entered; let terminal;
+      if (trigger === "retired") terminal = f.controller.native(relay.envelope("retired", prepare, { reason: "original_dispatch_failed" }));
+      else { f.ports[0].onMessage.emit(f.status(false)); f.ports[0].onMessage.emit(f.status(true)); }
+      release(); await pending; if (terminal) await terminal; await f.controller.idle();
+      assert.equal(f.controller.state().active, null);
+      assert.equal(f.storage.data.consoleChatRelayV1.attempts[dispatchId].phase, trigger === "retired" ? "retired" : "failed");
+      assert.equal(f.ports[0].sent.some(value => value.type === "prepared"), false);
+      assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, boundary === "prepared_save" ? 1 : 0);
+      assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
+      assert.equal(f.timers.size, 0); assert.equal(f.updates.listeners.size, 0);
+      const created = f.tabs.length; await f.controller.native(prepare); assert.equal(f.tabs.length, created);
+    }
+  }
+});
+await test("cancel after readonly ready settles but before prepare remains final even if native ready immediately recovers", async () => {
+  const f = workerFixture(); await f.enable(); let cancelled = false;
+  const clear = f.timing.clearTimeout;
+  f.timing.clearTimeout = id => {
+    clear(id);
+    if (!cancelled) {
+      cancelled = true;
+      // Deliver the native loss/recovery before the await-ready continuation.
+      queueMicrotask(() => { f.ports[0].onMessage.emit(f.status(false)); f.ports[0].onMessage.emit(f.status(true)); });
+    }
+  };
+  await f.controller.native(prepare);
+  assert.equal(cancelled, true); assert.equal(f.controller.state().active, null);
+  assert.equal(f.storage.data.consoleChatRelayV1.attempts[dispatchId].phase, "failed");
+  assert.equal(f.calls.filter(call => call.value.type === "relay.content.readiness").length, 1);
+  assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, 0);
+  assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
+  assert.equal(f.ports[0].sent.some(value => value.type === "prepared"), false);
+});
+await test("matching retirement or readiness loss during worker SHA cannot create a tab after a late valid hash", async () => {
+  for (const trigger of ["status_recovers", "retired"]) {
+    let reached, release;
+    const entered = new Promise(resolve => { reached = resolve; }), gate = new Promise(resolve => { release = resolve; });
+    const isolated = vm.createContext({ crypto: { subtle: { async digest(...args) {
+      reached(); await gate; return webcrypto.subtle.digest(...args);
+    } } }, TextEncoder, URL, Date, Uint8Array, Set, Error, structuredClone, setTimeout, clearTimeout, importScripts() {} });
+    vm.runInContext(await readFile(new URL("lib/protocol.js", directory), "utf8"), isolated);
+    vm.runInContext(await readFile(new URL("service-worker.js", directory), "utf8"), isolated);
+    const f = workerFixture({}, "chrome", isolated.ConsoleChatRelayWorker); await f.enable();
+    const pending = f.controller.native(prepare); await entered; let terminal;
+    assert.equal(f.controller.state().active.phase, "preparing");
+    if (trigger === "retired") terminal = f.controller.native(relay.envelope("retired", prepare, { reason: "original_dispatch_failed" }));
+    else { f.ports[0].onMessage.emit(f.status(false)); f.ports[0].onMessage.emit(f.status(true)); }
+    release(); await pending; if (terminal) await terminal; await f.controller.idle();
+    assert.equal(f.controller.state().active, null);
+    assert.equal(f.storage.data.consoleChatRelayV1.attempts[dispatchId].phase, trigger === "retired" ? "retired" : "failed");
+    assert.equal(f.tabs.length, 0); assert.equal(f.calls.length, 0);
+    assert.equal(f.ports[0].sent.some(value => value.type === "prepared"), false);
+  }
+});
 await test("worker accepts matching Chrome/Edge prepared surfaces and never forwards a different browser", async () => {
   for (const surface of ["chrome", "edge"]) {
     const value = clone(prepare); value.domContract.surface = surface;
@@ -622,7 +824,7 @@ class Node {
 }
 function contentFixture({ promptText = prompt, completed = false, stop = false, extraUser = false, clickThrows = false, draft = "", answerShell = false,
   emptyInnerText, profileText = "Thinking effortInstant", completionText = "Response complete" } = {}) {
-  const storage = storageFixture(), messages = [], emitted = [], queries = [], timers = new Map(), location = { href: "https://chatgpt.com/" };
+  const storage = storageFixture(), messages = [], emitted = [], availableNotifications = [], queries = [], timers = new Map(), location = { href: "https://chatgpt.com/" };
   const composer = new Node(draft, { role: "textbox", contenteditable: "true" });
   composer.emptyInnerText = emptyInnerText;
   const model = new Node(profileText, { "data-selected-reasoning-effort": "none" });
@@ -647,19 +849,21 @@ function contentFixture({ promptText = prompt, completed = false, stop = false, 
   };
   items.set("#send", [send]);
   class Observer { constructor(callback) { mutation = callback; } observe() {} disconnect() { mutation = null; } }
-  const env = { chrome: { storage, runtime: { async sendMessage(value) { emitted.push(clone(value)); return { received: true }; } } },
+  const env = { chrome: { storage, runtime: { async sendMessage(value) {
+    (value.type === "contentAvailable" ? availableNotifications : emitted).push(clone(value)); return { received: true };
+  } } },
     document: { documentElement: {}, querySelectorAll(selector) {
       assert.equal(typeof selector, "string"); assert.ok(selector); queries.push(selector); return items.get(selector) || [];
     } }, location, MutationObserver: Observer,
     InputEvent: class { constructor(type, detail) { this.type = type; this.detail = detail; } }, now: () => Date.parse("2026-10-05T12:00:00.000Z"),
     setTimeout(fn, timeout) { const id = nextTimer++; timers.set(id, { fn, timeout }); return id; }, clearTimeout(id) { timers.delete(id); } };
-  return { env, items, storage, emitted, queries, composer, model, messages, timers, send, controller: context.ConsoleChatRelayContent.createController(env),
+  return { env, items, storage, emitted, availableNotifications, queries, composer, model, messages, timers, send, controller: context.ConsoleChatRelayContent.createController(env),
     clicks: () => clicks, mutateNow() { mutation?.(); },
     async mutation() { mutation?.(); await this.controller.idle(); await this.controller.idle(); } };
 }
-async function contentListenerFixture(f) {
+async function contentListenerFixture(f, crypto = webcrypto) {
   f.env.chrome.runtime.onMessage = new Event();
-  const isolated = vm.createContext({ ...f.env, crypto: webcrypto, TextEncoder, URL, Date, Uint8Array, Set, Error,
+  const isolated = vm.createContext({ ...f.env, crypto, TextEncoder, URL, Date, Uint8Array, Set, Error,
     structuredClone, addEventListener() {} });
   vm.runInContext(await readFile(new URL("lib/protocol.js", directory), "utf8"), isolated);
   vm.runInContext(await readFile(new URL("content-script.js", directory), "utf8"), isolated);
@@ -667,6 +871,87 @@ async function contentListenerFixture(f) {
   assert.equal(typeof route, "function");
   return { route, call(value) { return new Promise(resolve => { route(value, { id: relay.EXTENSION_ID }, resolve); }); } };
 }
+await test("content document_idle announces only receiver availability; missing controls resolve on DOM event without preparing or typing", async () => {
+  const f = contentFixture({ profileText: "思考强度Instant" }), composer = f.items.get("#composer");
+  f.items.set("#composer", []); const listener = await contentListenerFixture(f);
+  assert.deepEqual(f.availableNotifications, [{ protocol: relay.PROTOCOL, type: "contentAvailable" }]);
+  const request = readinessFor(), pending = listener.call({ type: "relay.content.readiness", readiness: request });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.timers.size, 1); assert.equal([...f.timers.values()][0].timeout, 60000);
+  assert.equal(f.storage.writes.length, 0); assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0); assert.equal(f.emitted.length, 0);
+  f.items.set("#composer", composer); f.mutateNow(); const response = await pending; relay.validatePageReady(response, request);
+  assert.equal(response.observation.profileDom.text, "思考强度Instant"); assert.equal(f.timers.size, 0);
+  assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.emitted.length, 0);
+  // Readiness confers no commit authority; the real prepare is still required.
+  const rejectedCommit = await listener.call({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+  assert.equal(rejectedCommit.code, "commit_not_prepared"); assert.equal(rejectedCommit.clickStarted, false);
+  relay.validatePrepared(await listener.call({ type: "relay.content.prepare", prepare }));
+  assert.equal(f.clicks(), 0); assert.equal(f.composer.textContent, "");
+});
+await test("readonly DOM readiness rejects a late draft, wrong tier, prior conversation or duplicate control before prompt delivery", async () => {
+  for (const [change, code] of [
+    [f => { f.composer.textContent = "用户原草稿"; }, "composer_changed"],
+    [f => { f.model.textContent = "Pro"; }, "profile_changed"],
+    [f => { f.model.attributes["data-selected-reasoning-effort"] = "high"; }, "profile_changed"],
+    [f => { f.env.location.href = capture.evidence.conversationUrl; }, "not_fresh_chat"],
+    [f => { f.items.set("#profile", [f.model, new Node("Instant")]); }, "dom_contract_changed"]
+  ]) {
+    const f = contentFixture(); change(f);
+    await assert.rejects(f.controller.receive({ type: "relay.content.readiness", readiness: readinessFor() }), error => error.code === code);
+    assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.emitted.length, 0); assert.equal(f.timers.size, 0);
+    if (code === "composer_changed") assert.equal(f.composer.textContent, "用户原草稿");
+  }
+});
+await test("content readiness timeout/cancel/pagehide removes observer and cannot restore prepare when controls arrive late", async () => {
+  for (const trigger of ["timeout", "cancel", "pagehide"]) {
+    const f = contentFixture(), composer = f.items.get("#composer"); f.items.set("#composer", []);
+    const pending = f.controller.receive({ type: "relay.content.readiness", readiness: readinessFor() });
+    const rejected = assert.rejects(pending, error => error.code === (trigger === "timeout" ? "page_ready_timeout" : "readiness_cancelled"));
+    await new Promise(resolve => setImmediate(resolve));
+    if (trigger === "timeout") [...f.timers.values()][0].fn();
+    if (trigger === "cancel") {
+      assert.throws(() => f.controller.cancel(relay.envelope("cancel", { ...prepare, dispatchId: "a".repeat(32) })), error => error.code === "cancel_identity_mismatch");
+      f.controller.cancel(relay.envelope("cancel", prepare));
+    }
+    if (trigger === "pagehide") f.controller.stop();
+    await rejected; f.items.set("#composer", composer); f.mutateNow();
+    await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "readiness_identity_mismatch");
+    assert.equal(f.clicks(), 0); assert.equal(f.composer.textContent, ""); assert.equal(f.storage.writes.length, 0); assert.equal(f.timers.size, 0);
+  }
+});
+await test("ready content cannot bind a different prepare identity or altered frozen selector contract", async () => {
+  for (const change of [value => { value.attemptId = "a2a45678-1234-4567-89ab-1234567890ab"; },
+    value => { value.domContract.selectors.composer = "#other"; }]) {
+    const f = contentFixture(); relay.validatePageReady(await f.controller.receive({ type: "relay.content.readiness", readiness: readinessFor() }), readinessFor());
+    const wrong = clone(prepare); change(wrong);
+    await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare: wrong }), error => error.code === "readiness_identity_mismatch");
+    assert.equal(f.storage.writes.length, 0); assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0);
+  }
+});
+await test("content cancellation during prepare SHA/storage cannot recreate a prepared identity or authorize Send", async () => {
+  for (const boundary of ["sha", "storage"]) {
+    const f = contentFixture(); let reached, release;
+    const entered = new Promise(resolve => { reached = resolve; }), gate = new Promise(resolve => { release = resolve; });
+    const crypto = boundary === "sha" ? { subtle: { async digest(...args) {
+      reached(); await gate; return webcrypto.subtle.digest(...args);
+    } } } : webcrypto;
+    const listener = await contentListenerFixture(f, crypto);
+    relay.validatePageReady(await listener.call({ type: "relay.content.readiness", readiness: readinessFor() }), readinessFor());
+    if (boundary === "storage") {
+      const get = f.storage.local.get.bind(f.storage.local);
+      f.storage.local.get = async key => { reached(); await gate; return get(key); };
+    }
+    const pending = listener.call({ type: "relay.content.prepare", prepare }); await entered;
+    const cancel = await listener.call({ type: "relay.content.cancel", cancel: relay.envelope("cancel", prepare) });
+    assert.equal(cancel.cancelled, true); release();
+    const response = await pending; relay.validateFailure(response);
+    assert.equal(response.type, "blocked"); assert.equal(response.code, "prepare_cancelled");
+    const commit = await listener.call({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+    assert.equal(commit.code, "commit_not_prepared"); assert.equal(commit.clickStarted, false);
+    const repeat = await listener.call({ type: "relay.content.prepare", prepare }); assert.equal(repeat.code, "page_already_prepared");
+    assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.emitted.length, 0);
+  }
+});
 await test("input waits for a DOM-enabled Send event and commits exactly once with its durable original intent", async () => {
   const f = contentFixture({ completed: true }); let inputs = 0;
   f.composer.dispatchEvent = () => { inputs++; return true; };

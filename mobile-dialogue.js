@@ -43,7 +43,7 @@
     const content = make("main", "", "dialogue-content"), context = make("div", "", "dialogue-context"), contextText = make("span"), contextOpen = button("查看想法", () => void openIdea(state.session?.ideaId)); context.append(contextText, contextOpen);
     const welcome = make("div", "", "dialogue-welcome"); welcome.append(make("div", "✧", "dialogue-welcome-mark"), make("h2", "脑子里的想法，\n从这里开始。"), make("p", "直接问一句，或先记下来。\n还没想清楚，也可以慢慢聊。"));
     const suggestions = make("div", "", "dialogue-suggestions"); suggestions.append(button("先记一个念头", () => { composerInput.placeholder = "记下这个念头，以后接着想…"; composerInput.focus(); }), button("找以前的想法", () => void showIdeas())); welcome.append(suggestions);
-    const messages = make("div", "", "dialogue-messages"), pending = make("div", "", "dialogue-pending"), pendingText = make("span"); pending.append(pendingText);
+    const messages = make("div", "", "dialogue-messages"), pending = make("div", "", "dialogue-pending"), pendingText = make("span"); pending.setAttribute("role", "status"); pending.setAttribute("aria-live", "polite"); pending.append(pendingText);
     const listView = make("section", "", "dialogue-list-view"), listTools = make("div", "", "dialogue-list-tools"), search = field("input", "搜索想法"), project = field("select", "按项目筛选"), ideaList = make("div", "", "dialogue-ideas-list"), listFooter = make("div", "", "dialogue-list-footer"), archiveToggle = button("查看归档", () => { state.archived = !state.archived; void loadIdeas(); });
     search.type = "search"; search.placeholder = "搜索想法"; search.value = state.search; listTools.append(search, project); listFooter.append(archiveToggle); listView.append(listTools, ideaList, listFooter);
     const detailView = make("section", "", "dialogue-detail-view"), detailHeading = make("div", "", "dialogue-detail-heading"), ideaTitle = field("input", "想法标题", "dialogue-detail-title"), detailMeta = make("p", "", "dialogue-detail-meta"), ideaBody = field("textarea", "想法内容", "dialogue-detail-body"); ideaTitle.maxLength = 240; ideaBody.rows = 5; detailHeading.append(ideaTitle, detailMeta);
@@ -64,6 +64,7 @@
     const status = make("div", "", "dialogue-status"), draftStatus = make("p"), capabilityStatus = make("p"); status.setAttribute("role", "status"); status.append(draftStatus, capabilityStatus); composeLeft.append(attach, tier); composeRight.append(saveOnly, send); composeActions.append(composeLeft, composeRight); shell.append(pendingImages, composerInput, composeActions, imageInput); composer.append(shell, status); root.classList.add("mobile-dialogue"); root.replaceChildren(top, notice, content, newResult, composer);
     const savedImagePicker = make("details", "", "dialogue-saved-image-picker"), savedImageChoices = make("div", "", "dialogue-attachment-grid"); savedImagePicker.append(make("summary", "已保存图片"), make("p", "选择本次引用的图片；未选择的图片不会发送。", "dialogue-source-note"), savedImageChoices); savedImagePicker.hidden = true; shell.insertBefore(savedImagePicker, composerInput);
     const storageFailureNotice = "这台手机暂时无法保存草稿，请保留页面并复制内容。";
+    const acceptedSendNotices = ["请求已接收，等待原聊天的实际回答。", "请求已保存；普通 Chat 自动转发尚未接通。"];
     function persist() {
       const recovering = state.storageFailed;
       try { localStorage.setItem(storageKey, JSON.stringify({ clientId: state.clientId, tier: state.tier, drafts: state.drafts, editDrafts: state.editDrafts, pointDrafts: state.pointDrafts, pending: state.pending, search: state.search, project: state.project, listScroll: state.listScroll })); state.storageFailed = false; if (recovering && notice.textContent === storageFailureNotice) say(); renderDraftStatus(); return true; }
@@ -181,8 +182,8 @@
         if (message.role === "assistant") { const actions = make("div", "", "dialogue-message-actions"); actions.append(button(state.session?.ideaId ? "补充到此想法" : "存为想法", () => void rememberAnswer(message.id)), button("复制", () => void copyText(message.text || ""))); row.append(actions); }
         if (message.truncated) row.append(make("p", "此回答来源已截断，全文请到原 Chat 查看。", "dialogue-message-note")); messages.append(row);
       }
-      const jobs = Array.isArray(state.detail?.jobs) ? state.detail.jobs : [], inFlight = jobs.filter(item => ["queued", "running", "pending", "claimed", "waiting", "needs_review"].includes(item.status) || ["pending", "claimed", "waiting", "needs_review"].includes(item.appDispatch?.status)).at(-1);
-      pending.replaceChildren(pendingText); pending.hidden = !inFlight; cancelPendingButton = null;
+      const jobs = Array.isArray(state.detail?.jobs) ? state.detail.jobs : [], inFlight = jobs.filter(item => ["queued", "running", "pending", "claimed", "waiting", "needs_review"].includes(item.status) || ["pending", "claimed", "waiting", "needs_review"].includes(item.appDispatch?.status)).at(-1), failure = latestDialogueFailure();
+      pending.replaceChildren(pendingText); pending.hidden = !inFlight && !failure; pending.dataset.status = inFlight ? inFlight.appDispatch?.status || inFlight.status : failure ? "failed" : ""; cancelPendingButton = null;
       if (inFlight) {
         const dispatchStatus = inFlight.appDispatch?.status || inFlight.status;
         const running = ["running", "waiting"].includes(dispatchStatus);
@@ -191,10 +192,24 @@
         const unsent = target?.jobId === inFlight.id;
         pendingText.textContent = dispatchStatus === "needs_review" ? "送达情况需要核对，未重复发送。" : running ? "正在等原聊天回答…" : unsent ? "尚未发送，等待转发处理" : dispatchStatus === "pending" ? "等待转发处理，发送状态尚未核实。" : "请求已保存，等待处理。";
         if (unsent) { cancelPendingButton = button("结束这条未发送请求", () => void cancelUnsentRequest(target)); pending.append(cancelPendingButton); }
+      } else if (failure) {
+        const error = typeof failure.error === "string" && failure.error ? failure.error : typeof failure.appDispatch.error === "string" && failure.appDispatch.error ? failure.appDispatch.error : "未取得实际回答，请核对电脑上的原请求。";
+        const reason = error.replace(/^[a-z][a-z0-9_]*:\s*(?=\S)/, "");
+        pendingText.textContent = `这轮未完成：${reason}\n原消息与当前草稿保留，未自动重发。`;
+        if (acceptedSendNotices.includes(notice.textContent)) say();
       }
       context.hidden = !state.session?.ideaId; contextText.textContent = state.session?.ideaId ? `围绕「${state.detail?.sourceTask?.title || state.idea?.title || "这条想法"}」继续聊` : "";
       welcome.hidden = Boolean(values.length || state.session?.ideaId); messages.hidden = !values.length;
       if (fresh && state.view === "chat") { if (atBottom) requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" })); else { state.newResults = true; newResult.hidden = false; } }
+    }
+    function latestDialogueFailure() {
+      const session = state.session;
+      if (!session || session.isCurrent !== true || session.clientId !== state.clientId || state.detail?.record?.id !== session.recordId) return null;
+      const latest = (Array.isArray(state.detail.jobs) ? state.detail.jobs : []).filter(job => job.recordId === session.recordId
+        && job.kind === "discuss" && job.purpose === "discussion" && job.mobileDialogue?.id === session.id
+        && job.mobileDialogue.clientId === state.clientId && job.mobileDialogue.recordId === session.recordId).at(-1);
+      return latest?.status === "failed" && latest.appDispatch?.status === "failed"
+        && typeof latest.id === "string" && latest.id && typeof latest.appDispatch.id === "string" && latest.appDispatch.id ? latest : null;
     }
     function renderView() {
       root.dataset.view = state.view; back.hidden = state.view === "chat"; ideasButton.hidden = state.view !== "chat"; clearMenuAction.hidden = state.view !== "chat";
@@ -320,7 +335,7 @@
       try { if (draftSync) await draftSync; await ensureSession(); const uploadedIds = !state.pending ? await uploadFiles(intent) : []; const payload = durablePayload("mobile/dialogue/send", submission(intent, uploadedIds), ["sessionId", "text", "requestedProfile"]);
         const data = await call("mobile/dialogue/send", payload); state.pending = null;
         if (applyDialogue(data, payload.sessionId) && composerInput.value === text) { composerInput.value = ""; state.drafts[payload.sessionId] = { text: "", tier: state.tier, unsynced: false }; state.dirty = false; autosize(composerInput); }
-        persist(); say(data.execution?.relayStatus === "connected" ? "请求已接收，等待原聊天的实际回答。" : "请求已保存；普通 Chat 自动转发尚未接通。");
+        persist(); if (!latestDialogueFailure()) say(acceptedSendNotices[data.execution?.relayStatus === "connected" ? 0 : 1]);
       } catch (error) { if (writeRejected(error)) { state.pending = null; persist(); } fail(error); }
       finally { state.busy = false; updateControls(); }
     }

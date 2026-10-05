@@ -465,4 +465,70 @@ await test("only exact historical DOM observation is displayed and never upgrade
   const valid = { requestedProfile: "fast", actualProfileObserved: "Instant", source: "browser_dom_ui_label", dispatchId: "a".repeat(32), jobId: "b".repeat(32), messageId: "c".repeat(32), observedAt: "2026-10-05T05:00:00Z", capabilitiesVerified: false };
   for (const changes of [null, { capabilitiesVerified: true }, { source: "unverified_label" }, { dispatchId: "unknown" }, { observedAt: "not-a-date" }, { actualProfileObserved: "Pro" }, { extra: "unexpected" }]) { const h = harness(); const profile = h.byLabel("回答档位"); profile.value = "pro"; profile.fire("change"); h.hook(action => action.startsWith("mobile/dialogue?") ? { ...h.value(), execution: { ...h.value().execution, profileObservation: { ...valid, ...changes } } } : undefined); h.panel.setActive(true); await flush(); assert.equal(profile.value, "pro"); assert.equal(h.byClass("dialogue-status").children[1].textContent, "档位待核实"); assert.doesNotMatch(h.root.textContent, /实际 极速|实际 Pro/); if (changes === null) { assert.match(h.byClass("dialogue-menu-meta").textContent, /上一轮页面显示 Instant；实际模型／推理未核实/); assert.match(h.byClass("dialogue-status").children[1].title, /上一轮页面显示 Instant/); } else assert.doesNotMatch(h.byClass("dialogue-menu-meta").textContent, /上一轮页面显示/); assert.equal(h.calls.filter(item => item.payload).length, 0); }
 });
+const scopedMobileJob = (h, status = "failed", error = "tab_load_timeout: 专用页面未在有界等待内加载，保留核对，不发送。") => ({
+  id: "3".repeat(32), recordId: h.current().recordId, kind: "discuss", purpose: "discussion", status, error, result: {},
+  mobileDialogue: { id: h.current().id, clientId: h.current().clientId, recordId: h.current().recordId, revision: h.current().revision },
+  appDispatch: { id: "4".repeat(32), status: status === "failed" ? "failed" : "pending", error, targetThreadId: null, canCancelPending: false }
+});
+await test("same-job terminal failure replaces the accepted wait after SSE without consuming an IME draft or resending", async () => {
+  const h = streamHarness(); h.panel.setActive(true); await until(() => h.transport.connections.length === 1, "failure stream should open");
+  h.hook((action, payload) => {
+    if (action !== "mobile/dialogue/send") return undefined;
+    h.current().revision++; h.message({ id: "confirmed-question", role: "user", text: payload.text }); h.setJobs([scopedMobileJob(h, "waiting", "")]);
+    return { ...h.value(), execution: { ...h.value().execution, relayStatus: "connected" } };
+  });
+  const input = h.byLabel("提问或保存想法"); input.value = "A：明确发送的问题"; input.fire("input"); h.byText("发送 ↑").click();
+  await until(() => h.byClass("dialogue-notice").textContent.includes("请求已接收"), "actual acceptance should be visible before failure");
+  input.fire("compositionstart"); input.value = "B：中文候选草稿尚未确认"; input.fire("input");
+  h.setJobs([scopedMobileJob(h)]); h.result("b".repeat(64), "failed");
+  h.transport.connections[0].frame("dialogue.result", { ...resultFrame(h, "b".repeat(64), "failed"), jobId: "3".repeat(32) });
+  await flush(); assert.equal(dialogueReads(h), 1); assert.match(h.byClass("dialogue-notice").textContent, /请求已接收/);
+  input.fire("compositionend");
+  await until(() => h.byClass("dialogue-pending").dataset.status === "failed", "released IME should read the exact terminal failure");
+  assert.equal(h.byClass("dialogue-pending").hidden, false); assert.match(h.byClass("dialogue-pending").textContent, /这轮未完成：专用页面未在有界等待内加载/);
+  assert.doesNotMatch(h.byClass("dialogue-pending").textContent, /tab_load_timeout/); assert.match(h.byClass("dialogue-pending").textContent, /未自动重发/);
+  assert.equal(h.byClass("dialogue-notice").textContent, ""); assert.equal(input.value, "B：中文候选草稿尚未确认");
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1); assert.equal(dialogueReads(h), 2); h.panel.clear();
+});
+await test("old or foreign scoped failures and inconsistent terminal projections cannot replace the current discussion status", async () => {
+  for (const alter of [
+    job => ({ ...job, mobileDialogue: { ...job.mobileDialogue, id: "another-session" } }),
+    job => ({ ...job, mobileDialogue: { ...job.mobileDialogue, clientId: randomUUID() } }),
+    job => ({ ...job, mobileDialogue: { ...job.mobileDialogue, recordId: "another-record" } }),
+    job => ({ ...job, appDispatch: { ...job.appDispatch, status: "needs_review" } })
+  ]) {
+    const h = harness(); h.setJobs([alter(scopedMobileJob(h, "failed", "错误不应进入本轮"))]); h.panel.setActive(true); await flush();
+    assert.notEqual(h.byClass("dialogue-pending").dataset.status, "failed"); assert.doesNotMatch(h.root.textContent, /错误不应进入本轮|这轮未完成/);
+    assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear();
+  }
+  const h = harness(); h.setJobs([scopedMobileJob(h, "failed", "旧轮错误"), { ...scopedMobileJob(h, "waiting", ""), id: "5".repeat(32), appDispatch: { ...scopedMobileJob(h, "waiting", "").appDispatch, id: "6".repeat(32) } }]);
+  h.panel.setActive(true); await flush(); assert.doesNotMatch(h.root.textContent, /旧轮错误|这轮未完成/); assert.match(h.byClass("dialogue-pending").textContent, /等待转发处理/); h.panel.clear();
+});
+await test("only a deliberate new submission replaces a shown terminal failure with its new waiting job", async () => {
+  const h = harness(); h.setJobs([scopedMobileJob(h)]); h.panel.setActive(true); await flush(); assert.match(h.byClass("dialogue-pending").textContent, /这轮未完成/);
+  const failed = scopedMobileJob(h); h.hook((action, payload) => {
+    if (action !== "mobile/dialogue/send") return undefined;
+    h.current().revision++; h.message({ id: "new-confirmed-question", role: "user", text: payload.text });
+    h.setJobs([failed, { ...scopedMobileJob(h, "waiting", ""), id: "5".repeat(32), appDispatch: { ...scopedMobileJob(h, "waiting", "").appDispatch, id: "6".repeat(32) } }]);
+    return { ...h.value(), execution: { ...h.value().execution, relayStatus: "connected" } };
+  });
+  const input = h.byLabel("提问或保存想法"); input.value = "这一条是我明确确认的新请求"; input.fire("input");
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0); h.byText("发送 ↑").click();
+  await until(() => h.byClass("dialogue-notice").textContent.includes("请求已接收"), "new acceptance should supersede old failure");
+  assert.notEqual(h.byClass("dialogue-pending").dataset.status, "failed"); assert.doesNotMatch(h.root.textContent, /这轮未完成|专用页面未在有界等待内加载/);
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1); assert.equal(h.calls.find(item => item.action === "mobile/dialogue/send").payload.text, "这一条是我明确确认的新请求"); h.panel.clear();
+});
+await test("a terminal failure read retains an unknown send nonce and the complete human uncertainty reason", async () => {
+  const h = streamHarness(); h.panel.setActive(true); await until(() => h.transport.connections.length === 1, "unknown failure stream should open");
+  h.hook(action => { if (action === "mobile/dialogue/send") throw new TypeError("accepted response unavailable"); });
+  const input = h.byLabel("提问或保存想法"); input.value = "A：未核实送达"; input.fire("input"); h.byText("发送 ↑").click();
+  await until(() => h.calls.some(item => item.action === "mobile/dialogue/send") && h.panel.canReload(), "unknown send should retain its durable nonce");
+  const pending = JSON.parse([...h.storage.values()][0]).pending; input.value = "B：不能覆盖的下一轮草稿"; input.fire("input");
+  h.setJobs([scopedMobileJob(h, "failed", "page_changed: 页面已改变，送达情况仍待核对。")]); h.result("b".repeat(64), "failed");
+  h.transport.connections[0].frame("dialogue.result", resultFrame(h, "b".repeat(64), "failed"));
+  await until(() => h.byClass("dialogue-pending").dataset.status === "failed", "matching failed read should expose the human reason");
+  assert.match(h.byClass("dialogue-pending").textContent, /页面已改变，送达情况仍待核对/); assert.doesNotMatch(h.byClass("dialogue-pending").textContent, /page_changed|未发送|尚未发送/);
+  assert.deepEqual(JSON.parse([...h.storage.values()][0]).pending, pending); assert.equal(input.value, "B：不能覆盖的下一轮草稿");
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1); h.panel.clear();
+});
 console.log(`${count} mobile dialogue behavior checks passed.`);

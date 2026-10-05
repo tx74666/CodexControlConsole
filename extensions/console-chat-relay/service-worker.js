@@ -21,8 +21,9 @@ importScripts("lib/protocol.js");
     const surface = [...surfaces][0];
     return ua && uaSurface !== surface ? null : surface;
   }
-  function createController(api, resolveBrowserSurface = () => detectBrowserSurface(root.navigator)) {
+  function createController(api, resolveBrowserSurface = () => detectBrowserSurface(root.navigator), timers = { setTimeout, clearTimeout }) {
     let state = { enabled: false, attempts: {}, active: null }, native = null, status = null, nativeReady = false, requestedReady = false;
+    let readinessWait = null, preparationGuard = null;
     let lastMessage = "准备包默认停用；尚无生产启用批准或浏览器页面实机验收。", serial = Promise.resolve(), reconnectUsed = false;
     const viewers = new Set();
     const load = api.storage.local.get(STORAGE_KEY).then(result => {
@@ -48,9 +49,19 @@ importScripts("lib/protocol.js");
       if (!native) R.reject("native_disconnected", "本机接收端连接已断开。");
       native.postMessage(value);
     }
-    function cancelOwned() {
+    function cancelOwned(code = "page_ready_cancelled", message = "本次专用页就绪等待已停止，不输入或发送。") {
       const active = state.active;
-      if (!active || active.phase === "stored" || !Number.isInteger(active.tabId)) return;
+      if (!active || active.phase === "stored") return;
+      // Cancellation is monotonic even while creation/persistence is awaiting
+      // and no tab or readiness waiter exists yet. A later ready status cannot
+      // turn this same request back into a live preparation.
+      if (preparationGuard && R.sameIdentity(preparationGuard.identity, active.prepare)) {
+        preparationGuard.cancelled = true; preparationGuard.code = code; preparationGuard.message = message;
+      }
+      if (!Number.isInteger(active.tabId)) return;
+      if (readinessWait && R.sameIdentity(readinessWait.identity, active.prepare)) {
+        readinessWait.cancel(code, message); return;
+      }
       try {
         const pending = api.tabs.sendMessage(active.tabId, { type: "relay.content.cancel", cancel: R.envelope("cancel", active.prepare) });
         pending?.catch?.(() => {});
@@ -117,7 +128,7 @@ importScripts("lib/protocol.js");
             if (![value.enabled, value.approved, value.configured, value.clientReady].every(item => item === true)) cancelOwned();
             nativeReady = value.clientReady === true && state.enabled && value.enabled && value.approved && value.configured;
             lastMessage = value.message; askReady();
-          } catch { lastMessage = "原生状态回执无效，保持未就绪。"; status = null; nativeReady = false; requestedReady = false; }
+          } catch { cancelOwned(); lastMessage = "原生状态回执无效，保持未就绪。"; status = null; nativeReady = false; requestedReady = false; }
           publish();
           return;
         }
@@ -139,17 +150,73 @@ importScripts("lib/protocol.js");
       });
       send(R.handshake("hello"));
     }
-    async function waitLoaded(tabId) {
+    function available(value, sender) {
+      R.exact(value, ["protocol", "type"]);
+      const active = state.active;
+      if (value.protocol !== R.PROTOCOL || value.type !== "contentAvailable" || sender?.id !== api.runtime.id
+          || sender.frameId !== 0 || !Number.isInteger(sender.tab?.id) || sender.tab.id !== active?.tabId
+          || !R.rootUrl(sender.url) || active.phase !== "preparing" || !readinessWait
+          || !R.sameIdentity(readinessWait.identity, active.prepare))
+        R.reject("wrong_page_source", "只读接收器通知不是本次专用 tab 的主页面。");
+      readinessWait.wake();
+      return { received: true };
+    }
+    async function waitReady(tabId, prepare) {
       return new Promise((resolve, reject) => {
-        let done = false;
-        const finish = error => {
-          if (done) return; done = true; clearTimeout(deadline); api.tabs.onUpdated.removeListener(onUpdated);
-          if (error) reject(error); else resolve();
+        let done = false, probing = false, wakeRequested = false, deadline;
+        const readiness = R.envelope("checkReady", prepare, { domContract: structuredClone(prepare.domContract) });
+        const finish = (error, response) => {
+          if (done) return; done = true;
+          if (deadline !== undefined) timers.clearTimeout(deadline);
+          api.tabs.onUpdated.removeListener(onUpdated);
+          if (readinessWait?.identity === prepare) readinessWait = null;
+          if (error) {
+            try { api.tabs.sendMessage(tabId, { type: "relay.content.cancel", cancel: R.envelope("cancel", prepare) }, { frameId: 0 })?.catch?.(() => {}); }
+            catch { /* A missing receiver cannot authorize a substitute send. */ }
+            reject(error);
+          } else resolve(response);
         };
-        const onUpdated = (changedId, info) => { if (changedId === tabId && info.status === "complete") finish(); };
-        const deadline = setTimeout(() => finish(new R.RelayError("tab_load_timeout", "专用页面未在有界等待内加载，保留核对，不发送。")), 10000);
+        const probe = () => {
+          if (done) return;
+          if (probing) { wakeRequested = true; return; }
+          wakeRequested = false;
+          if (!state.enabled || !nativeReady || state.active?.phase !== "preparing" || state.active.tabId !== tabId
+              || !R.sameIdentity(state.active.prepare, prepare))
+            return finish(new R.RelayError("page_ready_cancelled", "本次只读就绪等待身份或批准已失效，不发送。"));
+          probing = true;
+          let response;
+          try { response = api.tabs.sendMessage(tabId, { type: "relay.content.readiness", readiness }, { frameId: 0 }); }
+          catch (error) { probing = false; return finish(error); }
+          Promise.resolve(response).then(value => {
+            probing = false; if (done) return;
+            try {
+              if (value?.type === "blocked") {
+                R.validateFailure(value);
+                if (!R.sameIdentity(value, prepare)) R.reject("readiness_identity_mismatch", "就绪失败回执属于另一请求。");
+                throw new R.RelayError(value.code, value.message);
+              }
+              R.validatePageReady(value, readiness);
+              finish(null, value);
+            } catch (error) { finish(error); }
+          }, error => {
+            probing = false; if (done) return;
+            // Only an absent receiver permits another readonly probe, and
+            // only on a real contentAvailable/complete event, never a timer.
+            if (!/Receiving end does not exist/i.test(String(error?.message || ""))) finish(error);
+            else if (wakeRequested) probe();
+          });
+        };
+        const onUpdated = (changedId, info) => { if (changedId === tabId && info.status === "complete") probe(); };
+        readinessWait = { identity: prepare, tabId, wake: probe, cancel: (code, message) => finish(new R.RelayError(code, message)) };
         api.tabs.onUpdated.addListener(onUpdated);
-        api.tabs.get(tabId).then(tab => { if (tab.status === "complete") finish(); }, finish);
+        deadline = timers.setTimeout(() => finish(new R.RelayError("page_ready_timeout", "六十秒内未取得专用页的实际只读就绪回执，不输入或发送。")), 60000);
+        // Listen first, then probe the current owned receiver. Page load/asset
+        // completion is only a wake-up event, never evidence of DOM readiness.
+        api.tabs.get(tabId).then(tab => {
+          if (done) return;
+          if (tab?.id !== tabId) return finish(new R.RelayError("wrong_page_source", "未取得本次准确专用 tab。"));
+          probe();
+        }, finish);
       });
     }
     async function handlePrepare(value) {
@@ -166,16 +233,28 @@ importScripts("lib/protocol.js");
       if (state.attempts[value.dispatchId]) return fail(value, "dispatch_already_attempted", "该请求已有转发记录；只能核对，不能再次创建或发送。");
       if (state.active && state.active.phase !== "stored") return fail(value, "dispatch_busy", "已有请求在途或需要核对，不能处理下一条。", false);
       if (Object.keys(state.attempts).length >= MAX_TOMBSTONES) return fail(value, "ledger_full", "扩展防重复账本已达上限，保留请求并停止。", false);
-      if (await R.sha256(value.prompt) !== value.promptSha256) return fail(value, "prompt_hash_mismatch", "冻结问题与实际 SHA 不匹配，不发送。", false);
       state.active = { prepare: structuredClone(value), phase: "preparing", tabId: null, observedProfile: null, accepted: null };
       state.attempts[value.dispatchId] = { attemptId: value.attemptId, promptSha256: value.promptSha256, phase: "preparing" };
-      await save();
+      const guard = preparationGuard = { identity: value, cancelled: false, code: null, message: null };
+      const stillPreparing = (phase = "preparing") => {
+        if (guard.cancelled || preparationGuard !== guard || !state.enabled || !nativeReady
+            || state.active?.phase !== phase || !R.sameIdentity(state.active.prepare, value))
+          R.reject(guard.code || "page_ready_cancelled", guard.message || "本次准备已停止，不能恢复输入或发送。");
+      };
       try {
+        await save(); stillPreparing();
+        const actualSha = await R.sha256(value.prompt); stillPreparing();
+        if (actualSha !== value.promptSha256) R.reject("prompt_hash_mismatch", "冻结问题与实际 SHA 不匹配，不发送。");
         const tab = await api.tabs.create({ url: "https://chatgpt.com/", active: true });
-        if (!Number.isInteger(tab?.id)) R.reject("tab_not_created", "未取得扩展自己创建的准确 tab。");
+        stillPreparing();
+        if (!Number.isInteger(tab?.id) || tab.id < 0) R.reject("tab_not_created", "未取得扩展自己创建的准确 tab。");
         state.active.tabId = tab.id; await save();
-        await waitLoaded(tab.id);
-        const response = await api.tabs.sendMessage(tab.id, { type: "relay.content.prepare", prepare: value });
+        stillPreparing();
+        await waitReady(tab.id, value);
+        stillPreparing();
+        if (state.active.tabId !== tab.id) R.reject("page_ready_cancelled", "只读就绪后专用页面身份已失效，不发送准备请求。");
+        const response = await api.tabs.sendMessage(tab.id, { type: "relay.content.prepare", prepare: value }, { frameId: 0 });
+        stillPreparing();
         if (response?.type === "blocked") {
           R.validateFailure(response);
           if (!R.sameIdentity(response, value)) R.reject("prepare_identity_mismatch", "准备失败回执不属于本次专用页面。");
@@ -186,8 +265,9 @@ importScripts("lib/protocol.js");
             || response.observation.surface !== value.domContract.surface)
           R.reject("prepare_identity_mismatch", "页面准备回执身份、浏览器或 DOM 观察证据不符。");
         state.active.phase = "prepared"; state.active.observedProfile = response.observation.observedProfile;
-        state.attempts[value.dispatchId].phase = "prepared"; await save(); send(response);
+        state.attempts[value.dispatchId].phase = "prepared"; await save(); stillPreparing("prepared"); send(response);
       } catch (error) { return fail(value, error.code || "prepare_failed", String(error?.message || "页面未准备完成。"), false); }
+      finally { if (preparationGuard === guard) preparationGuard = null; }
     }
     async function handleCommit(value) {
       R.validateCommit(value);
@@ -291,8 +371,9 @@ importScripts("lib/protocol.js");
     }
     async function start() { await load; if (state.enabled) connect(false); publish(); }
     return { start, view, native: receiveNative, page: (value, sender) => queue(() => handlePage(value, sender)),
-      popup: action => queue(() => popup(action)), abandon: (identity, code, message) => queue(() => fail(identity, code, message)),
-      subscribe, notice, cancelOwned, idle: () => serial, state: () => structuredClone(state) };
+      popup: action => { if (action === "disable") cancelOwned(); return queue(() => popup(action)); },
+      abandon: (identity, code, message) => queue(() => fail(identity, code, message)),
+      subscribe, notice, cancelOwned, available, idle: () => serial, state: () => structuredClone(state) };
   }
   function ownControlUrl(api) { return `chrome-extension://${api.runtime.id}/popup.html`; }
   function ownControlPage(api, sender) {
@@ -306,6 +387,11 @@ importScripts("lib/protocol.js");
   function registerRuntime(api, resolveBrowserSurface) {
     const controller = createController(api, resolveBrowserSurface);
     api.runtime.onMessage.addListener((value, sender, reply) => {
+      if (value?.type === "contentAvailable") {
+        try { reply(controller.available(value, sender)); }
+        catch (error) { reply({ received: false, code: error?.code || "page_rejected" }); }
+        return false;
+      }
       if (value?.type === "relay.popup") {
         if (!ownControlPage(api, sender)) return false;
         if (value.action === "disable") controller.cancelOwned();
@@ -338,7 +424,9 @@ importScripts("lib/protocol.js");
     });
     api.tabs.onRemoved.addListener(tabId => {
       const active = controller.state().active;
-      if (active?.tabId === tabId && active.phase !== "stored") controller.abandon(active.prepare,
+      if (active?.tabId !== tabId || active.phase === "stored") return;
+      controller.cancelOwned("owned_tab_closed", "本次专用聊天页已关闭，不能继续输入或发送。");
+      if (active.phase !== "preparing") controller.abandon(active.prepare,
         "owned_tab_closed", "专用聊天页已关闭，发送或结果需核对，不能重发。").catch(() => {});
     });
     controller.start().catch(() => {});
