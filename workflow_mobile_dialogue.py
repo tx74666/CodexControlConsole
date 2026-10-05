@@ -9,14 +9,120 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import sqlite3
 import tempfile
+import threading
+import time
+from contextlib import closing
 from urllib.parse import parse_qs
 import uuid
 
 
 PROFILES = {"fast", "high", "pro"}
 MOBILE_IMAGE_BYTES = 8 * 1024 * 1024
+_EVENT_HUB_LOCK = threading.Lock()
+_EVENT_STREAM_LIMIT = 16
+
+
+class _DialogueEventHub:
+    """Bounded in-memory wakeups; persisted job state supplies reconnection evidence."""
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.subscriptions = {}
+        self.versions = {}
+
+    def subscribe(self, key):
+        with self.condition:
+            if len(self.subscriptions) >= _EVENT_STREAM_LIMIT:
+                raise _api().WorkflowError("讨论连接已达到上限，请关闭重复页面后再试。", 429, "dialogue_connections_full")
+            token = uuid.uuid4().hex
+            self.subscriptions[token] = key
+            self.versions.setdefault(key, 0)
+            return token, self.versions[key]
+
+    def keys(self):
+        with self.condition:
+            return tuple(self.versions)
+
+    def notify(self, keys):
+        with self.condition:
+            changed = False
+            for key in keys:
+                if key in self.versions:
+                    self.versions[key] += 1
+                    changed = True
+            if changed:
+                self.condition.notify_all()
+
+    def wait(self, token, version, timeout):
+        with self.condition:
+            key = self.subscriptions.get(token)
+            if key is None:
+                return None
+            self.condition.wait_for(lambda: token not in self.subscriptions or self.versions[key] != version, timeout)
+            return self.versions.get(key) if token in self.subscriptions else None
+
+    def close(self, token):
+        with self.condition:
+            key = self.subscriptions.pop(token, None)
+            if key is not None and key not in self.subscriptions.values():
+                self.versions.pop(key, None)
+            self.condition.notify_all()
+
+
+class _DialogueEventStream:
+    def __init__(self, service, hub, key, token, version, state, cursor, authorize):
+        self.service, self.hub, self.key = service, hub, key
+        self.token, self.version, self.authorize = token, version, authorize
+        self.cursor, self.closed = state["cursor"], False
+        self.initial = {"event": "dialogue.result" if cursor and cursor != self.cursor else "dialogue.ready", "data": state}
+
+    def _authorized(self):
+        if self.authorize:
+            self.authorize()
+        if getattr(self.service, "_stop", None) is not None and self.service._stop.is_set():
+            raise _api().WorkflowError("电脑连接已关闭。", 503, "dialogue_connection_closed")
+
+    def next_event(self, timeout=25):
+        if self.closed:
+            raise _api().WorkflowError("讨论连接已关闭。", 409, "dialogue_connection_closed")
+        self._authorized()
+        if self.initial is not None:
+            event, self.initial = self.initial, None
+            version = self.hub.wait(self.token, self.version, 0)
+            if version is None:
+                raise _api().WorkflowError("讨论连接已关闭。", 409, "dialogue_connection_closed")
+            if version != self.version:
+                self.version = version
+                state = self.service._mobile_event_read(self.key)
+                if state["cursor"] != self.cursor:
+                    self.cursor = state["cursor"]
+                    event = {"event": "dialogue.result", "data": state}
+            self._authorized()
+            return event
+        deadline = time.monotonic() + min(max(float(timeout), 0), 25)
+        while True:
+            version = self.hub.wait(self.token, self.version, max(0, deadline - time.monotonic()))
+            self._authorized()
+            if version is None:
+                raise _api().WorkflowError("讨论连接已关闭。", 409, "dialogue_connection_closed")
+            if version != self.version:
+                self.version = version
+                state = self.service._mobile_event_read(self.key)
+                self._authorized()
+                if state["cursor"] != self.cursor:
+                    self.cursor = state["cursor"]
+                    return {"event": "dialogue.result", "data": state}
+            if time.monotonic() >= deadline:
+                # Transport keepalive only: no queue/session reads on idle timeouts.
+                return None
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self.hub.close(self.token)
 
 
 def _api():
@@ -50,6 +156,119 @@ def _body(body, allowed):
 
 
 class MobileDialogueMixin:
+    def _mobile_event_hub(self):
+        with _EVENT_HUB_LOCK:
+            hub = getattr(self, "_mobile_result_hub", None)
+            if hub is None:
+                hub = self._mobile_result_hub = _DialogueEventHub()
+            return hub
+
+    def _mobile_result_job(self, db, session):
+        # The frozen session, not the record's newest arbitrary message, owns a result.
+        job = db.execute("SELECT * FROM jobs WHERE record_id=? AND kind='discuss' "
+            "AND json_extract(payload,'$.mobileDialogue.id')=? "
+            "AND json_extract(payload,'$.mobileDialogue.clientId')=? ORDER BY created_at DESC,id DESC LIMIT 1",
+            (session["recordId"], session["id"], session["clientId"])).fetchone()
+        if job is None:
+            return None, None
+        payload = json.loads(job["payload"])
+        dialogue = payload.get("mobileDialogue")
+        identifier = payload.get("appDispatchId")
+        dispatch = db.execute("SELECT * FROM idea_dispatches WHERE id=?", (identifier,)).fetchone()
+        snapshot = json.loads(dispatch["snapshot"]) if dispatch else {}
+        if (not isinstance(dialogue, dict) or dialogue.get("recordId") != session["recordId"]
+                or dialogue != payload.get("appFrozen", {}).get("mobileDialogue")
+                or dialogue != snapshot.get("mobileDialogue") or snapshot.get("recordId") != job["record_id"]
+                or snapshot.get("jobId") != job["id"]):
+            raise _api().WorkflowError("本轮回答来源无法核对。", 409, "result_not_matching")
+        return job, dispatch
+
+    def _mobile_event_state(self, db, key, require_current=True):
+        client_id, session_id = key
+        session = self._mobile_session(db, client_id, session_id)
+        current = self._mobile_client_state(db, client_id)["currentSessionId"]
+        if require_current and current != session_id:
+            raise _api().WorkflowError("当前讨论已切换，请读取新的讨论。", 409, "dialogue_changed")
+        job, dispatch = self._mobile_result_job(db, session)
+        status = "idle" if job is None else "needs_review" if dispatch["status"] == "needs_review" else job["status"]
+        proof = {"clientId": client_id, "sessionId": session_id, "recordId": session["recordId"], "currentSessionId": current,
+            "job": {name: job[name] for name in ("id", "status", "updated_at", "error", "result")} if job else None,
+            "dispatch": {name: dispatch[name] for name in ("id", "status", "updated_at", "error", "result", "target_thread_id")} if dispatch else None}
+        cursor = hashlib.sha256(_api()._json(proof).encode("utf-8")).hexdigest()
+        return {"clientId": client_id, "sessionId": session_id, "recordId": session["recordId"], "cursor": cursor,
+            "jobId": job["id"] if job else None, "status": status}
+
+    def _mobile_event_read(self, key):
+        # This GET never creates tables/settings, recovers jobs, or changes revision.
+        with self._lock, closing(sqlite3.connect((self.data_dir / "workflow.sqlite3").resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            db.row_factory = sqlite3.Row
+            return self._mobile_event_state(db, key)
+
+    def _mobile_events_snapshot(self, db):
+        """Called before/after a transaction; only existing bounded subscriptions."""
+        hub = getattr(self, "_mobile_result_hub", None)
+        if hub is None:
+            return {}
+        snapshots = {}
+        for key in hub.keys():
+            try:
+                snapshots[key] = self._mobile_event_state(db, key, require_current=False)["cursor"]
+            except _api().WorkflowError as error:
+                snapshots[key] = (error.status, error.code)
+        return snapshots
+
+    def _mobile_events_committed(self, before, after):
+        """Invoke only after db.commit succeeds, never for rolled-back changes."""
+        hub = getattr(self, "_mobile_result_hub", None)
+        if hub is not None:
+            hub.notify(key for key in before.keys() | after.keys() if before.get(key) != after.get(key))
+
+    def mobile_dialogue_subscribe(self, query="", authorize=None):
+        params = _query(query, {"clientId", "sessionId", "cursor"})
+        client_id = _client(params.get("clientId"))
+        session_id = params.get("sessionId")
+        cursor = params.get("cursor", "")
+        if (params.get("clientId") != client_id or not isinstance(session_id, str) or not re.fullmatch(r"[a-f0-9]{32}", session_id)
+                or not isinstance(cursor, str) or cursor and not re.fullmatch(r"[a-f0-9]{64}", cursor)):
+            raise _api().WorkflowError("讨论事件请求身份无效。")
+        if authorize:
+            authorize()
+        key = client_id, session_id
+        self._mobile_event_read(key)
+        hub = self._mobile_event_hub()
+        token, version = hub.subscribe(key)
+        try:
+            # Subscribe before the second read so a concurrent commit cannot be missed.
+            state = self._mobile_event_read(key)
+            if authorize:
+                authorize()
+            return _DialogueEventStream(self, hub, key, token, version, state, cursor, authorize)
+        except BaseException:
+            hub.close(token)
+            raise
+
+    def _mobile_profile_observation(self, db, session):
+        job, dispatch = self._mobile_result_job(db, session)
+        if not job or job["status"] != "succeeded" or dispatch["status"] != "completed":
+            return None
+        result = json.loads(job["result"] or "{}")
+        evidence = result.get("browserEvidence", {})
+        profile = evidence.get("profile", {})
+        message = db.execute("SELECT role,record_id FROM messages WHERE id=?", (result.get("messageId"),)).fetchone()
+        if (result.get("sourceKind") != "browser_dom" or evidence.get("source") != "browser_dom"
+                or result.get("dispatchId") != dispatch["id"] or result.get("actualProfileObserved") != "Instant"
+                or evidence.get("promptText") != dispatch["prompt"]
+                or profile != {"requestedProfile": "fast", "observedBefore": "Instant", "observedAfter": "Instant"}
+                or result.get("executionCapabilities") != {"verified": False, "source": "browser_dom_ui_label"}
+                or not message or message["record_id"] != session["recordId"] or message["role"] != "assistant"):
+            return None
+        observation = {"requestedProfile": "fast", "actualProfileObserved": "Instant", "source": "browser_dom_ui_label",
+            "dispatchId": dispatch["id"], "jobId": job["id"], "messageId": result["messageId"],
+            "observedAt": evidence["observedAt"], "capabilitiesVerified": False}
+        if result.get("profileObservation") not in (None, observation):
+            return None
+        return observation
+
     def _mobile_client_state(self, db, client_id):
         return self._setting(db, "mobile-dialogue:client:" + client_id) or {"currentSessionId": None, "requestedProfile": "high"}
 
@@ -148,6 +367,15 @@ class MobileDialogueMixin:
         projects = self._setting(db, "projects") or []
         return projects[0] if projects else None
 
+    def _mobile_classification_id(self, db, identifier):
+        """Saving a category uses its actual identity, not execution/root access."""
+        if identifier is None:
+            return None
+        identifier = _api()._key(identifier)
+        if not any(project.get("id") == identifier for project in self._setting(db, "projects") or []):
+            raise _api().WorkflowError("项目分类不存在，请重新选择。", 403, "project_not_authorized")
+        return identifier
+
     def _mobile_new_record(self, db, title="当前讨论", text=""):
         api = _api()
         project = self._mobile_project(db)
@@ -200,10 +428,11 @@ class MobileDialogueMixin:
         session["requestedProfile"] = profile
         return text, context
 
-    def _mobile_execution(self, profile):
+    def _mobile_execution(self, profile, observation=None):
         execution = {"requestedProfile": profile, "actualReceipt": {"verified": False, "actualProfile": None,
             "status": "unverified", "source": None}, "supportedProfiles": [], "capability": "unverified",
-            "relayStatus": "not_connected", "message": "已保留所选档位；当前普通 Chat 通道尚未验证档位切换，事件转发器尚未接通。"}
+            "relayStatus": "not_connected", "profileObservation": observation,
+            "message": "已保留所选档位；当前普通 Chat 通道尚未验证档位切换，事件转发器尚未接通。"}
         broker = getattr(self, "_chat_relay_broker", None)
         if broker is not None:
             status = broker.public_status()
@@ -223,13 +452,17 @@ class MobileDialogueMixin:
             session = self._mobile_session(db, client_id, identifier) if identifier else None
             if session:
                 session = {**session, "isCurrent": identifier == client["currentSessionId"]}
+            result_state = self._mobile_event_state(db, (client_id, identifier), require_current=False) if session else None
+            observation = self._mobile_profile_observation(db, session) if session else None
             revision = self._revision(db)
         profile = session["requestedProfile"] if session else client["requestedProfile"]
         detail = self.detail(session["recordId"], prefix) if session else None
         eligible_ids = set(session.get("eligibleAttachmentIds", [])) | set(session.get("uploadedAttachmentIds", [])) if session else set()
         return {"session": session, "detail": detail,
             "eligibleAttachments": [item for item in detail["attachments"] if item["id"] in eligible_ids] if detail else [],
-            "preferences": {"requestedProfile": client["requestedProfile"]}, "execution": self._mobile_execution(profile),
+            "preferences": {"requestedProfile": client["requestedProfile"]}, "execution": self._mobile_execution(profile, observation),
+            "resultCursor": result_state["cursor"] if result_state else None,
+            "resultStatus": result_state["status"] if result_state else "idle",
             "revision": revision, **extra}
 
     def mobile_dialogue_get(self, query="", prefix="/api/workflow"):
@@ -729,8 +962,7 @@ class MobileDialogueMixin:
                         db.execute("UPDATE records SET primary_attachment_id=? WHERE id=?", (attachments[0], record_id))
                     projects = [source["metadata"].get("projectId") for source in sources]
                     project_id = projects[0] if all(project == projects[0] for project in projects) else None
-                    if project_id is not None:
-                        self._project(db, project_id)
+                    project_id = self._mobile_classification_id(db, project_id)
                     meta = {"projectId": project_id, "archived": False, "keyPoints": points,
                         "executionDraft": execution, "provenance": [], "attachmentIds": attachments}
                     self._set_setting(db, "mobile-idea:" + identifier, meta)
@@ -785,9 +1017,7 @@ class MobileDialogueMixin:
                     meta["archived"] = body["archived"]
                 else:
                     if "projectId" in body:
-                        if body["projectId"] is not None:
-                            self._project(db, body["projectId"])
-                        meta["projectId"] = body["projectId"]
+                        meta["projectId"] = self._mobile_classification_id(db, body["projectId"])
                     if "executionDraft" in body:
                         meta["executionDraft"] = api._text(body["executionDraft"])
                     if "keyPoints" in body:

@@ -28,11 +28,14 @@
     function composerText(node) { return String(node.innerText ?? node.textContent ?? ""); }
     function completion() { return all(selectors().completion).some(node => String(node.textContent || "").trim() === "Response complete"); }
     function stopPresent() { return all(selectors().stop).length > 0; }
-    function messageNodes() {
+    function messageNodes(readAnswers = true) {
       const entries = new Map();
       for (const node of all(selectors().messages)) {
         const unit = node.getAttribute("data-chatgpt-search-unit-key"), match = /^fallback-turn-(\d+):(\d+):(user|assistant)$/.exec(unit || "");
         if (!match) R.reject("dom_message_unverified", "实际 DOM 单位格式未经本版本核对。");
+        // An assistant wrapper can precede its streaming body. Bind the exact
+        // user first; require the unique answer body only after completion.
+        if (!readAnswers && match[3] === "assistant") continue;
         const id = R.messageIds(node.getAttribute("data-chatgpt-search-message-ids"));
         const bodyNodes = all(match[3] === "user" ? selectors().userText : selectors().assistantText, node);
         if (bodyNodes.length !== 1) R.reject("dom_message_unverified", "缺少唯一原文子节点，不能抓取反应、标题或工具输出。");
@@ -58,7 +61,6 @@
     function disconnectObserver() {
       if (state?.observer) state.observer.disconnect();
       if (state?.acceptDeadline) env.clearTimeout(state.acceptDeadline);
-      if (state?.completionDeadline) env.clearTimeout(state.completionDeadline);
     }
     async function emit(value) {
       const response = await env.chrome.runtime.sendMessage(value);
@@ -72,7 +74,7 @@
     async function observeCommitted() {
       if (!state || state.phase !== "waiting") return;
       if (!R.conversationUrl(env.location.href)) return;
-      const observedProfile = profile(), messages = messageNodes(), users = messages.filter(node => node.role === "user"), answers = messages.filter(node => node.role === "assistant");
+      const observedProfile = profile(), users = messageNodes(false);
       if (users.length > 1) R.reject("other_user_input", "专用页面出现额外用户输入，回答归属需核对。");
       if (users.length !== 1 || users[0].text !== state.prepare.prompt) return;
       const user = users[0], seenAt = new Date(env.now()).toISOString();
@@ -88,6 +90,7 @@
         await emit(accepted);
       }
       if (!completion() || stopPresent()) return;
+      const answers = messageNodes().filter(node => node.role === "assistant");
       if (answers.length !== 1) R.reject("final_source_ambiguous", "结束后没有唯一主回答，不能把工具或多个成果拼作答案。");
       const answer = answers[0];
       const captured = R.envelope("capture", state.prepare, { evidence: { source: "browser_dom", conversationUrl: env.location.href,
@@ -133,7 +136,8 @@
       state.observer.observe(env.document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
       state.phase = "waiting";
       state.acceptDeadline = env.setTimeout(() => queue(() => fail("send_not_verified", "提交后十秒内没有确切同问题 URL/来源证据，保留核对，不重发。")), 10000);
-      state.completionDeadline = env.setTimeout(() => queue(() => fail("completion_not_verified", "有界等待内未取得唯一结束回答；保留核对，不重发。")), 120000);
+      // Once the exact input is accepted, remain idle on DOM events until its
+      // final or an attribution failure. Slow generation is not a send failure.
       // Exactly one click. A throwing click is an unknown outcome, never a retry.
       send.click();
       observeEvent();

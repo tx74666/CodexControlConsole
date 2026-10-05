@@ -32,7 +32,7 @@ from phone_device_store import DeviceStoreError, REMEMBER_TTL, TOKEN_PATTERN
 from phone_discovery import discover_lan_interfaces
 from workflow_service import WorkflowError
 from workflow_models import WorkflowModelError
-from workflow_http import workflow_get, workflow_post, workflow_import_idea, workflow_upload_dialogue
+from workflow_http import workflow_get, workflow_post, workflow_import_idea, workflow_upload_dialogue, send_workflow_events
 
 
 PAIR_TTL = 300
@@ -93,6 +93,8 @@ class _PhoneServer(ThreadingHTTPServer):
     def __init__(self, address, companion):
         self.companion = companion
         self._slots = threading.BoundedSemaphore(8)
+        # Long-lived result subscriptions leave four normal request slots free.
+        self._workflow_event_slots = threading.BoundedSemaphore(4)
         super().__init__(address, _PhoneHandler)
 
     def get_request(self):
@@ -305,7 +307,9 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 token, peer = self._token(), self.client_address[0]
                 authorize = lambda: companion.session(token, peer)
                 action = parsed.path.removeprefix("/api/phone/workflow/")
-                if action == "attachment":
+                if action == "mobile/dialogue/events":
+                    send_workflow_events(self, companion.workflow_service, parsed.query, authorize=authorize)
+                elif action == "attachment":
                     with companion.workflow_service.read_attachment(parsed.query, authorize=authorize) as item:
                         send_transfer_attachment(self, item, authorize=authorize)
                 else:

@@ -1,6 +1,52 @@
 """Shared workflow routes; host handlers enforce desktop or paired-phone access."""
 from urllib.parse import parse_qs
+import json
 from workflow_service import WorkflowError
+
+
+def send_workflow_events(handler, service, query, *, authorize=None):
+    """One authenticated result subscription; no dispatch or queue polling."""
+    if handler.command != "GET":
+        raise WorkflowError("讨论事件只支持 GET。", 405)
+    operation = getattr(service, "mobile_dialogue_subscribe", None)
+    if not callable(operation):
+        raise WorkflowError("电脑端讨论事件组件尚未更新。", 503)
+    slots = handler.server._workflow_event_slots
+    if not slots.acquire(blocking=False):
+        raise WorkflowError("讨论连接已满，请关闭其它讨论页后重试。", 429)
+    stream, started = None, False
+    try:
+        stream = operation(query, authorize=authorize)
+        if authorize:
+            authorize()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("X-Content-Type-Options", "nosniff")
+        handler.send_header("Referrer-Policy", "same-origin")
+        handler.send_header("X-Frame-Options", "DENY")
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        started = True
+        handler.close_connection = True
+        while not service._stop.is_set():
+            frame = stream.next_event(timeout=25)
+            if authorize:
+                authorize()
+            # Comments keep only the transport alive; no periodic result read.
+            payload = ("event: " + frame["event"] + "\ndata: " + json.dumps(frame["data"],
+                ensure_ascii=False, separators=(",", ":")) + "\n\n") if frame else ": keepalive\n\n"
+            handler.wfile.write(payload.encode("utf-8"))
+            handler.wfile.flush()
+    except Exception:
+        # After headers, expiration, a changed session or a disconnected socket
+        # ends this response. Never append a second JSON response to the stream.
+        if not started:
+            raise
+    finally:
+        if stream is not None:
+            stream.close()
+        slots.release()
 
 
 def workflow_import_idea(service, fields, files, *, prefix="/api/workflow", authorize=None):

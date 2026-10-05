@@ -87,6 +87,154 @@ class NativeWorkChecks(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM idea_dispatches").fetchone()[0], 0)
 
+    def unclassified_phone_idea(self, with_image=False):
+        self.service.shutdown()
+        self.service = WorkflowService(self.root / "unclassified-private", models=NoModels(), projects=[], recover_jobs=False)
+        client = str(uuid.uuid4())
+        opened = self.service.mobile_dialogue_open(request(clientId=client))
+        session, identifiers = opened["session"], []
+        if with_image:
+            path = self.root / "phone-original.png"
+            Image.new("RGB", (24, 16), "blue").save(path)
+            uploaded = self.service.mobile_dialogue_upload(request(recordId=session["recordId"],
+                text=json.dumps({"clientId": client, "sessionId": session["id"], "expectedRevision": session["revision"]})),
+                [IncomingFile(path, 0, path.stat().st_size, path.name, "image/png")])
+            session, identifiers = uploaded["session"], uploaded["uploadedAttachmentIds"]
+        saved = self.service.mobile_dialogue_save(request(clientId=client, sessionId=session["id"],
+            expectedRevision=session["revision"], text="尚未归类的手机原始想法", attachmentIds=identifiers))
+        self.idea, self.record = saved["idea"], saved["session"]["recordId"]
+        self.assertIsNone(self.idea["projectId"])
+        self.assertEqual(saved["detail"]["record"]["projectId"], "")
+        self.assert_empty_queue()
+        return identifiers
+
+    def enable_actual_workspace(self):
+        self.service.native_work_catalog(deepcopy(self.catalog))
+        self.service.configure_app_work(request(bindings=[deepcopy(self.binding)]))
+
+    def test_unclassified_saved_phone_idea_uses_only_final_explicit_workspace_without_reclassifying(self):
+        identifiers = self.unclassified_phone_idea(with_image=True)
+        self.update_mobile_idea(executionDraft="已保存的来源稿", keyPoints=[
+            {"id": uuid.uuid4().hex, "text": "当前建议不能升格为决定", "kind": "suggestion"}])
+        self.enable_actual_workspace()
+        before_idea = self.service.mobile_idea(urlencode({"id": self.idea["id"]}))["idea"]
+        with self.service._db() as db:
+            before_record = dict(self.service._record(db, self.record))
+            before_projects = self.service._setting(db, "projects")
+            before_bindings = self.service._setting(db, "app_work_bindings")
+        database = self.service.data_dir / "workflow.sqlite3"
+        before_bytes = database.read_bytes()
+        review = self.review()
+        self.assertEqual(database.read_bytes(), before_bytes)
+        self.assert_empty_queue()
+        body = self.body(projectId="", text="最终确认修改所选真实 Workspace 内文件", context={"attachmentIds": identifiers})
+        accepted = self.service.app_work(body)
+        replay = self.service.app_work(deepcopy(body))
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["job"]["id"], accepted["job"]["id"])
+        with self.service._db() as db:
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone()[0])
+            dispatch = self.service._dispatch(db, accepted["job"]["appDispatch"]["id"])
+            snapshot = json.loads(dispatch["snapshot"])
+            after_record = dict(self.service._record(db, self.record))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM idea_dispatches").fetchone()[0], 1)
+            self.assertEqual(self.service._setting(db, "projects"), before_projects)
+            self.assertEqual(self.service._setting(db, "app_work_bindings"), before_bindings)
+        for key in ("id", "title", "project_id", "context", "primary_attachment_id", "created_at"):
+            self.assertEqual(after_record[key], before_record[key])
+        self.assertEqual(payload["projectId"], "")
+        self.assertEqual(payload["appFrozen"]["projectName"], "未归类")
+        self.assertNotIn("actionPlanning", payload["appFrozen"])
+        self.assertEqual(payload["ideaContext"], review["ideaContext"])
+        self.assertEqual(payload["sourceTask"]["revision"], self.idea["revision"])
+        self.assertEqual(payload["text"], body["text"])
+        self.assertEqual(snapshot["workspace"], {"projectId": self.binding["workspaceProjectId"], "hostId": "local",
+            "root": self.binding["workspaceRoot"], "allowedRoot": self.binding["allowedRoot"]})
+        frozen_image = payload["appFrozen"]["images"][0]
+        self.assertEqual(frozen_image["id"], identifiers[0])
+        self.assertEqual(frozen_image["originalSha256"], hashlib.sha256((self.root / "phone-original.png").read_bytes()).hexdigest())
+        self.assertEqual(self.service.mobile_idea(urlencode({"id": self.idea["id"]}))["idea"], before_idea)
+        self.assertFalse(self.service._wake.is_set())
+        # Claim validates the same frozen scope; it does not contact Codex.
+        claim = self.service.incubator_claim(request())
+        self.assertTrue(claim["shouldDispatch"])
+        self.assertEqual(claim["dispatch"]["snapshot"]["workspace"], snapshot["workspace"])
+        (self.project / "source.txt").write_text("Real isolated final Work change", encoding="utf-8")
+        returned = self.attach(claim["dispatch"], answer(changedFiles=["source.txt"]))
+        self.assertEqual(returned["job"]["recordId"], self.record)
+        self.assertEqual(returned["job"]["status"], "succeeded")
+        self.assertTrue(returned["job"]["result"]["executionVerified"])
+        self.assertEqual(returned["job"]["result"]["fileProof"][0]["afterSha256"],
+            hashlib.sha256((self.project / "source.txt").read_bytes()).hexdigest())
+        self.assertEqual(self.service.mobile_idea(urlencode({"id": self.idea["id"]}))["idea"], before_idea)
+
+    def test_later_explicit_classification_does_not_rewrite_empty_source_record_or_block_final_workspace(self):
+        self.unclassified_phone_idea()
+        self.service.configure_projects([{ "id": "console", "name": "Actual configured classification", "root": str(self.project),
+            "capabilities": ["capture_screen"], "allowGeneratedScripts": False}])
+        self.update_mobile_idea(projectId="console", executionDraft="当前保存稿")
+        mapped = self.service.task_record(request(ideaId=self.idea["id"], expectedRevision=self.idea["revision"]))
+        self.assertEqual(mapped["record"]["id"], self.record)
+        self.assertEqual(mapped["record"]["projectId"], "")
+        self.enable_actual_workspace()
+        accepted = self.service.app_work(self.body(projectId=""))
+        self.assertEqual(accepted["job"]["status"], "waiting")
+        actual = self.service.mobile_idea(urlencode({"id": self.idea["id"]}))["idea"]
+        self.assertEqual(actual["projectId"], "console")
+        self.assertEqual(actual["revision"], self.idea["revision"])
+        self.assertEqual(self.service.detail(self.record)["record"]["projectId"], "")
+
+    def test_unclassified_work_never_bypasses_actual_binding_or_internal_scope_checks(self):
+        self.unclassified_phone_idea()
+        source = {"ideaId": self.idea["id"], "revision": self.idea["revision"]}
+        body = request(recordId=self.record, projectId="", text="明确任务", sourceTask=source, context={"attachmentIds": []},
+            bindingId=self.binding["id"], workspaceAuthorizationSha256=native_work._digest(self.binding),
+            workTarget={"mode": "new", "name": "Explicit Work"}, ideaContextSha256=self.review()["ideaContextSha256"])
+        self.error(lambda: self.service.app_work(body), "work_not_authorized")
+        self.enable_actual_workspace()
+        self.error(lambda: self.service.app_work({**body, "workspaceAuthorizationSha256": "0" * 64}), "permission_changed")
+        with self.service._db() as db:
+            record = self.service._record(db, self.record)
+            payload = {"projectId": "", "executionEngine": "codex_app", "action": "native_work",
+                "context": {"attachmentIds": [], "referenceIds": [], "selectedText": ""},
+                "appTarget": {"kind": "codex", "mode": "new", "threadId": ""}}
+            self.error(lambda: self.service._freeze_app_discussion(db, record, payload, None), "project_not_authorized")
+            self.error(lambda: self.service._freeze_app_discussion(db, record, payload, None,
+                native_work_binding={**self.binding, "allowedRoot": str(self.workspace)}), "permission_changed")
+            invalid = {**payload, "context": {**payload["context"], "referenceIds": ["private-ref"]}}
+            self.error(lambda: self.service._freeze_app_discussion(db, record, invalid, None,
+                native_work_binding=self.binding), "project_not_authorized")
+            invalid = {**payload, "action": "command"}
+            self.error(lambda: self.service._freeze_app_discussion(db, record, invalid, None,
+                native_work_binding=self.binding), "project_not_authorized")
+            invalid = {**payload, "appTarget": {"kind": "codex", "mode": "existing", "threadId": str(uuid.uuid4())}}
+            self.error(lambda: self.service._freeze_app_discussion(db, record, invalid, None,
+                native_work_binding=self.binding), "permission_changed")
+        self.service.configure_app_work(request(bindings=[{**self.binding, "allowAppWork": False}]))
+        self.error(lambda: self.service.app_work(body), "work_not_authorized")
+        self.assert_empty_queue()
+        self.assertEqual(self.service.config()["projects"], [])
+        self.assertEqual(self.service.detail(self.record)["record"]["projectId"], "")
+
+    def test_nonempty_existing_classification_and_unclassified_reauthorization_remain_strict(self):
+        self.error(lambda: self.service.app_work(self.body(projectId=None)))
+        self.assert_empty_queue()
+        self.unclassified_phone_idea()
+        self.enable_actual_workspace()
+        body = self.body(projectId="")
+        calls = []
+        def revoke():
+            calls.append(1)
+            if len(calls) == 2:
+                raise WorkflowError("Pairing expired after scope validation", 403, "permission_changed")
+        self.error(lambda: self.service.app_work(body, authorize=revoke), "permission_changed")
+        self.assertEqual(len(calls), 2)
+        self.assert_empty_queue()
+        self.assertEqual(self.service.mobile_idea(urlencode({"id": self.idea["id"]}))["idea"]["body"], self.idea["body"])
+        self.assertEqual(self.service.detail(self.record)["record"]["projectId"], "")
+        self.assertFalse(self.service._wake.is_set())
+
     def test_review_exact_current_saved_idea_context_is_read_only_and_authorized(self):
         decision, suggestion = uuid.uuid4().hex, uuid.uuid4().hex
         self.update_mobile_idea(executionDraft="已保存的执行稿 🧵", keyPoints=[

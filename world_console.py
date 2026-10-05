@@ -61,7 +61,7 @@ from transfer_store import TransferStore, TransferError, read_transfer_request, 
 from workflow_service import WorkflowError, WorkflowService
 from workflow_chat_relay import ChatRelayBroker
 from workflow_models import WorkflowModels, WorkflowModelError
-from workflow_http import workflow_get, workflow_post, workflow_upload_dialogue
+from workflow_http import workflow_get, workflow_post, workflow_upload_dialogue, send_workflow_events
 from phone_offline import build_phone_export
 from workspace_plan import (
     MAX_PLAN_BYTES, PlanStateConflict,
@@ -1413,6 +1413,7 @@ class ConsoleHTTPServer(ThreadingHTTPServer):
         self.max_request_threads = max_request_threads
         self.connection_idle_timeout = connection_idle_timeout
         self._request_slots = threading.BoundedSemaphore(max_request_threads)
+        self._workflow_event_slots = threading.BoundedSemaphore(max(1, min(4, max_request_threads // 2)))
         super().__init__(
             server_address,
             request_handler_class,
@@ -1501,14 +1502,16 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             try:
                 action = parsed.path.removeprefix("/api/workflow/")
-                if action == "attachment":
+                def authorize_workflow_read():
+                    # Origin/Host were checked above and remain immutable.
+                    if not _client_address_is_loopback(self.client_address[0]):
+                        raise WorkflowError("This action is available on this PC only.", 403)
+                if action == "mobile/dialogue/events":
+                    send_workflow_events(self, WORKFLOW_SERVICE, parsed.query, authorize=authorize_workflow_read)
+                elif action == "attachment":
                     with WORKFLOW_SERVICE.read_attachment(parsed.query) as item:
                         send_transfer_attachment(self, item)
                 else:
-                    def authorize_workflow_read():
-                        # Origin/Host were checked above and remain immutable for this request.
-                        if not _client_address_is_loopback(self.client_address[0]):
-                            raise WorkflowError("This action is available on this PC only.", 403)
                     self.send_json(workflow_get(WORKFLOW_SERVICE, action, parsed.query, authorize=authorize_workflow_read))
             except (WorkflowError, WorkflowModelError, TransferError) as error:
                 self.send_json({"error": str(error), "code": getattr(error, "code", "invalid_request")}, status=error.status)

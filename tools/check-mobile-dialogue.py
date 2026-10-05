@@ -171,6 +171,42 @@ class MobileDialogueChecks(unittest.TestCase):
             self.assertIsNone(self.service._setting(db, "app_work_bindings"))
             self.assertIsNone(self.service._setting(db, "app_work_catalog"))
 
+    def test_classification_split_and_merge_do_not_require_an_execution_directory(self):
+        workspace = self.root / "management-project"
+        workspace.mkdir()
+        self.service = WorkflowService(self.root / "management-private", models=ForbiddenModels(), recover_jobs=False,
+            projects=[{"id": "stale-project", "name": "Configured classification", "root": str(workspace), "capabilities": []}])
+        saved = self.mutate("save", self.open(), text="原想法：物理方案与手动方案")
+        idea = saved["idea"]
+        with self.service._db() as db:
+            projects_before = self.service._setting(db, "projects")
+            record_before = dict(self.service._record(db, saved["session"]["recordId"]))
+        workspace.rmdir()
+        classified = self.post("idea/update", request(id=idea["id"], expectedRevision=idea["revision"], projectId="stale-project"))["idea"]
+        self.assertEqual(classified["projectId"], "stale-project")
+        split_body = request(id=classified["id"], expectedRevision=classified["revision"], start=0, end=3, title="分出的文字")
+        split = self.post("idea/split", split_body)["idea"]
+        self.assertEqual(split["body"], classified["body"][:3])
+        self.assertEqual(split["projectId"], "stale-project")
+        self.assertEqual(self.post("idea/split", split_body)["idea"]["id"], split["id"])
+        combined = self.post("idea/merge", request(firstId=classified["id"], firstRevision=classified["revision"],
+            secondId=split["id"], secondRevision=split["revision"], title="同分类合并"))["idea"]
+        self.assertEqual(combined["body"], classified["body"] + "\n\n" + split["body"])
+        self.assertEqual(combined["projectId"], "stale-project")
+        before = self.db_snapshot()
+        self.error(lambda: self.post("idea/update", request(id=classified["id"], expectedRevision=classified["revision"], projectId="unknown")))
+        self.error(lambda: self.post("idea/update", request(id=classified["id"], expectedRevision=classified["revision"] + 1, projectId="stale-project")))
+        self.assertEqual(self.db_snapshot(), before)
+        with self.service._db() as db:
+            self.assertEqual(self.service._setting(db, "projects"), projects_before)
+            self.assertEqual(dict(self.service._record(db, saved["session"]["recordId"])), record_before)
+            self.assertEqual(self.service._idea(db, classified["id"])["body"], classified["body"])
+            self.assertEqual(self.error(lambda: self.service._project(db, "stale-project")).status, 503)
+            self.assertIsNone(self.service._setting(db, "app_work_bindings"))
+        self.assertFalse(workspace.exists())
+        self.assertEqual(self.counts()["jobs"], 0)
+        self.assertEqual(self.counts()["idea_dispatches"], 0)
+
     def test_notebook_save_and_clear_do_not_open_or_require_an_existing_project_directory(self):
         workspace = self.root / "previously-authorized-project"
         workspace.mkdir()

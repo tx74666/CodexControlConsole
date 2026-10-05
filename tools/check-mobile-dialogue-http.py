@@ -129,6 +129,103 @@ class MobileDialogueHttpChecks(unittest.TestCase):
             return {name: db.execute("SELECT COUNT(*) FROM " + name).fetchone()[0]
                     for name in ("attachments", "messages", "jobs", "idea_dispatches")}
 
+    def events(self, session, *, headers=None, method="GET", cursor=""):
+        params = urllib.parse.urlencode({"clientId": session["clientId"], "sessionId": session["id"], "cursor": cursor})
+        values = {"Host": self.host, "Origin": self.origin, "X-Codex-Phone": "1"}
+        if self.cookie:
+            values["Cookie"] = self.cookie
+        values.update(headers or {})
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        connection.request(method, PREFIX + "mobile/dialogue/events?" + params, headers=values)
+        response = connection.getresponse()
+        self.addCleanup(connection.close)
+        self.addCleanup(response.close)
+        return response
+
+    def event(self, response):
+        lines = []
+        for _ in range(6):
+            line = response.readline()
+            self.assertTrue(line, "Result subscription unexpectedly ended")
+            if line == b"\n":
+                break
+            lines.append(line.decode("utf-8").rstrip("\n"))
+        return {"event": next(line[7:] for line in lines if line.startswith("event: ")),
+            "data": json.loads(next(line[6:] for line in lines if line.startswith("data: ")))}
+
+    def test_result_stream_preserves_paired_origin_and_get_only_boundary(self):
+        self.pair()
+        session, before = self.open(), self.counts()
+        for headers, expected in (({"Cookie": ""}, 401), ({"Origin": "https://other.invalid"}, 403),
+                ({"Sec-Fetch-Site": "cross-site"}, 403)):
+            response = self.events(session, headers=headers)
+            self.assertEqual(response.status, expected)
+            self.assertNotEqual(response.getheader("Content-Type"), "text/event-stream; charset=utf-8")
+            response.read()
+        self.assertEqual(self.events(session, method="HEAD").status, 405)
+        foreign = {**session, "clientId": str(uuid.uuid4())}
+        response = self.events(foreign)
+        self.assertEqual(response.status, 403)
+        response.read()
+        self.assertEqual(self.counts(), before)
+
+    def test_completion_pushes_exact_result_without_another_request_or_send(self):
+        self.pair()
+        session = self.open()
+        response = self.events(session)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.getheader("Cache-Control"), "no-store")
+        self.assertIsNone(response.getheader("Content-Length"))
+        ready = self.event(response)
+        self.assertEqual(ready["event"], "dialogue.ready")
+        self.assertEqual(set(ready["data"]), {"clientId", "sessionId", "recordId", "cursor", "jobId", "status"})
+        status, sent, _ = self.call(PREFIX + "mobile/dialogue/send", request(clientId=session["clientId"],
+            sessionId=session["id"], expectedRevision=session["revision"], text="隔离 HTTP 问题", attachmentIds=[], requestedProfile="high"))
+        self.assertEqual(status, 200, sent)
+        first = self.event(response)
+        self.assertEqual(first["event"], "dialogue.result")
+        dispatch_id = sent["job"]["appDispatch"]["id"]
+        claimed = self.service.incubator_claim(request(id=dispatch_id))["dispatch"]
+        self.service.incubator_attach_result(request(id=dispatch_id, claimToken=claimed["claimToken"],
+            status="completed", targetThreadId=str(uuid.uuid4()), result={"text": "隔离测试的完成回答",
+                "sourceMessageId": str(uuid.uuid4()), "turnId": str(uuid.uuid4())}))
+        for _ in range(3):
+            complete = self.event(response)
+            if complete["data"]["status"] == "succeeded":
+                break
+        self.assertEqual(complete["data"]["status"], "succeeded")
+        self.assertEqual(complete["data"]["recordId"], session["recordId"])
+        self.assertNotIn("隔离测试的完成回答", json.dumps(complete, ensure_ascii=False))
+        current = self.service.mobile_dialogue_get("clientId=" + session["clientId"])
+        self.assertIn("隔离测试的完成回答", str(current["detail"]["messages"]))
+        self.assertEqual(self.counts()["idea_dispatches"], 1)
+        self.assertEqual(self.counts()["jobs"], 1)
+        self.service.mobile_dialogue_clear(request(clientId=session["clientId"], sessionId=session["id"],
+            expectedRevision=current["session"]["revision"]))
+        self.assertEqual(response.readline(), b"")
+
+    def test_clear_ends_old_stream_and_event_connections_leave_normal_slots(self):
+        self.pair()
+        session = self.open()
+        streams = [self.events(session) for _ in range(4)]
+        for response in streams:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(self.event(response)["event"], "dialogue.ready")
+        extra = self.events(session)
+        self.assertEqual(extra.status, 429)
+        extra.read()
+        status, cleared, _ = self.call(PREFIX + "mobile/dialogue/clear", request(clientId=session["clientId"],
+            sessionId=session["id"], expectedRevision=session["revision"]))
+        self.assertEqual(status, 200, cleared)
+        for response in streams:
+            self.assertEqual(response.readline(), b"")
+        reopened = self.events(cleared["session"])
+        self.assertEqual(reopened.status, 200)
+        self.assertEqual(self.event(reopened)["data"]["sessionId"], cleared["session"]["id"])
+        self.service.mobile_dialogue_clear(request(clientId=cleared["session"]["clientId"],
+            sessionId=cleared["session"]["id"], expectedRevision=cleared["session"]["revision"]))
+        self.assertEqual(reopened.readline(), b"")
+
     def idea(self, text):
         return self.service.incubator_create(request(title=text, body=text, stage="thinking"))["idea"]
 

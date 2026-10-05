@@ -153,13 +153,21 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
                 notifier = self._dispatch_commit_notifier
                 before_dispatch_rowid = db.execute("SELECT COALESCE(MAX(rowid),0) FROM idea_dispatches").fetchone()[0] if notifier else None
                 before_dispatch_open = {row[0] for row in db.execute("SELECT id FROM idea_dispatches WHERE status IN ('claimed','waiting','needs_review')")} if notifier else set()
+                before_mobile_results = self._mobile_events_snapshot(db)
                 yield db
                 committed_dispatches = [row[0] for row in db.execute(
                     "SELECT id FROM idea_dispatches WHERE rowid>? AND status='pending' AND user_confirmed_at<>''", (before_dispatch_rowid,))] if notifier else []
                 released_dispatches = [row[0] for row in db.execute(
                     "SELECT id FROM idea_dispatches WHERE id IN (" + ",".join("?" for _ in before_dispatch_open) + ") AND status IN ('completed','failed')",
                     tuple(before_dispatch_open))] if notifier and before_dispatch_open else []
+                after_mobile_results = self._mobile_events_snapshot(db)
                 db.commit()
+                # Subscribers wake only for an actual committed scoped change.
+                # A notification failure cannot turn an accepted write into retry.
+                try:
+                    self._mobile_events_committed(before_mobile_results, after_mobile_results)
+                except Exception:
+                    pass
                 if notifier and committed_dispatches:
                     # Enqueue only after durable commit. The opt-in broker owns delivery;
                     # callback failure cannot turn an accepted request into a retry.
@@ -1830,16 +1838,29 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
             raise WorkflowError("图片讨论需要本机 Codex；ChatGPT 文字消息不能代替传图。", 400, "app_images_unavailable")
         return {"kind": kind, "mode": mode, "threadId": identifier, "name": cached["title"]}
 
-    def _freeze_app_discussion(self, db, record, payload, project):
+    def _freeze_app_discussion(self, db, record, payload, project, *, native_work_binding=None):
         """Only accepted selections and this record's history become the private prompt."""
         context = payload["context"]
         if project is None:
             mobile = payload.get("mobileDialogue")
             target = payload.get("appTarget", {})
-            if (not isinstance(mobile, dict) or mobile.get("recordId") != record["id"]
+            if native_work_binding is not None:
+                if (not isinstance(native_work_binding, dict) or payload.get("executionEngine") != "codex_app"
+                        or payload.get("action") != "native_work" or record["project_id"] != ""
+                        or payload.get("projectId") != "" or target.get("kind") != "codex"
+                        or target.get("mode") not in {"new", "existing"}):
+                    raise WorkflowError("未归类 Work 必须明确核对本记录及实际 Workspace。", 403, "project_not_authorized")
+                binding, catalog = self._native_binding(db, _key(native_work_binding.get("id")))
+                if binding != native_work_binding:
+                    raise WorkflowError("Work Workspace 授权已改变，未冻结任务。", 403, "permission_changed")
+                if target["mode"] == "existing" and not any(row["id"] == target.get("threadId")
+                        and row["projectId"] == binding["workspaceProjectId"] and row["cwd"] == binding["workspaceRoot"]
+                        for row in catalog["threads"]):
+                    raise WorkflowError("目标 Work 聊天实际 Workspace 不匹配。", 403, "permission_changed")
+            elif (not isinstance(mobile, dict) or mobile.get("recordId") != record["id"]
                     or payload.get("purpose") != "discussion" or target.get("kind") != "chatgpt"
                     or target.get("mode") != "new"):
-                raise WorkflowError("只有本记录的手机普通讨论可以不指定执行项目。", 403, "project_not_authorized")
+                raise WorkflowError("只有本记录的手机普通讨论或已授权 Work 可以不指定执行项目。", 403, "project_not_authorized")
             if context["referenceIds"]:
                 raise WorkflowError("未授权项目不能读取项目引用；手机文字与草稿保留。", 403, "project_not_authorized")
         images = []
@@ -2333,6 +2354,9 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
     def shutdown(self, wait=5):
         self._stop.set()
         self._wake.set()
+        hub = getattr(self, "_mobile_result_hub", None)
+        if hub is not None:
+            hub.notify(hub.keys())
         process = self._process
         if process is not None:
             process.terminate()  # This task's private job; no other application's processes.

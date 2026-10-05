@@ -392,6 +392,10 @@ class ChatRelayController:
         result = {"text": answer, "sourceKind": "browser_dom", "browserEvidence": evidence, "targetThreadId": conversation,
                   "dispatchId": row["id"], "messageId": message_id, "attachmentIds": [], "actualProfileObserved": attempt["profileLabel"],
                   "executionCapabilities": {"verified": False, "source": "browser_dom_ui_label"}}
+        # A DOM label is observable evidence, never a backend model/reasoning receipt.
+        result["profileObservation"] = {"requestedProfile": attempt["requestedProfile"], "actualProfileObserved": attempt["profileLabel"],
+            "source": "browser_dom_ui_label", "dispatchId": row["id"], "jobId": job["id"], "messageId": message_id,
+            "observedAt": evidence["observedAt"], "capabilitiesVerified": False}
         db.execute("UPDATE jobs SET status='succeeded',result=?,error='',updated_at=? WHERE id=?", (encode(result).decode(), now(), job["id"]))
         db.execute("UPDATE idea_dispatches SET status='completed',target_thread_id=?,result=?,error='',updated_at=? WHERE id=?", (conversation, encode(result).decode(), now(), row["id"]))
         attempt.update(phase="completed", conversationUrl=evidence["conversationUrl"], captureSha256=sha(json.dumps(evidence, ensure_ascii=False, sort_keys=True)), completedAt=now())

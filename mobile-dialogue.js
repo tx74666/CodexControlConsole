@@ -28,6 +28,7 @@
     let pointEditor = null;
     const editComposing = { body: false, execution: false };
     let draftSync = null, draftTimer = 0, ideaSequence = 0, managementSequence = 0, files = [], fileOwner = null, fileError = false, fileReading = null, fileWriting = 0, uploadRequest = null, packUrl = "", packIdeaId = "", packRevision = 0;
+    let resultStream = null, resultEpoch = 0, resultKey = "", resultCursor = "", resultPending = null, resultDraining = false, resultStopped = false, resultTransition = false, pageClosed = false;
     const blobs = options.blobStore || options.assetStore || fileStore(), filesKey = `${storageKey}:files:${state.clientId}`, filePreviews = [];
     const top = make("header", "", "dialogue-top"), topLeft = make("div", "", "dialogue-top-left"), topActions = make("div", "", "dialogue-top-actions"), title = make("h2", "对话", "dialogue-title");
     const back = button("‹ 返回", () => void goBack(), "dialogue-back"), ideasButton = button("想法", () => void showIdeas());
@@ -62,20 +63,25 @@
     const saveOnly = button("只保存", () => void saveIdea()), send = button("发送 ↑", () => void sendMessage(), "dialogue-send"), attach = button("＋", () => imageInput.click()), imageInput = field("input", "选择图片文件"), pendingImages = make("div", "", "dialogue-attachment-grid"); attach.setAttribute("aria-label", "添加图片"); imageInput.type = "file"; imageInput.accept = "image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"; imageInput.multiple = true; imageInput.hidden = true;
     const status = make("div", "", "dialogue-status"), draftStatus = make("p"), capabilityStatus = make("p"); status.setAttribute("role", "status"); status.append(draftStatus, capabilityStatus); composeLeft.append(attach, tier); composeRight.append(saveOnly, send); composeActions.append(composeLeft, composeRight); shell.append(pendingImages, composerInput, composeActions, imageInput); composer.append(shell, status); root.classList.add("mobile-dialogue"); root.replaceChildren(top, notice, content, newResult, composer);
     const savedImagePicker = make("details", "", "dialogue-saved-image-picker"), savedImageChoices = make("div", "", "dialogue-attachment-grid"); savedImagePicker.append(make("summary", "已保存图片"), make("p", "选择本次引用的图片；未选择的图片不会发送。", "dialogue-source-note"), savedImageChoices); savedImagePicker.hidden = true; shell.insertBefore(savedImagePicker, composerInput);
+    const storageFailureNotice = "这台手机暂时无法保存草稿，请保留页面并复制内容。";
     function persist() {
-      try { localStorage.setItem(storageKey, JSON.stringify({ clientId: state.clientId, tier: state.tier, drafts: state.drafts, editDrafts: state.editDrafts, pointDrafts: state.pointDrafts, pending: state.pending, search: state.search, project: state.project, listScroll: state.listScroll })); state.storageFailed = false; return true; }
-      catch { state.storageFailed = true; say("这台手机暂时无法保存草稿，请保留页面并复制内容。", true); return false; }
+      const recovering = state.storageFailed;
+      try { localStorage.setItem(storageKey, JSON.stringify({ clientId: state.clientId, tier: state.tier, drafts: state.drafts, editDrafts: state.editDrafts, pointDrafts: state.pointDrafts, pending: state.pending, search: state.search, project: state.project, listScroll: state.listScroll })); state.storageFailed = false; if (recovering && notice.textContent === storageFailureNotice) say(); renderDraftStatus(); return true; }
+      catch { state.storageFailed = true; renderDraftStatus(); say(storageFailureNotice, true); return false; }
     }
     function say(text = "", error = false) { notice.textContent = text; notice.dataset.error = String(error); }
     function autosize(input, limit = 170) { input.style.height = "auto"; input.style.height = `${Math.min(limit, Math.max(48, input.scrollHeight || 48))}px`; input.style.overflowY = input.scrollHeight > limit ? "auto" : "hidden"; }
     function draftKey() { return state.session?.id || "unopened"; }
+    function renderDraftStatus() {
+      draftStatus.textContent = state.storageFailed ? !offline && state.session && !state.dirty ? "草稿已同步电脑；本机保存失败" : "草稿尚未保存在此手机" : offline ? state.session || state.dirty ? "草稿已保存在此手机" : "只保存留在此手机" : state.dirty ? "草稿已保存在此手机" : state.session ? "草稿已同步电脑" : "";
+    }
     function saveLocalDraft(userEdited = false) {
       const local = state.drafts[draftKey()];
       // Capturing a blank page before its session loads is not an edit or a clear.
-      if (!state.session && !userEdited && !composerInput.value && local?.userEdited !== true) return;
-      state.drafts[draftKey()] = { text: composerInput.value, tier: state.tier, updatedAt: new Date().toISOString(), unsynced: true, ...(!state.session ? { waitingForSession: true, ...(userEdited || local?.userEdited === true ? { userEdited: true } : {}) } : {}) }; state.dirty = true; persist(); draftStatus.textContent = offline ? "已保存在此手机" : "草稿已保存在此手机"; autosize(composerInput); updateControls();
+      if (!state.session && !userEdited && !composerInput.value && local?.userEdited !== true) return !state.storageFailed;
+      state.drafts[draftKey()] = { text: composerInput.value, tier: state.tier, updatedAt: new Date().toISOString(), unsynced: true, ...(!state.session ? { waitingForSession: true, ...(userEdited || local?.userEdited === true ? { userEdited: true } : {}) } : {}) }; state.dirty = true; const stored = persist(); autosize(composerInput); updateControls(); return stored;
     }
-    function restoreDraft() { const local = state.drafts[draftKey()], localDirty = Boolean(local?.unsynced && (state.session || local.userEdited === true || local.text)); composerInput.value = localDirty ? local.text || "" : state.session?.draft?.text ?? local?.text ?? ""; state.dirty = localDirty; autosize(composerInput); draftStatus.textContent = offline ? state.session || state.dirty ? "草稿已保存在此手机" : "只保存留在此手机" : state.dirty ? "草稿已保存在此手机" : state.session ? "草稿已同步电脑" : ""; }
+    function restoreDraft() { const local = state.drafts[draftKey()], localDirty = Boolean(local?.unsynced && (state.session || local.userEdited === true || local.text)); composerInput.value = localDirty ? local.text || "" : state.session?.draft?.text ?? local?.text ?? ""; state.dirty = localDirty; autosize(composerInput); renderDraftStatus(); }
     async function call(action, body) {
       const generation = state.generation;
       if (adapter) { const result = await adapter(action, body); if (generation !== state.generation) throw Object.assign(new Error("已切换页面。"), { cancelled: true }); return result; }
@@ -103,13 +109,64 @@
       }
       if (state.session?.id && previousSession !== state.session.id) void restoreSessionFiles(state.session.id);
       const selectedTier = data.preferences?.requestedProfile || data.session?.requestedProfile; if (!saved.tier && !state.dirty && tiers.some(item => item.id === selectedTier)) state.tier = selectedTier;
-      tier.value = state.tier; renderConversation(); renderCapability(); renderFiles(); updateControls(); return true;
+      const key = currentResultKey();
+      if (key !== resultKey) { closeResultStream(); resultKey = key; resultCursor = ""; resultPending = null; resultStopped = false; }
+      if (/^[a-f0-9]{64}$/.test(data.resultCursor || "")) { if (!resultCursor || !resultStream && !resultPending) resultCursor = data.resultCursor; if (resultPending?.cursor === data.resultCursor) resultPending = null; }
+      tier.value = state.tier; renderConversation(); renderCapability(); renderFiles(); updateControls(); syncResultStream(); return true;
+    }
+    function currentResultKey() { return state.session ? `${state.clientId}:${state.session.id}:${state.session.recordId}` : ""; }
+    function canReadResults() { return !offline && !adapter && state.active && state.view === "chat" && !pageClosed && !document.hidden && navigator.onLine !== false && !resultTransition && /^[a-f0-9]{32}$/.test(state.session?.id || "") && /^[a-f0-9]{32}$/.test(state.session?.recordId || ""); }
+    function closeResultStream() { resultEpoch++; const stream = resultStream; resultStream = null; stream?.controller.abort(); void stream?.reader?.cancel().catch(() => {}); }
+    function currentResultStream(stream) { return resultStream === stream && stream.epoch === resultEpoch && stream.generation === state.generation && stream.key === currentResultKey() && canReadResults(); }
+    function receiveResultFrame(stream, frame) {
+      if (!currentResultStream(stream)) return;
+      const lines = frame.split("\n"), events = lines.filter(line => line.startsWith("event:")), dataLines = lines.filter(line => line.startsWith("data:"));
+      if (events.length !== 1 || !dataLines.length) return;
+      const event = events[0].slice(6).trim(); if (!["dialogue.ready", "dialogue.result", "dialogue.closed"].includes(event)) return;
+      let data; try { data = JSON.parse(dataLines.map(line => line.slice(5).replace(/^ /, "")).join("\n")); } catch { return; }
+      if (!data || Object.keys(data).sort().join(",") !== "clientId,cursor,jobId,recordId,sessionId,status" || data.clientId !== stream.clientId || data.sessionId !== stream.sessionId || data.recordId !== stream.recordId || !/^[a-f0-9]{64}$/.test(data.cursor || "") || data.jobId !== null && !/^[a-f0-9]{32}$/.test(data.jobId || "") || typeof data.status !== "string" || !data.status || data.status.length > 80) return;
+      if (event === "dialogue.closed") { resultStopped = true; closeResultStream(); return; }
+      if (event === "dialogue.ready") { resultCursor = data.cursor; void drainResults(); return; }
+      if (data.cursor === resultCursor) return;
+      resultCursor = data.cursor; resultPending = { key: stream.key, generation: stream.generation, cursor: data.cursor }; void drainResults();
+    }
+    function syncResultStream() {
+      if (!canReadResults()) { closeResultStream(); return; }
+      if (resultStream || resultStopped || typeof fetch !== "function" || typeof TextDecoder !== "function") return;
+      let url; try { url = new URL(`${base}/mobile/dialogue/events`, location.origin); if (url.origin !== location.origin) return; } catch { return; }
+      url.search = new URLSearchParams({ clientId: state.clientId, sessionId: state.session.id, cursor: resultCursor }).toString();
+      const stream = { epoch: ++resultEpoch, generation: state.generation, key: currentResultKey(), clientId: state.clientId, sessionId: state.session.id, recordId: state.session.recordId, controller: new AbortController(), reader: null }; resultStream = stream;
+      void (async () => {
+        try {
+          const response = await fetch(url.href, { method: "GET", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", signal: stream.controller.signal, headers: { Accept: "text/event-stream", ...(phone ? { "X-Codex-Phone": "1" } : {}) } });
+          if (!currentResultStream(stream)) { await response.body?.cancel(); return; }
+          if (response.status === 401) { options.onAuth?.(); throw new Error("请重新连接电脑。"); }
+          if (!response.ok || !/^text\/event-stream(?:;|$)/i.test(response.headers.get("Content-Type") || "") || !response.body?.getReader) throw new Error("回答通知连接暂不可用，请重新连接电脑后查看。");
+          stream.reader = response.body.getReader(); const decoder = new TextDecoder(); let buffered = "";
+          while (currentResultStream(stream)) {
+            const chunk = await stream.reader.read(); if (!currentResultStream(stream)) return;
+            if (chunk.done) { options.onConnectionState?.(false); if (!state.storageFailed) say("回答通知连接已断开；重新连接电脑后可继续查看。", true); break; }
+            buffered += decoder.decode(chunk.value, { stream: true }); buffered = buffered.replace(/\r\n/g, "\n");
+            if (buffered.length > 65536) throw new Error("回答通知格式暂时无法读取，请重新连接电脑后查看。");
+            let boundary; while ((boundary = buffered.indexOf("\n\n")) !== -1) { const frame = buffered.slice(0, boundary); buffered = buffered.slice(boundary + 2); receiveResultFrame(stream, frame); if (!currentResultStream(stream)) return; }
+          }
+        } catch (error) { if (currentResultStream(stream) && error.name !== "AbortError") { options.onConnectionState?.(false); if (!state.storageFailed) fail(error); } }
+        finally { if (resultStream === stream) { resultStopped = true; closeResultStream(); } }
+      })();
+    }
+    async function drainResults() {
+      if (!resultPending || resultDraining || !canReadResults() || state.busy || state.reading || state.composing || editComposing.body || editComposing.execution) return;
+      const pending = resultPending; if (pending.key !== currentResultKey() || pending.generation !== state.generation) { resultPending = null; return; }
+      resultDraining = true;
+      try { if (await refresh(false) && resultPending === pending) resultPending = null; }
+      finally { resultDraining = false; if (resultPending && resultPending !== pending) void drainResults(); }
     }
     function renderCapability() {
       const actual = state.execution?.actualReceipt?.actualProfile, verified = state.execution?.actualReceipt?.verified === true && tiers.some(item => item.id === actual);
+      const observed = state.execution?.profileObservation, observation = observed && Object.keys(observed).sort().join(",") === "actualProfileObserved,capabilitiesVerified,dispatchId,jobId,messageId,observedAt,requestedProfile,source" && observed.requestedProfile === "fast" && observed.actualProfileObserved === "Instant" && observed.source === "browser_dom_ui_label" && observed.capabilitiesVerified === false && [observed.dispatchId, observed.jobId, observed.messageId].every(id => typeof id === "string" && /^[a-f0-9]{32}$/.test(id)) && typeof observed.observedAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(observed.observedAt) && !Number.isNaN(Date.parse(observed.observedAt)) ? "上一轮页面显示 Instant；实际模型／推理未核实" : "";
       capabilityStatus.textContent = offline ? "电脑未连接" : verified ? `实际 ${tiers.find(item => item.id === actual).label}` : "档位待核实";
-      capabilityStatus.title = state.execution?.message || "当前 App 通道的档位还未验证，不会把请求档位当作实际能力。";
-      menuMeta.textContent = offline ? "内容保存在此手机；连接电脑后才可发给 ChatGPT。" : `${options.getVersion?.() || "Codex Console"}\n${state.execution?.message || "普通 Chat 自动转发尚未接通，排队不代表已送达。"}`;
+      capabilityStatus.title = [state.execution?.message || "当前 App 通道的档位还未验证，不会把请求档位当作实际能力。", observation].filter(Boolean).join("\n");
+      menuMeta.textContent = offline ? "内容保存在此手机；连接电脑后才可发给 ChatGPT。" : `${options.getVersion?.() || "Codex Console"}\n${state.execution?.message || "普通 Chat 自动转发尚未接通，排队不代表已送达。"}${observation ? `\n${observation}` : ""}`;
     }
     function renderConversation() {
       if (state.view !== "chat") { for (const node of [context, welcome, messages, pending]) node.hidden = true; return; }
@@ -140,10 +197,10 @@
       title.textContent = ({ chat: "对话", ideas: state.archived ? "归档想法" : "想法", detail: "想法", execution: "执行稿" })[state.view];
       listView.hidden = state.view !== "ideas"; detailView.hidden = state.view !== "detail"; executionView.hidden = state.view !== "execution"; composer.hidden = state.view !== "chat";
       for (const node of [context, welcome, messages, pending]) if (state.view !== "chat") node.hidden = true;
-      if (state.view === "chat") renderConversation(); newResult.hidden = state.view !== "chat" || !state.newResults; renderEditReviews(); updateControls(); options.onViewChange?.(state.view);
+      if (state.view === "chat") renderConversation(); newResult.hidden = state.view !== "chat" || !state.newResults; renderEditReviews(); updateControls(); syncResultStream(); options.onViewChange?.(state.view);
     }
     function currentFiles() { return !fileOwner || fileOwner === state.session?.id ? files : []; }
-    function updateControls() { const empty = !composerInput.value.trim(); send.disabled = state.busy || empty || state.composing; saveOnly.disabled = state.busy || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy; saveEdit.hidden = !state.editorDirty; saveEdit.disabled = state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = state.busy || state.editorDirty; executionDraft.disabled = state.busy || state.editorDirty; carryIdea.disabled = state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = state.busy || Boolean(state.pending); }
+    function updateControls() { const empty = !composerInput.value.trim(); send.disabled = state.busy || empty || state.composing; saveOnly.disabled = state.busy || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy; saveEdit.hidden = !state.editorDirty; saveEdit.disabled = state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = state.busy || state.editorDirty; executionDraft.disabled = state.busy || state.editorDirty; carryIdea.disabled = state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = state.busy || Boolean(state.pending); void drainResults(); }
     async function writeFiles(value) { fileWriting++; try { await blobs.put(value); } catch (error) { fileError = true; throw error; } finally { fileWriting--; } }
     async function saveFiles() { try { await writeFiles({ id: filesKey, files, fileOwner, uploadRequest }); fileError = false; } catch (error) { fileError = true; fail(error); throw error; } }
     async function restoreSessionFiles(id) {
@@ -197,14 +254,14 @@
       if (draftSync || !state.active || state.busy || !state.dirty || state.storageFailed || offline) return;
       const intent = composeIntent(), text = intent.text;
       draftSync = (async () => {
-        try { await ensureSession(); const id = state.session.id, data = await call("mobile/dialogue/draft", submission(intent)); if (applyDialogue(data, id) && composerInput.value === text) { state.drafts[id] = { text, tier: intent.requestedProfile, unsynced: false }; state.dirty = false; persist(); draftStatus.textContent = "草稿已同步电脑"; } }
+        try { await ensureSession(); const id = state.session.id, data = await call("mobile/dialogue/draft", submission(intent)); if (applyDialogue(data, id) && composerInput.value === text) { state.drafts[id] = { text, tier: intent.requestedProfile, unsynced: false }; state.dirty = false; persist(); } }
         catch (error) { fail(error); }
       })();
       try { await draftSync; } finally { draftSync = null; }
     }
     async function sendMessage() {
       if (state.busy || state.composing || !composerInput.value.trim()) return;
-      if (offline) { saveLocalDraft(); say("请连接电脑后发送；这段草稿已保存在此手机。"); options.onConnect?.(); return; }
+      if (offline) { if (!saveLocalDraft()) return; say("请连接电脑后发送；这段草稿已保存在此手机。"); options.onConnect?.(); return; }
       const intent = composeIntent(), text = intent.text; state.busy = true; updateControls(); say("");
       try { if (draftSync) await draftSync; await ensureSession(); const uploadedIds = !state.pending ? await uploadFiles(intent) : []; const payload = durablePayload("mobile/dialogue/send", submission(intent, uploadedIds), ["sessionId", "text", "requestedProfile"]);
         const data = await call("mobile/dialogue/send", payload); state.pending = null;
@@ -224,19 +281,19 @@
       if (state.busy) return;
       if (state.pending) { say("上一条操作是否送达还需要核对，暂不切换讨论；原草稿与请求编号保留。", true); return; }
       more.open = false; if (state.view !== "chat") return;
-      state.busy = true; updateControls(); saveLocalDraft();
+      state.busy = true; resultTransition = true; closeResultStream(); updateControls(); saveLocalDraft();
       try { if (draftSync) await draftSync; await ensureSession(); if (currentFiles().length) { fileOwner = state.session.id; await saveFiles(); } const data = await call("mobile/dialogue/clear", { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision }); applyDialogue(data); state.messageIds.clear(); composerInput.value = ""; state.drafts[state.session.id] = { text: "", tier: state.tier, unsynced: false }; delete state.drafts.unopened; state.dirty = false; state.newResults = false; persist(); autosize(composerInput); renderView(); say("当前讨论已重新开始，保存的想法仍然保留。"); }
-      catch (error) { fail(error); } finally { state.busy = false; updateControls(); }
+      catch (error) { fail(error); } finally { resultTransition = false; state.busy = false; updateControls(); syncResultStream(); }
     }
     async function rememberAnswer(sourceMessageId) {
       if (state.busy || !state.session) return; state.busy = true; updateControls();
       try { if (draftSync) await draftSync; const candidate = { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision, sourceMessageId, ...(state.session.ideaId ? { ideaId: state.session.ideaId, expectedIdeaRevision: state.session.ideaRevision } : {}) }, payload = durablePayload("mobile/dialogue/remember", candidate, ["sessionId", "sourceMessageId", "ideaId"]); const data = await call("mobile/dialogue/remember", payload); state.pending = null; persist(); applyDialogue(data, payload.sessionId); say(data.keyPointAdded === false && data.keyPointOmittedReason === "point_limit" ? "完整回答与来源已保存；长期要点已满，未新增要点。" : payload.ideaId ? "已补充到此想法，原回答来源已保留。" : "已存为想法，原回答来源已保留。"); }
       catch (error) { if (writeRejected(error)) { state.pending = null; persist(); } fail(error); } finally { state.busy = false; updateControls(); }
     }
-    async function refresh() {
-      if (!state.active || state.reading || state.composing && state.view === "chat" || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return; capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
-      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return; if (sessionId && data.session?.id !== sessionId && state.dirty) return; if (applyDialogue(data, sessionId) && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); } }
-      catch (error) { fail(error); } finally { state.reading = false; updateControls(); }
+    async function refresh(recoverEvents = true) {
+      if (!state.active || state.reading || state.composing && state.view === "chat" || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return false; if (recoverEvents && !resultStream) resultStopped = false; capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
+      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); return applied; } }
+      catch (error) { fail(error); } finally { state.reading = false; updateControls(); syncResultStream(); }
     }
     async function showIdeas() { if (state.busy) return; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } state.view = "ideas"; say(""); renderView(); await loadIdeas(); requestAnimationFrame(() => window.scrollTo({ top: state.listScroll, behavior: "auto" })); }
     async function loadIdeas() {
@@ -450,8 +507,9 @@
     async function openIdeaDiscussion() {
       if (state.busy || !state.idea || state.editorDirty) return; state.busy = true; updateControls();
       if (state.pending) { state.busy = false; updateControls(); say("上一条操作是否送达还需要核对，暂不切换讨论；原草稿与请求编号保留。", true); return; }
+      resultTransition = true; closeResultStream();
       try { if (draftSync) await draftSync; saveLocalDraft(); const data = await call("mobile/dialogue/open", { requestId: uuid(), clientId: state.clientId, ideaId: state.idea.id, expectedIdeaRevision: state.idea.revision }); state.messageIds.clear(); applyDialogue(data); state.view = "chat"; restoreDraft(); renderView(); say(""); window.scrollTo({ top: 0, behavior: "auto" }); }
-      catch (error) { fail(error); } finally { state.busy = false; updateControls(); }
+      catch (error) { fail(error); } finally { resultTransition = false; state.busy = false; updateControls(); syncResultStream(); }
     }
     function showExecutionDraft() { if (!state.idea || state.editorDirty) return; closeManagement(); state.view = "execution"; const draft = state.editDrafts[state.idea.id]; executionText.value = draft?.executionDirty ? draft.executionDraft : state.idea.executionDraft || state.idea.body || ""; if (!draft?.executionDirty && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); renderView(); autosize(executionText, 12000); window.scrollTo({ top: 0, behavior: "auto" }); }
     function clearPack() { if (packUrl) URL.revokeObjectURL?.(packUrl); packUrl = ""; packIdeaId = ""; packRevision = 0; packLink.hidden = true; packLink.removeAttribute?.("href"); }
@@ -505,14 +563,16 @@
     ideaTitle.addEventListener("input", persistEditor); ideaBody.addEventListener("input", persistEditor); executionText.addEventListener("input", persistExecution);
     for (const [input, kind] of [[ideaTitle, "body"], [ideaBody, "body"], [executionText, "execution"]]) { input.addEventListener("compositionstart", () => { editComposing[kind] = true; updateControls(); }); input.addEventListener("compositionend", () => { editComposing[kind] = false; kind === "body" ? persistEditor() : persistExecution(); }); }
     search.addEventListener("input", () => { state.search = search.value; state.listScroll = 0; persist(); void loadIdeas(); }); project.addEventListener("change", () => { state.project = project.value; state.listScroll = 0; persist(); void loadIdeas(); });
-    window.addEventListener("pagehide", () => { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); });
+    window.addEventListener("pagehide", () => { pageClosed = true; closeResultStream(); capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); });
+    window.addEventListener("pageshow", () => { pageClosed = false; if (state.active) void refresh(); });
     const viewport = () => { const value = window.visualViewport?.height || window.innerHeight; root.style.setProperty("--dialogue-viewport", `${value}px`); }; window.visualViewport?.addEventListener("resize", viewport); window.addEventListener("resize", viewport); viewport();
-    document.addEventListener("visibilitychange", () => { capturePointEditor(); if (!document.hidden && state.active) void refresh(); else if (document.hidden) saveLocalDraft(); });
+    document.addEventListener("visibilitychange", () => { capturePointEditor(); if (!document.hidden && state.active) void refresh(); else if (document.hidden) { closeResultStream(); saveLocalDraft(); } });
+    window.addEventListener("offline", () => closeResultStream());
     window.addEventListener("online", () => { if (state.active) void refresh(); });
-    window.addEventListener("codex:dialogue-result", event => { if (state.active && event.detail?.sessionId === state.session?.id) void refresh(); });
+    window.addEventListener("codex:dialogue-result", event => { if (state.active && event.detail?.clientId === state.clientId && event.detail?.sessionId === state.session?.id && event.detail?.recordId === state.session?.recordId) void refresh(); });
     persist(); restoreDraft(); renderCapability(); renderView();
     fileReading = blobs.get(filesKey).then(value => { if (value?.files) { files = value.files; fileOwner = value.fileOwner || null; uploadRequest = value.uploadRequest || null; renderFiles(); } }).catch(() => { /* No claim of file recovery is made without a readable store. */ }).finally(() => { fileReading = null; });
-    return { setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { capturePointEditor(); saveLocalDraft(); more.open = false; } }, refresh, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { capturePointEditor(); pointEditor = null; state.generation += 1; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.idea = state.ideaDetail = state.management = null; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
+    return { setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { closeResultStream(); capturePointEditor(); saveLocalDraft(); more.open = false; } }, refresh, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { closeResultStream(); resultKey = resultCursor = ""; resultPending = null; capturePointEditor(); pointEditor = null; state.generation += 1; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.idea = state.ideaDetail = state.management = null; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
   }
   window.CodexMobileDialogue = Object.freeze({ create });
 })();

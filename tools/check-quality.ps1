@@ -139,6 +139,7 @@ $PythonChecks = @(
   "tools/check-thread-cache-import.py",
   "tools/check-workflow.py",
   "tools/check-mobile-dialogue.py",
+  "tools/check-mobile-dialogue-events.py",
   "tools/check-mobile-dialogue-http.py",
   "tools/check-console-chat-relay.py",
   "tools/check-console-chat-relay-integration.py",

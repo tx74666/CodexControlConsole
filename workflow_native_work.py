@@ -412,7 +412,11 @@ class NativeWorkMixin:
                 computer = self._setting(db, "computer")
                 if body.get("computerId", computer["id"]) != computer["id"]:
                     raise api.WorkflowError("Work 目标不是这台电脑。", 403)
-                project = self._project(db, body.get("projectId", record["project_id"]))
+                project_id = body.get("projectId", record["project_id"])
+                # A journal created before projects were configured keeps its
+                # original classification. Work authority comes from the exact
+                # explicitly selected App Workspace, not a fabricated project.
+                project = None if record["project_id"] == "" and project_id in (None, "") else self._project(db, project_id)
                 context = self._context(db, record["id"], body.get("context", json.loads(record["context"])))
                 context.setdefault("attachmentIds", [record["primary_attachment_id"]] if record["primary_attachment_id"] else [])
                 context["attachmentIds"] = list(dict.fromkeys(context["attachmentIds"]))
@@ -452,10 +456,11 @@ class NativeWorkMixin:
                 output_directory = "work/console-work-results/" + dispatch_id
                 if _file(Path(binding["allowedRoot"]), output_directory + "/.reserved", False, output_directory).parent.exists():
                     raise api.WorkflowError("本轮 Work 输出目录已存在，请重新审核。", 409)
-                payload = {"computerId": computer["id"], "projectId": project["id"], "text": text, "context": context,
+                payload = {"computerId": computer["id"], "projectId": project["id"] if project else record["project_id"], "text": text, "context": context,
                     "executionEngine": "codex_app", "action": "native_work", "sourceTask": source_task, "updateTaskBody": update_body,
                     "appTarget": {"kind": "codex", "mode": target["mode"], "threadId": thread_id, "name": name}}
-                payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, project)
+                payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, project,
+                    native_work_binding=binding if project is None else None)
                 if sum(image["originalSize"] for image in payload["appFrozen"]["images"]) > api.MAX_UPLOAD:
                     raise api.WorkflowError("本轮所选原图总大小超过 24 MB；图片与执行稿保留，Work 未入队。", 413, "work_images_too_large")
                 if idea_context is not None:

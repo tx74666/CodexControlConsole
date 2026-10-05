@@ -319,7 +319,7 @@ class Node {
   focus() {}
   dispatchEvent() { return true; }
 }
-function contentFixture({ promptText = prompt, completed = false, stop = false, extraUser = false, clickThrows = false, draft = "" } = {}) {
+function contentFixture({ promptText = prompt, completed = false, stop = false, extraUser = false, clickThrows = false, draft = "", answerShell = false } = {}) {
   const storage = storageFixture(), messages = [], emitted = [], timers = new Map(), location = { href: "https://chatgpt.com/" };
   const composer = new Node(draft, { role: "textbox", contenteditable: "true" });
   const model = new Node("Thinking effortInstant", { "data-selected-reasoning-effort": "none" });
@@ -336,7 +336,9 @@ function contentFixture({ promptText = prompt, completed = false, stop = false, 
     clicks++; location.href = capture.evidence.conversationUrl;
     messages.push(message(sourceId, "fallback-turn-0:0:user", promptText, "user"));
     if (extraUser) messages.push(message("a2a45678-1234-4567-89ab-1234567890ab", "fallback-turn-1:0:user", "other", "user"));
-    messages.push(message(answerId, "fallback-turn-0:1:assistant", "真实隔离答案", "assistant"));
+    const answer = message(answerId, "fallback-turn-0:1:assistant", "真实隔离答案", "assistant");
+    if (answerShell) answer.children.delete(".answer-body");
+    messages.push(answer);
     if (completed) items.set("#complete", [complete]); if (stop) items.set("#stop", [stopNode]);
     if (clickThrows) throw new Error("fixture click result unknown");
   };
@@ -389,6 +391,46 @@ await test("Stop prevents premature final; DOM completion event then returns one
   f.items.set("#stop", []); await f.mutation();
   assert.equal(f.emitted.filter(value => value.type === "capture").length, 1);
   await f.mutation(); assert.equal(f.emitted.filter(value => value.type === "capture").length, 1);
+});
+await test("streaming assistant shell does not abort the accepted input before its body exists", async () => {
+  const f = contentFixture({ answerShell: true, stop: true });
+  await f.controller.receive({ type: "relay.content.prepare", prepare });
+  await f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+  await f.controller.idle();
+  assert.equal(f.controller.phase(), "waiting");
+  assert.equal(f.emitted.filter(value => value.type === "accepted").length, 1);
+  assert.equal(f.emitted.filter(value => value.type === "uncertain" || value.type === "capture").length, 0);
+  await f.mutation();
+  f.messages[1].children.set(".answer-body", [new Node("流式完成的真实隔离答案")]);
+  f.items.set("#complete", [new Node("Response complete")]); f.items.set("#stop", []);
+  await f.mutation();
+  const actual = f.emitted.find(value => value.type === "capture");
+  assert.equal(actual.evidence.answerText, "流式完成的真实隔离答案"); relay.validateCapture(actual, prepare);
+  assert.equal(f.clicks(), 1); assert.equal(f.controller.phase(), "captured");
+});
+await test("accepted slow generation stays on mutation events and captures after two minutes without retry", async () => {
+  const f = contentFixture({ stop: true });
+  await f.controller.receive({ type: "relay.content.prepare", prepare });
+  await f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+  await f.controller.idle();
+  assert.equal(f.timers.size, 0); assert.equal(f.controller.phase(), "waiting");
+  f.env.now = () => Date.parse("2026-10-05T12:05:00.000Z");
+  await f.mutation(); assert.equal(f.emitted.filter(value => value.type === "uncertain").length, 0);
+  f.items.set("#complete", [new Node("Response complete")]); f.items.set("#stop", []);
+  await f.mutation();
+  const actual = f.emitted.find(value => value.type === "capture");
+  assert.equal(actual.evidence.observedAt, "2026-10-05T12:05:00.000Z");
+  assert.equal(f.emitted.filter(value => value.type === "capture").length, 1); assert.equal(f.clicks(), 1);
+});
+await test("final completion still rejects an ambiguous assistant body after streaming", async () => {
+  const f = contentFixture({ answerShell: true });
+  await f.controller.receive({ type: "relay.content.prepare", prepare });
+  await f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+  await f.controller.idle();
+  f.messages[1].children.set(".answer-body", [new Node("answer A"), new Node("answer B")]);
+  f.items.set("#complete", [new Node("Response complete")]); await f.mutation(); await f.controller.idle();
+  assert.equal(f.controller.phase(), "needs_review");
+  assert.equal(f.emitted.filter(value => value.type === "capture").length, 0); assert.equal(f.clicks(), 1);
 });
 await test("other user input stops attribution rather than attaching an unrelated final", async () => {
   const f = contentFixture({ completed: true, extraUser: true }); await f.controller.receive({ type: "relay.content.prepare", prepare });
