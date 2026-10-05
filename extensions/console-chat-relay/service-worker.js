@@ -24,6 +24,7 @@ importScripts("lib/protocol.js");
   function createController(api, resolveBrowserSurface = () => detectBrowserSurface(root.navigator)) {
     let state = { enabled: false, attempts: {}, active: null }, native = null, status = null, nativeReady = false, requestedReady = false;
     let lastMessage = "准备包默认停用；尚无生产启用批准或浏览器页面实机验收。", serial = Promise.resolve(), reconnectUsed = false;
+    const viewers = new Set();
     const load = api.storage.local.get(STORAGE_KEY).then(result => {
       const saved = result?.[STORAGE_KEY];
       if (!saved) return;
@@ -63,9 +64,13 @@ importScripts("lib/protocol.js");
     }
     function view() {
       return { enabled: state.enabled, connected: native !== null, approved: status?.approved === true,
+        clientReady: nativeReady && native !== null && state.enabled,
         configured: status?.configured === true && status?.enabled === true, actualProfile: state.active?.observedProfile || null,
         attemptId: state.active?.prepare?.attemptId || null, message: lastMessage };
     }
+    function publish() { for (const viewer of viewers) { try { viewer(view()); } catch {} } }
+    function subscribe(viewer) { viewers.add(viewer); return () => viewers.delete(viewer); }
+    function notice(message) { lastMessage = message; publish(); }
     function askReady() {
       if (state.enabled && native && status?.enabled === true && status?.approved === true && status?.configured === true && !requestedReady) {
         requestedReady = true;
@@ -80,23 +85,30 @@ importScripts("lib/protocol.js");
       const port = api.runtime.connectNative(R.HOST_NAME);
       native = port; nativeReady = false; requestedReady = false;
       port.onMessage.addListener(value => {
+        if (native !== port) return;
         if (value?.type === "status") {
           try {
-            R.validateStatus(value); status = value; nativeReady = value.clientReady === true && state.enabled;
+            R.validateStatus(value); status = value;
+            nativeReady = value.clientReady === true && state.enabled && value.enabled && value.approved && value.configured;
             lastMessage = value.message; askReady();
-          } catch { lastMessage = "原生状态回执无效，保持未就绪。"; nativeReady = false; }
+          } catch { lastMessage = "原生状态回执无效，保持未就绪。"; status = null; nativeReady = false; requestedReady = false; }
+          publish();
           return;
         }
-        queue(() => handleNative(value)).catch(error => { lastMessage = String(error?.message || "原生消息未处理。"); });
+        queue(() => handleNative(value)).then(publish, error => notice(String(error?.message || "原生消息未处理。")));
       });
       port.onDisconnect.addListener(() => {
         if (native !== port) return;
         native = null; nativeReady = false; requestedReady = false; status = null;
+        // Consume callback-scoped runtime.lastError without exposing private paths.
+        void api.runtime.lastError;
+        notice("本机接收端未连接。");
         queue(async () => {
           if (state.active && state.active.phase !== "stored") await fail(state.active.prepare, "native_disconnected", "本机连接中断；发送或保存结果待核对，不能重发。");
           lastMessage = "本机接收端未连接。";
           if (state.enabled && !reconnectUsed) { reconnectUsed = true; connect(false); }
-        }).catch(() => { lastMessage = "本机连接或账本状态无效，已停止自动连接。"; });
+          publish();
+        }).catch(() => notice("本机连接或账本状态无效，已停止自动连接。"));
       });
       send(R.handshake("hello"));
     }
@@ -205,30 +217,38 @@ importScripts("lib/protocol.js");
       R.reject("unsupported_page_message", "页面消息不能改变发送授权。");
     }
     async function popup(action) {
-      if (action === "status") { connect(true); return view(); }
+      if (action === "status") { connect(true); publish(); return view(); }
       if (action === "enable") {
         if (!status?.approved || !status?.configured || !status?.enabled) R.reject("approval_required", "尚未取得本机明确批准与真实 Chrome DOM 合同。");
-        state.enabled = true; reconnectUsed = false; await save(); askReady(); return view();
+        state.enabled = true; reconnectUsed = false; await save(); askReady(); publish(); return view();
       }
       if (action === "disable") {
         if (state.active && state.active.phase !== "stored") await fail(state.active.prepare, "relay_disabled", "用户停用转发；保留在途核对，不能重发。");
         state.enabled = false; await save(); nativeReady = false;
         const old = native; native = null; status = null; if (old) old.disconnect();
-        lastMessage = "已停用；旧请求与防重复账本保留。"; return view();
+        lastMessage = "已停用；旧请求与防重复账本保留。"; publish(); return view();
       }
       R.reject("invalid_popup_action", "未知扩展控制动作。");
     }
-    async function start() { await load; if (state.enabled) connect(false); }
+    async function start() { await load; if (state.enabled) connect(false); publish(); }
     return { start, view, native: value => queue(() => handleNative(value)), page: (value, sender) => queue(() => handlePage(value, sender)),
       popup: action => queue(() => popup(action)), abandon: (identity, code, message) => queue(() => fail(identity, code, message)),
-      idle: () => serial, state: () => structuredClone(state) };
+      subscribe, notice, idle: () => serial, state: () => structuredClone(state) };
   }
-  root.ConsoleChatRelayWorker = Object.freeze({ createController, detectBrowserSurface, STORAGE_KEY });
-  if (root.chrome?.runtime?.onMessage && root.chrome?.storage?.local && root.chrome?.tabs) {
-    const controller = createController(root.chrome);
-    root.chrome.runtime.onMessage.addListener((value, sender, reply) => {
+  function ownControlUrl(api) { return `chrome-extension://${api.runtime.id}/popup.html`; }
+  function ownControlPage(api, sender) {
+    if (api.runtime.id !== R.EXTENSION_ID || sender?.id !== R.EXTENSION_ID || sender.url !== ownControlUrl(api)
+        || (sender.frameId !== undefined && sender.frameId !== 0)
+        || (sender.origin !== undefined && sender.origin !== `chrome-extension://${R.EXTENSION_ID}`)) return false;
+    if (sender.tab === undefined) return true;
+    return Number.isInteger(sender.tab?.id) && sender.tab.id >= 0 && sender.frameId === 0
+      && (sender.tab.url === undefined || sender.tab.url === ownControlUrl(api));
+  }
+  function registerRuntime(api, resolveBrowserSurface) {
+    const controller = createController(api, resolveBrowserSurface);
+    api.runtime.onMessage.addListener((value, sender, reply) => {
       if (value?.type === "relay.popup") {
-        if (sender?.id !== root.chrome.runtime.id || sender.url !== `chrome-extension://${root.chrome.runtime.id}/popup.html` || sender.tab) return false;
+        if (!ownControlPage(api, sender)) return false;
         controller.popup(value.action).then(reply, error => reply({ ...controller.view(), message: String(error?.message || "扩展操作未完成。") }));
         return true;
       }
@@ -236,11 +256,34 @@ importScripts("lib/protocol.js");
       controller.page(value, sender).then(reply, error => reply({ received: false, code: error?.code || "page_rejected" }));
       return true;
     });
-    root.chrome.tabs.onRemoved.addListener(tabId => {
+    api.runtime.onConnect?.addListener(port => {
+      if (port.name !== "relay.status" || !ownControlPage(api, port.sender)) { port.disconnect(); return; }
+      const update = value => {
+        try { port.postMessage({ type: "relay.status", value }); }
+        catch { unsubscribe(); }
+      };
+      const unsubscribe = controller.subscribe(update);
+      port.onDisconnect.addListener(unsubscribe);
+      update(controller.view());
+    });
+    api.runtime.onInstalled?.addListener(details => {
+      if (!["install", "update"].includes(details?.reason) || api.runtime.id !== R.EXTENSION_ID) return;
+      const failed = () => controller.notice("接通页未能自动打开；请从此扩展的详细信息打开「扩展选项」。");
+      try {
+        const opening = api.tabs.create({ url: ownControlUrl(api), active: true }, () => {
+          if (api.runtime.lastError) failed();
+        });
+        if (opening && typeof opening.catch === "function") opening.catch(failed);
+      } catch { failed(); }
+    });
+    api.tabs.onRemoved.addListener(tabId => {
       const active = controller.state().active;
       if (active?.tabId === tabId && active.phase !== "stored") controller.abandon(active.prepare,
         "owned_tab_closed", "专用聊天页已关闭，发送或结果需核对，不能重发。").catch(() => {});
     });
     controller.start().catch(() => {});
+    return controller;
   }
+  root.ConsoleChatRelayWorker = Object.freeze({ createController, detectBrowserSurface, ownControlPage, registerRuntime, STORAGE_KEY });
+  if (root.chrome?.runtime?.onMessage && root.chrome?.storage?.local && root.chrome?.tabs) registerRuntime(root.chrome);
 })(globalThis);

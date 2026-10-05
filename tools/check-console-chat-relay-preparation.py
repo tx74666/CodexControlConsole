@@ -146,6 +146,16 @@ class PreparationChecks(unittest.TestCase):
         with self.assertRaises(prep.PreparationError):
             self.inspect()
 
+    def test_setup_options_reject_remote_or_other_pages(self):
+        for options in ({"page": "https://example.com/setup", "open_in_tab": True},
+                        {"page": "other.html", "open_in_tab": True},
+                        {"page": "popup.html", "open_in_tab": False},
+                        {"page": "popup.html", "open_in_tab": True, "unexpected": True}):
+            with self.subTest(options=options):
+                self.manifest(lambda value: value.update(options_ui=options))
+                with self.assertRaises(prep.PreparationError):
+                    self.inspect()
+
     def test_duplicate_manifest_permission_field_refused(self):
         path = self.extension / "manifest.json"
         original = path.read_text(encoding="utf-8")

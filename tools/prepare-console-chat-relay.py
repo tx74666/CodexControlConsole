@@ -144,7 +144,7 @@ def validate_extension(extension_dir):
     manifest = _read_json(root / "manifest.json", root)
     _require(set(manifest) == {
         "manifest_version", "name", "version", "key", "description", "permissions",
-        "host_permissions", "background", "action", "content_scripts", "content_security_policy",
+        "host_permissions", "background", "action", "options_ui", "content_scripts", "content_security_policy",
     }, "Extension manifest has unexpected or missing fields; permission changes require review.")
     _require(manifest.get("manifest_version") == 3, "Extension must use manifest version 3.")
     _require(manifest.get("permissions") == ["nativeMessaging", "storage"],
@@ -155,6 +155,8 @@ def validate_extension(extension_dir):
              "Unexpected extension background worker.")
     _require(manifest.get("action") == {"default_title": "Console Chat 转发", "default_popup": "popup.html"},
              "Unexpected extension popup contract.")
+    _require(manifest.get("options_ui") == {"page": "popup.html", "open_in_tab": True},
+             "Extension options must open only the existing local setup page in a tab.")
     _require(manifest.get("content_scripts") == [{
         "matches": ["https://chatgpt.com/*"], "js": ["lib/protocol.js", "content-script.js"],
         "run_at": "document_idle", "all_frames": False,

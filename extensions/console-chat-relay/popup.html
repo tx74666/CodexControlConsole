@@ -2,12 +2,13 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Console Chat 转发</title><link rel="stylesheet" href="popup.css"></head>
 <body>
-  <header><span class="mark" aria-hidden="true">C</span><div><h1>Console Chat 转发</h1><p>专用页面 · 已确认请求</p></div></header>
-  <section class="status" aria-live="polite"><span id="status-dot"></span><div><strong id="status-label">默认停用</strong><p id="status-detail">正在读取扩展状态。</p></div></section>
-  <dl><dt>浏览器档位</dt><dd id="profile">尚未核验</dd><dt>当前请求</dt><dd id="attempt">无</dd></dl>
-  <section class="permission"><h2>启用范围</h2><p>只读取并操作本扩展创建的专用 ChatGPT 页面，接收本机 Console 已确认的一条请求，并回传该请求的实际回答。</p><p>不读取登录凭据、其他聊天或普通草稿。档位不符、页面结构变化及送达不明时停止，不自动重发。</p></section>
-  <p id="approval" class="note">准备包没有获得生产启用批准，也没有完成真实 Chat 往返验收。</p>
-  <div class="actions"><button id="refresh" type="button">查看连接</button><button id="enable" type="button" disabled>启用</button><button id="disable" type="button">停用</button></div>
+  <header><span class="mark" aria-hidden="true">C</span><div><h1>Console Chat 转发</h1><p>专用页面 · 已确认请求</p></div><span id="extension-version" class="version" aria-label="扩展版本">读取版本中</span></header>
+  <section class="status" role="status" aria-live="polite"><span id="status-dot" aria-hidden="true"></span><div><strong id="status-label">默认停用</strong><p id="status-detail">正在读取扩展状态。</p></div></section>
+  <div class="actions"><button id="refresh" type="button">查看连接</button><button id="enable" type="button" disabled>启用转发</button><button id="disable" type="button">停用</button></div>
   <p id="error" role="alert" hidden></p>
+  <p id="approval" class="note">正在核对本机连接与启用范围。</p>
+  <dl><dt>浏览器档位</dt><dd id="profile">尚未核验</dd><dt>当前请求</dt><dd id="attempt">无</dd></dl>
+  <section class="help" aria-labelledby="help-title"><h2 id="help-title">从这里接通转发</h2><p>在扩展卡片点<strong>详情 → 扩展选项</strong>，可在完整页面打开这个面板；也可从浏览器工具栏的扩展菜单打开。</p><p>卡片上的<strong>重新加载</strong>只更新扩展文件。回到本页核对版本和连接，再由你点击<strong>启用转发</strong>。</p><p class="hint">“查看连接”只刷新状态。启用按钮灰色时，先确认 Console 已运行并完成连接配置。启用后在 Console 发送确认的问题；是否接通，以原任务收到实际回答为准。</p></section>
+  <section class="permission"><h2>启用范围</h2><p>只读取并操作本扩展创建的专用 ChatGPT 页面，接收本机 Console 已确认的一条请求，并回传该请求的实际回答。</p><p>不读取登录凭据、其他聊天或普通草稿。档位不符、页面结构变化及送达不明时停止，不自动重发。</p></section>
   <script src="popup.js"></script>
 </body></html>

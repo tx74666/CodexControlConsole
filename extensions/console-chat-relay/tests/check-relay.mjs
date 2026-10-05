@@ -260,6 +260,137 @@ function workerFixture(initial = {}, browserSurface = "chrome") {
       await controller.popup("enable"); ports.at(-1).onMessage.emit(status(true)); }
   };
 }
+function runtimeFixture() {
+  const f = workerFixture();
+  Object.assign(f.api.runtime, { onMessage: new Event(), onConnect: new Event(), onInstalled: new Event() });
+  f.api.tabs.onRemoved = new Event();
+  const controller = context.ConsoleChatRelayWorker.registerRuntime(f.api, () => "edge");
+  const url = `chrome-extension://${relay.EXTENSION_ID}/popup.html`;
+  return { ...f, controller, url, sender: { id: relay.EXTENSION_ID, url, frameId: 0, tab: { id: 73, url } },
+    route: [...f.api.runtime.onMessage.listeners][0] };
+}
+function controlPort(sender, name = "relay.status") {
+  return { sender, name, onMessage: new Event(), onDisconnect: new Event(), posted: [], disconnected: false,
+    postMessage(value) { this.posted.push(clone(value)); },
+    disconnect() { this.disconnected = true; this.onDisconnect.emit(); } };
+}
+await test("only the fixed own popup or top-level options page can control relay settings", () => {
+  const f = runtimeFixture(), accepts = context.ConsoleChatRelayWorker.ownControlPage;
+  for (const sender of [{ id: relay.EXTENSION_ID, url: f.url },
+    { id: relay.EXTENSION_ID, url: f.url, frameId: 0 }, f.sender,
+    { ...f.sender, tab: { id: 73 } }, { ...f.sender, origin: `chrome-extension://${relay.EXTENSION_ID}` }])
+    assert.equal(accepts(f.api, sender), true);
+  for (const sender of [undefined, { ...f.sender, id: "foreign" }, { ...f.sender, id: undefined },
+    { ...f.sender, url: "https://chatgpt.com/" }, { ...f.sender, url: "chrome-extension://foreign/popup.html" },
+    { ...f.sender, url: f.url + "?action=enable" }, { ...f.sender, url: f.url + "#enable" },
+    { ...f.sender, url: f.url.replace("popup.html", "content-script.js") }, { ...f.sender, frameId: 1 },
+    { ...f.sender, frameId: undefined }, { ...f.sender, origin: "https://chatgpt.com" },
+    { ...f.sender, tab: null }, { ...f.sender, tab: {} }, { ...f.sender, tab: { id: -1 } },
+    { ...f.sender, tab: { id: 73, url: "https://chatgpt.com/" } }])
+    assert.equal(accepts(f.api, sender), false);
+  assert.equal(accepts({ runtime: { id: "foreign" } }, { id: "foreign", url: "chrome-extension://foreign/popup.html" }), false);
+  assert.equal(f.storage.writes.length, 0); assert.equal(f.ports.length, 0);
+});
+await test("runtime settings route accepts own toolbar/options inspect and rejects foreign enable", async () => {
+  const f = runtimeFixture(), replies = [];
+  for (const sender of [{ id: relay.EXTENSION_ID, url: f.url }, f.sender]) {
+    assert.equal(f.route({ type: "relay.popup", action: "status" }, sender, value => replies.push(clone(value))), true);
+    await f.controller.idle();
+  }
+  assert.equal(replies.length, 2); assert.equal(f.ports.length, 1);
+  f.ports[0].onMessage.emit(f.status(false));
+  for (const sender of [{ ...f.sender, id: "foreign" }, { ...f.sender, frameId: 2 },
+    { ...f.sender, url: "https://chatgpt.com/" }, { ...f.sender, url: f.url + "?enable" }])
+    assert.equal(f.route({ type: "relay.popup", action: "enable" }, sender, () => assert.fail("foreign page replied")), false);
+  await f.controller.idle();
+  assert.equal(f.controller.state().enabled, false); assert.equal(f.storage.writes.length, 0);
+  assert.equal(f.ports[0].sent.some(value => value.type === "ready"), false); assert.equal(f.tabs.length, 0);
+});
+await test("install/update opens one own setup tab per event without native ready, Enable or Chat", async () => {
+  const f = runtimeFixture();
+  for (const reason of ["install", "update", "browser_update", "chrome_update", "shared_module_update", undefined])
+    f.api.runtime.onInstalled.emit({ reason });
+  await f.controller.idle();
+  assert.deepEqual(f.tabs, [{ url: f.url, active: true }, { url: f.url, active: true }]);
+  assert.equal(f.controller.state().enabled, false); assert.equal(f.ports.length, 0);
+  assert.equal(f.calls.length, 0); assert.equal(f.storage.writes.length, 0);
+});
+await test("setup tab callback failure consumes lastError, stays harmless and never retries", async () => {
+  const f = runtimeFixture(); let errorReads = 0;
+  Object.defineProperty(f.api.runtime, "lastError", { get() { errorReads++; return { message: "fixture private path" }; } });
+  f.api.tabs.create = (value, callback) => { f.tabs.push(clone(value)); callback(); };
+  f.api.runtime.onInstalled.emit({ reason: "update" });
+  await f.controller.idle();
+  assert.equal(errorReads, 1); assert.equal(f.tabs.length, 1);
+  assert.match(f.controller.view().message, /接通页未能自动打开/);
+  assert.equal(f.controller.view().message.includes("fixture private path"), false);
+  assert.equal(f.controller.state().enabled, false); assert.equal(f.storage.writes.length, 0); assert.equal(f.ports.length, 0);
+});
+await test("setup tab thrown/rejected creation never escapes or triggers an automatic retry", async () => {
+  for (const create of [() => { throw new Error("fixture create failed"); }, () => Promise.reject(new Error("fixture create failed"))]) {
+    const f = runtimeFixture(); let creates = 0;
+    f.api.tabs.create = () => { creates++; return create(); };
+    f.api.runtime.onInstalled.emit({ reason: "install" });
+    await f.controller.idle(); await Promise.resolve();
+    assert.equal(creates, 1); assert.match(f.controller.view().message, /接通页未能自动打开/);
+    assert.equal(f.controller.state().enabled, false); assert.equal(f.ports.length, 0); assert.equal(f.calls.length, 0);
+  }
+});
+await test("own status port receives actual native readiness events without polling or enable commands", async () => {
+  const f = runtimeFixture(), page = controlPort(f.sender);
+  f.api.runtime.onConnect.emit(page);
+  await f.controller.popup("status");
+  f.ports[0].onMessage.emit(f.status(false));
+  assert.equal(page.posted.at(-1).value.approved, true);
+  assert.equal(page.posted.at(-1).value.enabled, false); assert.equal(page.posted.at(-1).value.clientReady, false);
+  page.onMessage.emit({ type: "relay.popup", action: "enable" });
+  assert.equal(f.controller.state().enabled, false); assert.equal(f.storage.writes.length, 0);
+  await f.controller.popup("enable");
+  assert.equal(page.posted.at(-1).value.connected, true); assert.equal(page.posted.at(-1).value.clientReady, false);
+  f.ports[0].onMessage.emit(f.status(true));
+  assert.equal(page.posted.at(-1).value.clientReady, true);
+  f.ports[0].onMessage.emit({ ...f.status(true), unexpected: true });
+  assert.equal(page.posted.at(-1).value.clientReady, false); assert.equal(page.posted.at(-1).value.approved, false);
+  await assert.rejects(f.controller.popup("enable"), error => error.code === "approval_required");
+  const before = page.posted.length; page.disconnect();
+  f.ports[0].onMessage.emit(f.status(true));
+  assert.equal(page.posted.length, before); assert.equal(f.tabs.length, 0); assert.equal(f.calls.length, 0);
+});
+await test("foreign/frame/other-url status ports disconnect without observing or changing relay state", async () => {
+  const f = runtimeFixture();
+  for (const [sender, name] of [[{ ...f.sender, id: "foreign" }, "relay.status"],
+    [{ ...f.sender, frameId: 1 }, "relay.status"], [{ ...f.sender, url: "https://chatgpt.com/" }, "relay.status"],
+    [f.sender, "relay.enable"]]) {
+    const port = controlPort(sender, name); f.api.runtime.onConnect.emit(port);
+    assert.equal(port.disconnected, true); assert.equal(port.posted.length, 0);
+  }
+  await f.controller.idle(); assert.equal(f.storage.writes.length, 0); assert.equal(f.ports.length, 0);
+});
+await test("setup page shows its manifest version and asynchronous ready ack without stale reply or extra requests", async () => {
+  const ids = ["status-label", "status-detail", "status-dot", "profile", "attempt", "enable", "disable", "approval", "refresh", "error", "extension-version"];
+  const elements = Object.fromEntries(ids.map(id => [id, { textContent: "", disabled: false, hidden: true, dataset: {}, addEventListener() {} }]));
+  const port = controlPort({}), requests = []; let respond;
+  const popup = vm.createContext({ chrome: { runtime: { getManifest: () => ({ version: "0.1.1" }),
+    connect: options => { assert.equal(options.name, "relay.status"); return port; },
+    sendMessage: value => { requests.push(clone(value)); return new Promise(resolve => { respond = resolve; }); } } },
+    document: { getElementById: id => elements[id] } });
+  const initialAction = vm.runInContext(await readFile(new URL("popup.js", directory), "utf8"), popup);
+  assert.equal(typeof initialAction?.then, "function");
+  assert.equal(elements["extension-version"].textContent, "扩展版本 0.1.1");
+  const push = value => port.onMessage.emit({ type: "relay.status", value });
+  push({ enabled: false, connected: true, approved: true, configured: true, clientReady: false, message: "approved_browser_contract" });
+  assert.equal(elements.enable.disabled, true);
+  respond({ enabled: false, connected: true, approved: false, configured: false, clientReady: false });
+  await initialAction;
+  assert.equal(elements.enable.disabled, false);
+  push({ enabled: true, connected: true, approved: true, configured: true, clientReady: false });
+  assert.equal(elements["status-label"].textContent, "已启用，等待本机确认");
+  assert.equal(elements["status-dot"].dataset.state, "");
+  push({ enabled: true, connected: true, approved: true, configured: true, clientReady: true });
+  assert.equal(elements["status-label"].textContent, "已接通"); assert.equal(elements["status-dot"].dataset.state, "ready");
+  port.disconnect(); assert.equal(elements["status-dot"].dataset.state, "");
+  assert.deepEqual(requests, [{ type: "relay.popup", action: "status" }]);
+});
 await test("default-disabled worker performs no native connect or queue read", async () => {
   const fixture = workerFixture(); await fixture.controller.start();
   assert.equal(fixture.ports.length, 0); assert.equal(fixture.tabs.length, 0);
