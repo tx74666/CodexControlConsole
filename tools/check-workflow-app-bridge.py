@@ -148,6 +148,44 @@ class AppBridgeChecks(unittest.TestCase):
             db.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(payload), job["id"]))
         self.error(self.claim, "result_not_matching")
 
+    def test_equivalent_dispatch_time_zone_keeps_original_frozen_stamp_and_prompt(self):
+        confirmed = "2026-10-05T16:19:54.123456+00:00"
+        body = request(recordId=self.record, text="真实时刻不能变", appTarget=self.target())
+        with patch("workflow_service._now", return_value=confirmed):
+            accepted = self.service.discuss(body)
+        with self.service._db() as db:
+            job = dict(db.execute("SELECT * FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone())
+            payload = json.loads(job["payload"])
+            original = dict(self.service._dispatch(db, payload["appDispatchId"]))
+            db.execute("UPDATE idea_dispatches SET user_confirmed_at=? WHERE id=?",
+                ("2026-10-06T00:19:54.123456+08:00", original["id"]))
+        claimed = self.claim()["dispatch"]
+        self.assertEqual(claimed["prompt"], original["prompt"])
+        self.assertTrue(self.service.discuss(body)["duplicate"])
+        with self.service._db() as db:
+            self.assertEqual(db.execute("SELECT payload FROM jobs WHERE id=?", (job["id"],)).fetchone()[0], job["payload"])
+            dispatch = self.service._dispatch(db, original["id"])
+            self.assertEqual(dispatch["snapshot"], original["snapshot"])
+            self.assertEqual(dispatch["prompt"], original["prompt"])
+            snapshot = json.loads(dispatch["snapshot"])
+            changed_instant = {**dict(dispatch), "user_confirmed_at": "2026-10-06T00:19:55.123456+08:00"}
+            self.error(lambda: self.service._app_dispatch_job(db, changed_instant, snapshot), "result_not_matching")
+
+    def test_malformed_equal_submission_stamps_fail_with_result_not_matching(self):
+        accepted = self.discuss()
+        with self.service._db() as db:
+            job = db.execute("SELECT * FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone()
+            payload = json.loads(job["payload"])
+            dispatch = self.service._dispatch(db, payload["appDispatchId"])
+            snapshot = json.loads(dispatch["snapshot"])
+            original = payload["submissionTime"]
+            for malformed in (None, "invalid", {**original, "confirmedAt": "invalid"}, {**original, "localTime": "invalid"}):
+                with self.subTest(stamp=malformed):
+                    payload["submissionTime"] = malformed; payload["appFrozen"]["submissionTime"] = malformed
+                    snapshot["submissionTime"] = malformed
+                    db.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(payload), job["id"]))
+                    self.error(lambda: self.service._app_dispatch_job(db, dispatch, snapshot), "result_not_matching")
+
     def test_legacy_frozen_request_without_time_metadata_is_not_rewritten_on_claim(self):
         accepted = self.discuss()
         with self.service._db() as db:

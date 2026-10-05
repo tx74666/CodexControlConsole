@@ -661,13 +661,20 @@ class RelayChecks(unittest.TestCase):
         self.approve()
         sent, _ = self.send()
         identifier = sent["job"]["appDispatch"]["id"]
-        confirmed = approved + timedelta(seconds=1)
+        original = self.row(identifier)
+        confirmed = datetime.fromisoformat(original["user_confirmed_at"].replace("Z", "+00:00"))
         with self.service._db() as db:
-            db.execute("UPDATE idea_dispatches SET created_at=?,user_confirmed_at=? WHERE id=?",
-                       (confirmed.isoformat(), confirmed.astimezone(timezone(timedelta(hours=8))).isoformat(), identifier))
+            payload = db.execute("SELECT payload FROM jobs WHERE id=?", (sent["job"]["id"],)).fetchone()[0]
+            db.execute("UPDATE idea_dispatches SET user_confirmed_at=? WHERE id=?",
+                       (confirmed.astimezone(timezone(timedelta(hours=8))).isoformat(), identifier))
         self.assertEqual(ChatRelayBroker(self.service)._startup_pending(self.config), [identifier])
         self.controller.committed([identifier])
         self.assertEqual(self.row(identifier)["status"], "claimed")
+        self.assertEqual(self.row(identifier)["created_at"], original["created_at"])
+        self.assertEqual(self.row(identifier)["prompt"], original["prompt"])
+        self.assertEqual(self.row(identifier)["snapshot"], original["snapshot"])
+        with self.service._db() as db:
+            self.assertEqual(db.execute("SELECT payload FROM jobs WHERE id=?", (sent["job"]["id"],)).fetchone()[0], payload)
 
     def test_startup_limit_counts_eligible_confirmations_not_historical_rows(self):
         old, _ = self.send()

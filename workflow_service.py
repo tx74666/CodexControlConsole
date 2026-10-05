@@ -1284,10 +1284,17 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
         payload = json.loads(job["payload"])
         if payload.get("sourceTask") != snapshot.get("sourceTask"):
             raise WorkflowError("App 请求与原任务冻结正文不匹配。", 409, "result_not_matching")
-        if "submissionTime" in payload or "submissionTime" in snapshot or "submissionTime" in payload.get("appFrozen", {}):
-            submitted = self._submission_time(dispatch["user_confirmed_at"])
-            if any(value != submitted for value in (payload.get("submissionTime"),
-                    payload.get("appFrozen", {}).get("submissionTime"), snapshot.get("submissionTime"))):
+        frozen = payload.get("appFrozen")
+        if "submissionTime" in payload or "submissionTime" in snapshot or (isinstance(frozen, dict) and "submissionTime" in frozen):
+            submitted, matching = payload.get("submissionTime"), False
+            try:
+                matching = (isinstance(submitted, dict) and isinstance(frozen, dict)
+                    and submitted == frozen.get("submissionTime") == snapshot.get("submissionTime")
+                    and submitted == self._submission_time(submitted["confirmedAt"])
+                    and self._source_time(submitted["confirmedAt"]) == self._source_time(dispatch["user_confirmed_at"]))
+            except (WorkflowError, KeyError, TypeError, OverflowError):
+                pass
+            if not matching:
                 raise WorkflowError("App 请求与本轮确认提交时间不匹配。", 409, "result_not_matching")
         return job
 
