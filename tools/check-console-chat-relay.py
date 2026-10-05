@@ -86,7 +86,7 @@ class RelayChecks(unittest.TestCase):
     def prepared(self, prepare):
         return self.envelope(prepare, "prepared", observation={"url": "https://chatgpt.com/", "chatMode": True, "loginVerified": True,
                             "emptyComposer": True, "observedProfile": "Instant", "completionInitiallyPresent": False,
-                            "surface": "chrome", "observationSha256": "a" * 64, "profileDom": {"text": "Thinking effortInstant", "reasoningEffort": "none"}})
+                            "surface": prepare["domContract"]["surface"], "observationSha256": "a" * 64, "profileDom": {"text": "Thinking effortInstant", "reasoningEffort": "none"}})
 
     def evidence(self, prepare):
         return {"source": "browser_dom", "conversationUrl": "https://chatgpt.com/c/" + str(uuid.uuid4()),
@@ -187,6 +187,67 @@ class RelayChecks(unittest.TestCase):
         self.controller.committed([identifier])
         self.assertEqual(self.row(identifier)["status"], "pending")
         self.assertIsNone(self.attempt(identifier))
+
+    def test_edge_round_trip_preserves_cua_surface_and_exact_attribution(self):
+        self.config["domContract"]["surface"] = "edge"
+        sent, prepare = self.begin()
+        self.assertEqual(prepare["domContract"]["surface"], "edge")
+        self.assertEqual(prepare["domContract"]["source"], "cua")
+        self.assertTrue(self.controller.status()["clientReady"])
+        prepared = self.prepared(prepare)
+        self.assertEqual(prepared["observation"]["surface"], "edge")
+        prepared["observation"]["profileDom"]["text"] = "思考强度Instant"
+        self.controller.handle(prepared)
+        evidence = self.evidence(prepare)
+        evidence["completion"]["text"] = "回答已完成"
+        self.controller.handle(self.envelope(prepare, "capture", evidence=evidence))
+        identifier = sent["job"]["appDispatch"]["id"]
+        row = self.row(identifier)
+        self.assertEqual(row["status"], "completed")
+        self.assertEqual(json.loads(row["result"])["browserEvidence"], evidence)
+        self.assertEqual(json.loads(row["result"])["browserEvidence"]["completion"]["text"], "回答已完成")
+        self.assertEqual(self.attempt(identifier)["preparedObservation"]["surface"], "edge")
+
+    def test_edge_chinese_instant_label_still_requires_none_effort(self):
+        self.config["domContract"]["surface"] = "edge"
+        sent, prepare = self.begin()
+        prepared = self.prepared(prepare)
+        prepared["observation"]["profileDom"] = {"text": "思考强度Instant", "reasoningEffort": "high"}
+        with self.assertRaisesRegex(ValueError, "relay_prepared_dom_invalid"):
+            self.controller.handle(prepared)
+        self.assertEqual(self.row(sent["job"]["appDispatch"]["id"])["status"], "needs_review")
+        self.assertFalse(any(message["type"] == "commitSend" for message in self.messages))
+
+    def test_edge_contract_cannot_accept_chrome_prepare_observation(self):
+        self.config["domContract"]["surface"] = "edge"
+        sent, prepare = self.begin()
+        prepared = self.prepared(prepare)
+        prepared["observation"]["surface"] = "chrome"
+        with self.assertRaisesRegex(ValueError, "relay_prepared_dom_invalid"):
+            self.controller.handle(prepared)
+        self.assertEqual(self.row(sent["job"]["appDispatch"]["id"])["status"], "needs_review")
+        self.assertFalse(any(message["type"] == "commitSend" for message in self.messages))
+
+    def test_chrome_contract_cannot_accept_edge_prepare_observation(self):
+        sent, prepare = self.begin()
+        prepared = self.prepared(prepare)
+        prepared["observation"]["surface"] = "edge"
+        with self.assertRaisesRegex(ValueError, "relay_prepared_dom_invalid"):
+            self.controller.handle(prepared)
+        self.assertEqual(self.row(sent["job"]["appDispatch"]["id"])["status"], "needs_review")
+        self.assertFalse(any(message["type"] == "commitSend" for message in self.messages))
+
+    def test_edge_contract_does_not_widen_source_or_extension_allowlist(self):
+        self.config["domContract"]["surface"] = "edge"
+        self.assertEqual(approval(self.config, self.service.data_dir), self.config)
+        for kind in ("source", "extensionId"):
+            other = copy.deepcopy(self.config)
+            if kind == "source":
+                other["domContract"]["source"] = "chrome_extension_dom"
+            else:
+                other["extensionId"] = "a" * 32
+            with self.assertRaises(ValueError):
+                approval(other, self.service.data_dir)
 
     def test_unsupported_profile_fails_without_downgrade_and_new_confirmation_can_use_fast(self):
         self.approve()
@@ -443,6 +504,18 @@ class RelayChecks(unittest.TestCase):
     def test_incomplete_dom_not_saved(self):
         self.rejected_capture(lambda item: item["completion"].update(stopPresent=True))
 
+    def test_edge_chinese_completion_typo_not_saved(self):
+        self.config["domContract"]["surface"] = "edge"
+        self.rejected_capture(lambda item: item["completion"].update(text="回答已完城"))
+
+    def test_edge_chinese_completion_before_commit_not_saved(self):
+        self.config["domContract"]["surface"] = "edge"
+        self.rejected_capture(lambda item: item["completion"].update(text="回答已完成", observedAfterCommit=False))
+
+    def test_edge_chinese_completion_with_stop_present_not_saved(self):
+        self.config["domContract"]["surface"] = "edge"
+        self.rejected_capture(lambda item: item["completion"].update(text="回答已完成", stopPresent=True))
+
     def test_precommit_dom_not_saved(self):
         self.rejected_capture(lambda item: item.update(observedAt="2000-01-01T00:00:00Z"))
 
@@ -550,6 +623,11 @@ class RelayChecks(unittest.TestCase):
             finally:
                 broker.close()
         self.assertIsNone(self.service._dispatch_commit_notifier)
+
+    @unittest.skipUnless(os.name == "nt", "Windows authenticated Edge pipe contract")
+    def test_edge_pipe_start_close_restart_is_bounded_and_idle_has_no_claim(self):
+        self.config["domContract"]["surface"] = "edge"
+        self.test_isolated_pipe_start_close_restart_is_bounded_and_idle_has_no_claim()
 
     def test_approval_identity_exact_and_close_only_owns_notifier(self):
         self.assertEqual(approval(self.config, self.service.data_dir), self.config)

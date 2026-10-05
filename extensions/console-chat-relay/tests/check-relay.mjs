@@ -66,6 +66,16 @@ await test("unverified profile mapping/DOM completion source refuses preparation
   delete wrong.domContract.selectors.send;
   rejected(() => relay.validatePrepare(wrong), "dom_contract_unverified");
 });
+await test("only CUA Chrome and Edge surfaces can prepare; other surfaces remain unverified", () => {
+  for (const surface of ["chrome", "edge"]) {
+    const value = clone(prepare); value.domContract.surface = surface;
+    assert.equal(relay.validatePrepare(value), value);
+  }
+  for (const surface of ["iab", "fixture", "firefox", "Chrome", ""]) {
+    const value = clone(prepare); value.domContract.surface = surface;
+    rejected(() => relay.validatePrepare(value), "dom_contract_unverified");
+  }
+});
 await test("commitSend cannot supply a new prompt or target", () => {
   const commit = relay.envelope("commitSend", prepare);
   assert.equal(relay.validateCommit(commit), commit);
@@ -78,6 +88,25 @@ await test("prepared requires actual empty fresh root/Chat/login/Instant/no prev
   for (const patch of [{ url: capture.evidence.conversationUrl }, { url: "https://chatgpt.com/?prompt=secret" }, { chatMode: false }, { loginVerified: false },
     { emptyComposer: false }, { observedProfile: "Pro" }, { completionInitiallyPresent: true }])
     rejected(() => relay.validatePrepared(relay.envelope("prepared", prepare, { observation: { ...observation, ...patch } })), "prepare_observation_mismatch");
+});
+await test("prepared accepts only observed English/Chinese Instant labels with none effort", () => {
+  for (const surface of ["chrome", "edge"]) {
+    const value = clone(prepare); value.domContract.surface = surface;
+    const response = preparedFor(value);
+    for (const text of ["Instant", "Thinking effortInstant", "思考强度Instant"]) {
+      response.observation.profileDom.text = text;
+      assert.equal(relay.validatePrepared(response), response);
+    }
+    for (const text of ["思考强度Pro", "思考强度 Instant", "思考强度Instant extra"]) {
+      response.observation.profileDom.text = text;
+      rejected(() => relay.validatePrepared(response), "profile_unverified");
+    }
+    response.observation.profileDom = { text: "思考强度Instant", reasoningEffort: "high" };
+    rejected(() => relay.validatePrepared(response), "profile_unverified");
+    response.observation.profileDom.reasoningEffort = "none";
+    response.observation.surface = "iab";
+    rejected(() => relay.validatePrepared(response), "prepare_observation_mismatch");
+  }
 });
 await test("actual DOM evidence uses source keys; no fabricated server turn ID", () => {
   assert.equal(relay.validateCapture(capture, prepare), capture);
@@ -106,6 +135,13 @@ await test("same ID or wrong role DOM keys cannot represent two actual messages"
 await test("old completion/Stop still present/inexact completion reject main answer", () => {
   for (const patch of [{ observedAfterCommit: false }, { stopPresent: true }, { text: "Response started" }])
     rejected(() => relay.validateCapture({ ...capture, evidence: { ...capture.evidence, completion: { ...capture.evidence.completion, ...patch } } }, prepare), "capture_not_complete");
+});
+await test("observed Chinese completion validates exactly and typo/localized guesses never count as final", () => {
+  const actual = clone(capture); actual.evidence.completion.text = "回答已完成";
+  assert.equal(relay.validateCapture(actual, prepare), actual);
+  for (const text of ["回答已完", "回答已完成。", "回答完成", "回答已开始"])
+    rejected(() => relay.validateCapture({ ...capture, evidence: { ...capture.evidence,
+      completion: { ...capture.evidence.completion, text } } }, prepare), "capture_not_complete");
 });
 await test("actual profile changes after commit cannot masquerade as requested tier", () => {
   for (const patch of [{ observedBefore: "Pro" }, { observedAfter: "Thinking" }, { requestedProfile: "high" }])
@@ -152,12 +188,12 @@ function storageFixture(initial = {}) {
 }
 function preparedFor(value) {
   return relay.envelope("prepared", value, { observation: { url: "https://chatgpt.com/", chatMode: true, loginVerified: true,
-    emptyComposer: true, observedProfile: "Instant", completionInitiallyPresent: false, surface: "chrome",
+    emptyComposer: true, observedProfile: "Instant", completionInitiallyPresent: false, surface: value.domContract.surface,
     observationSha256: value.domContract.observationSha256, profileDom: { text: "Thinking effortInstant", reasoningEffort: "none" } } });
 }
-function workerFixture(initial = {}) {
+function workerFixture(initial = {}, browserSurface = "chrome") {
   const storage = storageFixture(initial), ports = [], tabs = [], calls = [], updates = new Event();
-  let sendFailure = false, prepareFailure = false;
+  let sendFailure = false, prepareFailure = false, preparedSurface = null;
   const api = { storage, runtime: { id: relay.EXTENSION_ID,
     connectNative(host) {
       assert.equal(host, relay.HOST_NAME);
@@ -170,17 +206,21 @@ function workerFixture(initial = {}) {
       async sendMessage(id, value) { calls.push({ id, value: clone(value) });
         if (value.type === "relay.content.prepare") {
           if (prepareFailure) { prepareFailure = false; throw new relay.RelayError("login_required", "隔离页面未登录，本次未发送。"); }
-          return preparedFor(value.prepare);
+          const response = preparedFor(value.prepare);
+          if (preparedSurface !== null) response.observation.surface = preparedSurface;
+          return response;
         }
         if (sendFailure) throw new Error("fixture click outcome unknown");
         return { committed: true };
       } } };
-  const controller = context.ConsoleChatRelayWorker.createController(api);
+  const controller = context.ConsoleChatRelayWorker.createController(api, () => browserSurface);
   const status = clientReady => ({ protocol: relay.PROTOCOL, type: "status", hostName: relay.HOST_NAME, enabled: true,
     approved: true, configured: true, message: "fixture-only approved endpoint", clientReady });
   return { api, storage, ports, tabs, calls, controller, status,
     failSend() { sendFailure = true; },
     failPrepare() { prepareFailure = true; },
+    setPreparedSurface(surface) { preparedSurface = surface; },
+    setOwnSurface(surface) { browserSurface = surface; },
     async enable() { await controller.popup("status"); ports.at(-1).onMessage.emit(status(false));
       await controller.popup("enable"); ports.at(-1).onMessage.emit(status(true)); }
   };
@@ -189,6 +229,34 @@ await test("default-disabled worker performs no native connect or queue read", a
   const fixture = workerFixture(); await fixture.controller.start();
   assert.equal(fixture.ports.length, 0); assert.equal(fixture.tabs.length, 0);
   assert.equal(fixture.controller.view().enabled, false);
+});
+await test("browser identity derives from its own brands/UA and rejects unknown vendors or conflicts", () => {
+  const detect = context.ConsoleChatRelayWorker.detectBrowserSurface;
+  const chromeUA = "Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36", edgeUA = chromeUA + " Edg/140.0.0.0";
+  const brands = brand => [{ brand: "Not A(Brand", version: "8" }, { brand: "Chromium", version: "140" }, { brand, version: "140" }];
+  assert.equal(detect({ userAgent: chromeUA, userAgentData: { brands: brands("Google Chrome") } }), "chrome");
+  assert.equal(detect({ userAgent: edgeUA, userAgentData: { brands: brands("Microsoft Edge") } }), "edge");
+  assert.equal(detect({ userAgent: chromeUA }), "chrome"); assert.equal(detect({ userAgent: edgeUA }), "edge");
+  for (const value of [{}, { userAgent: "Firefox/140.0" }, { userAgent: chromeUA + " OPR/120.0" },
+    { userAgent: chromeUA, userAgentData: { brands: brands("Brave") } },
+    { userAgent: chromeUA, userAgentData: { brands: [{ brand: "Chromium" }] } },
+    { userAgent: chromeUA, userAgentData: { brands: brands("Microsoft Edge") } },
+    { userAgent: edgeUA, userAgentData: { brands: brands("Google Chrome") } },
+    { userAgent: edgeUA, userAgentData: { brands: [{ brand: "Google Chrome" }, { brand: "Microsoft Edge" }] } }])
+    assert.equal(detect(value), null);
+});
+await test("unknown browser identity prevents native hello; mismatched native surface never opens a page", async () => {
+  const unknown = workerFixture({}, null);
+  await assert.rejects(unknown.controller.popup("status"), error => error.code === "browser_identity_unverified");
+  assert.equal(unknown.ports.length, 0);
+  for (const surface of ["chrome", "edge"]) {
+    const f = workerFixture({}, surface); await f.enable();
+    const value = clone(prepare); value.domContract.surface = surface === "edge" ? "chrome" : "edge";
+    await f.controller.native(value);
+    assert.equal(f.ports[0].sent.at(-1).type, "blocked");
+    assert.equal(f.ports[0].sent.at(-1).code, "browser_surface_mismatch");
+    assert.equal(f.tabs.length, 0); assert.equal(f.calls.length, 0);
+  }
 });
 await test("hello/status inspect does not ready; enable requires approved/configured actual endpoint", async () => {
   const f = workerFixture(); await f.controller.popup("status");
@@ -209,6 +277,21 @@ await test("worker owns one exact fresh tab and persists intent before a unique 
   await f.controller.native(relay.envelope("commitSend", prepare));
   assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 1);
   assert.equal(f.controller.state().active.phase, "needs_review");
+});
+await test("worker accepts matching Chrome/Edge prepared surfaces and never forwards a different browser", async () => {
+  for (const surface of ["chrome", "edge"]) {
+    const value = clone(prepare); value.domContract.surface = surface;
+    const matching = workerFixture({}, surface); await matching.enable(); await matching.controller.native(value);
+    assert.equal(matching.controller.state().active.phase, "prepared");
+    assert.equal(matching.ports[0].sent.at(-1).observation.surface, surface);
+    const mismatch = workerFixture({}, surface); await mismatch.enable();
+    mismatch.setPreparedSurface(surface === "edge" ? "chrome" : "edge");
+    await mismatch.controller.native(value);
+    assert.equal(mismatch.ports[0].sent.at(-1).type, "blocked");
+    assert.equal(mismatch.ports[0].sent.at(-1).code, "prepare_identity_mismatch");
+    assert.equal(mismatch.controller.state().active, null);
+    assert.equal(mismatch.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
+  }
 });
 await test("known unsent preparation failure durably retains tombstone and releases only its active request", async () => {
   const f = workerFixture(); await f.enable(); f.failPrepare();
@@ -312,18 +395,20 @@ await test("capture awaits exact stored receipt; UI label never becomes verified
 });
 class Node {
   constructor(text = "", attributes = {}) { this.textContent = text; this.attributes = attributes; this.isConnected = true; this.children = new Map(); }
-  get innerText() { return this.textContent; }
+  get innerText() { return this.textContent === "" && this.emptyInnerText !== undefined ? this.emptyInnerText : this.textContent; }
   getAttribute(key) { return this.attributes[key] ?? null; }
   getClientRects() { return [{}]; }
   querySelectorAll(selector) { return this.children.get(selector) || []; }
   focus() {}
   dispatchEvent() { return true; }
 }
-function contentFixture({ promptText = prompt, completed = false, stop = false, extraUser = false, clickThrows = false, draft = "", answerShell = false } = {}) {
+function contentFixture({ promptText = prompt, completed = false, stop = false, extraUser = false, clickThrows = false, draft = "", answerShell = false,
+  emptyInnerText, profileText = "Thinking effortInstant", completionText = "Response complete" } = {}) {
   const storage = storageFixture(), messages = [], emitted = [], timers = new Map(), location = { href: "https://chatgpt.com/" };
   const composer = new Node(draft, { role: "textbox", contenteditable: "true" });
-  const model = new Node("Thinking effortInstant", { "data-selected-reasoning-effort": "none" });
-  const chat = new Node("Chat", { "aria-pressed": "true" }), login = new Node("Signed in"), complete = new Node("Response complete"), stopNode = new Node("Stop");
+  composer.emptyInnerText = emptyInnerText;
+  const model = new Node(profileText, { "data-selected-reasoning-effort": "none" });
+  const chat = new Node("Chat", { "aria-pressed": "true" }), login = new Node("Signed in"), complete = new Node(completionText), stopNode = new Node("Stop");
   const items = new Map([["#composer", [composer]], ["#profile", [model]], ["#ordinary-chat", [chat]], ["#signed-in", [login]], [".message", messages], ["#complete", []], ["#stop", []]]);
   function message(id, unit, text, role) {
     const node = new Node(text + (role === "user" ? "👍" : "ChatGPT said:"), { "data-chatgpt-search-message-ids": JSON.stringify([id, id]), "data-chatgpt-search-unit-key": unit });
@@ -356,6 +441,30 @@ await test("content prepare is readonly and cannot overwrite any existing user d
   await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "composer_changed");
   assert.equal(f.composer.textContent, "未发送草稿"); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
 });
+await test("observed Edge empty editor newline is prepared without typing and reports Edge Chinese Instant", async () => {
+  const value = clone(prepare); value.domContract.surface = "edge";
+  const f = contentFixture({ emptyInnerText: "\n", profileText: "思考强度Instant", completed: true });
+  const response = await f.controller.receive({ type: "relay.content.prepare", prepare: value });
+  relay.validatePrepared(response);
+  assert.equal(response.observation.surface, "edge");
+  assert.equal(response.observation.profileDom.text, "思考强度Instant");
+  assert.equal(f.composer.textContent, ""); assert.equal(f.composer.innerText, "\n");
+  assert.equal(f.storage.writes.length, 0); assert.equal(f.clicks(), 0);
+  assert.equal((await f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", value) })).committed, true);
+  await f.controller.idle();
+  assert.equal(f.composer.textContent, prompt); assert.equal(f.clicks(), 1);
+  assert.equal(f.emitted.filter(message => message.type === "capture").length, 1);
+});
+await test("real spaces/newlines in textContent stay protected user drafts without trimming", async () => {
+  for (const draft of [" ", "\n", "\t\n", " 未发送草稿 \n"]) {
+    const f = contentFixture({ draft, profileText: "思考强度Instant" });
+    await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "composer_changed");
+    assert.equal(f.composer.textContent, draft); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
+  }
+  const f = contentFixture({ emptyInnerText: " " });
+  await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "composer_changed");
+  assert.equal(f.composer.innerText, " "); assert.equal(f.clicks(), 0);
+});
 await test("pure fixture owns empty Chat, commits once, excludes reactions/title and captures actual source units", async () => {
   const f = contentFixture({ completed: true });
   relay.validatePrepared(await f.controller.receive({ type: "relay.content.prepare", prepare }));
@@ -384,6 +493,35 @@ await test("content persistent intent failure or throwing Send never permits ret
   await assert.rejects(f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) }));
   assert.equal(f.clicks(), 1); assert.equal(f.controller.phase(), "needs_review");
 });
+await test("bidirectional serial worker/content failure replies before uncertain acknowledgement and never retries", async () => {
+  const worker = workerFixture(), content = contentFixture({ clickThrows: true }), notifications = [];
+  content.env.chrome.runtime.sendMessage = async value => {
+    notifications.push(clone(value));
+    const sender = { id: relay.EXTENSION_ID, tab: { id: 41 }, frameId: 0, url: content.env.location.href };
+    try { return await worker.controller.page(value, sender); }
+    catch (error) { return { received: false, code: error.code || "page_rejected" }; }
+  };
+  worker.api.tabs.sendMessage = async (id, value) => {
+    worker.calls.push({ id, value: clone(value) });
+    try { return await content.controller.receive(value); }
+    catch (error) { return { committed: false, code: error.code || "page_control_rejected" }; }
+  };
+  await worker.enable(); await worker.controller.native(prepare);
+  let deadline;
+  try {
+    await Promise.race([worker.controller.native(relay.envelope("commitSend", prepare)),
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error("bidirectional commit queue deadlocked")), 500); })]);
+  } finally { clearTimeout(deadline); }
+  await worker.controller.idle(); await content.controller.idle();
+  assert.equal(content.clicks(), 1); assert.equal(content.controller.phase(), "needs_review");
+  assert.equal(worker.controller.state().active.phase, "needs_review");
+  assert.equal(worker.storage.data.consoleChatRelayV1.attempts[dispatchId].phase, "needs_review");
+  assert.equal(content.storage.data[context.ConsoleChatRelayContent.CONTENT_PREFIX + dispatchId].phase, "send_intent");
+  assert.ok(notifications.some(value => value.type === "uncertain" && relay.sameIdentity(value, prepare)));
+  await worker.controller.native(relay.envelope("commitSend", prepare));
+  assert.equal(content.clicks(), 1);
+  assert.equal(worker.calls.filter(call => call.value.type === "relay.content.commit").length, 1);
+});
 await test("Stop prevents premature final; DOM completion event then returns one answer", async () => {
   const f = contentFixture({ completed: true, stop: true }); await f.controller.receive({ type: "relay.content.prepare", prepare });
   await f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) }); await f.controller.idle();
@@ -391,6 +529,22 @@ await test("Stop prevents premature final; DOM completion event then returns one
   f.items.set("#stop", []); await f.mutation();
   assert.equal(f.emitted.filter(value => value.type === "capture").length, 1);
   await f.mutation(); assert.equal(f.emitted.filter(value => value.type === "capture").length, 1);
+});
+await test("content preserves actual Chinese completion text and never translates a wrong marker into final evidence", async () => {
+  const value = clone(prepare); value.domContract.surface = "edge";
+  const actual = contentFixture({ completed: true, profileText: "思考强度Instant", completionText: "回答已完成" });
+  await actual.controller.receive({ type: "relay.content.prepare", prepare: value });
+  await actual.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", value) });
+  await actual.controller.idle();
+  const response = actual.emitted.find(message => message.type === "capture");
+  assert.ok(response); assert.equal(response.evidence.completion.text, "回答已完成");
+  relay.validateCapture(response, value);
+  const wrong = contentFixture({ completed: true, completionText: "回答已完成。" });
+  await wrong.controller.receive({ type: "relay.content.prepare", prepare });
+  await wrong.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+  await wrong.controller.idle();
+  assert.equal(wrong.emitted.filter(message => message.type === "capture").length, 0);
+  assert.equal(wrong.controller.phase(), "waiting"); assert.equal(wrong.clicks(), 1);
 });
 await test("streaming assistant shell does not abort the accepted input before its body exists", async () => {
   const f = contentFixture({ answerShell: true, stop: true });

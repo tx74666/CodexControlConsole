@@ -21,12 +21,20 @@
     function profile() {
       const node = one(selectors().profile), raw = String(node.textContent || "").trim();
       const effort = node.getAttribute("data-selected-reasoning-effort");
-      if (!["Instant", "Thinking effortInstant"].includes(raw) || effort !== "none")
+      if (!["Instant", "Thinking effortInstant", "思考强度Instant"].includes(raw) || effort !== "none")
         R.reject("profile_changed", "未观察到实际 Instant/none 控件；不切换未知控件或降档。");
       return { label: "Instant", dom: { text: raw, reasoningEffort: effort } };
     }
-    function composerText(node) { return String(node.innerText ?? node.textContent ?? ""); }
-    function completion() { return all(selectors().completion).some(node => String(node.textContent || "").trim() === "Response complete"); }
+    function composerText(node) {
+      const raw = String(node.innerText ?? node.textContent ?? "");
+      // CUA observed a rendered newline in the otherwise text-empty editor.
+      // A real textContent newline/space remains a user draft, without trimming.
+      return node.textContent === "" && raw === "\n" ? "" : raw;
+    }
+    function completion() {
+      return all(selectors().completion).map(node => String(node.textContent || "").trim())
+        .find(text => ["Response complete", "回答已完成"].includes(text)) || "";
+    }
     function stopPresent() { return all(selectors().stop).length > 0; }
     function messageNodes(readAnswers = true) {
       const entries = new Map();
@@ -89,13 +97,14 @@
         env.clearTimeout(state.acceptDeadline);
         await emit(accepted);
       }
-      if (!completion() || stopPresent()) return;
+      const completionText = completion();
+      if (!completionText || stopPresent()) return;
       const answers = messageNodes().filter(node => node.role === "assistant");
       if (answers.length !== 1) R.reject("final_source_ambiguous", "结束后没有唯一主回答，不能把工具或多个成果拼作答案。");
       const answer = answers[0];
       const captured = R.envelope("capture", state.prepare, { evidence: { source: "browser_dom", conversationUrl: env.location.href,
         sourceUserMessageId: user.id, assistantMessageId: answer.id, sourceUnitKey: user.unit, assistantUnitKey: answer.unit,
-        promptText: user.text, answerText: answer.text, completion: { text: "Response complete", observedAfterCommit: true, stopPresent: false },
+        promptText: user.text, answerText: answer.text, completion: { text: completionText, observedAfterCommit: true, stopPresent: false },
         profile: profileEvidence, observedAt: seenAt } });
       R.validateCapture(captured, state.prepare);
       await emit(captured); state.phase = "captured"; disconnectObserver();
@@ -112,7 +121,7 @@
       state = { prepare: structuredClone(value), phase: "preparing", key, observedBefore: null, accepted: null };
       const fresh = inspectFresh(); state.observedBefore = fresh.profile.label; state.phase = "prepared";
       return R.envelope("prepared", value, { observation: { url: env.location.href, chatMode: true, loginVerified: true, emptyComposer: true,
-        observedProfile: fresh.profile.label, completionInitiallyPresent: false, surface: "chrome",
+        observedProfile: fresh.profile.label, completionInitiallyPresent: false, surface: value.domContract.surface,
         observationSha256: value.domContract.observationSha256, profileDom: fresh.profile.dom } });
     }
     async function commit(value) {
@@ -149,7 +158,11 @@
         if (value?.type === "relay.content.commit") { R.exact(value, ["type", "commit"]); return await commit(value.commit); }
         R.reject("unknown_page_control", "网页正文和未知消息不能授权输入或发送。");
       } catch (error) {
-        if (state && ["send_intent", "waiting"].includes(state.phase)) await fail(error.code || "send_unknown", String(error?.message || "提交结果不明，不能重发。"));
+        // Return the failed content reply first: the worker is still awaiting
+        // this commit on its serial queue. Waiting for its page-message reply
+        // here would deadlock both queues. fail marks uncertainty immediately,
+        // retains the durable intent, and reports the original identity async.
+        if (state && ["send_intent", "waiting"].includes(state.phase)) void fail(error.code || "send_unknown", String(error?.message || "提交结果不明，不能重发。"));
         throw error;
       }
     }

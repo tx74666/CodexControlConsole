@@ -3,9 +3,27 @@ importScripts("lib/protocol.js");
 (function (root) {
   "use strict";
   const R = root.ConsoleChatRelay, STORAGE_KEY = "consoleChatRelayV1", MAX_TOMBSTONES = 1000;
-  function createController(api) {
+  function detectBrowserSurface(navigator) {
+    const ua = typeof navigator?.userAgent === "string" ? navigator.userAgent : "";
+    if (/\b(?:OPR|Opera|Brave|Vivaldi|YaBrowser|SamsungBrowser|UCBrowser|Chromium|Electron|EdgA|EdgiOS|Firefox|FxiOS|HeadlessChrome)\//i.test(ua)) return null;
+    const uaSurface = /\bEdg\/\d/.test(ua) ? "edge" : /\bChrome\/\d/.test(ua) ? "chrome" : null;
+    const brands = navigator?.userAgentData?.brands;
+    if (brands === undefined) return uaSurface;
+    if (!Array.isArray(brands) || !brands.length) return null;
+    const surfaces = new Set();
+    for (const entry of brands) {
+      if (typeof entry?.brand !== "string") return null;
+      if (entry.brand === "Google Chrome") surfaces.add("chrome");
+      else if (entry.brand === "Microsoft Edge") surfaces.add("edge");
+      else if (entry.brand !== "Chromium" && entry.brand.replace(/[^a-z]/gi, "").toLowerCase() !== "notabrand") return null;
+    }
+    if (surfaces.size !== 1) return null;
+    const surface = [...surfaces][0];
+    return ua && uaSurface !== surface ? null : surface;
+  }
+  function createController(api, resolveBrowserSurface = () => detectBrowserSurface(root.navigator)) {
     let state = { enabled: false, attempts: {}, active: null }, native = null, status = null, nativeReady = false, requestedReady = false;
-    let lastMessage = "准备包默认停用；尚无生产启用批准或 Chrome DOM 实机验收。", serial = Promise.resolve(), reconnectUsed = false;
+    let lastMessage = "准备包默认停用；尚无生产启用批准或浏览器页面实机验收。", serial = Promise.resolve(), reconnectUsed = false;
     const load = api.storage.local.get(STORAGE_KEY).then(result => {
       const saved = result?.[STORAGE_KEY];
       if (!saved) return;
@@ -15,6 +33,11 @@ importScripts("lib/protocol.js");
       if (state.active && state.active.phase !== "stored") { state.active.phase = "needs_review"; lastMessage = "上次转发未取得完整保存回执；保留核对，不能重发。"; }
     });
     async function save() { await api.storage.local.set({ [STORAGE_KEY]: structuredClone(state) }); }
+    function ownSurface() {
+      const surface = resolveBrowserSurface();
+      if (!["chrome", "edge"].includes(surface)) R.reject("browser_identity_unverified", "扩展自身浏览器身份未知或互相冲突，停止连接与发送。");
+      return surface;
+    }
     function queue(fn) {
       const run = serial.then(() => load).then(fn);
       serial = run.catch(() => {});
@@ -50,6 +73,7 @@ importScripts("lib/protocol.js");
       }
     }
     function connect(inspectOnly = false) {
+      ownSurface();
       if (native) { send(R.handshake("status")); return; }
       if (!inspectOnly && !state.enabled) return;
       if (api.runtime.id !== R.EXTENSION_ID) R.reject("wrong_extension", "扩展身份与已批准 allowlist 不一致。");
@@ -90,7 +114,10 @@ importScripts("lib/protocol.js");
       });
     }
     async function handlePrepare(value) {
-      try { R.validatePrepare(value); }
+      try {
+        R.validatePrepare(value);
+        if (value.domContract.surface !== ownSurface()) R.reject("browser_surface_mismatch", "冻结 DOM 合同与扩展自身浏览器不符，不创建或发送。");
+      }
       catch (error) {
         if (value?.protocol === R.PROTOCOL && /^[0-9a-f]{32}$/.test(value.dispatchId) && typeof value.attemptId === "string")
           return fail(value, error.code || "invalid_prepare", String(error.message || "准备契约不符。"), false);
@@ -111,8 +138,9 @@ importScripts("lib/protocol.js");
         await waitLoaded(tab.id);
         const response = await api.tabs.sendMessage(tab.id, { type: "relay.content.prepare", prepare: value });
         R.validatePrepared(response);
-        if (!R.sameIdentity(response, value) || response.observation.observationSha256 !== value.domContract.observationSha256)
-          R.reject("prepare_identity_mismatch", "页面准备回执身份或 DOM 观察证据不符。");
+        if (!R.sameIdentity(response, value) || response.observation.observationSha256 !== value.domContract.observationSha256
+            || response.observation.surface !== value.domContract.surface)
+          R.reject("prepare_identity_mismatch", "页面准备回执身份、浏览器或 DOM 观察证据不符。");
         state.active.phase = "prepared"; state.active.observedProfile = response.observation.observedProfile;
         state.attempts[value.dispatchId].phase = "prepared"; await save(); send(response);
       } catch (error) { return fail(value, error.code || "prepare_failed", String(error?.message || "页面未准备完成。"), false); }
@@ -195,7 +223,7 @@ importScripts("lib/protocol.js");
       popup: action => queue(() => popup(action)), abandon: (identity, code, message) => queue(() => fail(identity, code, message)),
       idle: () => serial, state: () => structuredClone(state) };
   }
-  root.ConsoleChatRelayWorker = Object.freeze({ createController, STORAGE_KEY });
+  root.ConsoleChatRelayWorker = Object.freeze({ createController, detectBrowserSurface, STORAGE_KEY });
   if (root.chrome?.runtime?.onMessage && root.chrome?.storage?.local && root.chrome?.tabs) {
     const controller = createController(root.chrome);
     root.chrome.runtime.onMessage.addListener((value, sender, reply) => {

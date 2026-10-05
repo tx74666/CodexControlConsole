@@ -42,9 +42,9 @@
   }
   function validateDom(value) {
     exact(value, DOM_KEYS, "dom_contract_unverified");
-    if (value.version !== 1 || value.verified !== true || value.surface !== "chrome" || value.source !== "cua"
+    if (value.version !== 1 || value.verified !== true || !["chrome", "edge"].includes(value.surface) || value.source !== "cua"
         || !SHA.test(value.observationSha256) || !isoTime(value.capturedAt))
-      reject("dom_contract_unverified", "尚无经实际 Chrome CUA 核对的 DOM 合同，IAB 与 fixture 不能替代。");
+      reject("dom_contract_unverified", "尚无经实际 Chrome/Edge CUA 核对的 DOM 合同，IAB 与 fixture 不能替代。");
     exact(value.selectors, SELECTOR_KEYS, "dom_contract_unverified");
     for (const key of SELECTOR_KEYS) nonempty(value.selectors[key], 1000, "dom_contract_unverified");
     exact(value.profiles, ["fast"], "profile_unverified");
@@ -90,10 +90,10 @@
     const observation = exact(value.observation, ["url", "chatMode", "loginVerified", "emptyComposer", "observedProfile", "completionInitiallyPresent", "surface", "observationSha256", "profileDom"]);
     if (!rootUrl(observation.url) || observation.chatMode !== true || observation.loginVerified !== true
         || observation.emptyComposer !== true || observation.completionInitiallyPresent !== false || observation.observedProfile !== "Instant"
-        || observation.surface !== "chrome" || !SHA.test(observation.observationSha256))
+        || !["chrome", "edge"].includes(observation.surface) || !SHA.test(observation.observationSha256))
       reject("prepare_observation_mismatch", "新 Chat、登录、空输入、结束标记或实际 Instant 观测不符。");
     exact(observation.profileDom, ["text", "reasoningEffort"]);
-    if (!["Instant", "Thinking effortInstant"].includes(observation.profileDom.text) || observation.profileDom.reasoningEffort !== "none")
+    if (!["Instant", "Thinking effortInstant", "思考强度Instant"].includes(observation.profileDom.text) || observation.profileDom.reasoningEffort !== "none")
       reject("profile_unverified", "缺少实际 Instant 标签与 none effort 属性。");
     return value;
   }
@@ -122,7 +122,7 @@
     if (text(evidence.promptText, MAX_PROMPT) !== prepared.prompt) reject("capture_prompt_mismatch", "页面用户输入与完整冻结问题不一致。");
     nonempty(evidence.answerText, MAX_ANSWER);
     exact(evidence.completion, ["text", "observedAfterCommit", "stopPresent"]);
-    if (evidence.completion.text !== "Response complete" || evidence.completion.observedAfterCommit !== true
+    if (!["Response complete", "回答已完成"].includes(evidence.completion.text) || evidence.completion.observedAfterCommit !== true
         || evidence.completion.stopPresent !== false) reject("capture_not_complete", "没有本次提交后的明确结束证据。");
     exact(evidence.profile, ["requestedProfile", "observedBefore", "observedAfter"]);
     if (evidence.profile.requestedProfile !== prepared.requestedProfile || evidence.profile.observedBefore !== "Instant"

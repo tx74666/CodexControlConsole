@@ -104,6 +104,8 @@ $PythonSources = @(
   "tools/build-update-manifest.py",
   "tools/console-chat-relay-host.py",
   "tools/prepare-console-chat-relay.py",
+  "tools/install-console-chat-relay.py",
+  "tools/configure-console-chat-relay.py",
   "tools/check-chat-relay-package.py"
 )
 
@@ -144,6 +146,8 @@ $PythonChecks = @(
   "tools/check-console-chat-relay.py",
   "tools/check-console-chat-relay-integration.py",
   "tools/check-console-chat-relay-preparation.py",
+  "tools/check-console-chat-relay-installation.py",
+  "tools/check-console-chat-relay-configuration.py",
   "tools/check-mobile-handoff.py",
   "tools/check-workflow-app-bridge.py",
   "tools/check-chat-capture.py",

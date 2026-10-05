@@ -24,6 +24,7 @@ EXTENSION_ID = "ggjlmdfnbknlicnibfngaenlakeabkfk"
 APPROVAL_KEY = "console_chat_relay_approval"
 ATTEMPT_PREFIX = "console-chat-relay:attempt:"
 MAX_FRAME = 1024 * 1024
+BROWSER_SURFACES = frozenset({"chrome", "edge"})
 
 
 def encode(value):
@@ -83,7 +84,7 @@ def approval(value, directory):
     timestamp(value["approvalConfirmedAt"])
     contract = value["domContract"]
     if (not isinstance(contract, dict) or set(contract) != {"version", "verified", "surface", "capturedAt", "source", "observationSha256", "selectors", "profiles"}
-            or contract["version"] != 1 or type(contract["verified"]) is not bool or contract["surface"] not in {"chrome", "iab"}
+            or contract["version"] != 1 or type(contract["verified"]) is not bool or contract["surface"] not in BROWSER_SURFACES | {"iab"}
             or contract["source"] != "cua" or not isinstance(contract["observationSha256"], str)
             or not re.fullmatch(r"[a-f0-9]{64}", contract["observationSha256"])
             or not isinstance(contract["selectors"], dict) or not isinstance(contract["profiles"], dict)
@@ -144,10 +145,10 @@ class ChatRelayController:
             config = self.config()
         except (ValueError, OSError):
             config = None
-        usable = bool(config and config["domContract"]["verified"] and config["domContract"]["surface"] == "chrome")
+        usable = bool(config and config["domContract"]["verified"] and config["domContract"]["surface"] in BROWSER_SURFACES)
         return {"protocol": PROTOCOL, "type": "status", "hostName": HOST_NAME, "enabled": bool(config),
                 "approved": bool(config), "configured": bool(config), "clientReady": bool(self.client_ready and usable),
-                "message": self.blocked_reason or ("approved_chrome_contract" if usable else "relay_disabled_or_chrome_dom_unverified")}
+                "message": self.blocked_reason or ("approved_browser_contract" if usable else "relay_disabled_or_browser_dom_unverified")}
 
     def committed(self, identifiers):
         with self.lock:
@@ -169,7 +170,7 @@ class ChatRelayController:
         if not self.client_ready or self.active:
             return
         config = self.config()
-        if not config or config["domContract"]["surface"] != "chrome" or config["domContract"]["verified"] is not True:
+        if not config or config["domContract"]["surface"] not in BROWSER_SURFACES or config["domContract"]["verified"] is not True:
             return
         service = self.service
         with service._db() as db:
@@ -269,7 +270,7 @@ class ChatRelayController:
                     raise ValueError("relay_handshake_invalid")
                 if message["type"] == "ready":
                     config = self.config()
-                    self.client_ready = bool(message["clientReady"] is True and config and config["domContract"]["verified"] is True and config["domContract"]["surface"] == "chrome")
+                    self.client_ready = bool(message["clientReady"] is True and config and config["domContract"]["verified"] is True and config["domContract"]["surface"] in BROWSER_SURFACES)
                 self.emit(self.status())
                 if self.client_ready:
                     self._drain()
@@ -280,7 +281,7 @@ class ChatRelayController:
             if extra is None or set(message) != base | extra:
                 raise ValueError("relay_message_fields_invalid")
             config = self.config()
-            if not config or config["domContract"]["surface"] != "chrome" or config["domContract"]["verified"] is not True:
+            if not config or config["domContract"]["surface"] not in BROWSER_SURFACES or config["domContract"]["verified"] is not True:
                 self.disconnect("relay_approval_revoked")
                 raise ValueError("relay_approval_unavailable")
             outgoing = None
@@ -311,9 +312,9 @@ class ChatRelayController:
                     if (not isinstance(observation, dict) or set(observation) != {"url", "chatMode", "loginVerified", "emptyComposer", "observedProfile", "completionInitiallyPresent", "surface", "observationSha256", "profileDom"}
                             or observation["url"] != "https://chatgpt.com/" or any(observation[key] is not True for key in ("chatMode", "loginVerified", "emptyComposer"))
                             or observation["completionInitiallyPresent"] is not False or observation["observedProfile"] != attempt["profileLabel"]
-                            or observation["surface"] != "chrome" or observation["observationSha256"] != attempt["observationSha256"]
+                            or observation["surface"] != config["domContract"]["surface"] or observation["observationSha256"] != attempt["observationSha256"]
                             or not isinstance(observation["profileDom"], dict) or set(observation["profileDom"]) != {"text", "reasoningEffort"}
-                            or observation["profileDom"]["text"] not in {"Instant", "Thinking effortInstant"}
+                            or observation["profileDom"]["text"] not in {"Instant", "Thinking effortInstant", "思考强度Instant"}
                             or observation["profileDom"]["reasoningEffort"] != "none"):
                         raise ValueError("relay_prepared_dom_invalid")
                     attempt.update(phase="send_intent", sendIntentAt=now(), preparedObservation=observation)
@@ -382,7 +383,13 @@ class ChatRelayController:
         answer = evidence["answerText"]
         if not isinstance(answer, str) or not answer.strip() or len(answer) > 20000 or "\0" in answer:
             raise ValueError("relay_capture_answer_empty_or_too_long")
-        if evidence["completion"] != {"text": "Response complete", "observedAfterCommit": True, "stopPresent": False}:
+        completion = evidence["completion"]
+        if (not isinstance(completion, dict)
+                or set(completion) != {"text", "observedAfterCommit", "stopPresent"}
+                or not isinstance(completion["text"], str)
+                or completion["text"] not in {"Response complete", "回答已完成"}
+                or completion["observedAfterCommit"] is not True
+                or completion["stopPresent"] is not False):
             raise ValueError("relay_capture_not_completed")
         snapshot = json.loads(row["snapshot"])
         job = self.service._app_dispatch_job(db, row, snapshot)
@@ -508,7 +515,7 @@ class ChatRelayBroker:
         if os.name != "nt":
             return False
         config = fixed_approval(directory=self.service.data_dir)
-        if not config or config["domContract"]["verified"] is not True or config["domContract"]["surface"] != "chrome":
+        if not config or config["domContract"]["verified"] is not True or config["domContract"]["surface"] not in BROWSER_SURFACES:
             return False
         if self.thread and self.thread.is_alive() and not self.stop_event.is_set():
             return config == self.approved_config
@@ -538,7 +545,7 @@ class ChatRelayBroker:
         return {"enabled": enabled, "approved": enabled, "configured": enabled,
                 "clientReady": bool(enabled and self.connection and controller and controller.client_ready),
                 "source": "browser_dom" if enabled else None, "capabilitiesVerified": False,
-                "message": controller.blocked_reason if controller and controller.blocked_reason else "approved_chrome_relay" if enabled else "relay_disabled_or_chrome_dom_unverified"}
+                "message": controller.blocked_reason if controller and controller.blocked_reason else "approved_browser_relay" if enabled else "relay_disabled_or_browser_dom_unverified"}
 
     def _emit(self, message):
         with self.write_lock:
