@@ -269,7 +269,9 @@ class SubscriptionChecks(unittest.TestCase):
         for index, name in enumerate(("registration.json", "connection.dpapi", "identity-hint.dpapi", "connection.lock")):
             directory = self.directory / ("reparse-case-" + str(index))
             directory.mkdir()
-            file = directory / name
+            # The provider canonicalizes legitimate Windows short-name aliases.
+            # Mark the actual same file, even when CI's TEMP uses RUNNER~1.
+            file = (directory / name).resolve()
             file.write_bytes(b"owned-fixture-sentinel")
             def information(path, *args, file=file, **kwargs):
                 value = original(path, *args, **kwargs)
