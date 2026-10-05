@@ -47,7 +47,7 @@ class PreparationChecks(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="console-relay-prep-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve(strict=True)
         self.app = self.root / "应用 bundle with spaces"
         self.extension = self.app / "_internal/extensions"
         shutil.copytree(ROOT / "extensions/console-chat-relay", self.extension)
@@ -85,6 +85,29 @@ class PreparationChecks(unittest.TestCase):
         self.assertEqual(result["host"]["machineCode"], 0x8664)
         self.assertFalse(any(result["operations"].values()))
         self.assertTrue(result["fixture"])
+        self.assertEqual(before, snapshots(self.root))
+
+    @unittest.skipUnless(os.name == "nt", "Windows short-path fixture only")
+    def test_short_alias_resolves_to_the_same_exact_host_path(self):
+        import ctypes
+        from ctypes import wintypes
+        get_short_path = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+        get_short_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+        get_short_path.restype = wintypes.DWORD
+        required = get_short_path(str(self.app), None, 0)
+        self.assertGreater(required, 0)
+        self.assertLessEqual(required, 32768)
+        buffer = ctypes.create_unicode_buffer(required)
+        copied = get_short_path(str(self.app), buffer, required)
+        self.assertGreater(copied, 0)
+        self.assertLess(copied, required)
+        alias = Path(buffer.value)
+        if str(alias).casefold() == str(self.app).casefold():
+            self.skipTest("This fixture volume has no distinct 8.3 alias")
+        before = snapshots(self.root)
+        report = prep.inspect_bundle(alias, fixture=True)
+        self.assertEqual(report["appDir"], str(self.app.resolve(strict=True)))
+        self.assertEqual(report["hostPath"], str(self.host.resolve(strict=True)))
         self.assertEqual(before, snapshots(self.root))
 
     def test_missing_host_has_no_output(self):
