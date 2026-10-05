@@ -17,7 +17,7 @@ const response = (body, status = 200) => ({ ok: status >= 200 && status < 300, s
 const photo = () => new File(["image"], "draft.png", { type: "image/png" });
 function fixture(phone = true) {
   const base = phone ? "/api/phone/workflow" : "/api/workflow";
-  const asset = (id, mimeType = "image/png") => ({ id, name: `${id}.${mimeType.startsWith("audio") ? "webm" : "png"}`, mimeType, url: `${base}/attachment?id=${id}` });
+  const asset = (id, mimeType = "image/png") => ({ id, name: `${id}.${mimeType.startsWith("audio") ? "webm" : "png"}`, mimeType, size: 5, url: `${base}/attachment?id=${id}` });
   return { base, asset, targets: [{ id: "local-chat", kind: "codex", title: "本机设计讨论", hostId: "local" }, { id: "remote-chat", kind: "codex", title: "远端会话", hostId: "other" }, { id: "gpt-chat", kind: "chatgpt", title: "ChatGPT 文字讨论" }], config: { computer: { id: "pc", name: "执行电脑" }, appDiscussion: { enabled: true, defaultTarget: { kind: "codex", mode: "new", threadId: "", name: "Console 图片讨论" } }, localTranscription: { available: true, status: "ready", languages: ["zh-CN"] }, projects: [{ id: "console", name: "Console", capabilities: ["capture_screen", "result_import", "command"], commands: [{ id: "preview", name: "指定预览" }], allowGeneratedScripts: false }], actions: [{ id: "auto", name: "规划执行" }, { id: "capture_screen", name: "截图" }, { id: "command", name: "指定预览" }], models: { ready: true, selected: "default", transcriptionReady: true, providers: [{ id: "default", protocol: "responses", endpoint: "https://api.example.test/v1", model: "configured-model", keyConfigured: true }] }, limits: { maxFileBytes: 12 * 1024 ** 2 }, backgroundEnabled: true }, detail: { record: { id: "record-1", title: "工作图片", projectId: "console", primaryAttachmentId: "source" }, messages: [{ id: "ai-1", role: "assistant", text: "方案一：只调整灯光。\n方案二：修改全部材质。", options: [{ id: "option-1", label: "只调灯光", instruction: "只调整灯光", action: "capture_screen", projectId: "console" }, { id: "option-2", label: "全部材质", instruction: "修改全部材质", action: "command", commandId: "preview", projectId: "console" }] }], attachments: [asset("source")], jobs: [], revision: "initial" }, receipts: new Map() };
 }
 function harness({ phone = true, storage = new Map(), blobData = new Map(), server = fixture(phone), secure = false, viewportHeight, layoutHeight = viewportHeight } = {}) {
@@ -72,7 +72,7 @@ function harness({ phone = true, storage = new Map(), blobData = new Map(), serv
       result = { job, dispatch: job.appDispatch, revision: "ended-once" };
     }
     else if (path === "create") result = server.detail;
-    else if (path === "upload") { const ids = []; for (const file of data.getAll("files")) { const id = `upload-${server.detail.attachments.length}`; const asset = server.asset(id, file.type); asset.name = file.name; server.detail.attachments.push(asset); ids.push(id); if (file.type.startsWith("image/")) server.detail.record.primaryAttachmentId = id; } result = { ...clone(server.detail), uploadedAttachmentIds: ids }; }
+    else if (path === "upload") { const ids = []; for (const file of data.getAll("files")) { const id = `upload-${server.detail.attachments.length}`; const asset = server.asset(id, file.type); asset.name = file.name; asset.size = file.size; server.detail.attachments.push(asset); ids.push(id); if (file.type.startsWith("image/")) server.detail.record.primaryAttachmentId = id; } result = { ...clone(server.detail), uploadedAttachmentIds: ids }; }
     else if (["discuss", "submit", "transcribe", "retry"].includes(path)) { const parent = path === "retry" && server.detail.jobs.find(item => item.id === data.jobId), app = path === "discuss" && data.appTarget || parent?.appDispatch && { kind: parent.appDispatch.targetKind, mode: parent.appDispatch.targetMode, threadId: parent.appDispatch.targetThreadId, name: parent.appDispatch.targetName }, job = { id: `job-${server.detail.jobs.length}`, recordId: server.detail.record.id, kind: path === "submit" ? "execute" : parent?.kind || path, status: app || path === "transcribe" && (data.transcriptionSource === "windows_local" ? !server.config.localTranscription.available : !server.config.models.transcriptionReady) ? "waiting" : "queued", requestId, text: data.text || "转写", result: {}, ...(data.purpose || parent?.purpose ? { purpose: data.purpose || parent.purpose } : {}), ...(data.action ? { action: data.action, projectId: data.projectId } : {}), ...(app ? { appDispatch: { id: `app-${server.detail.jobs.length}`, sourceType: "workflow_discussion", status: "pending", targetKind: app.kind, targetMode: app.mode, targetThreadId: app.threadId, targetName: app.name, error: "" } } : {}) }; server.detail.jobs.unshift(job); result = { job, record: server.detail.record, revision: `accepted-${job.id}` }; }
     else throw new Error(`Unexpected fixture request: ${path}`);
     server.receipts.set(requestId, clone(result)); return result;
@@ -797,6 +797,27 @@ await test("explicit no-queue Work rejection can be cancelled without losing rev
   assert.equal(h.draft.value, "我的具体修改要求"); assert.equal(h.field("可修改内容").value, "审核中完善后的要求"); assert.equal(h.server.detail.attachments[0].id, "source"); assert.equal(h.calls.filter(call => call.path === "app-work").length, 1); assert.equal(h.button("确认 Work 修改").disabled, false);
   h.button("确认 Work 修改").click(); await settle(); const requests = h.calls.filter(call => call.path === "app-work"); assert.equal(requests.length, 2); assert.notEqual(requests[0].data.requestId, requests[1].data.requestId); assert.equal(h.server.detail.jobs.length, 1);
 });
+await test("actual-size Work capacity rejection releases only a proven unaccepted request and retains the combined images", async () => {
+  const h = harness(), task = addTask(h.server); h.server.detail.attachments[0].size = 1; await h.start(); await h.panel.openTask(task);
+  h.type("保留原执行草稿"); const picker = h.all("input").find(item => item.accept === "image/*"); picker.files = [photo()]; picker.fire("change"); await settle();
+  h.button("Work").click(); h.button("审核 Work").click(); await settle(); h.change(h.field("Work 工作区"), "console-workspace");
+  h.pending("app-work", Promise.resolve(response({ error: "实际原图合计超过 24 MB；Work 未入队", code: "work_images_too_large", queueAccepted: false }, 413)));
+  h.button("确认 Work 修改").click(); await settle(); const first = h.calls.find(call => call.path === "app-work").data;
+  assert.deepEqual(first.context.attachmentIds, ["source", "upload-1"]); assert.equal(h.server.detail.jobs.length, 0); assert.ok(h.button("保留草稿，取消未接受请求")); assert.equal(h.button("原请求重试"), undefined);
+  h.type("容量核对后的完整执行要求", h.field("可修改内容")); h.button("保留草稿，取消未接受请求").click(); await settle();
+  const saved = workflowSaved(h); assert.equal(saved.outbox.length, 0); assert.equal(h.draft.value, "保留原执行草稿"); assert.equal(h.field("可修改内容").value, "容量核对后的完整执行要求");
+  assert.deepEqual(saved.drafts[task.recordId].review.context.attachmentIds, first.context.attachmentIds); assert.deepEqual(h.server.detail.attachments.map(item => item.id), ["source", "upload-1"]);
+  assert.equal(h.calls.filter(call => call.path === "app-work").length, 1); assert.equal(h.button("确认 Work 修改").disabled, false);
+});
+await test("a capacity error without explicit no-queue evidence remains an unknown frozen Work request", async () => {
+  for (const flag of [undefined, true]) {
+    const h = harness(), task = addTask(h.server); await h.start(); await h.panel.openTask(task); h.type("送达未知仍保留的草稿"); h.button("Work").click(); h.button("审核 Work").click(); await settle(); h.change(h.field("Work 工作区"), "console-workspace");
+    h.pending("app-work", Promise.resolve(response({ error: "容量状态未确认", code: "work_images_too_large", ...(flag === undefined ? {} : { queueAccepted: flag }) }, 413)));
+    h.button("确认 Work 修改").click(); await settle(); const actual = h.calls.find(call => call.path === "app-work").data, saved = workflowSaved(h);
+    assert.equal(h.button("保留草稿，取消未接受请求"), undefined); assert.ok(h.button("原请求重试")); assert.equal(saved.outbox.length, 1); assert.deepEqual(saved.outbox[0].payload, actual);
+    assert.equal(h.draft.value, "送达未知仍保留的草稿"); assert.deepEqual(saved.outbox[0].payload.context.attachmentIds, ["source"]); assert.equal(h.calls.filter(call => call.path === "app-work").length, 1);
+  }
+});
 await test("Work source read is asynchronous and cannot confirm before the exact frozen context arrives", async () => {
   const h = harness(), task = addTask(h.server, { executionDraft: "已保存来源稿\n保留两种模式。", keyPoints: [{ id: "decision-1", text: "已确认保留双模式", kind: "decision" }] }), hold = defer(); await h.start();
   h.pending("app-work-review", hold.promise); let completed = false; const opening = h.panel.openTask({ ...task, executionDraft: "点击时的具体执行要求", mode: "work" }).then(value => { completed = true; return value; }); await settle();
@@ -894,5 +915,37 @@ await test("explicit no-queue idea context change cancels only the rejected requ
   const h = harness(), task = addTask(h.server); await h.start(); await h.panel.openTask({ ...task, executionDraft: "精确最终稿", mode: "work" }); h.change(h.field("Work 工作区"), "console-workspace"); const initial = workflowSaved(h).drafts[task.recordId].review.ideaContextSha256;
   h.pending("app-work", Promise.resolve(response({ error: "来源已变化，未入队", code: "idea_context_changed", queueAccepted: false }, 409))); h.button("确认 Work 修改").click(); await settle(); assert.equal(h.server.detail.jobs.length, 0); assert.ok(h.button("保留草稿，取消未接受请求")); h.server.tasks[task.ideaId].keyPoints = [{ id: "new-point", text: "当前实际决定", kind: "decision" }];
   h.button("保留草稿，取消未接受请求").click(); await settle(); const review = workflowSaved(h).drafts[task.recordId].review; assert.notEqual(review.ideaContextSha256, initial); assert.equal(review.text, "精确最终稿"); assert.match(h.root.textContent, /已确认决定：当前实际决定/); assert.equal(h.calls.filter(call => call.path === "app-work").length, 1); assert.equal(h.button("确认 Work 修改").disabled, false);
+});
+await test("Work refuses five reviewed original and pending images without dropping or uploading any source", async () => {
+  const h = harness(), task = addTask(h.server); await h.start(); await h.panel.openTask(task); h.type("五张图仍要完整保留的执行稿");
+  const picker = h.all("input").find(item => item.accept === "image/*"); picker.files = [photo(), photo(), photo(), photo()]; picker.fire("change"); await settle();
+  h.button("Work").click(); h.button("审核 Work").click(); await settle(); h.change(h.field("Work 工作区"), "console-workspace");
+  assert.equal(h.button("确认 Work 修改").disabled, true); assert.match(h.root.textContent, /合计最多 4 张/);
+  const saved = workflowSaved(h); assert.deepEqual(saved.drafts[task.recordId].review.context.attachmentIds, ["source"]); assert.equal(saved.drafts[task.recordId].review.text, "五张图仍要完整保留的执行稿"); assert.equal(h.all("div").find(item => item.className === "workflow-pending").children.length, 4);
+  h.button("确认 Work 修改").click(); await settle(); assert.equal(h.calls.some(call => ["upload", "app-work"].includes(call.path)), false); assert.equal(h.server.detail.jobs.length, 0); assert.equal(workflowSaved(h).outbox.length, 0);
+});
+await test("Work keeps every original and uploaded ID at exactly four images", async () => {
+  const h = harness(), task = addTask(h.server); await h.start(); await h.panel.openTask(task); h.type("准确四张图的执行稿");
+  const picker = h.all("input").find(item => item.accept === "image/*"); picker.files = [photo(), photo(), photo()]; picker.fire("change"); await settle();
+  h.button("Work").click(); h.button("审核 Work").click(); await settle(); h.change(h.field("Work 工作区"), "console-workspace"); assert.equal(h.button("确认 Work 修改").disabled, false); h.button("确认 Work 修改").click(); await settle();
+  assert.deepEqual(h.calls.find(call => call.path === "app-work").data.context.attachmentIds, ["source", "upload-1", "upload-2", "upload-3"]); assert.equal(h.calls.filter(call => call.path === "upload").length, 1);
+});
+await test("Work exact 24 MiB passes while one extra byte preserves all files and rejects before upload", async () => {
+  for (const over of [false, true]) {
+    const h = harness(), task = addTask(h.server); h.server.detail.attachments[0].size = 12 * 1024 ** 2; await h.start(); await h.panel.openTask(task); h.type("实际合计容量执行稿");
+    const picker = h.all("input").find(item => item.accept === "image/*"), large = new File([new Uint8Array(12 * 1024 ** 2)], "actual-large.png", { type: "image/png" }); picker.files = over ? [large, new File(["x"], "one-byte.png", { type: "image/png" })] : [large]; picker.fire("change"); await settle();
+    h.button("Work").click(); h.button("审核 Work").click(); await settle(); h.change(h.field("Work 工作区"), "console-workspace"); assert.equal(h.button("确认 Work 修改").disabled, over);
+    if (over) { assert.match(h.root.textContent, /总大小超过 24 MB/); assert.equal(h.all("div").find(item => item.className === "workflow-pending").children.length, 2); assert.equal(workflowSaved(h).drafts[task.recordId].review.text, "实际合计容量执行稿"); h.button("确认 Work 修改").click(); await settle(); assert.equal(h.calls.some(call => ["upload", "app-work"].includes(call.path)), false); }
+    else { h.button("确认 Work 修改").click(); await settle(); assert.deepEqual(h.calls.find(call => call.path === "app-work").data.context.attachmentIds, ["source", "upload-1"]); }
+  }
+});
+await test("Work reviewed duplicate original IDs count once and five distinct restored selections are not truncated", async () => {
+  for (const excessive of [false, true]) {
+    const storage = new Map(), server = fixture(), first = harness({ storage, server }), task = addTask(server); await first.start(); await first.panel.openTask(task); first.panel.setActive(false);
+    if (excessive) server.detail.attachments.push(...["two", "three", "four", "five"].map(id => server.asset(id)));
+    const saved = workflowSaved(first), ids = excessive ? server.detail.attachments.map(item => item.id) : ["source", "source"]; saved.recordViews[task.recordId].selectedAttachments = ids; saved.selectedAttachments = ids; storage.set([...storage.keys()].find(key => key.startsWith("codexWorkflow.v1:")), JSON.stringify(saved));
+    const h = harness({ storage, server }); await h.start(); await h.panel.openTask(task); h.type("恢复后的完整选图审核"); h.button("Work").click(); h.button("审核 Work").click(); await settle(); h.change(h.field("Work 工作区"), "console-workspace");
+    assert.deepEqual(workflowSaved(h).drafts[task.recordId].review.context.attachmentIds, excessive ? ids : ["source"]); assert.equal(h.button("确认 Work 修改").disabled, excessive);
+  }
 });
 console.log(`Workflow UI checks passed (${count} cases).`);

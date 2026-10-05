@@ -7,7 +7,7 @@
   const fail = message => { throw new Error(message); };
   const exact = (value, fields) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === fields.length && fields.every(key => Object.prototype.hasOwnProperty.call(value, key));
   const positive = value => Number.isSafeInteger(value) && value > 0;
-  const string = (value, limit) => typeof value === "string" && value.length <= limit && !value.includes("\0");
+  const string = (value, limit) => typeof value === "string" && Array.from(value).length <= limit && !value.includes("\0");
   const digest = async blob => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer())), byte => byte.toString(16).padStart(2, "0")).join("");
   function newNonce() { if (typeof crypto?.getRandomValues !== "function") fail("浏览器无法生成安全交接凭据，内容仍保留。"); const bytes = crypto.getRandomValues(new Uint8Array(16)); bytes[6] = bytes[6] & 15 | 64; bytes[8] = bytes[8] & 63 | 128; const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join(""); return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`; }
   function decode(text) {
@@ -16,7 +16,7 @@
     if (!exact(value, ["format", "version", "source", "idea", "images"]) || value.format !== "codex-console-idea" || value.version !== 1 || !exact(value.source, ["clientId", "ideaId", "revision"]) || !UUID.test(value.source.clientId) || !ID.test(value.source.ideaId) || !positive(value.source.revision)) fail("想法包的来源或版本无效。");
     const idea = value.idea;
     if (!exact(idea, ["title", "body", "executionDraft", "archived", "keyPoints"]) || !string(idea.title, 160) || !idea.title.trim() || !string(idea.body, 20000) || !string(idea.executionDraft, 20000) || typeof idea.archived !== "boolean" || !Array.isArray(idea.keyPoints) || idea.keyPoints.length > 100) fail("想法包内容无效。");
-    const points = new Set(); for (const point of idea.keyPoints) { if (!exact(point, ["id", "text", "kind"]) || !ID.test(point.id) || points.has(point.id) || !string(point.text, 2000) || !point.text.trim() || !["suggestion", "decision"].includes(point.kind)) fail("长期要点无效。"); points.add(point.id); }
+    const points = new Set(); for (const point of idea.keyPoints) { if (!exact(point, ["id", "text", "kind"]) || !ID.test(point.id) || points.has(point.id) || !string(point.text, 20000) || !point.text.trim() || !["suggestion", "decision"].includes(point.kind)) fail("长期要点无效。"); points.add(point.id); }
     if (!Array.isArray(value.images) || value.images.length > 4) fail("每条想法最多带四张图片。");
     let total = 0; const images = new Set();
     for (const item of value.images) { if (!exact(item, ["id", "name", "mimeType", "size", "sha256"]) || !ID.test(item.id) || images.has(item.id) || !string(item.name, 160) || !item.name || item.name !== item.name.trim() || [".", ".."].includes(item.name) || /[\\/\u0000-\u001f\u007f]/.test(item.name) || !mimeTypes.has(item.mimeType) || !positive(item.size) || item.size > 8 * 1024 * 1024 || !HASH.test(item.sha256)) fail("图片来源、大小或校验值无效。"); total += item.size; images.add(item.id); }

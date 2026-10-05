@@ -312,7 +312,7 @@ class MobileHandoffChecks(unittest.TestCase):
         manifest["source"]["revision"] = True
         cases.append(manifest)
         manifest = copy.deepcopy(self.manifest)
-        manifest["idea"]["keyPoints"][0]["text"] = "x" * 2001
+        manifest["idea"]["keyPoints"][0]["text"] = "x" * 20001
         cases.append(manifest)
         for manifest in cases:
             with self.subTest(manifest=manifest):
@@ -322,6 +322,46 @@ class MobileHandoffChecks(unittest.TestCase):
         fields["text"] = '{"format":"one","format":"two"}'
         self.reject(lambda: self.import_idea(fields))
         self.assertEqual(previous, self.state())
+
+    def test_full_legal_long_points_and_unicode_remain_exact_after_import(self):
+        for text in ("x" * 20000, "😀" * 19000):
+            manifest = json.loads(json.dumps(self.manifest))
+            manifest["source"]["ideaId"] = uuid.uuid4().hex
+            manifest["idea"]["keyPoints"][0]["text"] = text
+            result = self.import_idea(self.fields(manifest))
+            self.assertEqual(result["idea"]["keyPoints"][0]["text"], text)
+            self.assertEqual(result["idea"]["keyPoints"][0]["kind"], "suggestion")
+            self.assertEqual(result["idea"]["keyPoints"][1]["kind"], "decision")
+            self.assertEqual(result["idea"]["provenance"][-1]["kind"], "phone_imported")
+        previous = self.state()
+        manifest["source"]["ideaId"] = uuid.uuid4().hex
+        # 20,000 four-byte codepoints fit the individual contract, but JSON
+        # framing makes their portable manifest exceed the unchanged byte cap.
+        manifest["idea"]["keyPoints"][0]["text"] = "😀" * 20000
+        self.assertGreater(len(self.fields(manifest)["text"].encode("utf-8")), 80000)
+        self.reject(lambda: self.import_idea(self.fields(manifest)))
+        self.assertEqual(previous, self.state())
+
+    def test_mixed_full_points_preserve_exact_eighty_thousand_manifest_byte_boundary(self):
+        manifest = json.loads(json.dumps(self.manifest))
+        manifest["idea"]["keyPoints"] = [{"id": uuid.uuid4().hex, "text": "x" * 20000,
+            "kind": "decision" if index == 0 else "suggestion"} for index in range(3)]
+        manifest["idea"]["body"] = ""
+        manifest["idea"]["executionDraft"] = "d" * 10000
+        remaining = 80000 - len(self.fields(manifest)["text"].encode("utf-8"))
+        self.assertTrue(0 < remaining <= 20000)
+        manifest["idea"]["body"] = "b" * remaining
+        fields = self.fields(manifest)
+        self.assertEqual(len(fields["text"].encode("utf-8")), 80000)
+        imported = self.import_idea(fields)
+        self.assertEqual([{key: point[key] for key in ("id", "text", "kind")} for point in imported["idea"]["keyPoints"]], manifest["idea"]["keyPoints"])
+        previous = self.state()
+        manifest["source"]["ideaId"] = uuid.uuid4().hex
+        manifest["idea"]["body"] += "b"
+        fields = self.fields(manifest)
+        self.assertEqual(len(fields["text"].encode("utf-8")), 80001)
+        self.reject(lambda: self.import_idea(fields))
+        self.assertEqual(self.state(), previous)
 
     def test_manifest_utf8_bytes_bound_and_file_count_or_size_are_checked(self):
         previous = self.state()

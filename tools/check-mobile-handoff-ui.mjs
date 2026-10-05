@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Isolated same-store and message-boundary behavior. No LAN or App sends.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { randomUUID, webcrypto } from "node:crypto";
 const source = readFileSync(new URL("../mobile-handoff.js", import.meta.url), "utf8"), localSource = readFileSync(new URL("../phone/dialogue-local.js", import.meta.url), "utf8");
@@ -98,5 +100,36 @@ await test("delayed frozen source verification navigates only after it is ready 
 await test("receiver status lookup is a read-only JSON route and found false never imports", async () => {
   const h = local(); await h.ready; const exported = await h.local.buildExport(h.ideaId, 1), nonce = randomUUID(), calls = [], replies = [], opener = { postMessage(message) { replies.push(message); } }, lan = surface(`http://192.168.1.20/mobile.html?ideaHandoff=${nonce}`, { crypto: { getRandomValues: crypto.getRandomValues }, async fetch(url, config) { calls.push({ url, config }); return { ok: true, json: async () => ({ requestId: exported.requestId, found: false, source: exported.source, sourceHash: "b".repeat(64), revision: "1" }) }; } }); lan.window.opener = opener;
   const receiver = lan.api.createReceiver({ isPaired: () => true }); receiver.activate(); lan.message({ source: opener, origin: "https://tx74666.github.io", data: { protocol: replies[0].protocol, nonce, challenge: replies[0].challenge, type: "status", requestId: exported.requestId, text: exported.text } }); await until(() => replies.at(-1)?.type === "not_found" && !receiver.isBusy(), "read-only lookup absence receipt"); assert.equal(calls.length, 1); assert.equal(calls[0].url, "/api/phone/workflow/mobile/idea/import-status"); assert.deepEqual(JSON.parse(calls[0].config.body), { requestId: exported.requestId, text: exported.text }); assert.equal(replies.at(-1).type, "not_found"); assert.equal(calls.filter(item => item.url.endsWith("/import")).length, 0);
+});
+await test("legal 20k points export intact and actual Python import agrees with unchanged Unicode and 80k byte limits", async () => {
+  const h = local(); await h.ready; const stored = h.stores.records.get("incubator"); stored.mobile.metadata[h.ideaId].keyPoints[0].text = "p".repeat(20000);
+  const exported = await h.local.buildExport(h.ideaId, 1); assert.equal(h.api.decode(exported.text).idea.keyPoints[0].text, "p".repeat(20000));
+  const base = JSON.parse(exported.text); base.images = []; const make = point => { const value = structuredClone(base); value.source.ideaId = randomUUID().replaceAll("-", ""); value.idea.keyPoints[0].text = point; return value; };
+  const exact = make("p".repeat(20000)); exact.idea.body = ""; exact.idea.executionDraft = "d".repeat(10000); exact.idea.keyPoints = Array.from({ length: 3 }, (_, index) => ({ id: randomUUID().replaceAll("-", ""), text: "p".repeat(20000), kind: index ? "suggestion" : "decision" }));
+  const padding = 80000 - new TextEncoder().encode(JSON.stringify(exact)).length; assert.ok(padding > 0 && padding <= 20000); exact.idea.body = "b".repeat(padding); const oneOver = structuredClone(exact); oneOver.idea.body += "b";
+  const cases = [make("p".repeat(20000)), make("😀".repeat(19000)), make("p".repeat(20001)), make("😀".repeat(20000)), make("😀".repeat(20001)), exact, oneOver].map(value => ({ requestId: randomUUID(), text: JSON.stringify(value) }));
+  const accepted = [true, true, false, false, false, true, false]; assert.equal(new TextEncoder().encode(cases[5].text).length, 80000); assert.equal(new TextEncoder().encode(cases[6].text).length, 80001);
+  for (const [index, item] of cases.entries()) { if (accepted[index]) assert.deepEqual(JSON.parse(JSON.stringify(h.api.decode(item.text).idea.keyPoints)), JSON.parse(item.text).idea.keyPoints); else assert.throws(() => h.api.decode(item.text)); }
+  const python = process.env.CONSOLE_TEST_PYTHON || (existsSync("D:/Codex/.tools/console-build-py312/Scripts/python.exe") ? "D:/Codex/.tools/console-build-py312/Scripts/python.exe" : "python");
+  const program = `import hashlib,json,sys,tempfile\nfrom pathlib import Path\nfrom workflow_service import WorkflowService,WorkflowError\nresults=[]\nwith tempfile.TemporaryDirectory(prefix='console-handoff-codec-cross-') as folder:\n for index,fields in enumerate(json.load(sys.stdin)):\n  service=WorkflowService(Path(folder)/str(index),recover_jobs=False,projects=[{'id':'test','name':'Isolated fixture','root':folder,'capabilities':[]}])\n  try:\n   result=service.mobile_idea_import(fields,[])\n   points=result['idea']['keyPoints']\n   with service._db() as db:\n    assert db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]==0\n    assert db.execute('SELECT COUNT(*) FROM idea_dispatches').fetchone()[0]==0\n   results.append({'accepted':True,'points':[{'sha256':hashlib.sha256(point['text'].encode()).hexdigest(),'kind':point['kind'],'length':len(point['text'])} for point in points]})\n  except WorkflowError as error:\n   results.append({'accepted':False,'status':error.status,'error':str(error)})\nprint(json.dumps(results))\n`;
+  const child = spawnSync(python, ["-X", "utf8", "-B", "-c", program], { cwd: fileURLToPath(new URL("..", import.meta.url)), input: JSON.stringify(cases), encoding: "utf8", maxBuffer: 1024 * 1024 }); assert.equal(child.status, 0, child.stderr);
+  const actual = JSON.parse(child.stdout); assert.deepEqual(actual.map(item => item.accepted), accepted, JSON.stringify(actual));
+  for (const [index, item] of actual.entries()) if (item.accepted) { const points = JSON.parse(cases[index].text).idea.keyPoints; for (const [offset, point] of points.entries()) { assert.equal(item.points[offset].sha256, await h.api.digest(new Blob([point.text]))); assert.equal(item.points[offset].kind, point.kind); assert.equal(item.points[offset].length, Array.from(point.text).length); } }
+});
+await test("a Unicode automatic title from actual local save packs and imports without losing the original body", async () => {
+  const h = local(); await h.ready; const cases = [];
+  for (const amount of [40, 90]) {
+    const clientId = randomUUID(), opened = await h.local.endpoint("mobile/dialogue/open", { requestId: randomUUID(), clientId });
+    const body = "A" + "😀".repeat(amount) + "\n完整原正文保留", expectedTitle = "A" + "😀".repeat(Math.min(amount, 79));
+    const saved = await h.local.endpoint("mobile/dialogue/save", { requestId: randomUUID(), clientId, sessionId: opened.session.id, expectedRevision: opened.session.revision, text: body, attachmentIds: [], requestedProfile: "high" });
+    assert.equal(saved.idea.title, expectedTitle); assert.equal(Array.from(saved.idea.title).length, Math.min(amount + 1, 80)); assert.equal(saved.idea.body, body); assert.equal(saved.idea.provenance[0].sessionId, opened.session.id);
+    const exported = await h.local.buildExport(saved.idea.id, saved.idea.revision), packed = await h.api.encodePack(exported), decoded = await h.api.decodePack(packed);
+    assert.equal(decoded.text, exported.text); assert.equal(h.api.decode(decoded.text).idea.title, expectedTitle); assert.equal(h.api.decode(decoded.text).idea.body, body); assert.equal(decoded.files.length, 0);
+    cases.push({ requestId: decoded.requestId, text: decoded.text });
+  }
+  const python = process.env.CONSOLE_TEST_PYTHON || (existsSync("D:/Codex/.tools/console-build-py312/Scripts/python.exe") ? "D:/Codex/.tools/console-build-py312/Scripts/python.exe" : "python");
+  const program = `import json,sys,tempfile\nfrom pathlib import Path\nfrom workflow_service import WorkflowService\nresults=[]\nwith tempfile.TemporaryDirectory(prefix='console-local-title-import-') as folder:\n service=WorkflowService(Path(folder),recover_jobs=False,projects=[{'id':'test','name':'Isolated fixture','root':folder,'capabilities':[]}])\n for fields in json.load(sys.stdin):\n  actual=service.mobile_idea_import(fields,[])\n  results.append({'title':actual['idea']['title'],'body':actual['idea']['body'],'source':actual['imported']['source']})\n with service._db() as db:\n  assert db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]==0\n  assert db.execute('SELECT COUNT(*) FROM idea_dispatches').fetchone()[0]==0\nprint(json.dumps(results))\n`;
+  const child = spawnSync(python, ["-X", "utf8", "-B", "-c", program], { cwd: fileURLToPath(new URL("..", import.meta.url)), input: JSON.stringify(cases), encoding: "utf8", maxBuffer: 1024 * 1024 }); assert.equal(child.status, 0, child.stderr);
+  const actual = JSON.parse(child.stdout); assert.equal(actual.length, cases.length); actual.forEach((item, index) => { const frozen = JSON.parse(cases[index].text); assert.equal(item.title, frozen.idea.title); assert.equal(item.body, frozen.idea.body); assert.deepEqual(item.source, frozen.source); });
 });
 console.log(`${count} mobile handoff checks passed.`);

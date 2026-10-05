@@ -379,7 +379,7 @@ class NativeWorkMixin:
             return self._accept_app_work(body, prefix, reauthorize)
         except api.WorkflowError as error:
             # Only a known, rolled-back rejection can release the browser's pending outbox.
-            rejected = {"revision_conflict", "permission_changed", "work_not_authorized", "work_catalog_stale", "task_source_mismatch", "dispatch_in_progress", "idea_context_changed", "idea_context_too_long"}
+            rejected = {"revision_conflict", "permission_changed", "work_not_authorized", "work_catalog_stale", "task_source_mismatch", "dispatch_in_progress", "idea_context_changed", "idea_context_too_long", "work_images_too_large"}
             if not authority_failed and error.status != 401 and error.code in rejected and isinstance(body, dict):
                 try:
                     request_id = str(uuid.UUID(body.get("requestId", "")))
@@ -415,6 +415,7 @@ class NativeWorkMixin:
                 project = self._project(db, body.get("projectId", record["project_id"]))
                 context = self._context(db, record["id"], body.get("context", json.loads(record["context"])))
                 context.setdefault("attachmentIds", [record["primary_attachment_id"]] if record["primary_attachment_id"] else [])
+                context["attachmentIds"] = list(dict.fromkeys(context["attachmentIds"]))
                 if context.get("referenceIds"):
                     raise api.WorkflowError("Native Work 请使用明确选定的原消息与图片。")
                 source_text = ""
@@ -455,6 +456,8 @@ class NativeWorkMixin:
                     "executionEngine": "codex_app", "action": "native_work", "sourceTask": source_task, "updateTaskBody": update_body,
                     "appTarget": {"kind": "codex", "mode": target["mode"], "threadId": thread_id, "name": name}}
                 payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, project)
+                if sum(image["originalSize"] for image in payload["appFrozen"]["images"]) > api.MAX_UPLOAD:
+                    raise api.WorkflowError("本轮所选原图总大小超过 24 MB；图片与执行稿保留，Work 未入队。", 413, "work_images_too_large")
                 if idea_context is not None:
                     if (sum(len(point["text"]) for point in idea_context["keyPoints"])
                             + len(idea_context["savedExecutionDraft"]["text"])

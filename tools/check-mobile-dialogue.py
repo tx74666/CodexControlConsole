@@ -628,6 +628,67 @@ class MobileDialogueChecks(unittest.TestCase):
         self.assertEqual(first["idea"]["body"], "原想法\n\n新增结论")
         self.assertEqual(len(second["idea"]["keyPoints"]), 1)
 
+    def test_saved_long_answer_and_maximum_unicode_point_can_merge_and_review_work_in_full(self):
+        text = "已完成回答" * 501
+        sent = self.mutate("send", self.open())
+        answer = self.answer(sent, text)
+        remembered = self.mutate("remember", self.current(), sourceMessageId=answer["id"])
+        self.assertTrue(remembered["keyPointAdded"])
+        idea = remembered["idea"]
+        other = self.save_idea("另一份保持不变的正文")
+        merged = self.post("idea/merge", request(firstId=idea["id"], firstRevision=idea["revision"],
+            secondId=other["id"], secondRevision=other["revision"], title="完整长回答合并"))["idea"]
+        self.assertEqual(merged["keyPoints"][0]["text"], text)
+        self.assertEqual(merged["body"], text + "\n\n" + other["body"])
+        self.assertEqual(merged["keyPoints"][0]["kind"], "suggestion")
+        long_point = "😀" * 20000
+        changed = self.post("idea/update", request(id=merged["id"], expectedRevision=merged["revision"],
+            executionDraft="真正交付前的保存稿", keyPoints=[{"id": merged["keyPoints"][0]["id"],
+                "text": long_point, "kind": "suggestion"}]))["idea"]
+        reviewed = workflow_get(self.service, "app-work-review", "recordId=" + changed["workflowRecordId"]
+            + "&ideaId=" + changed["id"] + "&revision=" + str(changed["revision"]))
+        self.assertEqual(reviewed["ideaContext"]["keyPoints"][0]["text"], long_point)
+        self.assertEqual(reviewed["ideaContext"]["savedExecutionDraft"]["text"], changed["executionDraft"])
+        second_merge = self.post("idea/merge", request(firstId=changed["id"], firstRevision=changed["revision"],
+            secondId=other["id"], secondRevision=other["revision"], title="Unicode要点完整保留"))["idea"]
+        self.assertEqual(second_merge["keyPoints"][0]["text"], long_point)
+        before = self.db_snapshot()
+        self.error(lambda: self.post("idea/update", request(id=changed["id"], expectedRevision=changed["revision"],
+            keyPoints=[{"id": changed["keyPoints"][0]["id"], "text": long_point + "😀", "kind": "suggestion"}])))
+        self.assertEqual(self.db_snapshot(), before)
+        self.assertEqual(self.counts()["idea_dispatches"], 1, "saving, merging and reviewing never dispatches another request")
+
+    def test_remember_at_one_hundred_points_keeps_full_answer_origin_and_persistent_omission_receipt(self):
+        saved = self.mutate("save", self.open(), text="原想法")
+        points = [{"id": uuid.uuid4().hex, "text": "完整要点" + str(index),
+            "kind": "decision" if index == 0 else "suggestion"} for index in range(100)]
+        idea = self.post("idea/update", request(id=saved["idea"]["id"], expectedRevision=saved["idea"]["revision"],
+            keyPoints=points))["idea"]
+        state = self.open(ideaId=idea["id"], expectedIdeaRevision=idea["revision"])
+        sent = self.mutate("send", state, text="这一条明确确认的讨论")
+        text = "新的完整回答与来源仍需保存" * 180
+        answer = self.answer(sent, text)
+        session = self.current()["session"]
+        body = request(clientId=self.client, sessionId=session["id"], expectedRevision=session["revision"],
+            sourceMessageId=answer["id"], ideaId=idea["id"], expectedIdeaRevision=idea["revision"])
+        first = self.post("dialogue/remember", body)
+        duplicate = self.post("dialogue/remember", body)
+        for result in (first, duplicate):
+            self.assertFalse(result["keyPointAdded"])
+            self.assertEqual(result["keyPointOmittedReason"], "point_limit")
+            self.assertEqual(result["idea"]["body"], idea["body"] + "\n\n" + text)
+            self.assertEqual([{key: point[key] for key in ("id", "text", "kind")} for point in result["idea"]["keyPoints"]], points)
+            self.assertEqual(result["idea"]["provenance"][-1]["sourceMessageId"], answer["id"])
+            self.assertEqual(result["idea"]["provenance"][-1]["sourceJobId"], sent["job"]["id"])
+        self.assertTrue(duplicate["duplicate"])
+        review = workflow_get(self.service, "app-work-review", "recordId=" + idea["workflowRecordId"]
+            + "&ideaId=" + idea["id"] + "&revision=" + str(first["idea"]["revision"]))
+        self.assertEqual(review["ideaContext"]["keyPoints"], points)
+        with self.service._db() as db:
+            receipt = json.loads(db.execute("SELECT response FROM requests WHERE id=?", (body["requestId"],)).fetchone()[0])
+        self.assertFalse(receipt["keyPointAdded"])
+        self.assertEqual(receipt["keyPointOmittedReason"], "point_limit")
+
     def test_user_message_is_not_a_completed_answer(self):
         sent = self.mutate("send", self.open())
         message = sent["detail"]["messages"][0]

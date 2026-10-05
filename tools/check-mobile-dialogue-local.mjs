@@ -161,4 +161,15 @@ assert.ok(media.get(`dialogue-image:${acceptedId}`)?.blob, "a concurrent duplica
 const raceRetry = await api.uploadAttachments([image], racing.session, racingRequest);
 assert.equal(raceRetry.duplicate, true); assert.equal(raceRetry.attachments[0].id, acceptedId);
 assert.equal(records.get("incubator").receipts.old.signature, "preserved");
+const longClient = randomUUID(), longSession = await post("mobile/dialogue/open", { clientId: longClient });
+const longSaved = await post("mobile/dialogue/save", { clientId: longClient, sessionId: longSession.session.id, expectedRevision: longSession.session.revision, text: "长要点的原正文", attachmentIds: [] });
+const longPoint = "😀".repeat(20000), longPointId = "f".repeat(32);
+const longEdited = await post("mobile/idea/update", { id: longSaved.idea.id, expectedRevision: longSaved.idea.revision, executionDraft: longPoint, keyPoints: [{ id: longPointId, text: longPoint, kind: "suggestion" }] });
+assert.equal(longEdited.idea.keyPoints[0].text, longPoint); assert.equal(longEdited.idea.executionDraft, longPoint); assert.equal(Array.from(longPoint).length, 20000);
+const longSnapshot = clone(records.get("incubator"));
+await assert.rejects(() => post("mobile/idea/update", { id: longEdited.idea.id, expectedRevision: longEdited.idea.revision, keyPoints: [{ id: longPointId, text: longPoint + "😀", kind: "suggestion" }] }), /过长/);
+assert.deepEqual(records.get("incubator"), longSnapshot, "one extra Unicode codepoint must not replace the legal original or its receipt");
+const otherLongClient = randomUUID(), otherLongSession = await post("mobile/dialogue/open", { clientId: otherLongClient }), otherLongSaved = await post("mobile/dialogue/save", { clientId: otherLongClient, sessionId: otherLongSession.session.id, expectedRevision: otherLongSession.session.revision, text: "另一条新想法", attachmentIds: [] });
+const longMerged = await post("mobile/idea/merge", { firstId: longEdited.idea.id, firstRevision: longEdited.idea.revision, secondId: otherLongSaved.idea.id, secondRevision: otherLongSaved.idea.revision, title: "完整Unicode要点合并" });
+assert.equal(longMerged.idea.keyPoints[0].text, longPoint); assert.equal(longMerged.idea.keyPoints[0].kind, "suggestion"); assert.ok(longMerged.idea.executionDraft.startsWith(longPoint));
 console.log("Mobile local dialogue: drafts, clear isolation, explicit source-image reuse, immutable split/merge sources, nonce retries, Unicode ranges and original image bytes passed.");

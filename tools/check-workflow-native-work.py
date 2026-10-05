@@ -275,6 +275,7 @@ class NativeWorkChecks(unittest.TestCase):
             operation()
         if code:
             self.assertEqual(caught.exception.code, code)
+        return caught.exception
 
     def claim(self, body=None):
         accepted = self.service.app_work(body or self.body())
@@ -497,6 +498,48 @@ class NativeWorkChecks(unittest.TestCase):
         claim = self.service.incubator_claim(request())
         self.assertFalse(claim["shouldDispatch"])
         self.assertEqual(claim["dispatch"]["status"], "failed")
+
+    def selected_images(self, sizes):
+        ids = []
+        for size in sizes:
+            path = self.root / (uuid.uuid4().hex + ".png")
+            Image.new("RGB", (2, 2), "green").save(path, "PNG")
+            with path.open("ab") as stream:
+                stream.truncate(size)
+            uploaded = self.service.upload(request(recordId=self.record),
+                [IncomingFile(path, 0, path.stat().st_size, "actual.png", "image/png")])
+            ids.extend(uploaded["uploadedAttachmentIds"])
+        return ids
+
+    def test_work_exact_twenty_four_mib_uses_actual_original_sizes_and_deduplicates_ids(self):
+        ids = self.selected_images([8 * 1024 ** 2] * 3)
+        accepted = self.service.app_work(self.body(context={"attachmentIds": [ids[0], ids[0], ids[1], ids[2]]}))
+        with self.service._db() as db:
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone()[0])
+        self.assertEqual(payload["context"]["attachmentIds"], ids)
+        self.assertEqual([image["id"] for image in payload["appFrozen"]["images"]], ids)
+        self.assertEqual(sum(image["originalSize"] for image in payload["appFrozen"]["images"]), 24 * 1024 ** 2)
+        self.assertEqual(accepted["job"]["appDispatch"]["status"], "pending")
+
+    def test_work_actual_original_total_over_twenty_four_mib_rejects_without_any_queue_or_data_change(self):
+        ids = self.selected_images([8 * 1024 ** 2, 8 * 1024 ** 2, 8 * 1024 ** 2 + 1])
+        # A stale or false DTO size cannot substitute for the original file bytes.
+        with self.service._db() as db:
+            db.execute("UPDATE attachments SET size=1 WHERE record_id=?", (self.record,))
+        detail = self.service.detail(self.record)
+        with self.service._db() as db:
+            before = {table: [tuple(row) for row in db.execute("SELECT * FROM " + table + " ORDER BY rowid")]
+                for table in ("settings", "requests", "records", "messages", "attachments", "ideas", "jobs", "idea_dispatches")}
+        result = self.error(lambda: self.service.app_work(self.body(context={"attachmentIds": ids})))
+        self.assertEqual(result.code, "work_images_too_large")
+        self.assertEqual(result.status, 413)
+        self.assertIs(result.queueAccepted, False)
+        self.assertEqual(self.service.detail(self.record), detail)
+        with self.service._db() as db:
+            after = {table: [tuple(row) for row in db.execute("SELECT * FROM " + table + " ORDER BY rowid")]
+                for table in before}
+        self.assertEqual(after, before)
+        self.assert_empty_queue()
 
     def test_completed_retry_same_uuid_does_not_repeat_body_revision_or_result(self):
         accepted, dispatch = self.claim(self.body(updateTaskBody=True))

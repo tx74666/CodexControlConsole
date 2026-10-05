@@ -77,7 +77,7 @@ def _manifest(text):
     for point in points:
         _object(point, {"id", "text", "kind"})
         identifier = api._id(point["id"])
-        if identifier in seen or not api._text(point["text"], 2000).strip():
+        if identifier in seen or not api._text(point["text"]).strip():
             raise api.WorkflowError("手机想法要点为空或重复。")
         if not isinstance(point["kind"], str) or point["kind"] not in {"suggestion", "decision"}:
             raise api.WorkflowError("请区分建议和已保存决定。")

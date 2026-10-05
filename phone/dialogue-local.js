@@ -5,7 +5,7 @@
   const ID = /^[a-f0-9]{32}$/;
   const profiles = new Set(["fast", "high", "pro"]);
   const error = (message, status = 400, code = "invalid_request") => Object.assign(new Error(message), { status, code });
-  const text = (value, limit = 20000) => { if (typeof value !== "string" || value.length > limit || value.includes("\0")) throw error("文字内容无效或过长。"); return value; };
+  const text = (value, limit = 20000) => { if (typeof value !== "string" || Array.from(value).length > limit || value.includes("\0")) throw error("文字内容无效或过长。"); return value; };
   const stamp = () => new Date().toISOString();
   const nextId = () => crypto.randomUUID().replaceAll("-", "");
   const signature = value => JSON.stringify(Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])));
@@ -117,7 +117,7 @@
     const points = [], seen = new Set();
     if (route.endsWith("merge")) for (const source of sources) for (const point of source.keyPoints || []) {
       const key = JSON.stringify([point.text, point.kind]); if (seen.has(key)) continue; seen.add(key);
-      points.push({ id: nextId(), text: point.text, kind: point.kind, source: { sourceIdeaId: source.id, sourceIdeaRevision: source.revision, sourcePointId: point.id } });
+      points.push({ id: nextId(), text: text(point.text), kind: point.kind, source: { sourceIdeaId: source.id, sourceIdeaRevision: source.revision, sourcePointId: point.id } });
     }
     if (points.length > 100) throw error("合并后的长期要点超过 100 条，原内容仍保留。", 413);
     const eligible = new Set(sources.flatMap(source => source.attachmentIds || []));
@@ -219,7 +219,7 @@
             const existing = session.ideaId ? value.ideas.find(item => item.id === session.ideaId) : null;
             if (session.ideaId && (!existing || existing.revision !== session.ideaRevision)) throw error("想法已修改，请刷新后合并。", 409, "revision_conflict");
             if (!existing && value.ideas.length >= 1000) throw error("此手机保存的想法较多，请先导出备份。", 409);
-            const idea = existing || { id: ideaId, title: content.trim().split(/\r?\n/)[0].slice(0, 80) || mediaProof[0]?.name || "图片想法", body: content, stage: "vague", priority: "normal", parentId: null, targetKind: "none", targetThreadId: "", targetName: "", revision: 1, createdAt: now, updatedAt: now };
+            const idea = existing || { id: ideaId, title: Array.from(content.trim().split(/\r?\n/)[0]).slice(0, 80).join("") || mediaProof[0]?.name || "图片想法", body: content, stage: "vague", priority: "normal", parentId: null, targetKind: "none", targetThreadId: "", targetName: "", revision: 1, createdAt: now, updatedAt: now };
             if (existing) { idea.body = text(idea.body + (content && idea.body ? "\n\n" : "") + content); idea.revision++; idea.updatedAt = now; session.ideaRevision = idea.revision; }
             else { value.ideas.unshift(idea); value.mobile.metadata[ideaId] = { projectId: null, archived: false, keyPoints: [], executionDraft: "", provenance: [] }; }
             const metadata = value.mobile.metadata[idea.id] ||= { projectId: null, archived: false, keyPoints: [], executionDraft: "", provenance: [] };
@@ -250,7 +250,7 @@
           if (body.executionDraft !== undefined) metadata.executionDraft = text(body.executionDraft);
           if (body.keyPoints !== undefined) {
             if (!Array.isArray(body.keyPoints) || body.keyPoints.length > 100) throw error("长期要点无效。");
-            const seen = new Set(); metadata.keyPoints = body.keyPoints.map(item => { if (!ID.test(item.id || "") || seen.has(item.id) || !["suggestion", "decision"].includes(item.kind)) throw error("长期要点身份或类型无效。"); seen.add(item.id); return { id: item.id, text: text(item.text, 2000), kind: item.kind }; });
+            const seen = new Set(); metadata.keyPoints = body.keyPoints.map(item => { if (!ID.test(item.id || "") || seen.has(item.id) || !["suggestion", "decision"].includes(item.kind)) throw error("长期要点身份或类型无效。"); seen.add(item.id); return { id: item.id, text: text(item.text), kind: item.kind }; });
           }
         }
         value.mobile.metadata[idea.id] = { projectId: null, archived: metadata.archived, keyPoints: metadata.keyPoints, executionDraft: metadata.executionDraft, attachmentIds: metadata.attachmentIds, provenance: metadata.provenance };

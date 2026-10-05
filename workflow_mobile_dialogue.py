@@ -541,9 +541,11 @@ class MobileDialogueMixin:
         meta = self._mobile_metadata(db, idea_id)
         value = {**value, "id": uuid.uuid4().hex, "createdAt": _api()._now(), "destinationRevision": self._idea(db, idea_id)["revision"]}
         meta["provenance"].append(value)
-        if point:
+        point_added = bool(point) and len(meta["keyPoints"]) < 100
+        if point_added:
             meta["keyPoints"].append({"id": uuid.uuid4().hex, "text": point, "kind": "suggestion", "source": value})
         self._set_setting(db, "mobile-idea:" + idea_id, meta)
+        return point_added
 
     def mobile_dialogue_remember(self, body, prefix="/api/workflow", authorize=None):
         api = _api()
@@ -575,19 +577,22 @@ class MobileDialogueMixin:
                 payload = json.loads(jobs[0]["payload"])
                 source = payload.get("sourceTask") or {}
                 dialogue = payload.get("mobileDialogue") or {}
-                self._mobile_add_provenance(db, idea["id"], {"kind": "assistant_suggestion", "sourceSessionId": dialogue.get("id", session["id"]),
+                point_added = self._mobile_add_provenance(db, idea["id"], {"kind": "assistant_suggestion", "sourceSessionId": dialogue.get("id", session["id"]),
                     "sourceSessionRevision": dialogue.get("revision", session["revision"]), "sourceRecordId": session["recordId"],
                     "sourceMessageId": message["id"], "sourceJobId": jobs[0]["id"], "sourceIdeaId": source.get("ideaId"), "sourceIdeaRevision": source.get("revision")}, message["text"])
                 if session["ideaId"] == idea["id"]:
                     session["ideaRevision"] = idea["revision"]
                 self._mobile_save_session(db, session)
-                saved = {"sessionId": session["id"], "ideaId": idea["id"]}
+                saved = {"sessionId": session["id"], "ideaId": idea["id"], "keyPointAdded": point_added}
+                if not point_added:
+                    saved["keyPointOmittedReason"] = "point_limit"
                 self._receipt(db, "mobile_dialogue_remember", body, saved)
                 self._revision(db, True)
             if authorize:
                 authorize()
             idea = self._mobile_idea(db, self._idea(db, saved["ideaId"]))
-        return self._mobile_state(client_id, prefix, saved["sessionId"], idea=idea, duplicate=old is not None)
+        return self._mobile_state(client_id, prefix, saved["sessionId"], idea=idea, duplicate=old is not None,
+            **{key: saved[key] for key in ("keyPointAdded", "keyPointOmittedReason") if key in saved})
 
     def mobile_ideas(self, query="", prefix="/api/workflow"):
         params = _query(query, {"search", "projectId", "archived"})
@@ -624,7 +629,7 @@ class MobileDialogueMixin:
         points, seen = [], {}
         for source in sources:
             for point in source["metadata"].get("keyPoints", []):
-                text = api._text(point.get("text"), 2000)
+                text = api._text(point.get("text"))
                 kind = point.get("kind")
                 if not text.strip() or kind not in {"decision", "suggestion"}:
                     raise api.WorkflowError("原要点无法核对，请先编辑原想法。")
