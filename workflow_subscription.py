@@ -18,6 +18,7 @@ import queue
 import re
 import secrets
 import ssl
+import stat
 import tempfile
 import threading
 import time
@@ -47,6 +48,9 @@ CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 MAX_IMAGE = 8 * 1024 * 1024
 MAX_IMAGES = 24 * 1024 * 1024
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+# Stable across all instances. Keep the mutex range far beyond bounded backup
+# read requests (including BufferedReader readahead); the file itself stays 1 B.
+WINDOWS_LOCK_OFFSET = 2**31 - 1
 
 
 def _error(code, message="订阅通道尚未准备好；内容保留，未自动重发。", status=409):
@@ -73,6 +77,32 @@ def _atomic(path, data):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def _reject_reparse(path):
+    """Check lexical ancestors before following or creating any descendant."""
+    absolute = path.absolute()
+    for node in (absolute, *absolute.parents):
+        try:
+            information = node.lstat()
+        except FileNotFoundError:
+            continue
+        if (stat.S_ISLNK(information.st_mode)
+                or getattr(information, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)):
+            raise _error("subscription_store_path_invalid")
+
+
+def _canonical_store_directory(path):
+    absolute = path.absolute()
+    _reject_reparse(absolute)
+    absolute.mkdir(parents=True, exist_ok=True)
+    canonical = absolute.resolve(strict=True)
+    _reject_reparse(canonical)
+    # GetFinalPathNameByHandle expands legitimate Windows 8.3 names. File
+    # identity, after rejecting every reparse ancestor, validates that alias.
+    if not absolute.samefile(canonical) or (os.name != "nt" and canonical != absolute):
+        raise _error("subscription_store_path_invalid")
+    return canonical
 
 
 def _protect(data, decrypt=False):
@@ -310,24 +340,32 @@ class WorkflowSubscription:
                 return
             self._initialized = True
             try:
-                self.directory.mkdir(parents=True, exist_ok=True)
-                if self.directory.resolve() != self.directory.absolute():
-                    raise _error("subscription_store_path_invalid")
+                self.directory = _canonical_store_directory(self.directory)
+                self._registry_path = self.directory / "registration.json"
+                self._credential_path = self.directory / "connection.dpapi"
+                self._hint_path = self.directory / "identity-hint.dpapi"
                 for name in ("registration.json", "connection.dpapi", "identity-hint.dpapi", "connection.lock"):
-                    if (self.directory / name).resolve().parent != self.directory.resolve():
+                    path = self.directory / name
+                    _reject_reparse(path)
+                    if path.resolve().parent != self.directory:
                         raise _error("subscription_store_path_invalid")
                 self._process_file = open(self.directory / "connection.lock", "a+b")
-                self._process_file.seek(0, os.SEEK_END)
-                if not self._process_file.tell():
-                    self._process_file.write(b"0")
-                    self._process_file.flush()
-                self._process_file.seek(0)
                 if os.name == "nt":
                     import msvcrt
+                    self._process_file.seek(WINDOWS_LOCK_OFFSET)
                     msvcrt.locking(self._process_file.fileno(), msvcrt.LK_NBLCK, 1)
                 else:
                     import fcntl
                     fcntl.flock(self._process_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # Initialize only after acquiring ownership, so concurrent first
+                # starts cannot both append a marker or enlarge the file.
+                self._process_file.seek(0, os.SEEK_END)
+                length = self._process_file.tell()
+                if not length:
+                    self._process_file.write(b"0")
+                    self._process_file.flush()
+                elif length != 1:
+                    raise _error("subscription_lock_file_invalid")
                 self._load()
                 self._store_available = True
             except Exception as error:
@@ -603,6 +641,15 @@ class WorkflowSubscription:
         if not connection.get("refreshToken"):
             self._status = "reauth_required"
             raise _error("subscription_reauth_required")
+        blocked = {**connection, "refreshBlocked": True}
+        try:
+            # Rotation reservation must survive a crash after the remote POST,
+            # including a crash before the new credential can be saved.
+            self._save_connection(blocked)
+        except Exception:
+            self._connection = blocked
+            self._status, self._last_error = "reauth_required", "subscription_refresh_reservation_failed"
+            raise _error(self._last_error) from None
         try:
             tokens = self._request(TOKEN, form={"grant_type": "refresh_token", "client_id": connection["clientId"],
                 "refresh_token": connection["refreshToken"], "resource": RESOURCE})
@@ -622,14 +669,16 @@ class WorkflowSubscription:
             if getattr(error, "remote_status", None) in {429, 500, 502, 503, 504} and _code(error) != "invalid_grant":
                 # A definite temporary HTTP refusal preserves the still-saved credential.
                 # Only a later explicit catalog refresh/new confirmation can try again.
-                self._status, self._last_error = "refresh_failed", _code(error)
+                try:
+                    self._save_connection(connection)
+                except Exception:
+                    self._connection = blocked
+                    self._status, self._last_error = "reauth_required", "subscription_refresh_restore_failed"
+                else:
+                    self._status, self._last_error = "refresh_failed", _code(error)
                 raise _error(self._last_error) from None
             # An ambiguous rotation is never retried with the old refresh token.
-            blocked = {**connection, "refreshBlocked": True}
-            try:
-                self._save_connection(blocked)
-            except Exception:
-                self._connection = blocked
+            self._connection = blocked
             self._status, self._last_error = "reauth_required", _code(error, "subscription_refresh_unknown")
             raise _error(self._last_error) from None
 

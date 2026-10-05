@@ -1,12 +1,15 @@
 """Disposable OAuth/event worker fixtures. No provider requests or inference."""
 import base64
 import copy
+import ctypes
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
 import threading
 import time
 from types import SimpleNamespace
@@ -216,6 +219,106 @@ class SubscriptionChecks(unittest.TestCase):
         finally:
             other.close()
 
+    @unittest.skipUnless(os.name == "nt", "Native Windows 8.3 path identity")
+    def test_windows_short_alias_canonicalizes_same_directory_without_reparse(self):
+        long_parent = self.directory / "Console subscription long directory name"
+        long_parent.mkdir()
+        long_parent = long_parent.resolve()
+        function = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+        function.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_ulong]
+        function.restype = ctypes.c_ulong
+        length = function(str(long_parent), None, 0)
+        self.assertGreater(length, 0)
+        buffer = ctypes.create_unicode_buffer(length)
+        self.assertGreater(function(str(long_parent), buffer, length), 0)
+        short = Path(buffer.value)
+        if short.absolute() == long_parent:
+            self.skipTest("This NTFS temp path has no distinct on-disk 8.3 alias")
+        self.assertTrue(short.samefile(long_parent))
+        other = api.SubscriptionBroker(self.service, short / "auth", request_json=self.remote, protect=protect_fixture)
+        try:
+            other.start()
+            self.assertTrue(other._store_available, other.get_status()["error"])
+            self.assertEqual(other.directory, long_parent / "auth")
+            self.assertEqual(other._registry_path.parent, long_parent / "auth")
+            self.assertEqual(self.remote.calls, [])
+        finally:
+            other.close()
+
+    @unittest.skipUnless(os.name == "nt", "Native Windows junction ancestors")
+    def test_windows_ancestor_junction_rejected_before_creating_store(self):
+        target, junction = self.directory / "real-target", self.directory / "junction-ancestor"
+        target.mkdir()
+        result = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(target)],
+                                capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(junction.is_junction())
+        other = api.SubscriptionBroker(self.service, junction / "must-not-create", request_json=self.remote, protect=protect_fixture)
+        try:
+            other.start()
+            self.assertFalse(other._store_available)
+            self.assertEqual(other.get_status()["error"], "subscription_store_path_invalid")
+            self.assertFalse((target / "must-not-create").exists())
+            self.assertEqual(self.remote.calls, [])
+        finally:
+            other.close()
+            junction.rmdir()  # Removes this isolated junction only; never recurse into its target.
+
+    def test_every_store_file_reparse_attribute_rejected_before_open(self):
+        original = Path.lstat
+        for index, name in enumerate(("registration.json", "connection.dpapi", "identity-hint.dpapi", "connection.lock")):
+            directory = self.directory / ("reparse-case-" + str(index))
+            directory.mkdir()
+            file = directory / name
+            file.write_bytes(b"owned-fixture-sentinel")
+            def information(path, *args, file=file, **kwargs):
+                value = original(path, *args, **kwargs)
+                if path == file:
+                    return SimpleNamespace(st_mode=value.st_mode, st_file_attributes=0x400)
+                return value
+            other = api.SubscriptionBroker(self.service, directory, request_json=self.remote, protect=protect_fixture)
+            try:
+                with patch.object(Path, "lstat", information):
+                    other.start()
+                self.assertFalse(other._store_available)
+                self.assertEqual(other.get_status()["error"], "subscription_store_path_invalid")
+                self.assertEqual(file.read_bytes(), b"owned-fixture-sentinel")
+            finally:
+                other.close()
+        self.assertEqual(self.remote.calls, [])
+
+    @unittest.skipUnless(os.name == "nt", "Native Windows mandatory file range lock")
+    def test_windows_eof_mutex_blocks_second_broker_but_backup_reads_and_hashes(self):
+        self.broker.start()
+        file = self.broker.directory / "connection.lock"
+        with file.open("rb") as independent:
+            self.assertEqual(independent.read(16), b"0")
+        self.assertEqual(file.read_bytes(), b"0")
+        self.assertEqual(hashlib.sha256(file.read_bytes()).hexdigest(), hashlib.sha256(b"0").hexdigest())
+        digest = hashlib.sha256()
+        with file.open("rb") as independent:
+            for block in iter(lambda: independent.read(128 * 1024), b""):
+                digest.update(block)
+        self.assertEqual(digest.hexdigest(), hashlib.sha256(b"0").hexdigest())
+        self.assertEqual(file.stat().st_size, 1)
+        second = api.SubscriptionBroker(self.service, self.broker.directory, request_json=self.remote, protect=protect_fixture)
+        try:
+            second.start()
+            self.assertFalse(second._store_available)
+            self.assertEqual(second.get_status()["status"], "store_unavailable")
+            self.assertEqual(file.read_bytes(), b"0")
+            self.assertEqual(self.remote.calls, [])
+        finally:
+            second.close()
+        self.broker.close()
+        third = api.SubscriptionBroker(self.service, self.broker.directory, request_json=self.remote, protect=protect_fixture)
+        try:
+            third.start()
+            self.assertTrue(third._store_available)
+            self.assertEqual(file.read_bytes(), b"0")
+        finally:
+            third.close()
+
     def test_pkce_scope_resource_and_issued_client_saved_before_exchange(self):
         self.remote.on_token = lambda _: self.assertEqual(
             json.loads(self.broker._registry_path.read_bytes())["clientId"], "issued-fixture-client")
@@ -372,6 +475,94 @@ class SubscriptionChecks(unittest.TestCase):
         self.assertTrue(stored["refreshBlocked"])
         self.assertEqual(stored["refreshToken"], "fixture-refresh-A")
         self.assertNotIn("fixture-refresh-A", json.dumps(self.broker.get_status()))
+
+    def stored_connection(self):
+        return json.loads(protect_fixture(self.broker._credential_path.read_bytes()[len(api.PROTECTED_HEADER):], decrypt=True))
+
+    def test_refresh_reservation_save_failure_makes_no_token_request(self):
+        self.login()
+        binding = self.binding()
+        self.broker._connection["expiresAt"] = self.now - 1
+        before_file, before_calls = self.broker._credential_path.read_bytes(), len(self.remote.calls)
+        def cannot_reserve(_):
+            raise OSError("fixture disk full")
+        self.broker._save_connection = cannot_reserve
+        with self.assertRaises(WorkflowError) as failure:
+            self.broker.credential_token(binding)
+        self.assertEqual(failure.exception.code, "subscription_refresh_reservation_failed")
+        self.assertEqual(len(self.remote.calls), before_calls)
+        self.assertEqual(self.broker._credential_path.read_bytes(), before_file)
+        self.assertTrue(self.broker._connection["refreshBlocked"])
+
+    def test_rotated_token_save_failure_leaves_durable_block_on_restart(self):
+        self.login()
+        binding = self.binding()
+        self.broker._connection["expiresAt"] = self.now - 1
+        original = self.broker._save_connection
+        def saving(connection):
+            if connection["accessToken"] == "fixture-access-B":
+                raise OSError("fixture disk full after rotation")
+            return original(connection)
+        self.broker._save_connection = saving
+        def rotated():
+            self.assertTrue(self.stored_connection()["refreshBlocked"])
+            return {**self.remote.tokens, "access_token": "fixture-access-B", "refresh_token": "fixture-refresh-B"}
+        self.remote.refresh = rotated
+        with self.assertRaises(WorkflowError):
+            self.broker.credential_token(binding)
+        self.assertTrue(self.stored_connection()["refreshBlocked"])
+        before_calls = len(self.remote.calls)
+        self.broker.close()
+        self.broker = self.make_broker()
+        self.broker.start()
+        self.assertEqual(self.broker.get_status()["status"], "reauth_required")
+        with self.assertRaises(WorkflowError):
+            self.broker.refresh_catalog()
+        self.assertEqual(len(self.remote.calls), before_calls)
+
+    def test_crash_inside_refresh_has_prior_durable_reservation(self):
+        self.login()
+        binding = self.binding()
+        self.broker._connection["expiresAt"] = self.now - 1
+        def interrupted():
+            self.assertTrue(self.stored_connection()["refreshBlocked"])
+            raise SystemExit("simulated process crash, no real termination")
+        self.remote.refresh = interrupted
+        with self.assertRaises(SystemExit):
+            self.broker.credential_token(binding)
+        self.assertTrue(self.stored_connection()["refreshBlocked"])
+        before_calls = len(self.remote.calls)
+        self.broker.close()
+        self.broker = self.make_broker()
+        self.broker.start()
+        self.assertFalse(self.broker.get_status()["connected"])
+        with self.assertRaises(WorkflowError):
+            self.broker.refresh_catalog()
+        self.assertEqual(len(self.remote.calls), before_calls)
+
+    def test_definite_refresh_refusal_restore_failure_keeps_durable_block(self):
+        self.login()
+        binding = self.binding()
+        self.broker._connection["expiresAt"] = self.now - 1
+        original = self.broker._save_connection
+        def saving(connection):
+            if not connection["refreshBlocked"]:
+                raise OSError("fixture restore failure")
+            return original(connection)
+        self.broker._save_connection = saving
+        def unavailable():
+            error = WorkflowError("fixture HTTP refusal", 409, "temporarily_unavailable")
+            error.remote_status = 503
+            raise error
+        self.remote.refresh = unavailable
+        with self.assertRaises(WorkflowError) as failure:
+            self.broker.credential_token(binding)
+        self.assertEqual(failure.exception.code, "subscription_refresh_restore_failed")
+        self.assertTrue(self.stored_connection()["refreshBlocked"])
+        before_calls = len(self.remote.calls)
+        with self.assertRaises(WorkflowError):
+            self.broker.credential_token(binding)
+        self.assertEqual(len(self.remote.calls), before_calls)
 
     def test_definite_temporary_refresh_refusal_keeps_credentials_without_auto_retry(self):
         self.login()
