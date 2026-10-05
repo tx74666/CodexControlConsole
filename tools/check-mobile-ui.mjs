@@ -19,9 +19,9 @@ const inbox = () => ({ entries: [
 ] });
 const dashboard = () => ({ version: "1.0.14", plan: plan(), device: { currentMemory: { status: "available", usedPercent: 91, availableBytes: 1024 ** 3, totalBytes: 16 * 1024 ** 3, readAt: "2026-10-01T11:00:00+08:00" }, model: "Dell fixture", cpuModel: "CPU", gpuModels: ["GPU"], sampledAt: "2026-09-27T11:00:00+08:00", installedMemoryBytes: 16 * 1024 ** 3 }, documents: { inbox: inbox(), guide: { items: [{ title: "阅读重点", path: "human.md", highlights: ["重点"] }] }, references: { items: [{ id: "nodes", defaultLanguage: "zh-CN", variants: [{ language: "zh-CN", label: "中文", title: "节点参考", path: "nodes.zh.md", available: true }, { language: "en", label: "English", title: "Nodes", path: "nodes.en.md", available: true }] }] } } });
 const playlist = () => ({ playback: "phone", tracks: [{ name: "<script>One</script>", path: "local/one.mp3", type: "mp3", size: 100 }, { name: "Two", path: "album/two.m4a", type: "m4a", size: 200 }, { name: "三首", path: "album/three.mp3", type: "mp3", lyrics: true, lyricsLanguage: "zh", lyricsLanguages: [{ code: "zh", label: "Chinese" }, { code: "en", label: "English" }] }], truncated: false });
-function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.html?workView=ideas", { loadedVersion = "1.0.14", session = new Map() } = {}) {
+function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.html?workView=ideas", { loadedVersion = "1.0.14", session = new Map(), dialogue = null } = {}) {
   class Element {
-    constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.style = { setProperty(key, value) { this[key] = value; } }; }
+    constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.listenerOptions = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.style = { setProperty(key, value) { this[key] = value; } }; }
     append(...items) { for (const item of items) { if (item.parentElement) item.parentElement.children = item.parentElement.children.filter(value => value !== item); this.children.push(item); item.parentElement = this; } }
     prepend(...items) { this.children.unshift(...items); }
     appendChild(item) { this.append(item); return item; }
@@ -32,7 +32,7 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
     setAttribute(key, value) { this.attributes[key] = String(value); }
     getAttribute(key) { return this.attributes[key]; }
     removeAttribute(key) { delete this.attributes[key]; if (key === "src") this.src = ""; }
-    addEventListener(key, fn) { this.listeners.set(key, fn); }
+    addEventListener(key, fn, options) { this.listeners.set(key, fn); this.listenerOptions.set(key, options); }
     focus() { this.focused = true; }
     scrollIntoView() { this.scrolled = true; }
     click() { this.clicked = true; }
@@ -41,6 +41,7 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
   const nodes = new Map(), calls = [], answers = [], saved = new Map(), timers = new Map(); let nextTimer = 1;
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   get("phoneWorkflowDetails").append(get("phoneWorkflowPanel"));
+  get("appScreen").append(...["work", "transfer", "music", "documents"].map(tab => get(`${tab}Panel`)));
   get("pairRemember").checked = true;
   const audio = get("musicAudio"); audio.paused = true; audio.currentTime = 0; audio.duration = NaN; audio.src = ""; audio.playCalls = 0; audio.pauseCalls = 0; audio.loadCalls = 0; const mediaEvents = [];
   audio.pause = () => { audio.paused = true; audio.pauseCalls++; mediaEvents.push("pause"); };
@@ -56,9 +57,10 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
   const replacedUrls = [];
   const history = { state: null, replaceState(value, unused, url) { this.state = value; replacedUrls.push(url); runtime.window.location.href = url; }, pushState(value) { this.state = value; }, back() { this.state = null; } };
   const reloads = [];
-  const runtime = { URL, URLSearchParams, AbortController, TypeError, Blob, structuredClone, document, history, navigator: {}, DOMParser: class { parseFromString(text) { const entries = [...text.matchAll(/<script\s+src="([^"]+)"/g)].map(match => ({ getAttribute: () => match[1] })); return { querySelectorAll: () => entries }; } }, sessionStorage: { getItem: key => session.get(key) || null, setItem: (key, value) => session.set(key, value), removeItem: key => session.delete(key) }, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: initialUrl, replace(url) { reloads.push(url); } }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
+  const runtime = { URL, URLSearchParams, AbortController, TypeError, Blob, structuredClone, document, history, navigator: {}, DOMParser: class { parseFromString(text) { const entries = [...text.matchAll(/<script\s+src="([^"]+)"/g)].map(match => ({ getAttribute: () => match[1] })); return { querySelectorAll: () => entries }; } }, sessionStorage: { getItem: key => session.get(key) || null, setItem: (key, value) => session.set(key, value), removeItem: key => session.delete(key) }, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) }, window: { innerWidth: 390, innerHeight: 844, visualViewport: { height: 844, scale: 1 }, getComputedStyle: node => node.style, getSelection: () => ({ isCollapsed: true }), setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: initialUrl, replace(url) { reloads.push(url); } }, addEventListener(name, callback) { windowEvents.set(name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
   const panels = {};
   for (const [name, apiName] of [["workflow", "CodexWorkflowPanel"], ["incubator", "CodexIncubatorPanel"], ["conversations", "CodexConversationsPanel"], ["transfer", "CodexTransferPanel"]]) runtime.window[apiName] = { create(root, options) { const panel = { root, options, active: false, activity: [], clears: 0, targets: [], reloadReady: true, draft: false, taskOpen: false, taskContext: null, openReady: true, clearReady: true, refreshes: 0, refresh() { this.refreshes++; }, hasDraft() { return this.draft; }, canReload() { return this.reloadReady; }, async prepareReload() { return this.reloadReady; }, setActive(value) { this.active = Boolean(value); this.activity.push(this.active); }, clear() { this.active = false; this.taskOpen = false; this.taskContext = null; this.clears++; }, async useTarget(value) { this.targets.push(value); return true; }, async openTask(value) { if (!this.openReady) return false; this.taskContext = value; return true; }, clearTask() { if (!this.clearReady) return false; this.taskContext = null; return true; }, getTaskContext() { return this.taskContext; }, hasOpenTask() { return this.taskOpen; }, closeTask() { if (options.onTaskLeave?.() === false) return false; this.taskOpen = false; options.onTaskStateChange?.(); return true; } }; panels[name] = panel; return panel; } };
+  if (dialogue) runtime.window.CodexMobileDialogue = { create: () => dialogue };
   const names = "state,livePlan,validateLivePlan,pollLivePlan,savePlanSnapshot,api,bootstrap,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,showPair,showOffline,pathValue,appendLink,renderMarkdown,setFont,selectTab,selectWorkView,syncWorkPanelActivity,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks,uiUpdate,versionNotice,renderVersion,scriptVersion,loadedUiVersion,maybeReloadConnectedUi,checkConnectedVersion";
   const normalized = normalizeScript(script), footer = "  void bootstrap();\n})();";
   assert.equal(normalized.split(footer).length, 2, "test export insertion must match only bootstrap footer");
@@ -68,6 +70,17 @@ function harness(script = source, initialUrl = "http://192.0.2.1:8899/mobile.htm
 }
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
+function tabStroke(h, { target = h.get(`${h.api.state.tab}Panel`), dx = 90, dy = 4, x = 140, afterStart = null, moveTouches = null, cancel = false, duration = 180 } = {}) {
+  const host = h.get("appScreen"), first = { identifier: 7, clientX: x, clientY: 260 };
+  host.listeners.get("touchstart")({ target, touches: [first], timeStamp: 100 });
+  afterStart?.(); let prevented = false;
+  const last = { identifier: 7, clientX: x + dx, clientY: 260 + dy };
+  host.listeners.get("touchmove")({ target, touches: moveTouches || [last], timeStamp: 100 + duration / 2,
+    cancelable: true, preventDefault() { prevented = true; } });
+  if (cancel) host.listeners.get("touchcancel")({});
+  host.listeners.get("touchend")({ target, touches: [], changedTouches: [last], timeStamp: 100 + duration });
+  return prevented;
+}
 
 await test("Default dialogue preserves an explicit legacy picture and dispatch workspace", () => {
   assert.deepEqual([...html.matchAll(/data-work-view="([^"]+)"/g)].map(match => match[1]), ["dialogue", "ideas", "conversations", "workflow"]); assert.match(html, /data-work-view="workflow"[^>]*>独立工作记录/); assert.match(html, /<summary>其它入口<\/summary>/); assert.match(html, /id="phoneWorkflowDetails"[^>]*hidden/); assert.equal([...html.matchAll(/id="phoneWorkflowPanel"/g)].length, 1);
@@ -116,6 +129,65 @@ await test("iPhone install entry, safe areas, touch sizes and four grouped tabs"
   assert.doesNotMatch(source, /serviceWorker\??\.(?:register|unregister)|\.innerHTML|document\.cookie/); assert.doesNotMatch(html, /onclick=|<script[^>]*>\s*[^<\s]/);
   const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
   for (const match of source.matchAll(/\bel\("([^"]+)"\)/g)) assert.ok(ids.has(match[1]), `Missing phone element ${match[1]}`);
+});
+await test("rightward stroke selects the right-hand existing area while hidden navigation preserves the same dialogue and draft", () => {
+  const dialogue = { active: false, clears: 0, session: { id: "original-session", recordId: "original-record", revision: 9 }, draft: "中文草稿，不发送", files: [{ id: "image-one" }],
+    setActive(value) { this.active = value; }, clear() { this.clears++; }, hasDraft() { return true; }, canReload() { return true; } };
+  const h = harness(source, "http://192.0.2.1:8899/mobile.html", { dialogue }); h.ready(); h.api.state.music.loaded = true; h.api.selectTab("work");
+  const session = dialogue.session, files = dialogue.files, dashboard = h.api.state.dashboard, generation = h.api.state.generation;
+  h.get("bottomNav").hidden = true;
+  assert.equal(tabStroke(h), true); assert.equal(h.api.state.tab, "transfer");
+  assert.equal(h.panels.transfer.active, true); assert.equal(dialogue.active, false);
+  tabStroke(h); assert.equal(h.api.state.tab, "music"); tabStroke(h); assert.equal(h.api.state.tab, "documents");
+  assert.equal(tabStroke(h), false); assert.equal(h.api.state.tab, "documents", "last area does not wrap");
+  tabStroke(h, { dx: -90 }); assert.equal(h.api.state.tab, "music");
+  tabStroke(h, { dx: -90 }); assert.equal(h.api.state.tab, "transfer");
+  tabStroke(h, { dx: -90 }); assert.equal(h.api.state.tab, "work"); assert.equal(dialogue.active, true);
+  assert.equal(tabStroke(h, { dx: -90 }), false); assert.equal(h.api.state.tab, "work", "first area does not wrap");
+  assert.equal(h.document.body.dataset.workView, "dialogue"); assert.equal(dialogue.session, session); assert.equal(dialogue.files, files);
+  assert.equal(dialogue.draft, "中文草稿，不发送"); assert.equal(dialogue.clears, 0);
+  assert.equal(h.api.state.dashboard, dashboard); assert.equal(h.api.state.generation, generation); assert.equal(h.api.state.paired, true);
+  assert.equal(h.calls.length, 0); assert.equal(h.audio.pauseCalls, 0); assert.equal(h.audio.playCalls, 0);
+});
+await test("inputs, controls, horizontal attachments, browser edges and open keyboard keep their own gestures", () => {
+  for (const kind of ["textarea", "input", "select", "button", "link", "summary", "slider", "attachment", "keyboard", "focused_input", "selected_text", "edge"]) {
+    const h = harness(); h.ready(); h.api.selectTab("work");
+    const target = h.document.createElement(({ link: "a", attachment: "div", keyboard: "div", focused_input: "div", selected_text: "div", edge: "div", slider: "div" })[kind] || kind);
+    h.get("workPanel").append(target);
+    if (kind === "slider") target.setAttribute("role", "slider");
+    if (kind === "attachment") { target.style.overflowX = "auto"; target.scrollWidth = 480; target.clientWidth = 300; }
+    if (kind === "keyboard") h.runtime.window.visualViewport.height = 520;
+    if (kind === "focused_input") h.document.activeElement = h.document.createElement("textarea");
+    if (kind === "selected_text") h.runtime.window.getSelection = () => ({ isCollapsed: false });
+    assert.equal(tabStroke(h, { target, x: kind === "edge" ? 10 : 140 }), false, kind);
+    assert.equal(h.api.state.tab, "work", kind); assert.equal(h.calls.length, 0);
+  }
+});
+await test("vertical scrolling, short/slow strokes, multiple fingers and cancelled touches do not switch areas", () => {
+  for (const options of [{ dx: 10, dy: 110 }, { dx: 45, dy: 4 }, { dx: 90, duration: 1100 },
+    { moveTouches: [{ identifier: 7, clientX: 230, clientY: 264 }, { identifier: 8, clientX: 300, clientY: 280 }] }, { cancel: true }]) {
+    const h = harness(); h.ready(); h.api.selectTab("work");
+    const scroller = h.document.createElement("div"); scroller.style.overflowY = "auto"; scroller.scrollHeight = 1500; scroller.clientHeight = 400;
+    h.get("workPanel").append(scroller); tabStroke(h, { target: scroller, ...options });
+    assert.equal(h.api.state.tab, "work"); assert.equal(h.calls.length, 0);
+  }
+  const h = harness(); h.ready(); h.api.selectTab("work");
+  const vertical = h.document.createElement("div"); vertical.style.overflowY = "auto"; vertical.scrollHeight = 1500; vertical.clientHeight = 400;
+  h.get("workPanel").append(vertical); assert.equal(tabStroke(h, { target: vertical, dx: 10, dy: 110 }), false);
+  assert.equal(tabStroke(h, { target: vertical }), true); assert.equal(h.api.state.tab, "transfer", "clear horizontal intent in the dialogue scroller still navigates");
+});
+await test("IME, new keyboard, pairing/view changes and reader opening invalidate an unfinished swipe", () => {
+  for (const change of [h => { h.documentEvents.get("compositionstart")(); h.documentEvents.get("compositionend")(); },
+    h => { h.runtime.window.visualViewport.height = 500; }, h => { h.api.state.generation++; }, h => { h.api.state.paired = false; },
+    h => { h.document.hidden = true; }, h => { h.api.state.reader = { path: "reports/one.md" }; }, h => { h.api.selectWorkView("conversations"); },
+    h => { h.api.uiUpdate.preparing = true; }]) {
+    const h = harness(); h.ready(); h.api.selectTab("work");
+    assert.equal(tabStroke(h, { afterStart: () => change(h) }), false); assert.equal(h.api.state.tab, "work"); assert.equal(h.calls.length, 0);
+  }
+  const h = harness(); h.ready(); h.api.selectTab("work");
+  tabStroke(h, { afterStart: () => h.api.selectTab("documents") }); assert.equal(h.api.state.tab, "documents");
+  assert.equal(h.get("appScreen").listenerOptions.get("touchstart").passive, true);
+  assert.equal(h.get("appScreen").listenerOptions.get("touchmove").passive, false);
 });
 await test("LAN home-screen icons reuse only the canonical phone PWA assets with padding", () => {
   const canonicalHtml = readFileSync(new URL("../phone/index.html", import.meta.url), "utf8");

@@ -6,6 +6,12 @@
   const field = (tag, label, className = "") => { const node = make(tag, "", className); node.setAttribute("aria-label", label); return node; };
   const tiers = [{ id: "fast", label: "极速" }, { id: "high", label: "高" }, { id: "pro", label: "Pro" }];
   const when = value => { const date = new Date(value || ""); return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }); };
+  const savedTime = value => {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return "时间未记录";
+    const date = new Date(value); if (Number.isNaN(date.getTime())) return "时间未记录";
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(date).map(item => [item.type, item.value]));
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}（UTC+08:00）`;
+  };
   function fileStore() {
     if (window.PhoneStore) return { get: id => window.PhoneStore.get("settings", id), put: value => window.PhoneStore.put("settings", value), remove: id => window.PhoneStore.remove("settings", id) };
     let opened;
@@ -178,7 +184,11 @@
       state.messageIds = new Set(values.map(item => item.id)); messages.replaceChildren();
       for (const message of values.filter(item => ["user", "assistant"].includes(item.role))) {
         const row = make("article", "", "dialogue-message"); row.dataset.role = message.role;
-        row.append(make("p", message.role === "assistant" ? "ChatGPT" : "你", "dialogue-message-label"), make("p", message.text || "", "dialogue-message-text"));
+        const meta = make("div", "", "dialogue-message-meta"), time = make("time", savedTime(message.createdAt), "dialogue-message-time");
+        time.title = "记录保存时间 · Asia/Shanghai（UTC+08:00）";
+        if (time.textContent !== "时间未记录") time.setAttribute("datetime", message.createdAt);
+        meta.append(make("p", message.role === "assistant" ? "ChatGPT" : "你", "dialogue-message-label"), time);
+        row.append(meta, make("p", message.text || "", "dialogue-message-text"));
         if (message.role === "assistant") { const actions = make("div", "", "dialogue-message-actions"); actions.append(button(state.session?.ideaId ? "补充到此想法" : "存为想法", () => void rememberAnswer(message.id)), button("复制", () => void copyText(message.text || ""))); row.append(actions); }
         if (message.truncated) row.append(make("p", "此回答来源已截断，全文请到原 Chat 查看。", "dialogue-message-note")); messages.append(row);
       }

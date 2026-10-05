@@ -229,6 +229,11 @@ function preparedFor(value) {
 function readinessFor(value = prepare) {
   return relay.envelope("checkReady", value, { domContract: clone(value.domContract) });
 }
+function pageReadyFor(value = prepare) {
+  return relay.envelope("pageReady", value, { observation: { url: "https://chatgpt.com/", chatMode: true, loginVerified: true,
+    emptyComposer: true, modelControlPresent: true, completionInitiallyPresent: false,
+    surface: value.domContract.surface, observationSha256: value.domContract.observationSha256 } });
+}
 function workerFixture(initial = {}, browserSurface = "chrome", worker = context.ConsoleChatRelayWorker) {
   const storage = storageFixture(initial), ports = [], tabs = [], calls = [], updates = new Event(), timers = new Map();
   let timerId = 0;
@@ -244,7 +249,7 @@ function workerFixture(initial = {}, browserSurface = "chrome", worker = context
       async create(value) { tabs.push(clone(value)); return { id: 40 + tabs.length, status: "complete" }; },
       async get(id) { return { id, status: "complete" }; },
       async sendMessage(id, value, options) { calls.push({ id, value: clone(value), options: options === undefined ? undefined : clone(options) });
-        if (value.type === "relay.content.readiness") return { ...preparedFor(value.readiness), type: "pageReady" };
+        if (value.type === "relay.content.readiness") return pageReadyFor(value.readiness);
         if (value.type === "relay.content.prepare") {
           if (prepareReply) return clone(prepareReply);
           if (prepareFailure) { prepareFailure = false; throw new relay.RelayError("login_required", "隔离页面未登录，本次未发送。"); }
@@ -459,7 +464,7 @@ await test("readiness has no prompt or send permission and requires the exact fr
   assert.deepEqual(Object.keys(request).sort(), ["attemptId", "dispatchId", "domContract", "protocol", "type"].sort());
   for (const patch of [{ prompt }, { promptSha256: prepare.promptSha256 }, { requestedProfile: "fast" }, { claimToken: "private" }])
     rejected(() => relay.validateReadiness({ ...request, ...patch }), "invalid_schema");
-  const reply = { ...preparedFor(request), type: "pageReady" }; relay.validatePageReady(reply, request);
+  const reply = pageReadyFor(request); relay.validatePageReady(reply, request);
   for (const patch of [{ dispatchId: "a".repeat(32) }, { attemptId: "a2a45678-1234-4567-89ab-1234567890ab" }])
     rejected(() => relay.validatePageReady({ ...reply, ...patch }, request), "readiness_identity_mismatch");
   for (const patch of [{ surface: "edge" }, { observationSha256: "b".repeat(64) }])
@@ -478,7 +483,7 @@ await test("loading owned tab waits for actual readonly DOM receipt then prepare
   assert.equal([...f.timers.values()][0].timeout, 60000);
   f.updates.emit(999, { status: "complete" }); f.updates.emit(41, { status: "complete" });
   assert.equal(f.calls.length, 1);
-  release({ ...preparedFor(prepare), type: "pageReady" }); await pending;
+  release(pageReadyFor(prepare)); await pending;
   assert.equal(f.controller.state().active.phase, "prepared"); assert.equal(f.timers.size, 0); assert.equal(f.updates.listeners.size, 0);
   assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, 1);
   assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
@@ -525,7 +530,7 @@ await test("readiness timeout/native cancellation cannot resurrect an unsent att
     await pending; if (terminal) await terminal; await f.controller.idle();
     assert.equal(f.controller.state().active, null);
     assert.ok(["failed", "retired"].includes(f.controller.state().attempts[dispatchId].phase));
-    release({ ...preparedFor(prepare), type: "pageReady" }); await new Promise(resolve => setImmediate(resolve));
+    release(pageReadyFor(prepare)); await new Promise(resolve => setImmediate(resolve));
     f.updates.emit(41, { status: "complete" });
     assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, 0);
     assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
@@ -543,10 +548,10 @@ await test("wrong readiness receipt or inaccurate tab identity fails closed befo
       f.api.tabs.sendMessage = (id, value, options) => {
         if (value.type !== "relay.content.readiness") return send(id, value, options);
         f.calls.push({ id, value: clone(value), options: clone(options) });
-        const response = { ...preparedFor(prepare), type: "pageReady" };
+        const response = pageReadyFor(prepare);
         if (invalid === "identity") response.attemptId = "a2a45678-1234-4567-89ab-1234567890ab";
         if (invalid === "contract") response.observation.observationSha256 = "c".repeat(64);
-        if (invalid === "profile") response.observation.profileDom.reasoningEffort = "high";
+        if (invalid === "profile") response.observation.modelControlPresent = false;
         return Promise.resolve(response);
       };
     }
@@ -571,7 +576,7 @@ await test("closing only the owned preparing tab cancels readiness immediately a
   assert.equal(f.controller.state().active, null); assert.equal(f.controller.state().attempts[dispatchId].phase, "failed");
   assert.equal(f.ports[0].sent.filter(message => message.type === "blocked").length, 1);
   assert.equal(f.ports[0].sent.at(-1).code, "owned_tab_closed");
-  release({ ...preparedFor(value), type: "pageReady" }); await new Promise(resolve => setImmediate(resolve));
+  release(pageReadyFor(value)); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.filter(call => call.value.type === "relay.content.prepare").length, 0);
   assert.equal(f.calls.filter(call => call.value.type === "relay.content.commit").length, 0);
   assert.equal(f.updates.listeners.size, 0);
@@ -827,7 +832,7 @@ function contentFixture({ promptText = prompt, completed = false, stop = false, 
   const storage = storageFixture(), messages = [], emitted = [], availableNotifications = [], queries = [], timers = new Map(), location = { href: "https://chatgpt.com/" };
   const composer = new Node(draft, { role: "textbox", contenteditable: "true" });
   composer.emptyInnerText = emptyInnerText;
-  const model = new Node(profileText, { "data-selected-reasoning-effort": "none" });
+  const model = new Node(profileText, { "data-selected-reasoning-effort": "none", "id": "profile-original", "aria-haspopup": "menu", "aria-expanded": "false" }); model.tagName = "BUTTON";
   const chat = new Node("Chat", { "aria-pressed": "true" }), login = new Node("Signed in"), complete = new Node(completionText), stopNode = new Node("Stop");
   const items = new Map([["#composer", [composer]], ["#profile", [model]], ["#ordinary-chat", [chat]], ["#signed-in", [login]], [".message", messages], ["#complete", []], ["#stop", []]]);
   function message(id, unit, text, role) {
@@ -855,7 +860,8 @@ function contentFixture({ promptText = prompt, completed = false, stop = false, 
     document: { documentElement: {}, querySelectorAll(selector) {
       assert.equal(typeof selector, "string"); assert.ok(selector); queries.push(selector); return items.get(selector) || [];
     } }, location, MutationObserver: Observer,
-    InputEvent: class { constructor(type, detail) { this.type = type; this.detail = detail; } }, now: () => Date.parse("2026-10-05T12:00:00.000Z"),
+    InputEvent: class { constructor(type, detail) { this.type = type; this.detail = detail; } },
+    KeyboardEvent: class { constructor(type, detail) { this.type = type; Object.assign(this, detail); } }, now: () => Date.parse("2026-10-05T12:00:00.000Z"),
     setTimeout(fn, timeout) { const id = nextTimer++; timers.set(id, { fn, timeout }); return id; }, clearTimeout(id) { timers.delete(id); } };
   return { env, items, storage, emitted, availableNotifications, queries, composer, model, messages, timers, send, controller: context.ConsoleChatRelayContent.createController(env),
     clicks: () => clicks, mutateNow() { mutation?.(); },
@@ -880,7 +886,7 @@ await test("content document_idle announces only receiver availability; missing 
   assert.equal(f.timers.size, 1); assert.equal([...f.timers.values()][0].timeout, 60000);
   assert.equal(f.storage.writes.length, 0); assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0); assert.equal(f.emitted.length, 0);
   f.items.set("#composer", composer); f.mutateNow(); const response = await pending; relay.validatePageReady(response, request);
-  assert.equal(response.observation.profileDom.text, "思考强度Instant"); assert.equal(f.timers.size, 0);
+  assert.equal(response.observation.modelControlPresent, true); assert.equal("observedProfile" in response.observation, false); assert.equal(f.timers.size, 0);
   assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.emitted.length, 0);
   // Readiness confers no commit authority; the real prepare is still required.
   const rejectedCommit = await listener.call({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
@@ -888,11 +894,9 @@ await test("content document_idle announces only receiver availability; missing 
   relay.validatePrepared(await listener.call({ type: "relay.content.prepare", prepare }));
   assert.equal(f.clicks(), 0); assert.equal(f.composer.textContent, "");
 });
-await test("readonly DOM readiness rejects a late draft, wrong tier, prior conversation or duplicate control before prompt delivery", async () => {
+await test("readonly DOM readiness rejects a late draft, prior conversation or duplicate control before prompt delivery", async () => {
   for (const [change, code] of [
     [f => { f.composer.textContent = "用户原草稿"; }, "composer_changed"],
-    [f => { f.model.textContent = "Pro"; }, "profile_changed"],
-    [f => { f.model.attributes["data-selected-reasoning-effort"] = "high"; }, "profile_changed"],
     [f => { f.env.location.href = capture.evidence.conversationUrl; }, "not_fresh_chat"],
     [f => { f.items.set("#profile", [f.model, new Node("Instant")]); }, "dom_contract_changed"]
   ]) {
@@ -1022,7 +1026,7 @@ await test("cancel during asynchronous intent read or write cannot restore sendi
 await test("actual content listener returns typed original failures and exact click boundary without a duplicate async report", async () => {
   const pro = contentFixture({ profileText: "Pro" }), proListener = await contentListenerFixture(pro);
   const blocked = await proListener.call({ type: "relay.content.prepare", prepare }); relay.validateFailure(blocked);
-  assert.equal(blocked.type, "blocked"); assert.equal(blocked.code, "profile_changed");
+  assert.equal(blocked.type, "blocked"); assert.equal(blocked.code, "profile_picker_unverified");
   assert.equal(pro.clicks(), 0); assert.equal(pro.composer.textContent, ""); assert.equal(pro.emitted.length, 0);
   for (const clickThrows of [false, true]) {
     const f = contentFixture({ clickThrows }), listener = await contentListenerFixture(f);
@@ -1288,5 +1292,188 @@ await test("commit without a genuine prepared authority cannot type or Send", as
   const f = contentFixture();
   await assert.rejects(f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) }), error => error.code === "commit_not_prepared");
   assert.equal(f.composer.textContent, ""); assert.equal(f.clicks(), 0);
+});
+const pickerRows = [
+  ["Instant，第 1 项，共 5 项。", "none"], ["Medium，第 2 项，共 5 项。", "medium"],
+  ["High，第 3 项，共 5 项。", "high"], ["Extra High，第 4 项，共 5 项。", "max"], ["Pro，第 5 项，共 5 项。", "medium"]
+];
+const fixtureSliderSelector = '[role="menuitem"][data-reasoning-slider="true"][aria-label="强度"][aria-keyshortcuts="ArrowLeft ArrowRight"]';
+const fixtureStatusSelector = '[role="status"][aria-live="polite"]';
+function pickerFixture({ pauseKeys = false, pauseOpen = false, pauseClose = false } = {}) {
+  const f = contentFixture({ profileText: "Pro" }); let index = 4, profileClicks = 0;
+  const menu = new Node("", { role: "menu", id: "menu-owned", "aria-labelledby": "profile-original" });
+  const slider = new Node("", { role: "menuitem", "data-reasoning-slider": "true", "aria-label": "强度", "aria-keyshortcuts": "ArrowLeft ArrowRight" });
+  const status = new Node("", { role: "status", "aria-live": "polite" }), keys = [], seen = [];
+  const keyWaiters = [], clickWaiters = [];
+  const waitForCount = (count, readCount, waiters, label) => {
+    if (readCount() >= count) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const waiter = { count, resolve, timer: setTimeout(() => {
+        const index = waiters.indexOf(waiter); if (index >= 0) waiters.splice(index, 1);
+        reject(new Error(`Fixture did not observe ${count} ${label}.`));
+      }, 10000) };
+      waiters.push(waiter);
+    });
+  };
+  const publishCount = (count, waiters) => {
+    for (const waiter of [...waiters]) if (count >= waiter.count) {
+      waiters.splice(waiters.indexOf(waiter), 1); clearTimeout(waiter.timer); waiter.resolve();
+    }
+  };
+  slider.parentElement = menu; status.parentElement = menu;
+  menu.children.set(fixtureSliderSelector, [slider]); menu.children.set(fixtureStatusSelector, [status]);
+  f.items.set('[role="menu"]', []); f.model.attributes["data-selected-reasoning-effort"] = "medium";
+  const show = value => { index = value; status.textContent = pickerRows[value][0]; f.model.attributes["data-selected-reasoning-effort"] = pickerRows[value][1]; seen.push([...pickerRows[value]]); f.mutateNow(); };
+  f.model.click = () => {
+    profileClicks++; publishCount(profileClicks, clickWaiters);
+    if (f.model.attributes["aria-expanded"] === "false") {
+      if (pauseOpen) return;
+      f.model.attributes["aria-expanded"] = "true"; f.model.attributes["aria-controls"] = "menu-owned";
+      f.model.textContent = "思考强度思考强度"; f.items.set('[role="menu"]', [menu]); show(index);
+    } else {
+      if (pauseClose) return;
+      f.model.attributes["aria-expanded"] = "false"; f.model.textContent = "思考强度Instant";
+      f.model.attributes["data-selected-reasoning-effort"] = "none"; f.items.set('[role="menu"]', []); f.mutateNow();
+    }
+  };
+  slider.dispatchEvent = event => {
+    keys.push({ type: event.type, key: event.key, code: event.code, bubbles: event.bubbles, cancelable: event.cancelable, repeat: event.repeat });
+    publishCount(keys.length, keyWaiters);
+    if (event.type === "keydown" && !pauseKeys) show(Math.max(0, index - 1));
+    return true;
+  };
+  return { ...f, menu, slider, status, keys, seen, show, index: () => index, profileClicks: () => profileClicks,
+    whenKeys: count => waitForCount(count, () => keys.length, keyWaiters, "keyboard events"),
+    whenProfileClicks: count => waitForCount(count, () => profileClicks, clickWaiters, "original control clicks") };
+}
+await test("generic readonly readiness reports control presence without profile claims or selection permission", async () => {
+  const f = pickerFixture(), request = readinessFor();
+  const result = await f.controller.receive({ type: "relay.content.readiness", readiness: request });
+  relay.validatePageReady(result, request);
+  assert.deepEqual(Object.keys(result.observation).sort(), ["url", "chatMode", "loginVerified", "emptyComposer", "modelControlPresent", "completionInitiallyPresent", "surface", "observationSha256"].sort());
+  assert.equal(f.model.textContent, "Pro"); assert.equal(f.profileClicks(), 0); assert.equal(f.keys.length, 0); assert.equal(f.storage.writes.length, 0);
+  rejected(() => relay.validatePrepared({ ...result, type: "prepared" }), "invalid_schema");
+  rejected(() => relay.validatePageReady({ ...result, observation: { ...result.observation, observedProfile: "Instant" } }, request), "invalid_schema");
+  const commit = relay.envelope("commitSend", prepare);
+  await assert.rejects(f.controller.receive({ type: "relay.content.commit", commit }), error => error.code === "commit_not_prepared");
+  assert.equal(f.clicks(), 0);
+});
+await test("full frozen Fast prepare selects only the observed four left steps and closes the original control before proving Instant", async () => {
+  const f = pickerFixture();
+  const result = await f.controller.receive({ type: "relay.content.prepare", prepare }); relay.validatePrepared(result);
+  assert.deepEqual(f.seen, [...pickerRows].reverse()); assert.equal(f.profileClicks(), 2);
+  assert.deepEqual(f.keys.map(item => item.type), ["keydown", "keyup", "keydown", "keyup", "keydown", "keyup", "keydown", "keyup"]);
+  assert.ok(f.keys.every(item => item.key === "ArrowLeft" && item.code === "ArrowLeft" && item.bubbles && item.cancelable && item.repeat === false));
+  assert.equal(result.observation.profileDom.text, "思考强度Instant"); assert.equal(result.observation.profileDom.reasoningEffort, "none");
+  assert.equal(f.model.attributes["aria-expanded"], "false"); assert.equal(f.composer.textContent, "");
+  assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.timers.size, 0);
+  await f.controller.receive({ type: "relay.content.commit", commit: relay.envelope("commitSend", prepare) });
+  assert.equal(f.clicks(), 1); assert.equal(f.composer.textContent, prompt);
+  await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "page_already_prepared");
+  assert.equal(f.profileClicks(), 2); assert.equal(f.keys.length, 8); f.controller.stop();
+});
+await test("profile selection waits only on actual DOM changes and never proves the open menu placeholder", async () => {
+  const f = pickerFixture({ pauseKeys: true }), pending = f.controller.receive({ type: "relay.content.prepare", prepare });
+  await f.whenKeys(2); assert.equal(f.keys.length, 2); assert.equal(f.controller.phase(), "preparing");
+  for (const index of [3, 2, 1, 0]) {
+    f.show(index);
+    if (index > 0) { await f.whenKeys((5 - index) * 2); assert.equal(f.controller.phase(), "preparing"); }
+  }
+  const result = await pending; relay.validatePrepared(result); assert.equal(f.profileClicks(), 2); assert.equal(f.keys.length, 8); assert.equal(f.timers.size, 0);
+  const open = pickerFixture({ pauseClose: true }), blocked = open.controller.receive({ type: "relay.content.prepare", prepare });
+  const rejection = assert.rejects(blocked, error => error.code === "profile_selection_timeout");
+  await open.whenProfileClicks(2); assert.equal(open.index(), 0); assert.equal(open.model.textContent, "思考强度思考强度");
+  assert.equal(open.controller.phase(), "preparing"); [...open.timers.values()][0].fn(); await rejection;
+  assert.equal(open.clicks(), 0); assert.equal(open.storage.writes.length, 0); assert.equal(open.timers.size, 0);
+});
+await test("positive client rectangles cannot activate controls in hidden or inert ancestors", async () => {
+  for (const flag of ["hidden", "inert", "inertAttribute", "ariaHidden"]) {
+    const f = pickerFixture(), ancestor = new Node(); f.model.parentElement = ancestor;
+    if (flag === "hidden") ancestor.hidden = true;
+    if (flag === "inert") ancestor.inert = true;
+    if (flag === "inertAttribute") ancestor.attributes.inert = "";
+    if (flag === "ariaHidden") ancestor.attributes["aria-hidden"] = "true";
+    assert.equal(f.model.getClientRects().length, 1);
+    await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "dom_contract_changed");
+    assert.equal(f.profileClicks(), 0); assert.equal(f.keys.length, 0); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
+  }
+  const f = pickerFixture(), inactiveMenu = new Node("Inactive", { role: "menu" }), ancestor = new Node("", { "aria-hidden": "true" });
+  inactiveMenu.parentElement = ancestor;
+  const click = f.model.click; f.model.click = () => {
+    click(); if (f.model.attributes["aria-expanded"] === "true") f.items.set('[role="menu"]', [f.menu, inactiveMenu]);
+  };
+  const result = await f.controller.receive({ type: "relay.content.prepare", prepare }); relay.validatePrepared(result);
+  assert.equal(f.profileClicks(), 2); assert.equal(f.keys.length, 8); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
+});
+await test("keydown replacement or deactivation cannot send keyup to the retired slider", async () => {
+  for (const change of [
+    f => { f.menu.children.set(fixtureSliderSelector, [new Node("Other")]); },
+    f => { f.menu.children.set(fixtureStatusSelector, [new Node("Other")]); },
+    f => { f.items.set('[role="menu"]', [new Node("Other", { role: "menu" })]); },
+    f => { f.slider.isConnected = false; },
+    f => { f.menu.attributes["aria-hidden"] = "true"; }
+  ]) {
+    const f = pickerFixture({ pauseKeys: true }), dispatch = f.slider.dispatchEvent;
+    f.slider.dispatchEvent = event => { const result = dispatch(event); if (event.type === "keydown") change(f); return result; };
+    await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "profile_picker_unverified");
+    assert.deepEqual(f.keys.map(item => item.type), ["keydown"]);
+    assert.equal(f.profileClicks(), 1); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.timers.size, 0);
+  }
+});
+await test("unbound duplicate or unknown menu status cannot cause the first selection key", async () => {
+  for (const change of [
+    f => { f.menu.attributes["aria-labelledby"] = "other-button"; },
+    f => { f.model.attributes["aria-controls"] = "other-menu"; },
+    f => { f.items.set('[role="menu"]', [f.menu, new Node("Other", { role: "menu" })]); },
+    f => { f.menu.children.set(fixtureSliderSelector, [f.slider, new Node("Other")]); },
+    f => { f.menu.children.set(fixtureStatusSelector, [f.status, new Node("Other")]); },
+    f => { f.status.textContent = "Pro，第 5 项，共 6 项。"; },
+    f => { f.model.attributes["data-selected-reasoning-effort"] = "max"; }
+  ]) {
+    const f = pickerFixture(), click = f.model.click; f.model.click = () => { click(); change(f); };
+    await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare }), error => error.code === "profile_picker_unverified");
+    assert.equal(f.keys.length, 0); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.timers.size, 0);
+  }
+});
+await test("unknown requests prior intents and wrong frozen hashes cannot acquire picker permission", async () => {
+  for (const variant of ["high", "pro", "hash", "intent", "draft", "open"]) {
+    const f = pickerFixture(), value = clone(prepare);
+    if (["high", "pro"].includes(variant)) value.requestedProfile = variant;
+    if (variant === "hash") value.promptSha256 = "f".repeat(64);
+    if (variant === "intent") f.storage.data[context.ConsoleChatRelayContent.CONTENT_PREFIX + dispatchId] = { phase: "send_intent" };
+    if (variant === "draft") f.composer.textContent = "真实用户草稿\n ";
+    if (variant === "open") { f.model.attributes["aria-expanded"] = "true"; f.items.set('[role="menu"]', [f.menu]); }
+    await assert.rejects(f.controller.receive({ type: "relay.content.prepare", prepare: value }));
+    assert.equal(f.profileClicks(), 0); assert.equal(f.keys.length, 0); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0);
+    if (variant === "draft") assert.equal(f.composer.textContent, "真实用户草稿\n ");
+  }
+});
+await test("late draft turn URL or skipped ordinal stops profile selection without typing or another key", async () => {
+  for (const [change, code] of [
+    [f => { f.composer.textContent = "后到用户输入\n "; }, "composer_changed"],
+    [f => { f.env.location.href = capture.evidence.conversationUrl; }, "not_fresh_chat"],
+    [f => { f.items.set("#complete", [new Node("回答已完成")]); }, "not_fresh_chat"],
+    [f => { f.show(2); }, "profile_picker_unverified"],
+    [f => { f.items.set("#profile", [new Node("Other")]); }, "profile_changed"]
+  ]) {
+    const f = pickerFixture({ pauseKeys: true }), pending = f.controller.receive({ type: "relay.content.prepare", prepare });
+    const rejection = assert.rejects(pending, error => error.code === code); await f.whenKeys(2);
+    assert.equal(f.keys.length, 2); change(f); f.mutateNow(); await rejection;
+    assert.equal(f.keys.length, 2); assert.equal(f.clicks(), 0); assert.equal(f.storage.writes.length, 0); assert.equal(f.timers.size, 0);
+    if (code === "composer_changed") assert.equal(f.composer.textContent, "后到用户输入\n ");
+  }
+});
+await test("matching cancel timeout or page stop cleans picker waits and late steps cannot revive prepared", async () => {
+  for (const trigger of ["cancel", "timeout", "stop"]) {
+    const f = pickerFixture({ pauseKeys: true }), pending = f.controller.receive({ type: "relay.content.prepare", prepare });
+    const rejection = assert.rejects(pending, error => error.code === (trigger === "timeout" ? "profile_selection_timeout" : "prepare_cancelled"));
+    await f.whenKeys(2);
+    if (trigger === "timeout") [...f.timers.values()][0].fn();
+    else if (trigger === "stop") f.controller.stop();
+    else f.controller.cancel(relay.envelope("cancel", prepare));
+    await rejection; f.show(3); await new Promise(resolve => setImmediate(resolve));
+    assert.notEqual(f.controller.phase(), "prepared"); assert.equal(f.keys.length, 2); assert.equal(f.profileClicks(), 1);
+    assert.equal(f.timers.size, 0); assert.equal(f.clicks(), 0); assert.equal(f.composer.textContent, ""); assert.equal(f.storage.writes.length, 0);
+  }
 });
 console.log(`PASS ${tests} isolated relay checks; no real Chat/browser or production state accessed.`);

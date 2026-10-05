@@ -7,7 +7,12 @@
     const queue = fn => { const next = serial.then(fn); serial = next.catch(() => {}); return next; };
     const selectors = () => (state?.prepare || readiness?.request).domContract.selectors;
     function visible(node) {
-      return !!node && node.isConnected !== false && node.hidden !== true && typeof node.getClientRects === "function" && node.getClientRects().length > 0;
+      if (!node || node.isConnected === false || typeof node.getClientRects !== "function" || !node.getClientRects().length) return false;
+      for (let current = node; current; current = current.parentElement) {
+        if (current.hidden === true || current.inert === true || current.getAttribute?.("inert") != null
+            || String(current.getAttribute?.("aria-hidden") || "").toLowerCase() === "true") return false;
+      }
+      return true;
     }
     function all(selector, scope = env.document) {
       try { return [...scope.querySelectorAll(selector)].filter(visible); }
@@ -21,7 +26,8 @@
     function profile() {
       const node = one(selectors().profile), raw = String(node.textContent || "").trim();
       const effort = node.getAttribute("data-selected-reasoning-effort");
-      if (!["Instant", "Thinking effortInstant", "思考强度Instant", "思考强度即时"].includes(raw) || effort !== "none")
+      if (!["Instant", "Thinking effortInstant", "思考强度Instant", "思考强度即时"].includes(raw) || effort !== "none"
+          || node.getAttribute("aria-expanded") !== "false")
         R.reject("profile_changed", "未观察到实际 Instant/none 控件；不切换未知控件或降档。");
       return { label: "Instant", dom: { text: raw, reasoningEffort: effort } };
     }
@@ -61,7 +67,7 @@
       }
       return [...entries.values()];
     }
-    function inspectFresh(expectedComposer = "") {
+    function inspectFresh(expectedComposer = "", requireInstant = true) {
       if (!R.rootUrl(env.location.href)) R.reject("not_fresh_chat", "页面不是扩展自己的空白普通新 Chat。");
       const choice = one(selectors().chatMode);
       if (choice.getAttribute("aria-pressed") !== "true") R.reject("not_ordinary_chat", "未核对到已选普通 Chat 模式。");
@@ -70,7 +76,7 @@
       if (composer.getAttribute("role") !== "textbox" || composer.getAttribute("contenteditable") !== "true"
           || composerText(composer) !== expectedComposer) R.reject("composer_changed", "输入框不空或已有用户草稿，不覆盖。");
       if (messageNodes().length || completion() || stopPresent() === true) R.reject("not_fresh_chat", "页面已有消息、生成或结束标记，不使用旧聊天。");
-      return { composer, profile: profile() };
+      return { composer, profileControl: one(selectors().profile), profile: requireInstant ? profile() : null };
     }
     function freshObservation(contract, fresh) {
       return { url: env.location.href, chatMode: true, loginVerified: true, emptyComposer: true,
@@ -89,7 +95,9 @@
           if (deadline !== undefined) env.clearTimeout(deadline);
           current.cancel = null; current.phase = error ? "cancelled" : "ready";
           if (error) reject(error);
-          else resolve(R.envelope("pageReady", value, { observation: freshObservation(value.domContract, fresh) }));
+          else resolve(R.envelope("pageReady", value, { observation: { url: env.location.href, chatMode: true,
+            loginVerified: true, emptyComposer: true, modelControlPresent: true, completionInitiallyPresent: false,
+            surface: value.domContract.surface, observationSha256: value.domContract.observationSha256 } }));
         };
         const check = () => {
           if (done) return;
@@ -97,7 +105,7 @@
             if (current.phase !== "checking") R.reject("readiness_cancelled", "本次只读就绪等待已停止。");
             if (!R.rootUrl(env.location.href)) R.reject("not_fresh_chat", "页面不是本次专用普通新 Chat。");
             // Missing initial React controls may arrive after document_idle.
-            // Duplicate controls, drafts, another tier or prior turns fail closed.
+            // This probe observes presence only; it never selects or proves a tier.
             let missing = false;
             for (const key of ["chatMode", "login", "composer", "profile"]) {
               const nodes = all(selectors()[key]);
@@ -105,21 +113,131 @@
               if (!nodes.length) missing = true;
             }
             if (missing) return;
-            finish(null, inspectFresh());
+            finish(null, inspectFresh("", false));
           } catch (error) { finish(error); }
         };
         current.cancel = () => finish(new R.RelayError("readiness_cancelled", "本次只读就绪等待已停止，不输入或发送。"));
         observer = new env.MutationObserver(check);
         observer.observe(env.document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
-        deadline = env.setTimeout(() => finish(new R.RelayError("page_ready_timeout", "六十秒内未核对到实际空白 Chat/登录/Instant 控件，不输入或发送。")), 60000);
+        deadline = env.setTimeout(() => finish(new R.RelayError("page_ready_timeout", "六十秒内未核对到实际空白 Chat、登录与档位控件，不输入或发送。")), 60000);
         // Subscribe before the first state check. No periodic DOM probes.
         check();
       });
     }
     function disconnectObserver() {
+      state?.cancelProfileWait?.();
       state?.cancelSendWait?.();
       if (state?.observer) state.observer.disconnect();
       if (state?.acceptDeadline) env.clearTimeout(state.acceptDeadline);
+    }
+    // Exact CUA-observed menu states. Pro's initial medium attribute is an
+    // observed UI value, never an inferred model or requested Pro mapping.
+    const pickerSteps = [
+      { text: "Instant，第 1 项，共 5 项。", effort: "none" },
+      { text: "Medium，第 2 项，共 5 项。", effort: "medium" },
+      { text: "High，第 3 项，共 5 项。", effort: "high" },
+      { text: "Extra High，第 4 项，共 5 项。", effort: "max" },
+      { text: "Pro，第 5 项，共 5 项。", effort: "medium" }
+    ];
+    const sliderSelector = '[role="menuitem"][data-reasoning-slider="true"][aria-label="强度"][aria-keyshortcuts="ArrowLeft ArrowRight"]';
+    const pickerStatusSelector = '[role="status"][aria-live="polite"]';
+    function pickerBinding(button) {
+      const menus = all('[role="menu"]');
+      if (menus.length > 1) R.reject("profile_picker_unverified", "档位菜单不唯一，不操作未知菜单。");
+      if (!menus.length) return null;
+      const menu = menus[0], buttonId = button.getAttribute("id"), menuId = menu.getAttribute("id");
+      if (!buttonId || !menuId || button.getAttribute("aria-haspopup") !== "menu" || button.getAttribute("aria-expanded") !== "true"
+          || menu.getAttribute("aria-labelledby") !== buttonId || button.getAttribute("aria-controls") !== menuId)
+        R.reject("profile_picker_unverified", "档位菜单没有准确绑定原控件，不选择。");
+      const sliders = all(sliderSelector, menu), statuses = all(pickerStatusSelector, menu);
+      if (sliders.length > 1 || statuses.length > 1) R.reject("profile_picker_unverified", "档位滑块或状态不唯一，不选择。");
+      if (!sliders.length || !statuses.length) return null;
+      return { menu, slider: sliders[0], status: statuses[0] };
+    }
+    function pickerSnapshot(button) {
+      const binding = pickerBinding(button);
+      if (!binding) return null;
+      const raw = String(binding.status.textContent || "");
+      if (!raw) return null;
+      const index = pickerSteps.findIndex(step => step.text === raw && step.effort === button.getAttribute("data-selected-reasoning-effort"));
+      if (index < 0) R.reject("profile_picker_unverified", "档位状态与实际属性不属于已观察的五项表，不猜测。");
+      return { ...binding, index };
+    }
+    function waitProfile(current, stillPreparing, checkState, action) {
+      return new Promise((resolve, reject) => {
+        let done = false, observer, deadline;
+        const finish = (error, value) => {
+          if (done) return;
+          done = true; observer?.disconnect();
+          if (deadline !== undefined) env.clearTimeout(deadline);
+          current.cancelProfileWait = null;
+          if (error) reject(error); else resolve(value);
+        };
+        const check = () => {
+          if (done) return;
+          try { stillPreparing(); inspectFresh("", false); const value = checkState(); if (value) finish(null, value); }
+          catch (error) { finish(error); }
+        };
+        current.cancelProfileWait = () => finish(new R.RelayError("prepare_cancelled", "本次档位准备已停止，不能恢复选择或发送。"));
+        observer = new env.MutationObserver(check);
+        observer.observe(env.document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
+        deadline = env.setTimeout(() => finish(new R.RelayError("profile_selection_timeout", "十秒内未取得准确档位状态，保留原请求，不输入或发送。")), 10000);
+        try { stillPreparing(); inspectFresh("", false); action?.(); check(); }
+        catch (error) { finish(error); }
+      });
+    }
+    async function selectInstant(current, stillPreparing) {
+      const initial = inspectFresh("", false), button = initial.profileControl;
+      try { profile(); if (!all('[role="menu"]').length) return; }
+      catch (error) { if (error?.code !== "profile_changed") throw error; }
+      if (button.tagName !== "BUTTON" || !button.getAttribute("id") || button.getAttribute("aria-haspopup") !== "menu"
+          || button.getAttribute("aria-expanded") !== "false" || all('[role="menu"]').length
+          || typeof button.click !== "function" || typeof env.KeyboardEvent !== "function")
+        R.reject("profile_picker_unverified", "没有已观察的唯一关闭档位按钮，不操作现有或未知菜单。");
+      const originalButton = () => {
+        stillPreparing();
+        if (inspectFresh("", false).profileControl !== button) R.reject("profile_changed", "原档位控件已被替换，停止选择。");
+      };
+      let snapshot = await waitProfile(current, stillPreparing, () => { originalButton(); return pickerSnapshot(button); }, () => { originalButton(); button.click(); });
+      const boundMenu = snapshot.menu, boundSlider = snapshot.slider, boundStatus = snapshot.status;
+      const boundIdentity = () => {
+        originalButton(); const found = pickerBinding(button);
+        if (!found || found.menu !== boundMenu || found.slider !== boundSlider || found.status !== boundStatus)
+          R.reject("profile_picker_unverified", "原档位菜单、滑块或状态已改变，停止选择。");
+      };
+      const boundSnapshot = () => {
+        boundIdentity(); const found = pickerSnapshot(button);
+        if (!found) R.reject("profile_picker_unverified", "原档位状态暂不可核对，停止选择。");
+        return found;
+      };
+      let steps = 0;
+      while (snapshot.index > 0) {
+        if (++steps > 4) R.reject("profile_picker_unverified", "档位步骤超出已观察范围，不继续选择。");
+        const previous = snapshot.index, next = previous - 1;
+        snapshot = await waitProfile(current, stillPreparing, () => {
+          const found = boundSnapshot();
+          if (found.index === previous) return null;
+          if (found.index !== next) R.reject("profile_picker_unverified", "档位没有按已观察的一项左移，不继续选择。");
+          return found;
+        }, () => {
+          if (boundSnapshot().index !== previous) R.reject("profile_changed", "键盘选择前档位已改变，不操作。");
+          boundSlider.focus(); originalButton();
+          if (boundSnapshot().index !== previous) R.reject("profile_changed", "聚焦后档位已改变，不操作。");
+          boundSlider.dispatchEvent(new env.KeyboardEvent("keydown", { key: "ArrowLeft", code: "ArrowLeft", bubbles: true, cancelable: true, repeat: false }));
+          // React may update the ordinal asynchronously, but a retired or
+          // inactive original slider must never receive the keyup operation.
+          boundIdentity();
+          boundSlider.dispatchEvent(new env.KeyboardEvent("keyup", { key: "ArrowLeft", code: "ArrowLeft", bubbles: true, cancelable: true, repeat: false }));
+        });
+      }
+      await waitProfile(current, stillPreparing, () => {
+        originalButton(); const menus = all('[role="menu"]');
+        if (menus.length && (menus.length !== 1 || menus[0] !== boundMenu)) R.reject("profile_picker_unverified", "关闭时出现其它菜单，不恢复选择。");
+        if (button.getAttribute("aria-expanded") === "true" || menus.length) return null;
+        if (String(button.textContent || "").trim() === "思考强度思考强度") return null;
+        return inspectFresh();
+      }, () => { if (boundSnapshot().index !== 0) R.reject("profile_changed", "关闭前 Instant 观测已改变，不操作。"); button.click(); });
+      stillPreparing(); inspectFresh();
     }
     function waitForSend() {
       return new Promise((resolve, reject) => {
@@ -215,6 +333,7 @@
       if (actualSha !== value.promptSha256) R.reject("prompt_hash_mismatch", "完整冻结问题 SHA 不符。");
       const prior = await env.chrome.storage.local.get(key); stillPreparing();
       if (prior?.[key]) R.reject("dispatch_already_attempted", "该请求已有页面提交意图，只能核对。");
+      await selectInstant(current, stillPreparing); stillPreparing();
       const fresh = inspectFresh(); current.observedBefore = fresh.profile.label; current.phase = "prepared";
       return R.envelope("prepared", value, { observation: freshObservation(value.domContract, fresh) });
     }
@@ -283,7 +402,7 @@
   root.ConsoleChatRelayContent = Object.freeze({ createController, CONTENT_PREFIX });
   if (root.chrome?.runtime?.onMessage && root.document && root.location && root.MutationObserver) {
     const controller = createController({ chrome: root.chrome, document: root.document, location: root.location,
-      MutationObserver: root.MutationObserver, InputEvent: root.InputEvent, now: () => Date.now(), setTimeout: root.setTimeout, clearTimeout: root.clearTimeout });
+      MutationObserver: root.MutationObserver, InputEvent: root.InputEvent, KeyboardEvent: root.KeyboardEvent, now: () => Date.now(), setTimeout: root.setTimeout, clearTimeout: root.clearTimeout });
     root.chrome.runtime.onMessage.addListener((value, sender, reply) => {
       if (sender?.id !== R.EXTENSION_ID || !["relay.content.readiness", "relay.content.prepare", "relay.content.commit", "relay.content.cancel"].includes(value?.type)) return false;
       if (value.type === "relay.content.cancel") {

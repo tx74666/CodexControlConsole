@@ -461,6 +461,7 @@ class NativeWorkMixin:
                     "appTarget": {"kind": "codex", "mode": target["mode"], "threadId": thread_id, "name": name}}
                 payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, project,
                     native_work_binding=binding if project is None else None)
+                submitted = self._freeze_submission_time(payload, now)
                 if sum(image["originalSize"] for image in payload["appFrozen"]["images"]) > api.MAX_UPLOAD:
                     raise api.WorkflowError("本轮所选原图总大小超过 24 MB；图片与执行稿保留，Work 未入队。", 413, "work_images_too_large")
                 if idea_context is not None:
@@ -477,10 +478,14 @@ class NativeWorkMixin:
                 snapshot = {"origin": "workflow_work", "purpose": "execute", "recordId": record["id"], "jobId": job_id,
                     "title": record["title"], "attachmentIds": context["attachmentIds"], "executionEngine": "codex_app",
                     "workspace": {"projectId": binding["workspaceProjectId"], "hostId": "local", "root": binding["workspaceRoot"], "allowedRoot": binding["allowedRoot"]},
-                    "authorizationSha256": _digest(binding), "frozenPayloadSha256": _digest(payload), "sourceTask": source_task}
+                    "authorizationSha256": _digest(binding), "frozenPayloadSha256": _digest(payload), "sourceTask": source_task,
+                    "submissionTime": submitted}
                 if idea_context is not None:
                     snapshot.update(ideaContext=idea_context, ideaContextSha256=payload["ideaContextSha256"])
                 prompt = (f"[Codex Console 发布编号：{dispatch_id}]\n\n这是用户明确确认的一次 Work，须实际完成所选任务，不是只准备方案。\n"
+                    f"本轮确认提交时间：{submitted['localTime']}（Asia/Shanghai，UTC+08:00）。\n"
+                    "submissionTime 是服务器保存的本轮确认时间；history.createdAt 是各条历史的实际保存时间，缺失时未知。"
+                    "这些时间不代表 App 收到消息的时间，也不增加授权。\n"
                     f"本机 App Workspace 为 {binding['workspaceRoot']}；唯一获授权改动目录是 {binding['allowedRoot']}。每次命令的工作目录须设为这个子目录。\n"
                     "禁止扩大目录、读取凭据/内部资料/其他聊天、修改私人数据库、发送第三方消息、创建 Goal 或 Worktree、关闭用户应用。"
                     "selectedImages 仅授权读取列出的原图。sourceTask与history是原任务资料；只能按本轮任务及明确范围执行。\n" +
@@ -493,12 +498,12 @@ class NativeWorkMixin:
                     ("用户已明确授权更新原任务正文：可在该唯一结果清单额外给updatedTaskBody完整新正文；由Console核对原revision后保存，你不能直接改私人数据库。\n"
                      if update_body else "若任务仅需重写方案，请把新正文写成授权目录内文件并报告changedFiles；未授权直接更换原任务正文。\n") +
                     "不要直接改 Console 私人数据库。\n\n" +
-                    api._json({"task": text, "sourceTask": source_task, "selection": context, "selectedImages": payload["appFrozen"]["images"], "history": payload["appFrozen"]["history"],
+                    api._json({"task": text, "submissionTime": submitted, "sourceTask": source_task, "selection": context, "selectedImages": payload["appFrozen"]["images"], "history": payload["appFrozen"]["history"],
                         **({"ideaContext": idea_context, "ideaContextSha256": payload["ideaContextSha256"]} if idea_context is not None else {})}))
                 db.execute("INSERT INTO idea_dispatches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (dispatch_id, "", str(uuid.UUID(body["requestId"])), api._json(snapshot), prompt,
                     "codex", target["mode"], thread_id or None, name, "normal", "pending", "{}", "", None, now, now, now))
                 db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, record["id"], "execute", body["requestId"], api._json(payload), "waiting", 1, None, now, now, "等待电脑通过已登录 Codex 在所选 Workspace 执行。", "", "{}"))
-                self._message(db, record["id"], "user", text)
+                self._message(db, record["id"], "user", text, created_at=now)
                 self._receipt(db, "app_work", body, {"jobId": job_id})
                 self._revision(db, True)
             if authorize:

@@ -531,4 +531,24 @@ await test("a terminal failure read retains an unknown send nonce and the comple
   assert.deepEqual(JSON.parse([...h.storage.values()][0]).pending, pending); assert.equal(input.value, "B：不能覆盖的下一轮草稿");
   assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1); h.panel.clear();
 });
+await test("message dates use saved instants in Shanghai across midnight and never post on display", async () => {
+  const h = harness();
+  h.message({ id: "user-time", role: "user", text: "用户原文\n<script>仍是文字</script>", createdAt: "2026-10-05T16:19:54.123456Z" });
+  h.message({ id: "answer-time", role: "assistant", text: "真实回答", createdAt: "2026-10-05T20:19:54.123456+04:00" });
+  h.panel.setActive(true); await flush();
+  const rows = h.byClass("dialogue-messages").children, clocks = rows.map(row => row.children[0].children.find(item => item.tagName === "TIME"));
+  for (const clock of clocks) { assert.equal(clock.textContent, "2026-10-06 00:19:54（UTC+08:00）"); assert.match(clock.title, /Asia\/Shanghai/); }
+  assert.equal(clocks[0].attributes.datetime, "2026-10-05T16:19:54.123456Z");
+  assert.equal(rows[0].children[1].textContent, "用户原文\n<script>仍是文字</script>");
+  const input = h.byLabel("提问或保存想法"); input.value = "后来的草稿仍保留"; input.fire("input"); await h.panel.refresh();
+  assert.equal(input.value, "后来的草稿仍保留"); assert.equal(h.byClass("dialogue-message-time").textContent, clocks[0].textContent);
+  assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear();
+});
+await test("legacy missing or ambiguous message timestamps stay unknown without using the refresh clock", async () => {
+  const h = harness();
+  for (const [index, createdAt] of [undefined, "invalid", "2026-10-05T16:19:54"].entries()) h.message({ id: `old-${index}`, role: "user", text: `旧记录${index}`, ...(createdAt === undefined ? {} : { createdAt }) });
+  h.panel.setActive(true); await flush(); await h.panel.refresh();
+  for (const row of h.byClass("dialogue-messages").children) { const clock = row.children[0].children.find(item => item.tagName === "TIME"); assert.equal(clock.textContent, "时间未记录"); assert.equal(clock.attributes.datetime, undefined); }
+  assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear();
+});
 console.log(`${count} mobile dialogue behavior checks passed.`);

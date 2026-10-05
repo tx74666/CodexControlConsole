@@ -697,7 +697,7 @@ class MobileDialogueMixin:
                     self._insert_app_dispatch(db, job_id, record, payload, now, body["requestId"])
                     db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, record["id"], "discuss", body["requestId"],
                         api._json(payload), "waiting", 1, None, now, now, "已确认此消息；等待普通 Chat 转发器核对所选档位，尚未发送。", "", "{}"))
-                    self._message(db, record["id"], "user", text)
+                    self._message(db, record["id"], "user", text, created_at=now)
                     session["draft"] = {"text": "", "attachmentIds": []}
                     saved["jobId"] = job_id
                 elif action == "save":

@@ -354,6 +354,72 @@
     for (const button of document.querySelectorAll("[data-tab]")) button.setAttribute("aria-pressed", String(button.dataset.tab === value));
     if (value === "music" && state.paired && !state.music.loaded) void loadMusic();
   }
+  function bindTabSwipe() {
+    const host = el("appScreen"), tabs = ["work", "transfer", "music", "documents"];
+    let gesture = null, composing = false;
+    const editable = node => Boolean(node && (node.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(node.tagName)));
+    const selectionActive = () => window.getSelection?.()?.isCollapsed === false;
+    const inputActive = () => {
+      const viewport = window.visualViewport;
+      return composing || editable(document.activeElement) || selectionActive()
+        || Boolean(viewport && viewport.scale === 1 && Number.isFinite(window.innerHeight)
+          && window.innerHeight - viewport.height > 160);
+    };
+    const available = () => state.paired && !document.hidden && !host.hidden && !state.reader
+      && !state.busy && !state.mutationBusy && !uiUpdate.preparing && !uiUpdate.reloading && !inputActive();
+    const blockedTarget = target => {
+      for (let node = target?.nodeType === 3 ? target.parentElement : target; node; node = node.parentElement) {
+        if (node === host) return false;
+        if (editable(node) || ["BUTTON", "A", "SUMMARY", "LABEL", "AUDIO", "VIDEO", "IFRAME", "CANVAS"].includes(node.tagName)
+            || ["button", "slider", "textbox", "dialog"].includes(node.getAttribute?.("role"))
+            || node.getAttribute?.("data-swipe-ignore") != null) return true;
+        const style = window.getComputedStyle?.(node);
+        if (node.scrollWidth > node.clientWidth + 2 && /auto|scroll/.test(style?.overflowX || style?.overflow || "")) return true;
+      }
+      return true;
+    };
+    const point = touch => touch && Number.isFinite(touch.clientX) && Number.isFinite(touch.clientY) ? touch : null;
+    const time = event => Number.isFinite(event.timeStamp) ? event.timeStamp : Date.now();
+    const current = () => gesture && available() && gesture.generation === state.generation
+      && gesture.tab === state.tab && gesture.workView === workView;
+    const neighbour = dx => tabs[tabs.indexOf(gesture.tab) + (dx > 0 ? 1 : -1)];
+    host.addEventListener("touchstart", event => {
+      gesture = null;
+      if (event.touches?.length !== 1 || !available() || blockedTarget(event.target)) return;
+      const touch = point(event.touches[0]), width = window.innerWidth || document.documentElement.clientWidth;
+      // Keep iOS browser back/forward gestures at the screen edges intact.
+      if (!touch || touch.clientX <= 20 || width && touch.clientX >= width - 20) return;
+      gesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, time: time(event),
+        tab: state.tab, workView, generation: state.generation, horizontal: false };
+    }, { passive: true });
+    host.addEventListener("touchmove", event => {
+      if (!current() || event.touches?.length !== 1) { gesture = null; return; }
+      const touch = point(event.touches[0]);
+      if (!touch || touch.identifier !== gesture.id || time(event) - gesture.time > 900) { gesture = null; return; }
+      const dx = touch.clientX - gesture.x, dy = touch.clientY - gesture.y;
+      if (Math.abs(dy) >= 12 && Math.abs(dy) >= Math.abs(dx)) { gesture = null; return; }
+      if (Math.abs(dx) < 24 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      if (!neighbour(dx)) { gesture = null; return; }
+      gesture.horizontal = true;
+      if (event.cancelable) event.preventDefault();
+    }, { passive: false });
+    host.addEventListener("touchend", event => {
+      const previous = gesture;
+      if (!current() || event.touches?.length !== 0 || event.changedTouches?.length !== 1) { gesture = null; return; }
+      const touch = point(event.changedTouches[0]);
+      const dx = touch ? touch.clientX - previous.x : 0, dy = touch ? touch.clientY - previous.y : 0;
+      const next = touch && touch.identifier === previous.id && previous.horizontal && time(event) - previous.time <= 900
+        && Math.abs(dx) >= 64 && Math.abs(dx) >= Math.abs(dy) * 1.5 ? neighbour(dx) : null;
+      gesture = null;
+      // The user's requested direction: a rightward stroke selects the item
+      // on the right. Reuse normal tab activation; never clear or send a draft.
+      if (next) selectTab(next);
+    }, { passive: true });
+    host.addEventListener("touchcancel", () => { gesture = null; }, { passive: true });
+    document.addEventListener("compositionstart", () => { composing = true; gesture = null; });
+    document.addEventListener("compositionend", () => { composing = false; });
+  }
+  bindTabSwipe();
   function musicTime(value) {
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "0:00";
     const seconds = Math.floor(value); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;

@@ -107,6 +107,37 @@ class MobileDialogueChecks(unittest.TestCase):
     def files_snapshot(self):
         return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in self.service.attachments_dir.iterdir() if path.is_file()}
 
+    def test_phone_confirmation_time_is_shared_by_saved_message_and_frozen_chat_on_replay(self):
+        state = self.open()
+        drafted = self.mutate("draft", state, text="仅保存不能伪造发送时间")
+        self.assertEqual(self.counts()["messages"], 0)
+        self.assertEqual(self.counts()["idea_dispatches"], 0)
+        session = drafted["session"]
+        body = request(clientId=self.client, sessionId=session["id"], expectedRevision=session["revision"],
+            text="已确认本轮原文\n第二行", attachmentIds=[], requestedProfile="fast")
+        confirmed = "2026-10-05T16:19:54.123456+00:00"
+        stamp = {"confirmedAt": confirmed, "timeZone": "Asia/Shanghai", "localTime": "2026-10-06T00:19:54.123456+08:00"}
+        with patch("workflow_service._now", return_value=confirmed):
+            accepted = self.post("dialogue/send", body)
+        with self.service._db() as db:
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone()[0])
+            dispatch = dict(self.service._dispatch(db, payload["appDispatchId"]))
+        prompt_data = json.loads(dispatch["prompt"][dispatch["prompt"].rfind("\n\n") + 2:])
+        for value in (payload, payload["appFrozen"], json.loads(dispatch["snapshot"]), prompt_data):
+            self.assertEqual(value["submissionTime"], stamp)
+        self.assertEqual(payload["text"], body["text"])
+        self.assertEqual(prompt_data["question"], body["text"])
+        self.assertEqual(accepted["detail"]["messages"][-1]["createdAt"], confirmed)
+        self.assertEqual(dispatch["user_confirmed_at"], confirmed)
+        before = self.db_snapshot()
+        with patch("workflow_service._now", return_value="2026-10-09T01:00:00+00:00"):
+            replay = self.post("dialogue/send", body)
+            read = self.current()
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["job"]["id"], accepted["job"]["id"])
+        self.assertEqual(read["detail"]["messages"][-1]["createdAt"], confirmed)
+        self.assertEqual(self.db_snapshot(), before)
+
     def test_get_is_readonly_and_open_does_not_create_a_long_term_idea(self):
         before = self.counts()
         state = self.current()

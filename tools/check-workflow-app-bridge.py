@@ -106,6 +106,83 @@ class AppBridgeChecks(unittest.TestCase):
         self.assertEqual(self.service.incubator_dispatches()["dispatches"], [])
         self.assertEqual(self.service.incubator_list()["ideas"], [])
 
+    def test_confirmation_time_is_frozen_in_chat_prompt_and_message_across_replay_and_claim(self):
+        confirmed = "2026-10-05T16:19:54.123456+00:00"
+        stamp = {"confirmedAt": confirmed, "timeZone": "Asia/Shanghai", "localTime": "2026-10-06T00:19:54.123456+08:00"}
+        body = request(recordId=self.record, text="保留原文与换行\n第二行", appTarget=self.target("chatgpt"))
+        history = self.service.detail(self.record)["messages"]
+        with patch("workflow_service._now", return_value=confirmed):
+            accepted = self.service.discuss(body)
+        with self.service._db() as db:
+            job = dict(db.execute("SELECT * FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone())
+            payload = json.loads(job["payload"])
+            dispatch = dict(self.service._dispatch(db, payload["appDispatchId"]))
+        prompt_data = json.loads(dispatch["prompt"][dispatch["prompt"].rfind("\n\n") + 2:])
+        for value in (payload, payload["appFrozen"], json.loads(dispatch["snapshot"]), prompt_data):
+            self.assertEqual(value["submissionTime"], stamp)
+        self.assertEqual(prompt_data["question"], body["text"])
+        self.assertEqual(payload["text"], body["text"])
+        self.assertEqual(prompt_data["history"][0]["createdAt"], history[0]["createdAt"])
+        self.assertEqual(dispatch["user_confirmed_at"], confirmed)
+        self.assertEqual(job["created_at"], confirmed)
+        self.assertEqual(self.service.detail(self.record)["messages"][-1]["createdAt"], confirmed)
+        self.assertIn("2026-10-06T00:19:54.123456+08:00（Asia/Shanghai", dispatch["prompt"])
+        with patch("workflow_service._now", return_value="2026-10-07T01:00:00+00:00"):
+            replay = self.service.discuss(body)
+            claimed = self.claim()["dispatch"]
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["job"]["id"], accepted["job"]["id"])
+        self.assertEqual(claimed["prompt"], dispatch["prompt"])
+        with self.service._db() as db:
+            self.assertEqual(db.execute("SELECT payload FROM jobs WHERE id=?", (job["id"],)).fetchone()[0], job["payload"])
+        self.assertEqual(len(self.service.detail(self.record)["messages"]), len(history) + 1)
+
+    def test_confirmation_time_cannot_be_replaced_in_payload_and_frozen_context_together(self):
+        accepted = self.discuss()
+        with self.service._db() as db:
+            job = db.execute("SELECT * FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone()
+            payload = json.loads(job["payload"])
+            replacement = self.service._submission_time("2026-10-06T00:00:00+00:00")
+            payload["submissionTime"] = replacement
+            payload["appFrozen"]["submissionTime"] = replacement
+            db.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(payload), job["id"]))
+        self.error(self.claim, "result_not_matching")
+
+    def test_legacy_frozen_request_without_time_metadata_is_not_rewritten_on_claim(self):
+        accepted = self.discuss()
+        with self.service._db() as db:
+            job = db.execute("SELECT * FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone()
+            payload = json.loads(job["payload"])
+            dispatch = self.service._dispatch(db, payload["appDispatchId"])
+            snapshot = json.loads(dispatch["snapshot"])
+            payload.pop("submissionTime"); payload["appFrozen"].pop("submissionTime"); snapshot.pop("submissionTime")
+            db.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(payload), job["id"]))
+            db.execute("UPDATE idea_dispatches SET snapshot=?,prompt=? WHERE id=?", (json.dumps(snapshot), "Immutable legacy prompt", dispatch["id"]))
+        self.assertEqual(self.claim()["dispatch"]["prompt"], "Immutable legacy prompt")
+        with self.service._db() as db:
+            self.assertNotIn("submissionTime", json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (job["id"],)).fetchone()[0]))
+
+    def test_nested_only_submission_time_is_not_legacy_and_rejects_answer_attach_without_writes(self):
+        accepted = self.discuss()
+        claimed = self.claim()["dispatch"]
+        with self.service._db() as db:
+            job = db.execute("SELECT * FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone()
+            payload = json.loads(job["payload"])
+            dispatch = self.service._dispatch(db, payload["appDispatchId"])
+            snapshot = json.loads(dispatch["snapshot"])
+            payload.pop("submissionTime"); snapshot.pop("submissionTime")
+            self.assertIn("submissionTime", payload["appFrozen"])
+            db.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(payload), job["id"]))
+            db.execute("UPDATE idea_dispatches SET snapshot=? WHERE id=?", (json.dumps(snapshot), dispatch["id"]))
+        with self.service._db() as db:
+            before = {table: [tuple(row) for row in db.execute("SELECT * FROM " + table + " ORDER BY rowid")]
+                for table in ("jobs", "idea_dispatches", "messages", "requests")}
+        self.error(lambda: self.complete(claimed), "result_not_matching")
+        with self.service._db() as db:
+            after = {table: [tuple(row) for row in db.execute("SELECT * FROM " + table + " ORDER BY rowid")]
+                for table in before}
+        self.assertEqual(after, before)
+
     def test_selected_images_and_history_are_frozen_and_private(self):
         first = self.upload()
         other = self.service.create(request(projectId="console", text="Other record private comment"))["record"]["id"]

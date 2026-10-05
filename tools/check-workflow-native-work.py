@@ -87,6 +87,37 @@ class NativeWorkChecks(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM idea_dispatches").fetchone()[0], 0)
 
+    def test_work_confirmation_time_is_bound_before_payload_hash_and_replay_preserves_it(self):
+        confirmed = "2026-10-05T16:19:54.123456+00:00"
+        stamp = {"confirmedAt": confirmed, "timeZone": "Asia/Shanghai", "localTime": "2026-10-06T00:19:54.123456+08:00"}
+        with patch("workflow_service._now", return_value=confirmed):
+            catalog = {**deepcopy(self.catalog), "requestId": str(uuid.uuid4()), "capturedAt": confirmed}
+            self.service.native_work_catalog(catalog)
+            body = self.body(text="本轮真实执行文字\n原文保持")
+            accepted = self.service.app_work(body)
+        with self.service._db() as db:
+            job = dict(db.execute("SELECT * FROM jobs WHERE id=?", (accepted["job"]["id"],)).fetchone())
+            payload = json.loads(job["payload"])
+            dispatch = dict(self.service._dispatch(db, payload["appDispatchId"]))
+        snapshot = json.loads(dispatch["snapshot"])
+        prompt_data = json.loads(dispatch["prompt"][dispatch["prompt"].rfind("\n\n") + 2:])
+        for value in (payload, payload["appFrozen"], snapshot, prompt_data):
+            self.assertEqual(value["submissionTime"], stamp)
+        self.assertEqual(snapshot["frozenPayloadSha256"], native_work._digest(payload))
+        self.assertEqual(prompt_data["task"], body["text"])
+        self.assertEqual(payload["text"], body["text"])
+        self.assertEqual(dispatch["user_confirmed_at"], confirmed)
+        self.assertEqual(job["created_at"], confirmed)
+        self.assertEqual(self.service.detail(self.record)["messages"][-1]["createdAt"], confirmed)
+        with patch("workflow_service._now", return_value="2026-10-09T01:00:00+00:00"):
+            replay = self.service.app_work(deepcopy(body))
+        self.assertTrue(replay["duplicate"])
+        self.assertEqual(replay["job"]["id"], job["id"])
+        with self.service._db() as db:
+            self.assertEqual(dict(self.service._dispatch(db, dispatch["id"])), dispatch)
+            self.assertEqual(db.execute("SELECT payload FROM jobs WHERE id=?", (job["id"],)).fetchone()[0], job["payload"])
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 1)
+
     def unclassified_phone_idea(self, with_image=False):
         self.service.shutdown()
         self.service = WorkflowService(self.root / "unclassified-private", models=NoModels(), projects=[], recover_jobs=False)

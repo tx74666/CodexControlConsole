@@ -105,7 +105,11 @@
     exact(value, ["protocol", "type", "dispatchId", "attemptId", "observation"]);
     common(value, "pageReady");
     validateReadiness(readiness);
-    validateFreshObservation(value.observation);
+    const observation = exact(value.observation, ["url", "chatMode", "loginVerified", "emptyComposer", "modelControlPresent", "completionInitiallyPresent", "surface", "observationSha256"]);
+    if (!rootUrl(observation.url) || observation.chatMode !== true || observation.loginVerified !== true
+        || observation.emptyComposer !== true || observation.modelControlPresent !== true || observation.completionInitiallyPresent !== false
+        || !["chrome", "edge"].includes(observation.surface) || !SHA.test(observation.observationSha256))
+      reject("readiness_observation_mismatch", "只读就绪缺少实际空白普通 Chat、登录或档位控件；不代表已选择 Instant。");
     if (!sameIdentity(value, readiness) || value.observation.surface !== readiness.domContract.surface
         || value.observation.observationSha256 !== readiness.domContract.observationSha256)
       reject("readiness_identity_mismatch", "只读就绪回执不属于本次页面与冻结 DOM 合同。");
