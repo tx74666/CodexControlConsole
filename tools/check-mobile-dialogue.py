@@ -119,6 +119,149 @@ class MobileDialogueChecks(unittest.TestCase):
         self.assertEqual(self.counts()["ideas"], 0)
         self.assertEqual(self.counts()["idea_dispatches"], 0)
 
+    def test_first_unclassified_phone_saves_recovers_clears_and_reopens_real_images_without_a_project(self):
+        self.service = WorkflowService(self.root / "first-install-private", models=ForbiddenModels(), projects=[], recover_jobs=False)
+        self.assertEqual(self.service.config()["projects"], [])
+        self.assertIsNone(self.current()["session"])
+        self.assertEqual(self.counts()["records"], 0)
+        opened = self.open()
+        self.assertEqual(opened["detail"]["record"]["projectId"], "")
+        drafted = self.mutate("draft", opened, text="还没想成熟的无项目想法", requestedProfile="pro")
+        original = self.image(drafted)
+        selected = self.mutate("draft", drafted, text="还没想成熟的无项目想法", attachmentIds=[original], requestedProfile="pro")
+        files = self.files_snapshot()
+        self.service = WorkflowService(self.root / "first-install-private", models=ForbiddenModels(), recover_jobs=False)
+        recovered = self.current()
+        self.assertEqual(recovered["session"], selected["session"])
+        saved = self.mutate("save", recovered, text=recovered["session"]["draft"]["text"], attachmentIds=[original])
+        idea = saved["idea"]
+        self.assertIsNone(idea["projectId"])
+        self.assertEqual(idea["body"], "还没想成熟的无项目想法")
+        self.assertEqual(idea["attachmentIds"], [original])
+        self.assertEqual(idea["workflowRecordId"], opened["session"]["recordId"])
+        cleared = self.mutate("clear", saved)
+        self.assertNotEqual(cleared["session"]["id"], saved["session"]["id"])
+        self.assertEqual(cleared["detail"]["record"]["projectId"], "")
+        self.assertEqual(cleared["session"]["draft"], {"text": "", "attachmentIds": []})
+        before_late = self.db_snapshot()
+        self.error(lambda: self.mutate("draft", saved, text="旧页迟到草稿"), "dialogue_changed")
+        self.assertEqual(self.db_snapshot(), before_late)
+        found = workflow_get(self.service, "mobile/ideas", "projectId=unclassified&search=无项目")
+        self.assertEqual(found["projects"], [])
+        self.assertEqual([item["id"] for item in found["ideas"]], [idea["id"]])
+        reopened = self.open(ideaId=idea["id"], expectedIdeaRevision=idea["revision"])
+        self.assertEqual(reopened["session"]["recordId"], opened["session"]["recordId"])
+        self.assertEqual([item["id"] for item in reopened["eligibleAttachments"]], [original])
+        self.assertEqual(reopened["session"]["draft"], {"text": "", "attachmentIds": []})
+        self.assertEqual(workflow_get(self.service, "mobile/idea", "id=" + idea["id"])["idea"], idea)
+        before_work = self.db_snapshot()
+        reviewed = self.service.app_work_review("recordId=" + reopened["session"]["recordId"] + "&ideaId=" + idea["id"] + "&revision=" + str(idea["revision"]))
+        self.assertEqual(reviewed["ideaContext"]["ideaId"], idea["id"])
+        self.assertEqual(self.service.config()["appWork"]["bindings"], [])
+        self.assertEqual(self.db_snapshot(), before_work)
+        self.error(lambda: self.service.app_work(request(recordId=reopened["session"]["recordId"],
+            bindingId="no-grant", text="没有授权不能执行", sourceTask={"ideaId": idea["id"], "revision": idea["revision"]})))
+        self.assertEqual(self.db_snapshot(), before_work)
+        self.assertEqual(self.files_snapshot(), files)
+        self.assertEqual(self.counts()["jobs"], 0)
+        self.assertEqual(self.counts()["idea_dispatches"], 0)
+        self.assertFalse(self.service._wake.is_set())
+        with self.service._db() as db:
+            self.assertEqual(self.service._setting(db, "projects"), [])
+            self.assertIsNone(self.service._setting(db, "app_work_bindings"))
+            self.assertIsNone(self.service._setting(db, "app_work_catalog"))
+
+    def test_notebook_save_and_clear_do_not_open_or_require_an_existing_project_directory(self):
+        workspace = self.root / "previously-authorized-project"
+        workspace.mkdir()
+        self.service = WorkflowService(self.root / "missing-workspace-private", models=ForbiddenModels(), recover_jobs=False,
+            projects=[{"id": "stale-project", "name": "Actual configured project", "root": str(workspace), "capabilities": []}])
+        with self.service._db() as db:
+            projects_before = self.service._setting(db, "projects")
+        workspace.rmdir()
+        saved = self.mutate("save", self.open(), text="目录失效仍须记住的念头")
+        self.assertEqual(saved["detail"]["record"]["projectId"], "stale-project")
+        self.assertIsNone(saved["idea"]["projectId"])
+        self.mutate("clear", saved)
+        self.assertEqual(workflow_get(self.service, "mobile/idea", "id=" + saved["idea"]["id"])["idea"]["body"], "目录失效仍须记住的念头")
+        with self.service._db() as db:
+            self.assertEqual(self.service._setting(db, "projects"), projects_before)
+            self.error(lambda: self.service._project(db, "stale-project"))
+        self.assertFalse(workspace.exists())
+        self.assertEqual(self.counts()["jobs"], 0)
+        self.assertEqual(self.counts()["idea_dispatches"], 0)
+        sent = self.mutate("send", self.current(), text="目录失效不阻止普通文字讨论")
+        with self.service._db() as db:
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (sent["job"]["id"],)).fetchone()[0])
+            self.assertEqual(self.service._setting(db, "projects"), projects_before)
+        self.assertEqual(payload["projectId"], "stale-project")
+        self.assertNotIn("actionPlanning", payload["appFrozen"])
+        self.assertFalse(workspace.exists())
+
+    def test_unclassified_text_chat_freezes_once_and_recovers_a_late_answer_only_to_its_original_source(self):
+        self.service = WorkflowService(self.root / "unclassified-chat-private", models=ForbiddenModels(), projects=[], recover_jobs=False)
+        saved = self.mutate("save", self.open(), text="没有项目的长期想法")
+        state = saved["session"]
+        body = request(clientId=self.client, sessionId=state["id"], expectedRevision=state["revision"],
+            text="问题A：继续分析这个想法", attachmentIds=[], requestedProfile="fast")
+        first = self.post("dialogue/send", body)
+        duplicate = self.post("dialogue/send", body)
+        self.assertTrue(duplicate["duplicate"])
+        self.assertEqual(duplicate["job"]["id"], first["job"]["id"])
+        with self.service._db() as db:
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (first["job"]["id"],)).fetchone()[0])
+        self.assertEqual(payload["projectId"], "")
+        self.assertEqual(payload["appFrozen"]["projectName"], "未归类")
+        self.assertNotIn("actionPlanning", payload["appFrozen"])
+        self.assertEqual(payload["sourceTask"], {key: saved["idea"][key] for key in ("title", "body")} |
+            {"ideaId": saved["idea"]["id"], "revision": saved["idea"]["revision"]})
+        self.assertEqual(self.counts()["jobs"], 1)
+        self.assertEqual(self.counts()["idea_dispatches"], 1)
+        cleared = self.mutate("clear", first)
+        second = self.mutate("send", cleared, text="问题B：新的临时讨论", requestedProfile="fast")
+        response = self.answer(first, "回答A完整回到原无项目想法讨论")
+        current = self.current()
+        self.assertEqual(current["session"]["id"], second["session"]["id"])
+        self.assertEqual([message["text"] for message in current["detail"]["messages"]], ["问题B：新的临时讨论"])
+        original = self.service.detail(first["session"]["recordId"])
+        self.assertEqual(original["messages"][-1]["id"], response["id"])
+        self.assertEqual(original["sourceTask"]["ideaId"], saved["idea"]["id"])
+        replay = self.post("dialogue/send", body)
+        self.assertTrue(replay["duplicate"])
+        self.assertFalse(replay["session"]["isCurrent"])
+        self.assertEqual(replay["job"]["id"], first["job"]["id"])
+        self.assertEqual(self.counts()["idea_dispatches"], 2)
+        self.assertEqual(self.current()["session"]["id"], second["session"]["id"])
+        self.error(lambda: self.mutate("remember", current, sourceMessageId=response["id"]), "answer_source_mismatch")
+        self.assertFalse(self.service._wake.is_set())
+        with self.service._db() as db:
+            self.assertEqual(self.service._setting(db, "projects"), [])
+
+    def test_no_project_freeze_rejects_project_references_and_non_mobile_or_work_callers(self):
+        self.service = WorkflowService(self.root / "unclassified-scope-private", models=ForbiddenModels(), projects=[], recover_jobs=False)
+        state = self.open()
+        original = self.image(state)
+        drafted = self.mutate("draft", state, text="有图不假称传给普通 Chat", attachmentIds=[original])
+        before = self.db_snapshot()
+        self.error(lambda: self.mutate("send", drafted, text="图像问题", attachmentIds=[original]), "app_images_unavailable")
+        self.assertEqual(self.db_snapshot(), before)
+        self.assertEqual(self.current()["session"]["draft"], drafted["session"]["draft"])
+        with self.service._db() as db:
+            record = self.service._record(db, state["session"]["recordId"])
+            payload = {"context": {"attachmentIds": [], "selectedText": "", "referenceIds": ["private-ref"]},
+                "purpose": "discussion", "appTarget": {"kind": "chatgpt", "mode": "new"},
+                "mobileDialogue": {"recordId": record["id"]}}
+            self.error(lambda: self.service._freeze_app_discussion(db, record, payload, None), "project_not_authorized")
+            payload["context"]["referenceIds"] = []
+            for mobile, purpose, target in [(None, "discussion", {"kind": "chatgpt", "mode": "new"}),
+                    ({"recordId": "other-record"}, "discussion", {"kind": "chatgpt", "mode": "new"}),
+                    ({"recordId": record["id"]}, "native_work", {"kind": "codex", "mode": "new"})]:
+                self.error(lambda: self.service._freeze_app_discussion(db, record,
+                    {**payload, "mobileDialogue": mobile, "purpose": purpose, "appTarget": target}, None), "project_not_authorized")
+        self.assertEqual(self.db_snapshot(), before)
+        self.assertEqual(self.counts()["jobs"], 0)
+        self.assertEqual(self.counts()["idea_dispatches"], 0)
+
     def test_open_nonce_is_idempotent_and_open_without_idea_recovers_current(self):
         body = request(clientId=self.client)
         first = self.post("dialogue/open", body)

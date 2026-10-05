@@ -1833,6 +1833,15 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
     def _freeze_app_discussion(self, db, record, payload, project):
         """Only accepted selections and this record's history become the private prompt."""
         context = payload["context"]
+        if project is None:
+            mobile = payload.get("mobileDialogue")
+            target = payload.get("appTarget", {})
+            if (not isinstance(mobile, dict) or mobile.get("recordId") != record["id"]
+                    or payload.get("purpose") != "discussion" or target.get("kind") != "chatgpt"
+                    or target.get("mode") != "new"):
+                raise WorkflowError("只有本记录的手机普通讨论可以不指定执行项目。", 403, "project_not_authorized")
+            if context["referenceIds"]:
+                raise WorkflowError("未授权项目不能读取项目引用；手机文字与草稿保留。", 403, "project_not_authorized")
         images = []
         for identifier in context["attachmentIds"]:
             item = db.execute("SELECT * FROM attachments WHERE id=? AND record_id=?",
@@ -1880,9 +1889,9 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin):
                 history.append({"role": "selected", "content": _text(item.get("text", ""))})
         if sum(len(item["content"]) for item in history) > 65000:
             raise WorkflowError("所选上下文过长，请缩小引用范围。")
-        return {"recordTitle": record["title"], "projectName": project["name"], "history": history, "images": images,
+        return {"recordTitle": record["title"], "projectName": project["name"] if project is not None else "未归类", "history": history, "images": images,
                 "sourceTask": payload.get("sourceTask"),
-                "actionPlanning": self._action_catalog(project)}
+                **({"actionPlanning": self._action_catalog(project)} if project is not None else {})}
 
     @staticmethod
     def _file_digest(path):

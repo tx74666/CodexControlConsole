@@ -69,8 +69,13 @@
     function say(text = "", error = false) { notice.textContent = text; notice.dataset.error = String(error); }
     function autosize(input, limit = 170) { input.style.height = "auto"; input.style.height = `${Math.min(limit, Math.max(48, input.scrollHeight || 48))}px`; input.style.overflowY = input.scrollHeight > limit ? "auto" : "hidden"; }
     function draftKey() { return state.session?.id || "unopened"; }
-    function saveLocalDraft() { state.drafts[draftKey()] = { text: composerInput.value, tier: state.tier, updatedAt: new Date().toISOString(), unsynced: true, ...(!state.session ? { waitingForSession: true } : {}) }; state.dirty = true; persist(); draftStatus.textContent = offline ? "已保存在此手机" : "草稿已保存在此手机"; autosize(composerInput); updateControls(); }
-    function restoreDraft() { const local = state.drafts[draftKey()]; composerInput.value = local?.unsynced ? local.text || "" : state.session?.draft?.text || local?.text || ""; state.dirty = Boolean(local?.unsynced); autosize(composerInput); draftStatus.textContent = offline ? state.session || state.dirty ? "草稿已保存在此手机" : "只保存留在此手机" : state.dirty ? "草稿已保存在此手机" : state.session ? "草稿已同步电脑" : ""; }
+    function saveLocalDraft(userEdited = false) {
+      const local = state.drafts[draftKey()];
+      // Capturing a blank page before its session loads is not an edit or a clear.
+      if (!state.session && !userEdited && !composerInput.value && local?.userEdited !== true) return;
+      state.drafts[draftKey()] = { text: composerInput.value, tier: state.tier, updatedAt: new Date().toISOString(), unsynced: true, ...(!state.session ? { waitingForSession: true, ...(userEdited || local?.userEdited === true ? { userEdited: true } : {}) } : {}) }; state.dirty = true; persist(); draftStatus.textContent = offline ? "已保存在此手机" : "草稿已保存在此手机"; autosize(composerInput); updateControls();
+    }
+    function restoreDraft() { const local = state.drafts[draftKey()], localDirty = Boolean(local?.unsynced && (state.session || local.userEdited === true || local.text)); composerInput.value = localDirty ? local.text || "" : state.session?.draft?.text ?? local?.text ?? ""; state.dirty = localDirty; autosize(composerInput); draftStatus.textContent = offline ? state.session || state.dirty ? "草稿已保存在此手机" : "只保存留在此手机" : state.dirty ? "草稿已保存在此手机" : state.session ? "草稿已同步电脑" : ""; }
     async function call(action, body) {
       const generation = state.generation;
       if (adapter) { const result = await adapter(action, body); if (generation !== state.generation) throw Object.assign(new Error("已切换页面。"), { cancelled: true }); return result; }
@@ -92,7 +97,7 @@
       eligibleAttachments = Array.isArray(data.eligibleAttachments) ? data.eligibleAttachments : [];
       if (!previousSession && state.session?.id && state.drafts.unopened) {
         const original = state.drafts.unopened, knownSessions = Object.keys(state.drafts).filter(id => id !== "unopened");
-        if (original.waitingForSession === true || !knownSessions.length) state.drafts[state.session.id] = { ...original, waitingForSession: false };
+        if ((original.userEdited === true || original.text) && (original.waitingForSession === true || !knownSessions.length)) state.drafts[state.session.id] = { ...original, waitingForSession: false };
         delete state.drafts.unopened;
         persist();
       }
@@ -229,8 +234,8 @@
       catch (error) { if (writeRejected(error)) { state.pending = null; persist(); } fail(error); } finally { state.busy = false; updateControls(); }
     }
     async function refresh() {
-      if (!state.active || state.reading || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return; capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
-      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return; if (sessionId && data.session?.id !== sessionId && state.dirty) return; const localText = composerInput.value; applyDialogue(data, sessionId); if (!state.dirty) restoreDraft(); else composerInput.value = localText; } }
+      if (!state.active || state.reading || state.composing && state.view === "chat" || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return; capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
+      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return; if (sessionId && data.session?.id !== sessionId && state.dirty) return; if (applyDialogue(data, sessionId) && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); } }
       catch (error) { fail(error); } finally { state.reading = false; updateControls(); }
     }
     async function showIdeas() { if (state.busy) return; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } state.view = "ideas"; say(""); renderView(); await loadIdeas(); requestAnimationFrame(() => window.scrollTo({ top: state.listScroll, behavior: "auto" })); }
@@ -494,9 +499,9 @@
       try { if (draftSync) await draftSync; if (fileReading) await fileReading; await ensureSession(); if (fileOwner && fileOwner !== state.session?.id && files.length) { await writeFiles({ id: `${filesKey}:${fileOwner}`, files, uploadRequest, fileOwner }); files = []; uploadRequest = null; } fileOwner = state.session.id; files.push(...chosen); renderFiles(); await saveFiles(); say("图片草稿已保存在此手机；只保存不会发送。"); }
       catch (error) { fileError = true; fail(error); } finally { state.busy = false; updateControls(); }
     });
-    composerInput.addEventListener("input", () => { saveLocalDraft(); window.clearTimeout(draftTimer); draftTimer = window.setTimeout(() => void syncDraft(), 800); }); composerInput.addEventListener("compositionstart", () => { state.composing = true; updateControls(); }); composerInput.addEventListener("compositionend", () => { state.composing = false; saveLocalDraft(); });
+    composerInput.addEventListener("input", () => { saveLocalDraft(true); window.clearTimeout(draftTimer); draftTimer = window.setTimeout(() => void syncDraft(), 800); }); composerInput.addEventListener("compositionstart", () => { state.composing = true; updateControls(); }); composerInput.addEventListener("compositionend", () => { state.composing = false; saveLocalDraft(true); });
     composerInput.addEventListener("keydown", event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing && !state.composing) { event.preventDefault(); void sendMessage(); } });
-    tier.addEventListener("change", () => { state.tier = tier.value; saved.tier = state.tier; saveLocalDraft(); void syncDraft(); });
+    tier.addEventListener("change", () => { state.tier = tier.value; saved.tier = state.tier; persist(); saveLocalDraft(); void syncDraft(); });
     ideaTitle.addEventListener("input", persistEditor); ideaBody.addEventListener("input", persistEditor); executionText.addEventListener("input", persistExecution);
     for (const [input, kind] of [[ideaTitle, "body"], [ideaBody, "body"], [executionText, "execution"]]) { input.addEventListener("compositionstart", () => { editComposing[kind] = true; updateControls(); }); input.addEventListener("compositionend", () => { editComposing[kind] = false; kind === "body" ? persistEditor() : persistExecution(); }); }
     search.addEventListener("input", () => { state.search = search.value; state.listScroll = 0; persist(); void loadIdeas(); }); project.addEventListener("change", () => { state.project = project.value; state.listScroll = 0; persist(); void loadIdeas(); });

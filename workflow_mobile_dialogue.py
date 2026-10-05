@@ -144,14 +144,15 @@ class MobileDialogueMixin:
         return identifiers
 
     def _mobile_project(self, db):
+        """A journal's classification is metadata, never an execution grant."""
         projects = self._setting(db, "projects") or []
-        return self._project(db, projects[0]["id"] if projects else "")
+        return projects[0] if projects else None
 
     def _mobile_new_record(self, db, title="当前讨论", text=""):
         api = _api()
         project = self._mobile_project(db)
         identifier, now = uuid.uuid4().hex, api._now()
-        db.execute("INSERT INTO records VALUES (?,?,?,?,?,?,?)", (identifier, title, project["id"], now, now, None,
+        db.execute("INSERT INTO records VALUES (?,?,?,?,?,?,?)", (identifier, title, project["id"] if project else "", now, now, None,
             api._json({"selectedText": "", "referenceIds": [], "attachmentIds": []})))
         if text:
             self._message(db, identifier, "user", text)
@@ -434,16 +435,15 @@ class MobileDialogueMixin:
                     if db.execute("SELECT 1 FROM idea_dispatches WHERE json_extract(snapshot,'$.recordId')=? AND status IN ('pending','claimed','waiting','needs_review')", (session["recordId"],)).fetchone():
                         raise api.WorkflowError("当前讨论已有请求在途，请等待回答或核对送达。", 409, "dispatch_in_progress")
                     record = self._record(db, session["recordId"])
-                    project = self._project(db, record["project_id"])
                     source = self._source_task(db, record["id"], {"ideaId": session["ideaId"], "revision": session["ideaRevision"]} if session["ideaId"] else None)
                     if source and not session["ideaId"]:
                         raise api.WorkflowError("讨论来源已改变，请重新打开此想法。", 409, "task_source_mismatch")
                     target = self._app_target(db, {"kind": "chatgpt", "mode": "new", "threadId": "", "name": "Console 手机讨论"}, bool(context["attachmentIds"]))
                     dialogue = {key: session[key] for key in ("id", "clientId", "recordId", "ideaId", "ideaRevision", "revision")}
-                    payload = {"computerId": self._setting(db, "computer")["id"], "projectId": project["id"],
+                    payload = {"computerId": self._setting(db, "computer")["id"], "projectId": record["project_id"],
                         "text": text, "context": context, "purpose": "discussion", "sourceTask": source,
                         "appTarget": target, "requestedProfile": session["requestedProfile"], "mobileDialogue": dialogue}
-                    payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, project)
+                    payload["appFrozen"] = self._freeze_app_discussion(db, record, payload, None)
                     payload["appFrozen"].pop("actionPlanning", None)
                     payload["appFrozen"].update(requestedProfile=session["requestedProfile"], mobileDialogue=dialogue)
                     if source:
