@@ -20,6 +20,7 @@ const context = {
   els: { workspaceTodoInput: { value: '' }, workspaceTodoCategory: { value: 'work' } },
   workspaceTodoGroups: [{ id: 'work' }, { id: 'home' }],
   workspaceTodoPersonalMode: false, activeWorkspacePlan: null,
+  desktopCodexWorkPanel: null,
   desktopTransferPanel: { hasDraft() { return false; } },
   desktopWorkflowPanel: { hasDraft() { return false; } },
   desktopIncubatorPanel: { hasDraft() { return false; } },
@@ -65,9 +66,18 @@ context.desktopConversationsPanel.canReload = () => false;
 context.refreshForNewConsoleVersion('99.0.0');
 assert.equal(reloads, 0, 'a conversation read request awaiting acknowledgement must block automatic reload');
 context.desktopConversationsPanel.canReload = () => true;
+context.desktopCodexWorkPanel = { hasDraft() { return true; }, canReload() { return true; } };
+context.refreshForNewConsoleVersion('99.0.0');
+assert.equal(reloads, 0, 'a saved Work review or unconfirmed Agent request must block automatic reload');
+assert.equal(context.els.workspaceTodoInput.value, 'new draft', 'blocked Work reload must preserve the current editor');
+context.desktopCodexWorkPanel.hasDraft = () => false;
+context.desktopCodexWorkPanel.canReload = () => false;
+context.refreshForNewConsoleVersion('99.0.0');
+assert.equal(reloads, 0, 'active Work, permission setup, or unsafe Work persistence must block automatic reload');
+context.desktopCodexWorkPanel.canReload = () => true;
 context.refreshForNewConsoleVersion('99.0.0');
 context.refreshForNewConsoleVersion('99.0.0');
-assert.equal(reloads, 1, 'newer server must reload once');
+assert.equal(reloads, 1, 'an idle reload-safe Work panel permits one newer-server reload');
 assert.equal(JSON.parse(stored.get('draft')).text, 'new draft');
 context.els.workspaceTodoInput.value = '';
 context.saveWorkspaceTodoDraft();
@@ -75,4 +85,4 @@ assert(!stored.has('draft'), 'submitting/clearing draft must prevent its resurre
 stored.set('draft', '{invalid');
 context.restoreWorkspaceTodoDraft();
 assert.equal(context.els.workspaceTodoInput.value, '');
-console.log('PASS Console relaunch UI version and to-do draft preservation');
+console.log('PASS Console relaunch UI version, Work reload gates and to-do draft preservation');
