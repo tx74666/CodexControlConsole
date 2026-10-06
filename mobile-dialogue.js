@@ -252,9 +252,10 @@
         if (generation !== state.generation) throw Object.assign(new Error("已切换页面。"), { cancelled: true });
         if (response.status === 401) { options.onAuth?.(); throw Object.assign(new Error("请重新连接电脑。"), { auth: true }); }
         let data; try { data = await response.json(); } catch { throw new Error("电脑返回的内容暂时无法读取。"); }
+        if (generation !== state.generation) throw Object.assign(new Error("已切换页面。"), { cancelled: true });
         if (!response.ok) throw Object.assign(new Error(data.error || `操作未完成（${response.status}）。`), { status: response.status, data });
-        options.onConnectionState?.(true); return data;
-      } catch (error) { if (error instanceof TypeError || error.name === "AbortError") options.onConnectionState?.(false); throw error; }
+        if (state.active && generation === state.generation) options.onConnectionState?.(true); return data;
+      } catch (error) { if (state.active && generation === state.generation && (error instanceof TypeError || error.name === "AbortError")) options.onConnectionState?.(false); throw error; }
       finally { controllers.delete(controller); window.clearTimeout(timer); }
     }
     function fail(error) { if (!error.auth && !error.cancelled) say(error.name === "AbortError" ? "电脑连接超时，草稿仍在此手机。" : error.message || "暂时无法完成，草稿已保留。", true); }
@@ -630,10 +631,10 @@
     }
     async function showIdeas() { if (state.busy) return; const generation = state.generation, scroll = state.listScroll; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } detailReturn = null; state.view = "ideas"; say(""); renderView(); await loadIdeas(); restoreListPosition(generation, scroll); }
     async function loadIdeas() {
-      const currentSearch = state.search, currentProject = state.project, archived = state.archived;
-      try { const data = await call(`mobile/ideas?search=${encodeURIComponent(currentSearch)}&projectId=${encodeURIComponent(currentProject)}&archived=${archived ? "1" : "0"}`); if (currentSearch !== state.search || currentProject !== state.project || archived !== state.archived) return;
+      const generation = state.generation, currentSearch = state.search, currentProject = state.project, archived = state.archived;
+      try { const data = await call(`mobile/ideas?search=${encodeURIComponent(currentSearch)}&projectId=${encodeURIComponent(currentProject)}&archived=${archived ? "1" : "0"}`); if (!state.active || generation !== state.generation || currentSearch !== state.search || currentProject !== state.project || archived !== state.archived) return;
         state.ideas = Array.isArray(data.ideas) ? data.ideas : []; state.projects = Array.isArray(data.projects) ? data.projects : []; loadedIdeaList = { search: currentSearch, project: currentProject, archived }; renderIdeas(); }
-      catch (error) { fail(error); }
+      catch (error) { if (state.active && generation === state.generation) fail(error); }
     }
     function renderIdeas() {
       project.replaceChildren(); for (const item of [{ id: "", name: "全部项目" }, { id: "unclassified", name: "未归类" }, ...state.projects]) { const option = make("option", item.name || item.label || item.id); option.value = item.id; project.append(option); } project.value = state.project;
@@ -644,19 +645,19 @@
     }
     async function openIdea(id, refreshing = false, origin = null) {
       if (!id || state.busy) return;
-      const sequence = ++ideaSequence;
+      const generation = state.generation, sequence = ++ideaSequence;
       if (!refreshing) {
         capturePointEditor(); if (state.view === "detail" && state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution();
         closeManagement(); if (state.view === "ideas") state.listScroll = window.scrollY; detailReturn = origin; persist(); state.idea = state.ideaDetail = null; state.editorDirty = false; pointEditor = null; clearPack(); state.view = "detail"; say("正在读取想法…"); renderIdea(); renderView();
       }
       try {
-        const data = await call(`mobile/idea?id=${encodeURIComponent(id)}`); if (sequence !== ideaSequence || state.view === "chat" || state.view === "ideas" || refreshing && (pointEditor?.composing || editComposing.body || editComposing.execution)) return; if (data.idea?.id !== id) throw new Error("这条想法的身份暂时无法核对。");
+        const data = await call(`mobile/idea?id=${encodeURIComponent(id)}`); if (!state.active || generation !== state.generation || sequence !== ideaSequence || state.view === "chat" || state.view === "ideas" || refreshing && (pointEditor?.composing || editComposing.body || editComposing.execution)) return; if (data.idea?.id !== id) throw new Error("这条想法的身份暂时无法核对。");
         state.idea = data.idea; state.ideaDetail = data.detail || null; const local = state.editDrafts[id];
         if (local && typeof local.executionDraft === "string" && local.executionDirty === undefined) { local.executionDirty = local.executionDraft !== (data.idea.executionDraft || ""); if (!local.executionDirty) local.executionSource = editSource("execution", data.idea); persist(); }
         if (!state.editorDirty || !refreshing) { ideaTitle.value = local?.dirty ? local.title : data.idea?.title || ""; ideaBody.value = local?.dirty ? local.body : data.idea?.body || ""; state.editorDirty = Boolean(local?.dirty); }
         if (state.view === "execution" && !local?.executionDirty) executionText.value = data.idea.executionDraft || ""; renderIdea(); if (!refreshing) { say(""); window.scrollTo({ top: 0, behavior: "auto" }); }
       }
-      catch (error) { if (sequence === ideaSequence && ["detail", "execution"].includes(state.view)) fail(error); }
+      catch (error) { if (state.active && generation === state.generation && sequence === ideaSequence && ["detail", "execution"].includes(state.view)) fail(error); }
     }
     function renderIdea() {
       if (state.view === "detail") title.textContent = state.idea?.title || "想法";
