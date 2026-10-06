@@ -59,6 +59,7 @@
     onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期，请重新连接电脑。"),
     getVersion: () => el("versionLabel")?.textContent || "Codex Console",
+    renderMessage: (text, container) => renderMarkdown(text, container, 0, true),
     getConnectionStatus: () => ({ text: el("connectionLabel")?.textContent || "", connected: el("connectionLabel")?.dataset.connected === "true" }),
     onModule: value => { if (value === "conversations") selectWorkView("conversations"); else if (value === "workflow") selectWorkView("agents"); else if (value === "legacy") selectWorkView("ideas"); else selectTab(value); },
     onImportPack: async file => { if (!state.paired || !window.CodexMobileHandoff) throw new Error("请先完成电脑配对，手机想法包仍保留。"); const exported = await window.CodexMobileHandoff.decodePack(file); if (!state.paired) throw new Error("配对已断开，未导入。"); try { return await window.CodexMobileHandoff.importExported(exported); } catch (error) { if ([401, 403].includes(error.status)) showPair("配对已断开；导入结果待核对，请重连后用原想法包核对。"); throw error; } },
@@ -824,7 +825,7 @@
     }
     el("readerContents").hidden = !container.children.length;
   }
-  function appendInline(parent, source, depth = 0) {
+  function appendInline(parent, source, depth = 0, message = false) {
     const value = String(source);
     if (depth > 5) { parent.append(document.createTextNode(value)); return; }
     const tokens = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_|!?\[[^\]\n]*\]\((?:<[^>\n]+>|[^)\n]+)\))/g;
@@ -833,32 +834,33 @@
       parent.append(document.createTextNode(value.slice(offset, match.index)));
       const token = match[0];
       if (token.startsWith("`")) parent.append(node("code", token.slice(1, -1)));
-      else if (token.startsWith("**") || token.startsWith("__")) { const strong = node("strong"); appendInline(strong, token.slice(2, -2), depth + 1); parent.append(strong); }
-      else if (token.startsWith("*") || token.startsWith("_")) { const em = node("em"); appendInline(em, token.slice(1, -1), depth + 1); parent.append(em); }
+      else if (token.startsWith("**") || token.startsWith("__")) { const strong = node("strong"); appendInline(strong, token.slice(2, -2), depth + 1, message); parent.append(strong); }
+      else if (token.startsWith("*") || token.startsWith("_")) { const em = node("em"); appendInline(em, token.slice(1, -1), depth + 1, message); parent.append(em); }
       else {
         const split = token.indexOf("]("); const image = token.startsWith("!"); const label = token.slice(image ? 2 : 1, split);
         let target = token.slice(split + 2, -1).trim(); target = target.startsWith("<") && target.endsWith(">") ? target.slice(1, -1) : target.replace(/\s+["'][^"']*["']$/, "");
-        if (image) parent.append(document.createTextNode(`图片：${label}`)); else appendLink(parent, label, target, depth + 1);
+        if (image) parent.append(document.createTextNode(`图片：${label}`)); else appendLink(parent, label, target, depth + 1, message);
       }
       offset = match.index + token.length;
     }
     parent.append(document.createTextNode(value.slice(offset)));
   }
-  function appendLink(parent, label, target, depth = 0) {
+  function appendLink(parent, label, target, depth = 0, message = false) {
     if (/[\u0000-\u001f\u007f]/.test(target)) { parent.append(document.createTextNode(label)); return; }
     if (/^https?:\/\//i.test(target)) {
       try {
         const url = new URL(target); if (!["http:", "https:"].includes(url.protocol)) throw new Error("unsupported");
-        const anchor = node("a"); anchor.href = url.href; anchor.target = "_blank"; anchor.rel = "noopener noreferrer"; appendInline(anchor, label, depth); parent.append(anchor); return;
+        const anchor = node("a"); anchor.href = url.href; anchor.target = "_blank"; anchor.rel = "noopener noreferrer"; appendInline(anchor, label, depth, message); parent.append(anchor); return;
       } catch { parent.append(document.createTextNode(label)); return; }
     }
+    if (message) { parent.append(document.createTextNode(label)); return; }
     const index = target.indexOf("#"); const part = index < 0 ? target : target.slice(0, index); const fragment = index < 0 ? "" : target.slice(index + 1);
     const relative = part ? pathValue(part, state.reader?.path || "", true) : state.reader?.path;
     if (!relative || (part && !/\.md$/i.test(relative))) { parent.append(document.createTextNode(label)); return; }
     const anchor = node("a"); anchor.href = fragment && !part ? `#${fragment}` : "/mobile.html"; appendInline(anchor, label, depth);
     anchor.addEventListener("click", event => { event.preventDefault(); if (samePath(relative, state.reader?.path)) scrollFragment(fragment); else void openDocument(relative, { fragment, push: false }); }); parent.append(anchor);
   }
-  function renderMarkdown(source, container, quoteDepth = 0) {
+  function renderMarkdown(source, container, quoteDepth = 0, message = false) {
     container.replaceChildren();
     const value = String(source).replace(/\r\n?/g, "\n"); const lines = value.split("\n");
     const plain = content => { const pre = node("pre"); pre.append(node("code", content)); return pre; };
@@ -885,8 +887,8 @@
         const match = listMatch(lines[index]); if (!match || indentOf(match) < indent) break;
         if (indentOf(match) > indent) { if (!lastItem || depth >= 8) break; const nested = readList(index, depth + 1); lastItem.append(nested.list); index = nested.index; continue; }
         if (/^\d/.test(match[2]) !== ordered) break;
-        lastItem = node("li"); appendInline(lastItem, match[3]); list.append(lastItem); index += 1;
-        while (index < lines.length && lines[index].trim() && !listMatch(lines[index]) && /^\s+/.test(lines[index]) && lines[index].match(/^\s*/)[0].length > indent) { const continuation = node("p"); appendInline(continuation, lines[index++].trim()); lastItem.append(continuation); }
+        lastItem = node("li"); appendInline(lastItem, match[3], 0, message); list.append(lastItem); index += 1;
+        while (index < lines.length && lines[index].trim() && !listMatch(lines[index]) && /^\s+/.test(lines[index]) && lines[index].match(/^\s*/)[0].length > indent) { const continuation = node("p"); appendInline(continuation, lines[index++].trim(), 0, message); lastItem.append(continuation); }
       }
       return { list, index };
     };
@@ -897,19 +899,21 @@
       if (fence) { const close = new RegExp(`^\\s{0,3}${fence[1][0]}{${fence[1].length},}\\s*$`); const codeLines = []; index += 1; while (index < lines.length && !close.test(lines[index])) codeLines.push(lines[index++]); if (index < lines.length) index += 1; container.append(plain(codeLines.join("\n"))); continue; }
       const heading = /^(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
       if (heading) {
-        const item = node(`h${heading[1].length}`); appendInline(item, heading[2]); const base = slug(item.textContent); let key = base, count = 1; while (state.headings.has(key)) key = `${base}-${count++}`;
+        const item = node(`h${heading[1].length}`); appendInline(item, heading[2], 0, message);
+        if (message) { container.append(item); index += 1; continue; }
+        const base = slug(item.textContent); let key = base, count = 1; while (state.headings.has(key)) key = `${base}-${count++}`;
         item.id = `phone-heading-${key}`; state.headings.set(key, item); if (!(quoteDepth === 0 && index === 0 && heading[1].length === 1 && item.textContent.trim() === el("readerTitle").textContent.trim())) container.append(item); else state.headings.set(key, el("readerTitle")); index += 1; continue;
       }
       if (/^\s{0,3}(?:[-*_]\s*){3,}$/.test(line)) { container.append(node("hr")); index += 1; continue; }
-      if (/^\s{0,3}>/.test(line) && quoteDepth < 4) { const quotes = []; while (index < lines.length && /^\s{0,3}>/.test(lines[index])) quotes.push(lines[index++].replace(/^\s{0,3}>\s?/, "")); const quote = node("blockquote"); renderMarkdown(quotes.join("\n"), quote, quoteDepth + 1); container.append(quote); continue; }
+      if (/^\s{0,3}>/.test(line) && quoteDepth < 4) { const quotes = []; while (index < lines.length && /^\s{0,3}>/.test(lines[index])) quotes.push(lines[index++].replace(/^\s{0,3}>\s?/, "")); const quote = node("blockquote"); renderMarkdown(quotes.join("\n"), quote, quoteDepth + 1, message); container.append(quote); continue; }
       if (line.includes("|") && tableRule(lines[index + 1]) && cells(line).length <= 40) {
         const wrap = node("div", "", "reader-table-scroll"); wrap.tabIndex = 0; wrap.setAttribute("aria-label", "表格，可横向滚动"); const table = node("table"), head = node("thead"), row = node("tr");
-        for (const cell of cells(line)) { const th = node("th"); th.scope = "col"; appendInline(th, cell); row.append(th); } head.append(row); table.append(head); index += 2;
-        const body = node("tbody"); while (index < lines.length && lines[index].trim() && lines[index].includes("|") && cells(lines[index]).length <= 40) { const tr = node("tr"); for (const cell of cells(lines[index++])) { const td = node("td"); appendInline(td, cell); tr.append(td); } body.append(tr); } table.append(body); wrap.append(table); container.append(wrap); continue;
+        for (const cell of cells(line)) { const th = node("th"); th.scope = "col"; appendInline(th, cell, 0, message); row.append(th); } head.append(row); table.append(head); index += 2;
+        const body = node("tbody"); while (index < lines.length && lines[index].trim() && lines[index].includes("|") && cells(lines[index]).length <= 40) { const tr = node("tr"); for (const cell of cells(lines[index++])) { const td = node("td"); appendInline(td, cell, 0, message); tr.append(td); } body.append(tr); } table.append(body); wrap.append(table); container.append(wrap); continue;
       }
       if (listMatch(line)) { const result = readList(index); container.append(result.list); index = result.index; continue; }
       const paragraph = node("p"); const parts = [line]; index += 1; while (index < lines.length && !blockStart(lines[index], index)) parts.push(lines[index++]);
-      parts.forEach((part, offset) => { if (offset) paragraph.append(/ {2}$/.test(parts[offset - 1]) ? node("br") : document.createTextNode(" ")); appendInline(paragraph, part.trim()); }); container.append(paragraph);
+      parts.forEach((part, offset) => { if (offset) paragraph.append(message || / {2}$/.test(parts[offset - 1]) ? node("br") : document.createTextNode(" ")); appendInline(paragraph, part.trim(), 0, message); }); container.append(paragraph);
     }
   }
   function setFont(value) {

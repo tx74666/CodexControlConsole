@@ -94,6 +94,31 @@ const resultFrame = (h, cursor = "b".repeat(64), status = "succeeded") => ({ cli
 const dialogueReads = h => h.calls.filter(item => item.action.startsWith("mobile/dialogue?")).length;
 let count = 0;
 async function test(name, fn) { await fn(); count++; console.log(`PASS ${name}`); }
+await test("only assistant display uses the host renderer while copy and saved-answer source stay original", async () => {
+  const renders = [], original = "# 整理\n\n**先保存**\n\n```text\n<script>仍是文字</script>\n```", user = "**用户原文字面保留**";
+  const h = harness({ options: { renderMessage(text, node) { renders.push(text); const heading = h.runtime.document.createElement("h2"); heading.textContent = "已排版的展示"; node.append(heading); } } });
+  h.message({ id: "user-original", role: "user", text: user }); h.message({ id: "assistant-original", role: "assistant", text: original });
+  h.panel.setActive(true); await flush();
+  assert.deepEqual(renders, [original]);
+  const rows = h.byClass("dialogue-messages").children;
+  assert.equal(rows[0].children[1].textContent, user);
+  assert.equal(rows[0].children[1].dataset.formatted, undefined);
+  assert.equal(rows[1].children[1].textContent, "已排版的展示");
+  assert.equal(rows[1].children[1].dataset.formatted, "true");
+  h.byText("复制").click(); await flush(); assert.equal(h.copies.at(-1), original);
+  h.byText("存为想法").click(); await flush();
+  assert.equal(h.calls.find(call => call.action === "mobile/dialogue/remember")?.payload.sourceMessageId, "assistant-original");
+  assert.equal(h.calls.some(call => call.action === "mobile/dialogue/send"), false);
+});
+await test("a host renderer failure preserves the entire original answer and later rerenders safely", async () => {
+  const original = "完整中文回答\n```js\nconst value = '<img onerror=attack()>';\n```";
+  const h = harness({ options: { renderMessage(text, node) { node.textContent = "不能留下的半份展示"; throw new Error("fixture parser failure"); } } });
+  h.message({ id: "assistant-fallback", role: "assistant", text: original }); h.panel.setActive(true); await flush();
+  const body = h.byClass("dialogue-message-text"); assert.equal(body.textContent, original); assert.equal(body.dataset.formatted, undefined);
+  h.byText("复制").click(); await flush(); assert.equal(h.copies.at(-1), original);
+  await h.panel.refresh(); assert.equal(h.byClass("dialogue-message-text").textContent, original);
+  assert.equal(h.calls.some(call => call.action === "mobile/dialogue/send"), false);
+});
 const pendingJob = h => ({ id: "3".repeat(32), recordId: h.current().recordId, status: "waiting", result: {},
   appDispatch: { id: "4".repeat(32), status: "pending", targetThreadId: null, canCancelPending: true } });
 const fixtureReasoning = { fast: { mode: "standard", effort: "low" }, high: { mode: "standard", effort: "high" }, pro: { mode: "pro", effort: "high" } };

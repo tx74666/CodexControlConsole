@@ -337,7 +337,12 @@
         time.title = "记录保存时间 · Asia/Shanghai（UTC+08:00）";
         if (time.textContent !== "时间未记录") time.setAttribute("datetime", message.createdAt);
         meta.append(make("p", message.role === "assistant" ? "ChatGPT" : "你", "dialogue-message-label"), time);
-        row.append(meta, make("p", message.text || "", "dialogue-message-text"));
+        const body = make("div", "", "dialogue-message-text"), original = message.text || "";
+        if (message.role === "assistant" && typeof options.renderMessage === "function") {
+          try { options.renderMessage(original, body); body.dataset.formatted = "true"; }
+          catch { body.replaceChildren(); body.textContent = original; }
+        } else body.textContent = original;
+        row.append(meta, body);
         const roundImages = make("div", "", "dialogue-attachment-grid");
         for (const id of message.attachmentIds || []) {
           const attachment = (state.detail?.attachments || []).find(item => item.id === id);
