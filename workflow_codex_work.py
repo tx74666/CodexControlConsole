@@ -28,6 +28,7 @@ import tomllib
 import uuid
 
 from workflow_service import WorkflowError
+from workflow_codex_files import CodexFiles
 
 
 PROVIDER = "openai_chatgpt_plan"
@@ -43,6 +44,23 @@ MAX_ITEMS = 512
 MAX_PROGRESS = 256 * 1024
 MAX_PREPARATION_RECEIPT = 64 * 1024
 PREPARATION_EVIDENCE = "configuration_and_thread_profile_echo"
+FILE_TOOLS_EVIDENCE = "configuration_thread_profile_and_file_tools_contract"
+FILE_TOOLS_NAMESPACE = "console_workspace"
+SUPPORTED_CLI_VERSION = "0.160.1"
+FILE_TOOL_NAMES = {"console_list_files": "list_files", "console_read_text": "read_text", "console_write_text": "write_text"}
+# Only these failures are known to occur before destination mutation. Other
+# write failures can include verification or durable-receipt failures afterward.
+PREWRITE_REJECTIONS = frozenset("codex_files_" + code for code in (
+    "invalid_arguments", "invalid_call_id", "invalid_relative_path", "path_too_deep",
+    "protected_path", "sha_conflict", "cancelled"))
+FILE_TOOLS_INSTRUCTIONS = (
+    "Use only console_workspace.console_list_files, console_read_text and console_write_text for this Work. "
+    "They operate only inside the confirmed directory and reject protected paths. Paths are relative and use '/'; "
+    "list_files uses path='' for the root and depth=1..3. Read text before replacing it, and supply its exact "
+    "sha256 as expectedSha256; use null only for a new file. Native filesystem, shell, build, test execution "
+    "and additional permissions are unavailable. Never claim commands were run. Report actual successful "
+    "file changes and any blocked action truthfully. Do not retry a write with an unknown result."
+)
 ID = re.compile(r"[A-Za-z0-9_-]{1,190}\Z")
 RUN_ID = re.compile(r"[a-f0-9]{32}\Z")
 SHA = re.compile(r"[a-f0-9]{64}\Z")
@@ -94,12 +112,43 @@ def _canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
+def file_tools_specs():
+    """Documented 0.160.1 dynamic tools, independent of native environments."""
+    path = {"type": "string", "maxLength": 512}
+    definitions = (
+        ("console_list_files", "List bounded non-protected files inside the confirmed directory.",
+         {"path": path, "depth": {"type": "integer", "minimum": 1, "maximum": 3}}, ["path", "depth"]),
+        ("console_read_text", "Read one bounded UTF-8 file and its exact SHA256 inside the confirmed directory.",
+         {"path": {**path, "minLength": 1}}, ["path"]),
+        ("console_write_text", "Atomically replace one UTF-8 file after verifying the expected SHA256; no shell or code execution.",
+         {"path": {**path, "minLength": 1}, "content": {"type": "string", "maxLength": 1024 * 1024},
+          "expectedSha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}},
+         ["path", "content", "expectedSha256"]))
+    return [{"type": "namespace", "name": FILE_TOOLS_NAMESPACE,
+             "description": "Console-owned bounded file editing; no command execution or access outside the confirmed directory.",
+             "tools": [{"type": "function", "name": name, "description": description,
+                        "inputSchema": {"type": "object", "properties": properties,
+                                        "required": required, "additionalProperties": False}}
+                       for name, description, properties, required in definitions]}]
+
+
+FILE_TOOLS_SHA256 = hashlib.sha256(_canonical(file_tools_specs())).hexdigest()
+
+
+def file_tools_capabilities():
+    # These fields record the submitted documented contract, not an OS test or
+    # a nonexistent environments echo in ThreadStartResponse.
+    return {"fileToolsOnly": True, "nativeEnvironmentAccess": False, "threadStartEnvironments": [],
+            "dynamicToolsSha256": FILE_TOOLS_SHA256, "enforcement": "console_owned_path_validation",
+            "cliVersion": SUPPORTED_CLI_VERSION}
+
+
 def _spec(value):
     if type(value) is not dict or set(value) != SPEC_KEYS:
         raise _error("codex_work_spec_invalid", status=400)
     profile = value["requestedProfile"]
     if profile == "pro":
-        raise _error("codex_work_pro_unsupported", "本机 Codex 稳定接口没有 Pro mode；未降档、未执行。")
+        raise _error("codex_work_pro_unsupported", "Console Work 的 Pro 档位尚未接通；未降档、未执行。")
     if type(profile) is not str or profile not in PROFILE_EFFORT:
         raise _error("codex_work_profile_invalid", status=400)
     binding = value["subscription"]
@@ -162,7 +211,7 @@ def _same_scope(actual, expected):
             and all(key in {"extends", "filesystem", "network", "description", "workspace_roots"} for key in actual))
 
 
-def preparation_receipt(configuration, result):
+def preparation_receipt(configuration, result, *, file_tools_only=False):
     """Select bounded observed RPC fields, never the full config or credentials.
 
 This records configuration/profile echoes. It is not an independent test that
@@ -180,6 +229,8 @@ the operating system denied an out-of-scope read or write.
                         "modelProvider": result["modelProvider"], "reasoningEffort": result["reasoningEffort"],
                         "cwd": result["cwd"], "approvalPolicy": result["approvalPolicy"],
                         "activePermissionProfile": dict(result["activePermissionProfile"])}}
+    if file_tools_only:
+        receipt.update(schemaVersion=2, evidenceType=FILE_TOOLS_EVIDENCE, capabilities=file_tools_capabilities())
     if len(_canonical(receipt)) > MAX_PREPARATION_RECEIPT:
         raise _error("codex_work_preparation_receipt_invalid")
     # Detach nested dictionaries from the RPC reader and callback consumer.
@@ -189,9 +240,15 @@ the operating system denied an out-of-scope read or write.
 def valid_preparation_receipt(receipt, *, allowed_root, image_root, model, effort, thread_id):
     """Check selected actual echoes against the caller's immutable scope."""
     try:
-        if (type(receipt) is not dict or set(receipt) != {"schemaVersion", "evidenceType", "configuration", "threadStart"}
-                or type(receipt["schemaVersion"]) is not int or receipt["schemaVersion"] != 1
-                or receipt["evidenceType"] != PREPARATION_EVIDENCE
+        if type(receipt) is not dict:
+            return False
+        version = receipt.get("schemaVersion")
+        expected_keys = {"schemaVersion", "evidenceType", "configuration", "threadStart"}
+        if version == 2:
+            expected_keys.add("capabilities")
+        if (set(receipt) != expected_keys or type(version) is not int or version not in {1, 2}
+                or receipt["evidenceType"] != (FILE_TOOLS_EVIDENCE if version == 2 else PREPARATION_EVIDENCE)
+                or version == 2 and _canonical(receipt["capabilities"]) != _canonical(file_tools_capabilities())
                 or len(_canonical(receipt)) > MAX_PREPARATION_RECEIPT):
             return False
         configuration, actual = receipt["configuration"], receipt["threadStart"]
@@ -244,6 +301,10 @@ class _Run:
     deadline: float = 0
     complete: object = field(default_factory=threading.Event)
     write_lock: object = field(default_factory=threading.Lock)
+    file_tools: object = None
+    tool_calls: set = field(default_factory=set)
+    tool_request_ids: set = field(default_factory=set)
+    file_tools_blocked: bool = False
 
 
 class CodexWorkController:
@@ -254,12 +315,13 @@ Console runtime home reuses only its own explicit Windows setup. No start-time
 queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
 """
     def __init__(self, subscription, data_dir, *, executable=None, version="1.0.0",
-                 popen_factory=None, rpc_timeout=20, turn_timeout=1800, windows_sandbox=None):
+                 popen_factory=None, rpc_timeout=20, turn_timeout=1800, windows_sandbox=None, cli_version_reader=None):
         self.subscription = subscription
         self.data_dir = Path(data_dir).absolute()
         self.executable = str(executable) if executable else None
         self.version = version if isinstance(version, str) and re.fullmatch(r"[A-Za-z0-9._+-]{1,64}", version) else "1.0.0"
         self._popen = popen_factory or subprocess.Popen
+        self._cli_version_reader = cli_version_reader
         self._rpc_timeout = max(1, min(float(rpc_timeout), 60))
         self._turn_timeout = max(1, min(float(turn_timeout), 7200))
         self._lock = threading.RLock()
@@ -494,7 +556,8 @@ queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
                     "actualModel": run.actual_model, "requestedProfile": run.spec["requestedProfile"],
                     "requestedEffort": PROFILE_EFFORT[run.spec["requestedProfile"]], "actualEffort": run.actual_effort,
                     "terminalEventObserved": run.terminal_observed, "terminalStatus": run.terminal_status,
-                    "cancelRequested": run.interrupted_requested, "cancelVerified": run.terminal_status == "interrupted",
+                    "cancelRequested": run.interrupted_requested,
+                    "cancelVerified": run.terminal_status == "interrupted" and not run.file_tools_blocked,
                     "error": run.error, "report": run.report, "retryAllowed": False,
                     "active": not run.complete.is_set()}
 
@@ -543,6 +606,8 @@ queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
             raise _error("codex_work_preparation_not_durable")
         if event_type in {"send_intent", "interrupt_intent"} and result is not True:
             raise _error("codex_work_intent_not_durable")
+        if event_type == "file_tools_blocked" and result is not True:
+            raise _error("codex_work_file_tools_fence_not_durable")
         return result
 
     def _command(self, executable, allowed, policy=None):
@@ -610,6 +675,24 @@ queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
             environment["ACCESS_TOKEN"] = token
         return environment
 
+    def _verify_cli_version(self, executable, run):
+        environment = self._environment(run, None)
+        try:
+            if self._cli_version_reader is not None:
+                output = self._cli_version_reader(executable, environment, run.runtime_home)
+            else:
+                flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+                observed = subprocess.run([executable, "--version"], stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
+                    cwd=run.runtime_home, env=environment, **flags)
+                if observed.returncode != 0 or len(observed.stdout) > 1024 or len(observed.stderr) > 1024:
+                    raise ValueError()
+                output = observed.stdout.decode("utf-8", errors="strict")
+            if type(output) is not str or output.strip() != "codex-cli " + SUPPORTED_CLI_VERSION:
+                raise ValueError()
+        except Exception:
+            raise _error("codex_work_cli_version_unsupported", "本机 Codex 版本尚未核对受限文件工具合同；未发送执行请求。") from None
+
     def _send(self, run, method, params):
         with run.write_lock:
             identifier = run.next_id
@@ -660,6 +743,9 @@ queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
         method, params = value.get("method"), value.get("params")
         if not isinstance(params, dict) or params.get("threadId") != run.thread_id or params.get("turnId") != run.turn_id:
             raise _error("codex_work_foreign_server_request")
+        if method == "item/tool/call":
+            self._reply_file_tool(run, value)
+            return
         if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
             response = {"id": value["id"], "result": {"decision": "cancel"}}
         elif method == "item/permissions/requestApproval":
@@ -670,6 +756,102 @@ queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
             run.process.stdin.write(_canonical(response) + b"\n")
             run.process.stdin.flush()
         self._emit(run, "approval_blocked", code="codex_work_additional_approval_required")
+        run.interrupted_requested = True
+
+    def _reply_file_tool(self, run, value):
+        params, request_id = value["params"], value.get("id")
+        keys = {"threadId", "turnId", "callId", "namespace", "tool", "arguments"}
+        identifier, tool = params.get("callId"), params.get("tool")
+        if (set(params) != keys or params.get("namespace") != FILE_TOOLS_NAMESPACE
+                or type(identifier) is not str or not ID.fullmatch(identifier)
+                or type(tool) is not str or tool not in FILE_TOOL_NAMES
+                or type(params.get("arguments")) is not dict
+                or type(request_id) not in {int, str}
+                or type(request_id) is str and not ID.fullmatch(request_id)):
+            raise _error("codex_work_file_tool_request_invalid")
+        request_key = (type(request_id).__name__, request_id)
+        with run.lock:
+            if (identifier in run.tool_calls or request_key in run.tool_request_ids
+                    or len(run.tool_calls) >= MAX_ITEMS):
+                raise _error("codex_work_file_tool_replayed")
+            run.tool_calls.add(identifier)
+            run.tool_request_ids.add(request_key)
+        def cancelled():
+            return (run.is_setup or not run.send_started or run.turn_id is None
+                    or run.terminal_observed or run.complete.is_set() or run.interrupted_requested
+                    or run.file_tools_blocked or run.state != "running")
+        message = None
+        try:
+            message = self._perform_file_tool(run, params, request_id, identifier, tool, cancelled)
+            if message is not None:
+                if self._emit(run, "progress", kind="console_file_write", itemId=identifier,
+                              text=message) is not True:
+                    raise _error("codex_work_file_progress_not_durable")
+        except Exception:
+            # Service callbacks acquire the DB lock. Never invoke them with the
+            # run lock held: phone cancellation reads a snapshot in its DB scope.
+            if tool == "console_write_text":
+                with run.lock:
+                    if message is not None:
+                        self._mark_file_tools_blocked(run)
+            if run.file_tools_blocked:
+                self._emit(run, "file_tools_blocked", code=run.error)
+            raise
+
+    def _perform_file_tool(self, run, params, request_id, identifier, tool, cancelled):
+        # The run lock linearizes an owned bounded operation with an accepted
+        # interrupt. A new cancel cannot authorize a subsequent file operation.
+        with run.lock:
+            result, success = None, False
+            if cancelled() or run.file_tools is None:
+                result = {"code": "codex_work_file_tool_cancelled"}
+            else:
+                try:
+                    result = run.file_tools.call(FILE_TOOL_NAMES[tool], params["arguments"], identifier,
+                                                 cancelled=cancelled)
+                    if type(result) is not dict:
+                        raise _error("codex_work_file_tool_result_invalid")
+                    success = True
+                except Exception as error:
+                    # Only the module's fixed machine code can leave the host;
+                    # never serialize an exception, absolute path or protocol.
+                    code = error.args[0] if type(error) is RuntimeError and len(error.args) == 1 else None
+                    if type(code) is not str or not re.fullmatch(r"codex_files_[a-z0-9_]{1,60}", code):
+                        code = "codex_work_file_tool_failed"
+                    if tool == "console_write_text" and code not in PREWRITE_REJECTIONS:
+                        self._mark_file_tools_blocked(run)
+                        raise _error(run.error)
+                    result = {"code": code}
+            try:
+                text = _canonical(result).decode("utf-8")
+                if run.secret:
+                    text = text.replace(run.secret, "［凭据已隐藏］")
+                response = {"id": request_id, "result": {
+                    "contentItems": [{"type": "inputText", "text": text}], "success": success}}
+                frame = _canonical(response) + b"\n"
+                if len(frame) > MAX_LINE:
+                    raise _error("codex_work_file_tool_result_too_large")
+                with run.write_lock:
+                    run.process.stdin.write(frame)
+                    run.process.stdin.flush()
+                if success and tool == "console_write_text":
+                    message = self._clean(run, "已写入 " + result["path"] + "；SHA256 " + result["afterSha256"])
+                    run.progress_chars += len(message)
+                    if run.progress_chars > MAX_PROGRESS:
+                        raise _error("codex_work_progress_too_large")
+                    return message
+                return None
+            except Exception:
+                if success and tool == "console_write_text":
+                    self._mark_file_tools_blocked(run)
+                    raise _error(run.error) from None
+                raise
+
+    def _mark_file_tools_blocked(self, run):
+        # Once a write may have happened, neither a different call ID nor an
+        # actual interrupted terminal can restore this run's file authority.
+        run.file_tools_blocked = True
+        run.error = "codex_work_file_write_unverified"
         run.interrupted_requested = True
 
     def _maybe_interrupt(self, run):
@@ -824,11 +1006,16 @@ queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
             raise _error("codex_work_report_too_large")
         run.report = self._clean(run, report)
         run.state = turn["status"]
+        if run.file_tools_blocked:
+            run.state, run.error = "unknown", "codex_work_file_write_unverified"
         if turn["status"] == "completed" and (turn.get("error") is not None or not report.strip()):
-            run.state, run.error = "unknown", "codex_work_completed_report_unverified"
+            run.state = "unknown"
+            if not run.file_tools_blocked:
+                run.error = "codex_work_completed_report_unverified"
         self._emit(run, "terminal", status=run.state, terminalStatus=run.terminal_status,
                    terminalEventObserved=True, report=run.report, actualModel=run.actual_model,
-                   actualEffort=run.actual_effort, error=run.error, cancellationVerified=run.terminal_status == "interrupted",
+                   actualEffort=run.actual_effort, error=run.error,
+                   cancellationVerified=run.terminal_status == "interrupted" and not run.file_tools_blocked,
                    executionVerified=False, retryAllowed=False)
 
     def _close_idle(self, run):
@@ -871,6 +1058,12 @@ No provider call, process kill, thread adoption or queue scan is performed.
 
     def _execute(self, run):
         try:
+            executable = self.executable or shutil.which("codex")
+            if not executable or not Path(executable).is_absolute() or not Path(executable).is_file():
+                raise _error("codex_work_cli_unavailable")
+            executable = str(Path(executable).resolve())
+            root, run.runtime_home = self._runtime()
+            self._verify_cli_version(executable, run)
             prepared = self.subscription.prepare_work_connection(run.spec["subscription"])
             if (type(prepared) is not dict or set(prepared) != {"accessToken", "subscription"}
                     or prepared["subscription"] != run.spec["subscription"]
@@ -878,14 +1071,13 @@ No provider call, process kill, thread adoption or queue scan is performed.
                     or any(ord(character) <= 32 or ord(character) >= 127 for character in prepared["accessToken"])):
                 raise _error("codex_work_connection_invalid")
             run.secret = prepared["accessToken"]
-            executable = self.executable or shutil.which("codex")
-            if not executable or not Path(executable).is_absolute() or not Path(executable).is_file():
-                raise _error("codex_work_cli_unavailable")
-            executable = str(Path(executable).resolve())
-            root, run.runtime_home = self._runtime()
             run.home = root / run.identifier
             run.home.mkdir(exist_ok=False)
             (run.home / "images").mkdir()
+            markers = run.home / "file-tools"
+            markers.mkdir()
+            run.file_tools = CodexFiles(Path(run.spec["allowedRoot"]), markers,
+                protected_directories=PROTECTED_DIRECTORIES, protected_patterns=PROTECTED_PATTERNS)
             image_root = run.home / "images"
             policy = scope_policy(run.spec["allowedRoot"], image_root)
             inputs = [{"type": "text", "text": run.spec["text"]}] if run.spec["text"] else []
@@ -910,7 +1102,9 @@ No provider call, process kill, thread adoption or queue scan is performed.
             result = self._rpc(run, "thread/start", {"model": run.spec["subscription"]["modelSlug"],
                 "modelProvider": PROVIDER, "cwd": run.spec["allowedRoot"], "approvalPolicy": "never",
                 "permissions": PERMISSION_PROFILE, "runtimeWorkspaceRoots": [run.spec["allowedRoot"]],
-                "ephemeral": False, "config": {"model_reasoning_effort": effort}})
+                "ephemeral": False, "config": {"model_reasoning_effort": effort},
+                "environments": [], "dynamicTools": file_tools_specs(),
+                "developerInstructions": FILE_TOOLS_INSTRUCTIONS})
             thread_id = result.get("thread", {}).get("id")
             if type(thread_id) is not str or not ID.fullmatch(thread_id):
                 raise _error("codex_work_thread_invalid")
@@ -923,9 +1117,9 @@ No provider call, process kill, thread adoption or queue scan is performed.
             if (type(profile) is not dict or profile != {"id": PERMISSION_PROFILE, "extends": policy["extends"]}):
                 raise _error("codex_work_read_scope_unsupported", "本机 Codex 未准确确认限定读写范围；未发送执行请求。")
             run.actual_model, run.actual_effort = result["model"], effort
-            receipt = preparation_receipt(configuration, result)
+            receipt = preparation_receipt(configuration, result, file_tools_only=True)
             self._emit(run, "prepared", requestedProfile=run.spec["requestedProfile"],
-                       actualModel=run.actual_model, actualEffort=effort, sandboxVerified=True,
+                       actualModel=run.actual_model, actualEffort=effort, sandboxVerified=False,
                        preparationReceipt=receipt)
             # This callback is the durable fence immediately before the sole
             # inference-starting RPC. Ambiguous acknowledgement never retries.
@@ -943,6 +1137,8 @@ No provider call, process kill, thread adoption or queue scan is performed.
         except Exception as error:
             code = getattr(error, "code", None)
             code = code if type(code) is str and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code) else "codex_work_controller_error"
+            if run.file_tools_blocked:
+                code = "codex_work_file_write_unverified"
             run.error, run.state = code, "unknown" if run.send_started else "failed"
             partial = "\n\n".join(row["text"] for row in run.items.values()
                                   if row["kind"] == "item/agentMessage/delta")

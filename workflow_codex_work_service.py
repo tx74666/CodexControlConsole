@@ -95,6 +95,7 @@ The operating system's out-of-scope denial needs a separate actual experiment.
 Neither a profile echo nor Windows setup completion supplies that evidence.
 """
     empty = {"sandboxVerified": False, "configurationEchoVerified": False,
+             "fileToolsScopeVerified": False, "nativeEnvironmentAccess": None,
              "actualActivePermissionProfile": None, "preparationReceipt": None,
              "preparationReceiptSha256": None, "scopeEvidenceType": None,
              "outsideScopeReadDeniedVerified": False}
@@ -107,7 +108,10 @@ Neither a profile echo nor Windows setup completion supplies that evidence.
         if (not CodexWorkMixin._codex_work_event_shape(event) or event["type"] != "prepared"
                 or digest != _sha(event) or event["runId"] != meta["runId"]
                 or event["sourceSha256"] != meta["sourceSha256"] or event["threadId"] != meta["threadId"]
-                or event["turnId"] is not None or event["sandboxVerified"] is not True
+                or event["turnId"] is not None
+                or type(event["preparationReceipt"]) is not dict
+                or type(event["sandboxVerified"]) is not bool
+                or event["sandboxVerified"] != (event["preparationReceipt"].get("schemaVersion") == 1)
                 or event["requestedProfile"] != source["requestedProfile"]
                 or event["actualModel"] != source["subscription"]["modelSlug"]
                 or event["actualEffort"] != EFFORT[source["requestedProfile"]]):
@@ -126,16 +130,19 @@ Neither a profile echo nor Windows setup completion supplies that evidence.
             return empty
         # The full selected configuration stays in the private job. A stable
         # hash binds this public summary without disclosing its staging path.
-        return {**empty, "sandboxVerified": True, "configurationEchoVerified": True,
+        file_tools = selected["schemaVersion"] == 2
+        return {**empty, "sandboxVerified": event["sandboxVerified"], "configurationEchoVerified": True,
+                "fileToolsScopeVerified": file_tools, "nativeEnvironmentAccess": False if file_tools else None,
                 "scopeEvidenceType": selected["evidenceType"],
                 "actualActivePermissionProfile": dict(actual["activePermissionProfile"]),
                 "preparationReceiptSha256": digest,
-                "preparationReceipt": {"schemaVersion": 1, "evidenceType": selected["evidenceType"],
+                "preparationReceipt": {"schemaVersion": selected["schemaVersion"], "evidenceType": selected["evidenceType"],
                     "runId": event["runId"], "sourceSha256": event["sourceSha256"], "observedAt": event["observedAt"],
                     **{key: actual[key] for key in ("threadId", "model", "modelProvider", "reasoningEffort", "cwd", "approvalPolicy")},
                     "activePermissionProfile": dict(actual["activePermissionProfile"]),
                     "scopePolicySha256": _sha(selected["configuration"]["permissionProfile"]),
-                    "configurationEchoVerified": True, "outsideScopeReadDeniedVerified": False}}
+                    "configurationEchoVerified": True, "outsideScopeReadDeniedVerified": False,
+                    **({"capabilities": json.loads(_api()._json(selected["capabilities"]))} if file_tools else {})}}
     except (KeyError, TypeError, ValueError, RecursionError):
         return empty
 
@@ -382,7 +389,7 @@ class CodexWorkMixin:
             authorize()
         text = _api()._text(body["text"], MAX_TEXT)
         if not isinstance(body["requestedProfile"], str) or body["requestedProfile"] not in EFFORT:
-            _fail("codex_work_pro_unsupported", "此 Work 控制器尚不支持 Pro；不会降为其它档位。")
+            _fail("codex_work_pro_unsupported", "Console Work 的 Pro 档位尚未接通；请明确选择已核实的档位。")
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             old = self._receipt(db, "codex_work_review", body)
@@ -484,7 +491,8 @@ class CodexWorkMixin:
                       terminalEventObserved=(meta.get("terminal") or {}).get("terminalEventObserved", False),
                       terminalStatus=(meta.get("terminal") or {}).get("terminalStatus"),
                       sendIntentRecorded=meta.get("sendIntent") is not None, cancelRequested=meta.get("cancelRequest") is not None,
-                      retryAllowed=False, progress=meta.get("progress", []), plan=meta.get("plan", []))
+                      retryAllowed=False, progress=meta.get("progress", []), plan=meta.get("plan", []),
+                      fileToolsBlocked=meta.get("fileToolsBlocked") is True)
         return {"id": row["id"], "recordId": row["record_id"], "kind": "work", "executionEngine": "codex_agent",
                 "requestId": row["request_id"], "status": row["status"], "attempt": row["attempt"],
                 "createdAt": row["created_at"], "updatedAt": row["updated_at"], "error": row["error"],
@@ -694,6 +702,7 @@ class CodexWorkMixin:
                   "send_intent": {"model", "effort"}, "turn_started": {"actualModel", "actualEffort"},
                   "progress": {"kind", "itemId", "text"}, "plan": {"plan"},
                   "item_status": {"itemId", "itemType", "completed"}, "approval_blocked": {"code"},
+                  "file_tools_blocked": {"code"},
                   "provider_error": {"code", "retryAllowed"}, "interrupt_intent": set(),
                   "cancel_requested": {"cancellationVerified"}}
         kind = event.get("type") if isinstance(event, dict) else None
@@ -717,10 +726,13 @@ class CodexWorkMixin:
 
     def _codex_work_preparation_valid(self, event, source):
         from workflow_codex_work import valid_preparation_receipt
-        return (event["sandboxVerified"] is True and event["requestedProfile"] == source["requestedProfile"]
+        receipt = event.get("preparationReceipt")
+        return (type(receipt) is dict and type(event["sandboxVerified"]) is bool
+                and event["sandboxVerified"] == (receipt.get("schemaVersion") == 1)
+                and event["requestedProfile"] == source["requestedProfile"]
                 and event["actualModel"] == source["subscription"]["modelSlug"]
                 and event["actualEffort"] == EFFORT[source["requestedProfile"]]
-                and valid_preparation_receipt(event["preparationReceipt"],
+                and valid_preparation_receipt(receipt,
                     allowed_root=source["workspace"]["allowedRoot"],
                     image_root=self.data_dir / "codex-work" / event["runId"] / "images",
                     model=source["subscription"]["modelSlug"], effort=EFFORT[source["requestedProfile"]],
@@ -741,7 +753,9 @@ class CodexWorkMixin:
                     return False
                 if row["status"] in {"completed", "interrupted", "failed"}:
                     return kind == "terminal" and meta.get("terminal") == event
-                if row["status"] == "needs_review" and kind in {"prepared", "send_intent", "turn_started", "interrupt_intent"}:
+                if row["status"] == "needs_review" and kind in {"prepared", "send_intent", "turn_started"}:
+                    return False
+                if row["status"] == "needs_review" and kind == "interrupt_intent" and not meta.get("fileToolsBlocked"):
                     return False
                 model, effort = source["subscription"]["modelSlug"], EFFORT[source["requestedProfile"]]
                 status = row["status"]
@@ -772,11 +786,11 @@ class CodexWorkMixin:
                         return False
                     meta.update(threadId=thread, turnId=turn)
                     status = "cancelling" if meta["cancelRequest"] else "running"
-                elif kind in {"progress", "plan", "item_status", "approval_blocked", "provider_error", "interrupt_intent", "cancel_requested"}:
+                elif kind in {"progress", "plan", "item_status", "approval_blocked", "file_tools_blocked", "provider_error", "interrupt_intent", "cancel_requested"}:
                     if not meta["sendIntent"] or not thread or not turn or meta["turnId"] != turn:
                         return False
                     if kind == "progress":
-                        if (event["kind"] not in {"item/agentMessage/delta", "item/commandExecution/outputDelta", "item/fileChange/outputDelta"}
+                        if (event["kind"] not in {"item/agentMessage/delta", "item/commandExecution/outputDelta", "item/fileChange/outputDelta", "console_file_write"}
                                 or not isinstance(event["itemId"], str) or len(event["itemId"]) > 512
                                 or not isinstance(event["text"], str) or len(event["text"]) > MAX_TEXT or "\0" in event["text"]):
                             return False
@@ -808,15 +822,23 @@ class CodexWorkMixin:
                         if event["code"] != "codex_work_additional_approval_required":
                             return False
                         meta["approvalBlocked"] = True
+                    elif kind == "file_tools_blocked":
+                        if (event["code"] != "codex_work_file_write_unverified" or meta.get("fileToolsBlocked")
+                                or not self._codex_work_preparation_valid(meta.get("preparationReceipt", {}), source)
+                                or meta["preparationReceipt"]["preparationReceipt"].get("schemaVersion") != 2):
+                            return False
+                        meta["fileToolsBlocked"] = True
+                        meta["fileToolsBlockReceipt"] = dict(event)
+                        status = "needs_review"
                     elif kind == "provider_error":
                         if event["code"] != "codex_work_provider_error" or event["retryAllowed"] is not False:
                             return False
                         meta["providerErrorObserved"] = True
                     elif kind == "interrupt_intent":
-                        if meta["interruptIntent"] is not None or not (meta["cancelRequest"] or meta.get("approvalBlocked")):
+                        if meta["interruptIntent"] is not None or not (meta["cancelRequest"] or meta.get("approvalBlocked") or meta.get("fileToolsBlocked")):
                             return False
                         meta["interruptIntent"] = dict(event)
-                        status = "cancelling"
+                        status = "needs_review" if meta.get("fileToolsBlocked") else "cancelling"
                     elif event["cancellationVerified"] is not False or meta["interruptIntent"] is None:
                         return False
                 elif kind == "terminal":
@@ -849,12 +871,14 @@ class CodexWorkMixin:
             status = "failed"
         elif real:
             meta.update(threadId=event["threadId"], turnId=event["turnId"])
-            if event["status"] == event["terminalStatus"] == "interrupted" and event["cancellationVerified"] is True:
+            if (event["status"] == event["terminalStatus"] == "interrupted" and event["cancellationVerified"] is True
+                    and not meta.get("fileToolsBlocked")):
                 status = "interrupted"
-            elif event["status"] == event["terminalStatus"] == "failed":
+            elif event["status"] == event["terminalStatus"] == "failed" and not meta.get("fileToolsBlocked"):
                 status = "failed"
             elif (event["status"] == event["terminalStatus"] == "completed" and actual
-                  and event["error"] is None and event["report"].strip() and not meta.get("providerErrorObserved")):
+                  and event["error"] is None and event["report"].strip() and not meta.get("providerErrorObserved")
+                  and not meta.get("fileToolsBlocked")):
                 try:
                     workspace = self._codex_work_workspace(db, source["workspace"]["id"], source["workspace"]["authorizationSha256"])
                     after = self._codex_work_inventory(Path(workspace["allowedRoot"]))

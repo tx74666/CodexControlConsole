@@ -7,8 +7,10 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,7 +25,7 @@ BINDING = {"provider": "chatgpt_subscription", "connectionId": "1" * 32,
 # notification before its turn/start reply and an interrupt acknowledgement that
 # is deliberately separate from the later interrupted notification.
 CHILD = r'''
-import json, os, pathlib, queue, sys, threading, time, tomllib
+import hashlib, json, os, pathlib, queue, sys, threading, time, tomllib
 mode = sys.argv[1]
 runtime_home = pathlib.Path(os.environ["CODEX_HOME"])
 home = pathlib.Path(sys.argv[2])
@@ -49,6 +51,21 @@ def terminal(status="completed", text="修改说明完整。", mismatch=False):
     event("turn/completed", turn={"id": turn_id, "status": status,
                                   "items": [item] if status == "completed" else [], "error": None})
     running = False
+def file_tool(identifier=800, call_id="file_call_1", tool="console_write_text", arguments=None):
+    params = {"threadId": thread_id, "turnId": turn_id, "callId": call_id,
+              "namespace": "console_workspace", "tool": tool,
+              "arguments": arguments or {"path": "probe.txt", "content": "真实的隔离修改。", "expectedSha256": None}}
+    if mode == "dynamic_foreign_turn":
+        params["turnId"] = "unowned_turn"
+    elif mode == "dynamic_foreign_namespace":
+        params["namespace"] = "unowned_namespace"
+    elif mode == "dynamic_invalid_call":
+        params["callId"] = "not/an/id"
+    elif mode == "dynamic_wrong_tool":
+        params["tool"] = "shell_command"
+    elif mode == "dynamic_scope_error":
+        params["arguments"]["path"] = "../outside.txt"
+    emit({"id": identifier, "method": "item/tool/call", "params": params})
 while True:
     if running and (home / "fixture-release").exists():
         terminal("interrupted")
@@ -67,6 +84,25 @@ while True:
     with log.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(value, ensure_ascii=False) + "\n")
     method, params = value.get("method"), value.get("params", {})
+    if method is None and "result" in value and mode.startswith("dynamic_"):
+        if mode.startswith("dynamic_unknown_"):
+            # The second request was already buffered before the first reply.
+            # Only the owned interrupt may terminate this unknown-write fixture.
+            pass
+        elif value["id"] == 800 and mode == "dynamic_prewrite_then_write":
+            file_tool(identifier=801, call_id="file_call_2", arguments={"path": "probe.txt",
+                "content": "真实的隔离修改。",
+                "expectedSha256": hashlib.sha256("原先的内容。".encode("utf-8")).hexdigest()})
+        elif value["id"] == 800 and mode == "dynamic_duplicate":
+            file_tool(identifier=801, call_id="file_call_1", arguments={"path": "probe.txt", "content": "不应重复写入。",
+                "expectedSha256": None})
+        elif value["id"] == 800 and mode == "dynamic_write":
+            file_tool(identifier=801, call_id="file_call_2", tool="console_read_text", arguments={"path": "probe.txt"})
+        elif mode not in {"dynamic_cancel", "dynamic_duplicate", "dynamic_foreign_turn",
+                          "dynamic_foreign_namespace", "dynamic_invalid_call", "dynamic_wrong_tool"}:
+            event("item/agentMessage/delta", itemId="answer_fixture", delta="修改说明完整。")
+            terminal()
+        continue
     if method == "initialize":
         emit({"id": value["id"], "result": {"userAgent": "isolated fake"}})
     elif method == "initialized":
@@ -162,6 +198,12 @@ while True:
         elif mode == "approval":
             emit({"id": "approval_fixture", "method": "item/commandExecution/requestApproval",
                   "params": {"threadId": thread_id, "turnId": turn_id, "itemId": "command_fixture"}})
+        elif mode.startswith("dynamic_"):
+            file_tool()
+            if mode.startswith("dynamic_unknown_"):
+                file_tool(identifier=801, call_id="file_call_2", arguments={"path": "probe.txt",
+                    "content": "不应再次写入。",
+                    "expectedSha256": hashlib.sha256("真实的隔离修改。".encode("utf-8")).hexdigest()})
         emit({"id": value["id"], "result": {"turn": {"id": turn_id, "status": "inProgress", "items": [], "error": None}}})
     elif method == "turn/interrupt":
         emit({"id": value["id"], "result": {}})
@@ -187,6 +229,8 @@ class Fixture:
         # owned path without weakening any exact RPC/source comparisons.
         self.root, self.mode, self.reject_intent = Path(root).resolve(), mode, reject_intent
         self.events, self.children, self.invocations = [], [], []
+        self.version_reads = []
+        self.cli_version = "codex-cli " + api.SUPPORTED_CLI_VERSION
         self.workspace = self.root / "workspace"
         self.allowed = self.workspace / "allowed"
         self.allowed.mkdir(parents=True)
@@ -194,8 +238,13 @@ class Fixture:
         self.script.write_text(CHILD, encoding="utf-8")
         self.subscription = Subscription()
         self.controller = api.CodexWorkController(self.subscription, self.root / "state",
-            executable=sys.executable, popen_factory=self.spawn, rpc_timeout=2, turn_timeout=4)
+            executable=sys.executable, popen_factory=self.spawn, rpc_timeout=2, turn_timeout=4,
+            cli_version_reader=self.read_version)
         self.run_id = uuid.uuid4().hex
+
+    def read_version(self, executable, environment, cwd):
+        self.version_reads.append({"executable": executable, "environment": dict(environment), "cwd": str(cwd)})
+        return self.cli_version
 
     def spawn(self, command, **kwargs):
         self.invocations.append({"command": list(command), "env": dict(kwargs["env"]), "cwd": kwargs["cwd"]})
@@ -325,7 +374,10 @@ class Checks(unittest.TestCase):
         self.assertTrue(api.valid_preparation_receipt(receipt, allowed_root=f.allowed,
             image_root=f.home() / "images", model=BINDING["modelSlug"], effort="high", thread_id="thread_fixture"))
         self.assertEqual(receipt["threadStart"]["activePermissionProfile"], {"id": api.PERMISSION_PROFILE, "extends": ":workspace"})
-        self.assertEqual(receipt["evidenceType"], "configuration_and_thread_profile_echo")
+        self.assertEqual(receipt["evidenceType"], api.FILE_TOOLS_EVIDENCE)
+        self.assertEqual(receipt["schemaVersion"], 2)
+        self.assertFalse(prepared["sandboxVerified"])
+        self.assertEqual(receipt["capabilities"], api.file_tools_capabilities())
         self.assertNotIn(TOKEN, json.dumps(f.events))
         self.assertNotIn("description", receipt["configuration"]["permissionProfile"])
         self.assertNotIn("unused", receipt["configuration"]["permissionProfile"]["filesystem"])
@@ -333,6 +385,257 @@ class Checks(unittest.TestCase):
         changed["configuration"]["permissionProfile"]["filesystem"]["glob_scan_max_depth"] = 3.0
         self.assertFalse(api.valid_preparation_receipt(changed, allowed_root=f.allowed,
             image_root=f.home() / "images", model=BINDING["modelSlug"], effort="high", thread_id="thread_fixture"))
+
+    def test_file_tools_write_and_read_real_temp_file_with_exact_environment_contract(self):
+        f = self.fixture("dynamic_write")
+        f.submit()
+        f.done()
+        self.assertEqual((f.allowed / "probe.txt").read_text(encoding="utf-8"), "真实的隔离修改。")
+        self.assertEqual(f.controller.snapshot(f.run_id)["state"], "completed")
+        frames = f.messages()
+        start = next(frame for frame in frames if frame.get("method") == "thread/start")
+        self.assertEqual(start["params"]["environments"], [])
+        self.assertEqual(start["params"]["dynamicTools"], api.file_tools_specs())
+        self.assertEqual(start["params"]["developerInstructions"], api.FILE_TOOLS_INSTRUCTIONS)
+        self.assertEqual([tool["name"] for tool in start["params"]["dynamicTools"][0]["tools"]],
+                         ["console_list_files", "console_read_text", "console_write_text"])
+        write = next(frame["result"] for frame in frames if frame.get("id") == 800)
+        read = next(frame["result"] for frame in frames if frame.get("id") == 801)
+        self.assertTrue(write["success"])
+        self.assertTrue(read["success"])
+        actual_write = json.loads(write["contentItems"][0]["text"])
+        actual_read = json.loads(read["contentItems"][0]["text"])
+        self.assertEqual(actual_write["afterSha256"], hashlib.sha256((f.allowed / "probe.txt").read_bytes()).hexdigest())
+        self.assertEqual(actual_read["text"], "真实的隔离修改。")
+        self.assertFalse(actual_write["optimisticRaceEliminated"])
+        self.assertEqual(sum(event.get("kind") == "console_file_write" for event in f.events), 1)
+        self.assertEqual(sum(frame.get("method") == "turn/start" for frame in frames), 1)
+        self.assertEqual(len(list((f.home() / "file-tools").glob("*intent*"))), 2)
+
+    def test_file_tools_duplicate_call_cannot_repeat_a_real_write(self):
+        f = self.fixture("dynamic_duplicate")
+        f.submit()
+        f.wait(lambda: f.controller.snapshot(f.run_id)["state"] == "unknown")
+        self.assertEqual(f.controller.snapshot(f.run_id)["error"], "codex_work_file_tool_replayed")
+        self.assertEqual((f.allowed / "probe.txt").read_text(encoding="utf-8"), "真实的隔离修改。")
+        self.assertEqual(sum(event.get("kind") == "console_file_write" for event in f.events), 1)
+        self.assertEqual(len(list((f.home() / "file-tools").glob("*intent*"))), 1)
+
+    def test_foreign_or_malformed_file_tool_requests_do_not_touch_files(self):
+        for mode, code in (("dynamic_foreign_turn", "codex_work_foreign_server_request"),
+                           ("dynamic_foreign_namespace", "codex_work_file_tool_request_invalid"),
+                           ("dynamic_invalid_call", "codex_work_file_tool_request_invalid"),
+                           ("dynamic_wrong_tool", "codex_work_file_tool_request_invalid")):
+            with self.subTest(mode=mode):
+                f = self.fixture(mode)
+                f.submit()
+                f.wait(lambda: f.controller.snapshot(f.run_id)["state"] == "unknown")
+                self.assertEqual(f.controller.snapshot(f.run_id)["error"], code)
+                self.assertFalse((f.allowed / "probe.txt").exists())
+                self.assertEqual(list((f.home() / "file-tools").iterdir()), [])
+                self.assertFalse(any(event.get("kind") == "console_file_write" for event in f.events))
+
+    def test_file_tool_cancel_accepted_before_call_prevents_write(self):
+        f = self.fixture("dynamic_cancel")
+        original = f.event
+        def cancel_when_started(event):
+            result = original(event)
+            if event["type"] == "turn_started":
+                f.controller.interrupt(f.run_id, event["threadId"], event["turnId"])
+            return result
+        f.event = cancel_when_started
+        f.submit()
+        f.done()
+        self.assertTrue(f.controller.snapshot(f.run_id)["cancelVerified"])
+        self.assertFalse((f.allowed / "probe.txt").exists())
+        self.assertEqual(list((f.home() / "file-tools").iterdir()), [])
+        reply = next(frame["result"] for frame in f.messages() if frame.get("id") == 800)
+        self.assertFalse(reply["success"])
+        self.assertEqual(json.loads(reply["contentItems"][0]["text"]), {"code": "codex_work_file_tool_cancelled"})
+
+    def test_file_tool_scope_failure_is_fixed_safe_reply_not_success_or_write(self):
+        f = self.fixture("dynamic_scope_error")
+        f.submit()
+        f.done()
+        reply = next(frame["result"] for frame in f.messages() if frame.get("id") == 800)
+        self.assertFalse(reply["success"])
+        result = json.loads(reply["contentItems"][0]["text"])
+        self.assertRegex(result["code"], r"^codex_files_[a-z0-9_]+$")
+        self.assertNotIn(str(f.allowed), reply["contentItems"][0]["text"])
+        self.assertFalse((f.workspace / "outside.txt").exists())
+        self.assertFalse(any(event.get("kind") == "console_file_write" for event in f.events))
+
+    def assert_unknown_write_fenced(self, f, *, receipt_count):
+        f.done()
+        state, frames = f.controller.snapshot(f.run_id), f.messages()
+        self.assertEqual((state["state"], state["error"], state["terminalStatus"]),
+                         ("unknown", "codex_work_file_write_unverified", "interrupted"))
+        self.assertTrue(state["terminalEventObserved"])
+        self.assertFalse(state["cancelVerified"])
+        self.assertFalse(state["active"])
+        self.assertFalse(state["retryAllowed"])
+        self.assertEqual((f.allowed / "probe.txt").read_text(encoding="utf-8"), "真实的隔离修改。")
+        self.assertEqual(sum(frame.get("method") == "turn/start" for frame in frames), 1)
+        self.assertEqual(sum(frame.get("method") == "turn/interrupt" for frame in frames), 1)
+        blocked = [event for event in f.events if event["type"] == "file_tools_blocked"]
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["code"], "codex_work_file_write_unverified")
+        second = next(frame["result"] for frame in frames if frame.get("id") == 801)
+        self.assertFalse(second["success"])
+        self.assertEqual(json.loads(second["contentItems"][0]["text"]),
+                         {"code": "codex_work_file_tool_cancelled"})
+        markers = f.home() / "file-tools"
+        self.assertEqual(len(list(markers.glob("*.intent.json"))), 1)
+        self.assertEqual(len(list(markers.glob("*.receipt.json"))), receipt_count)
+        last_terminal = [event for event in f.events if event["type"] == "terminal"][-1]
+        self.assertEqual((last_terminal["status"], last_terminal["terminalStatus"]), ("unknown", "interrupted"))
+        self.assertFalse(last_terminal["cancellationVerified"])
+
+    def test_write_receipt_save_failure_keeps_actual_write_and_blocks_new_call_id(self):
+        f = self.fixture("dynamic_unknown_receipt")
+        original = api.CodexFiles.save
+        def fail_receipt(instance, path, value):
+            if path.name.endswith(".receipt.json"):
+                raise OSError("fixture failure after destination mutation")
+            return original(instance, path, value)
+        with mock.patch.object(api.CodexFiles, "save", new=fail_receipt):
+            f.submit()
+            self.assert_unknown_write_fenced(f, receipt_count=0)
+
+    def test_write_post_mutation_verification_failure_blocks_new_call_id(self):
+        f = self.fixture("dynamic_unknown_verification")
+        original = api.CodexFiles._write_text
+        def fail_verification(instance, *args):
+            original(instance, *args)
+            raise RuntimeError("codex_files_write_unverified")
+        with mock.patch.object(api.CodexFiles, "_write_text", new=fail_verification):
+            f.submit()
+            self.assert_unknown_write_fenced(f, receipt_count=0)
+
+    def test_successful_write_frame_and_progress_failures_fence_subsequent_calls(self):
+        for failure in ("frame", "progress_false", "progress_exception", "progress_limit"):
+            with self.subTest(failure=failure):
+                f = self.fixture("dynamic_unknown_" + failure)
+                original_call, original_event = api.CodexFiles.call, f.event
+                def checked_call(instance, *args, **kwargs):
+                    result = original_call(instance, *args, **kwargs)
+                    if failure == "frame":
+                        result["fixtureOversized"] = "x" * api.MAX_LINE
+                    return result
+                def fail_progress(event):
+                    value = original_event(event)
+                    if event["type"] == "turn_started" and failure == "progress_limit":
+                        f.controller._runs[f.run_id].progress_chars = api.MAX_PROGRESS
+                    if event.get("kind") == "console_file_write":
+                        if failure == "progress_false":
+                            return False
+                        if failure == "progress_exception":
+                            raise OSError("fixture callback failure")
+                    return value
+                f.event = fail_progress
+                with mock.patch.object(api.CodexFiles, "call", new=checked_call):
+                    f.submit()
+                    self.assert_unknown_write_fenced(f, receipt_count=1)
+
+    def test_definite_prewrite_sha_rejection_allows_new_valid_call(self):
+        f = self.fixture("dynamic_prewrite_then_write")
+        (f.allowed / "probe.txt").write_text("原先的内容。", encoding="utf-8")
+        f.submit()
+        f.done()
+        first = next(frame["result"] for frame in f.messages() if frame.get("id") == 800)
+        self.assertFalse(first["success"])
+        self.assertEqual(json.loads(first["contentItems"][0]["text"]), {"code": "codex_files_sha_conflict"})
+        second = next(frame["result"] for frame in f.messages() if frame.get("id") == 801)
+        self.assertTrue(second["success"])
+        self.assertEqual((f.allowed / "probe.txt").read_text(encoding="utf-8"), "真实的隔离修改。")
+        self.assertEqual(f.controller.snapshot(f.run_id)["state"], "completed")
+        self.assertFalse(any(event["type"] == "file_tools_blocked" for event in f.events))
+
+    def test_progress_and_unknown_fence_callbacks_do_not_deadlock_a_cancel_snapshot(self):
+        for callback_kind in ("progress", "file_tools_blocked"):
+            with self.subTest(callback_kind=callback_kind):
+                f = self.fixture("dynamic_unknown_lock")
+                service_lock = threading.Lock()
+                db_owned, callback_entered, snapshot_done = (threading.Event() for _ in range(3))
+                observed, callback_timeouts, original_event = [], [], f.event
+                def service_cancel_scope():
+                    # Mirrors the service's DB-lock -> controller.snapshot order.
+                    with service_lock:
+                        db_owned.set()
+                        if callback_entered.wait(3):
+                            state = f.controller.snapshot(f.run_id)
+                            observed.append(state)
+                            f.controller.interrupt(f.run_id, state["threadId"], state["turnId"])
+                            snapshot_done.set()
+                def service_callback(event):
+                    selected = (event.get("kind") == "console_file_write" if callback_kind == "progress"
+                                else event["type"] == "file_tools_blocked")
+                    if selected:
+                        callback_entered.set()
+                        # With the old run-lock -> callback order, this times out:
+                        # cancellation owns DB and waits for the same run lock.
+                        if not snapshot_done.wait(2):
+                            callback_timeouts.append(callback_kind)
+                            raise RuntimeError("fixture detected run/DB lock inversion")
+                        with service_lock:
+                            pass
+                    value = original_event(event)
+                    if callback_kind == "progress" and selected:
+                        return False  # preserve a hard unknown fence afterward
+                    return value
+                f.event = service_callback
+                cancel_thread = threading.Thread(target=service_cancel_scope)
+                cancel_thread.start()
+                self.assertTrue(db_owned.wait(2))
+                original_save = api.CodexFiles.save
+                def fail_receipt(instance, path, value):
+                    if callback_kind == "file_tools_blocked" and path.name.endswith(".receipt.json"):
+                        raise OSError("fixture post-write receipt failure")
+                    return original_save(instance, path, value)
+                try:
+                    with mock.patch.object(api.CodexFiles, "save", new=fail_receipt):
+                        f.submit()
+                        self.assert_unknown_write_fenced(f, receipt_count=1 if callback_kind == "progress" else 0)
+                    self.assertTrue(snapshot_done.is_set())
+                    self.assertEqual(len(observed), 1)
+                    self.assertEqual(callback_timeouts, [])
+                finally:
+                    callback_entered.set()
+                    cancel_thread.join(timeout=4)
+                self.assertFalse(cancel_thread.is_alive())
+
+    def test_file_tools_preparation_caps_are_strict_and_legacy_receipt_stays_compatible(self):
+        f = self.fixture()
+        f.submit()
+        f.done()
+        receipt = next(event["preparationReceipt"] for event in f.events if event["type"] == "prepared")
+        for changes in ({"fileToolsOnly": False}, {"nativeEnvironmentAccess": True},
+                        {"threadStartEnvironments": ["local"]}, {"dynamicToolsSha256": "0" * 64},
+                        {"enforcement": "windows_os_sandbox"}, {"fileToolsOnly": 1}, {"cliVersion": "0.160.0"}):
+            with self.subTest(changes=changes):
+                changed = copy.deepcopy(receipt)
+                changed["capabilities"].update(changes)
+                self.assertFalse(api.valid_preparation_receipt(changed, allowed_root=f.allowed,
+                    image_root=f.home() / "images", model=BINDING["modelSlug"], effort="high", thread_id="thread_fixture"))
+        legacy = copy.deepcopy(receipt)
+        legacy.update(schemaVersion=1, evidenceType=api.PREPARATION_EVIDENCE)
+        legacy.pop("capabilities")
+        self.assertTrue(api.valid_preparation_receipt(legacy, allowed_root=f.allowed,
+            image_root=f.home() / "images", model=BINDING["modelSlug"], effort="high", thread_id="thread_fixture"))
+
+    def test_unknown_cli_contract_fails_before_connection_and_native_thread(self):
+        for version in ("codex-cli 0.160.0", "codex-cli 0.160.2", "not a version", None):
+            with self.subTest(version=version):
+                f = self.fixture()
+                f.cli_version = version
+                f.submit()
+                f.done()
+                self.assertEqual(f.controller.snapshot(f.run_id)["error"], "codex_work_cli_version_unsupported")
+                self.assertEqual(f.subscription.calls, [])
+                self.assertEqual(f.children, [])
+                self.assertNotIn("ACCESS_TOKEN", f.version_reads[0]["environment"])
+                self.assertEqual(f.version_reads[0]["environment"]["CODEX_HOME"],
+                                 str(f.root / "state" / "codex-work" / "runtime-home"))
 
     def test_uncommitted_prepare_receipt_stops_before_intent_and_turn(self):
         f = self.fixture()
@@ -553,7 +856,8 @@ class Checks(unittest.TestCase):
         self.assertIn('windows.sandbox="elevated"', f.invocations[1]["command"])
         self.assertEqual(f.controller.snapshot(f.run_id)["state"], "completed")
         restarted = api.CodexWorkController(f.subscription, f.root / "state", executable=sys.executable,
-                                           popen_factory=f.spawn, rpc_timeout=2, turn_timeout=4)
+                                           popen_factory=f.spawn, rpc_timeout=2, turn_timeout=4,
+                                           cli_version_reader=f.read_version)
         restarted.start()
         self.assertTrue(restarted.setup_status()["ready"])
         self.assertFalse(restarted.begin_setup(str(f.allowed))["accepted"])

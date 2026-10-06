@@ -22,7 +22,7 @@
     const header = make("div", "", "workflow-header"); header.append(heading, back, load, refresh);
     const sourceText = make("textarea"); sourceText.readOnly = true; sourceText.rows = 4; sourceText.setAttribute("aria-label", "本轮 Work 底稿");
     const workspace = select(), model = select(), profile = select(); profile.setAttribute("aria-label", "Work 档位");
-    optionsFor(profile, [{ id: "fast", name: "极速 · low" }, { id: "high", name: "高 · high" }, { id: "pro", name: "Pro · 本机接口暂不支持", disabled: true }], saved.profile || "high");
+    optionsFor(profile, [{ id: "fast", name: "极速 · low" }, { id: "high", name: "高 · high" }, { id: "pro", name: "Pro · 待核实", disabled: true }], saved.profile || "high");
     if (saved.profile === "pro") profile.value = "pro";
     const scope = make("p", "", "workflow-muted"), sourceImages = make("div", "", "workflow-thumbnails"), prepare = button("核对本轮 Work", () => void prepareWork());
     const setupText = make("p", "", "workflow-muted"), setupButton = button("配置 Console Work 沙箱（Windows 授权）", () => void setupWork());
@@ -61,7 +61,7 @@
       review.hidden = !state.review && !state.pending;
       if (state.pending) { reviewText.textContent = "创建请求已提交或送达待核对。原请求编号已保留，不能再点一次自动重跑。请查看进度。"; confirm.disabled = true; }
       const binding = state.config?.workspaces?.find(item => item.id === workspace.value);
-      scope.textContent = binding ? `修改范围：${binding.allowedRoot}。网络关闭；额外权限需要另行确认。` : "请先在电脑设置工作区。";
+      scope.textContent = binding ? `修改范围：${binding.allowedRoot}。本轮可修改工作区文件；运行项目程序尚未接通。` : "请先在电脑设置工作区。";
       const setup = state.config?.setup;
       setupText.textContent = setup?.ready === true ? "Console Work 沙箱已配置；每轮仍会核对实际工作区权限。" : setup?.busy === true ? "正在等待 Windows 沙箱配置结果；权限窗口需你本人确认。" : setup?.status === "unknown" || state.setupUnknown ? "上次沙箱配置送达或结果待核对，请查看进度；不能重复配置。" : setup?.status === "failed" ? "上次沙箱配置未完成，结果已保留；请先核对电脑权限窗口与配置错误。" : "首次 Work 需要在电脑配置 Console 专用沙箱，并由你确认 Windows 权限。";
       setupButton.disabled = state.busy || !binding || setup?.ready === true || setup?.busy === true || setup?.attempted === true || setup?.status === "unknown" || state.setupUnknown;

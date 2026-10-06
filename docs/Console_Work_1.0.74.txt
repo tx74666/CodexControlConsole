@@ -1,0 +1,14 @@
+Codex Console 1.0.74：限定工作区文件修改
+
+正式 1.0.73 的独立 Work 已取得真实 gpt-6-astra/high 回答并保存到原记录，但原生 Windows 文件工具要求磁碟根读取权限，实际未修改 probe.txt。原失败与已发送意图保留，不重发旧消息。
+
+新控制器严格核对 Codex CLI 0.160.1 的官方协议，提交空执行环境，仅提供 Console 自有的有界列档、UTF-8 读取、完整替换工具。原生终端及项目程序运行仍未接通。文件工具核对明确工作区、保护路径、Windows reparse、硬链接、大小及原文件 SHA；写入先保留一次调用意图，写后核实字节并保存回执。取消与未知写入结果会阻止本轮后续文件操作；未知回执不能由另一 callId 重试。
+
+新 v2 回执分别保存真实配置／thread profile 回显和文件工具合同。sandboxVerified=false，不把协议合同、Windows 授权完成或 UI 状态宣称为操作系统越界拒绝实测。旧 v1 记录保留原回执，不补造证据。
+
+Work 极速／高可按实际模型请求选择；Pro 标为待核实，未静默降档。真实文件修改、原记录 Output、准确取消、正式安装与资料保存仍需要各自核对。手机实机和双 Agent 同时执行不由隔离测试代替。
+
+官方同版本协议与工具回归依据：
+https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+https://github.com/openai/codex/blob/rust-v0.160.1/codex-rs/core/src/tools/spec_plan_tests.rs
+https://learn.chatgpt.com/docs/app-server#dynamic-tool-calls-experimental

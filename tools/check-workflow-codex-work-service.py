@@ -249,6 +249,127 @@ class ServiceChecks(unittest.TestCase):
                 self.assertEqual(self.counts(), before)
         self.assertTrue(self.emit(original))
 
+    def file_tools_prepared(self, job):
+        event = self.event(job, "prepared", requestedProfile="high", actualModel="gpt-6-astra",
+                           actualEffort="high", sandboxVerified=False)
+        old = event["preparationReceipt"]
+        actual = old["threadStart"]
+        event["preparationReceipt"] = preparation_receipt(
+            {"config": {"default_permissions": PERMISSION_PROFILE,
+                        "permissions": {PERMISSION_PROFILE: old["configuration"]["permissionProfile"]}}},
+            {"thread": {"id": actual["threadId"]}, "model": actual["model"],
+             "modelProvider": actual["modelProvider"], "reasoningEffort": actual["reasoningEffort"],
+             "cwd": actual["cwd"], "approvalPolicy": actual["approvalPolicy"],
+             "activePermissionProfile": actual["activePermissionProfile"]}, file_tools_only=True)
+        return event
+
+    def test_file_tools_receipt_keeps_exact_contract_and_progress_after_restart(self):
+        accepted, _ = self.submit()
+        job = accepted["job"]
+        event = self.file_tools_prepared(job)
+        self.assertTrue(self.emit(event))
+        public = self.job(job["id"])["codexWork"]
+        self.assertFalse(public["sandboxVerified"])
+        self.assertTrue(public["configurationEchoVerified"])
+        self.assertTrue(public["fileToolsScopeVerified"])
+        self.assertIs(public["nativeEnvironmentAccess"], False)
+        self.assertFalse(public["outsideScopeReadDeniedVerified"])
+        receipt = public["preparationReceipt"]
+        self.assertEqual(receipt["schemaVersion"], 2)
+        self.assertEqual(receipt["capabilities"], event["preparationReceipt"]["capabilities"])
+        self.assertEqual(public["preparationReceiptSha256"], hashlib.sha256(_json(event).encode()).hexdigest())
+        self.assertNotIn(str(self.service.data_dir), _json(public))
+        self.assertTrue(self.emit(self.event(job, "send_intent", model="gpt-6-astra", effort="high")))
+        self.assertTrue(self.emit(self.event(job, "turn_started", turnId="turn_fixture",
+                                            actualModel="gpt-6-astra", actualEffort="high")))
+        self.assertTrue(self.emit(self.event(job, "progress", turnId="turn_fixture", kind="console_file_write",
+                                            itemId="call_fixture", text="已写入 source.txt；SHA256 " + "a" * 64)))
+        self.assertTrue(self.emit(self.terminal(job)))
+        recovered = WorkflowService(self.service.data_dir)
+        try:
+            result = recovered.codex_work_runs("recordId=" + self.record_id)["runs"][-1]
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["codexWork"]["preparationReceipt"], receipt)
+            self.assertTrue(result["codexWork"]["fileToolsScopeVerified"])
+            self.assertFalse(result["codexWork"]["sandboxVerified"])
+            self.assertFalse(result["codexWork"]["outsideScopeReadDeniedVerified"])
+            self.assertEqual(result["codexWork"]["progress"][-1]["kind"], "console_file_write")
+            self.assertFalse(result["codexWork"]["executionVerified"], "progress alone is not actual changed-file evidence")
+        finally:
+            recovered.shutdown()
+
+    def test_file_tools_contract_tampering_cannot_authorize_send(self):
+        accepted, _ = self.submit()
+        job = accepted["job"]
+        original = self.file_tools_prepared(job)
+        mutations = [
+            (["capabilities", "nativeEnvironmentAccess"], True),
+            (["capabilities", "threadStartEnvironments"], [{}]),
+            (["capabilities", "dynamicToolsSha256"], "0" * 64),
+            (["capabilities", "enforcement"], "windows_os_sandbox"),
+            (["capabilities", "cliVersion"], "0.160.2"),
+            (["evidenceType"], "os_scope_enforced")]
+        candidates = []
+        for keys, value in mutations:
+            event = copy.deepcopy(original)
+            target = event["preparationReceipt"]
+            for key in keys[:-1]:
+                target = target[key]
+            target[keys[-1]] = value
+            candidates.append(event)
+        missing = copy.deepcopy(original)
+        missing["preparationReceipt"].pop("capabilities")
+        candidates.extend([missing, {**copy.deepcopy(original), "sandboxVerified": True},
+                           {**copy.deepcopy(original), "preparationReceipt": []}])
+        before = self.counts()
+        for index, event in enumerate(candidates):
+            with self.subTest(index=index):
+                self.assertFalse(self.emit(event))
+                self.assertFalse(self.emit(self.event(job, "send_intent", model="gpt-6-astra", effort="high")))
+                self.assertEqual(self.counts(), before)
+                state = self.job(job["id"])["codexWork"]
+                self.assertFalse(state["fileToolsScopeVerified"])
+                self.assertFalse(state["sendIntentRecorded"])
+        self.assertTrue(self.emit(original))
+
+    def test_unknown_file_write_is_durable_and_only_interrupts_its_exact_run(self):
+        accepted, _ = self.submit()
+        job = accepted["job"]
+        self.assertTrue(self.emit(self.file_tools_prepared(job)))
+        self.assertTrue(self.emit(self.event(job, "send_intent", model="gpt-6-astra", effort="high")))
+        self.assertTrue(self.emit(self.event(job, "turn_started", turnId="turn_fixture", actualModel="gpt-6-astra", actualEffort="high")))
+        blocked = self.event(job, "file_tools_blocked", turnId="turn_fixture", code="codex_work_file_write_unverified")
+        before = self.counts()
+        for change in ({"threadId": "foreign"}, {"turnId": "foreign"}, {"sourceSha256": "f" * 64}, {"code": "unexpected"}):
+            self.assertFalse(self.emit({**blocked, **change}))
+            self.assertFalse(self.job(job["id"])["codexWork"]["fileToolsBlocked"])
+        self.assertTrue(self.emit(blocked))
+        self.assertFalse(self.emit(blocked))
+        self.assertEqual(self.counts(), before)
+        self.assertEqual(self.job(job["id"])["status"], "needs_review")
+        self.assertTrue(self.job(job["id"])["codexWork"]["fileToolsBlocked"])
+        intent = self.event(job, "interrupt_intent", turnId="turn_fixture")
+        self.assertTrue(self.emit(intent))
+        self.assertFalse(self.emit(intent))
+        self.assertTrue(self.emit(self.event(job, "cancel_requested", turnId="turn_fixture", cancellationVerified=False)))
+        terminal = self.terminal(job)
+        terminal.update(status="unknown", terminalStatus="interrupted", error="codex_work_file_write_unverified")
+        self.assertTrue(self.emit(terminal))
+        final = self.job(job["id"])
+        self.assertEqual(final["status"], "needs_review")
+        self.assertFalse(final["codexWork"]["cancellationVerified"])
+        self.assertFalse(final["codexWork"]["executionVerified"])
+        self.assertTrue(final["codexWork"]["terminalEventObserved"])
+        self.assertFalse(self.emit(self.event(job, "send_intent", model="gpt-6-astra", effort="high")))
+        recovered = WorkflowService(self.service.data_dir)
+        try:
+            kept = recovered.codex_work_runs("recordId=" + self.record_id)["runs"][-1]
+            self.assertEqual(kept["status"], "needs_review")
+            self.assertTrue(kept["codexWork"]["fileToolsBlocked"])
+            self.assertFalse(kept["codexWork"]["cancellationVerified"])
+        finally:
+            recovered.shutdown()
+
     def test_prepare_rechecks_current_binding_and_workspace_before_saving_echo(self):
         accepted, _ = self.submit()
         job = accepted["job"]
