@@ -5,6 +5,12 @@
   const button = (text, action) => { const node = make("button", text, "workflow-button"); node.type = "button"; node.addEventListener("click", action); return node; };
   const field = (text, control) => { const node = make("label", "", "workflow-field"); node.append(make("span", text), control); return node; };
   const select = () => make("select");
+  function changedFileText(file) {
+    if (!file || typeof file.path !== "string" || !file.path || /[\\:\u0000-\u001f\u007f]/.test(file.path) || file.path.split("/").some(part => !part || part === "." || part === "..")) return "";
+    const digest = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+    const valid = file.change === "added" ? file.beforeSha256 === null && digest(file.afterSha256) : file.change === "removed" ? digest(file.beforeSha256) && file.afterSha256 === null : file.change === "modified" && digest(file.beforeSha256) && digest(file.afterSha256) && file.beforeSha256 !== file.afterSha256;
+    return valid ? `${({ added: "新增", modified: "修改", removed: "删除" })[file.change]}：${file.path}` : "";
+  }
   function optionsFor(control, items, selected = control.value) { control.replaceChildren(); for (const item of items) { const option = make("option", item.name || item.id); option.value = item.id; option.disabled = item.disabled === true; control.append(option); } control.value = items.some(item => item.id === selected && !item.disabled) ? selected : items.find(item => !item.disabled)?.id || ""; }
   function create(root, options = {}) {
     if (!root) return null;
@@ -17,6 +23,7 @@
     const sourceText = make("textarea"); sourceText.readOnly = true; sourceText.rows = 4; sourceText.setAttribute("aria-label", "本轮 Work 底稿");
     const workspace = select(), model = select(), profile = select(); profile.setAttribute("aria-label", "Work 档位");
     optionsFor(profile, [{ id: "fast", name: "极速 · low" }, { id: "high", name: "高 · high" }, { id: "pro", name: "Pro · 本机接口暂不支持", disabled: true }], saved.profile || "high");
+    if (saved.profile === "pro") profile.value = "pro";
     const scope = make("p", "", "workflow-muted"), sourceImages = make("div", "", "workflow-thumbnails"), prepare = button("核对本轮 Work", () => void prepareWork());
     const setupText = make("p", "", "workflow-muted"), setupButton = button("配置 Console Work 沙箱（Windows 授权）", () => void setupWork());
     const setupBox = make("section", "", "codex-work-setup"); setupBox.append(setupText); if (!phone) setupBox.append(setupButton);
@@ -30,6 +37,16 @@
     else permissions.append(make("p", "工作区访问范围由电脑端明确保存。"));
     root.classList.add("workflow-panel", "codex-work-panel"); root.replaceChildren(header, notice, setupBox, form, review, runs, permissions);
     function say(text, error = false) { notice.textContent = text; notice.dataset.error = String(error); }
+    function currentPhoneScope() {
+      const value = options.getScope?.();
+      if (!value || value.recordId !== state.recordId || !/^[a-f0-9]{32}$/.test(value.recordId) || !/^[a-f0-9]{32}$/.test(value.sessionId || "") || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value.clientId || "")) return null;
+      const scope = { recordId: value.recordId, clientId: value.clientId, sessionId: value.sessionId };
+      return !state.source || sameScope(scope, state.source) ? scope : null;
+    }
+    function sameScope(left, right) { return Boolean(left && right && left.recordId === right.recordId && left.clientId === right.clientId && left.sessionId === right.sessionId); }
+    function jobPhoneScope(job) { const value = job.mobileDialogue; return value ? { recordId: value.recordId, clientId: value.clientId, sessionId: value.id } : null; }
+    function matchesPhoneJob(job, scope) { return job.mobileDialogue === null || sameScope(scope, jobPhoneScope(job)); }
+    function retirePhoneView() { state.generation++; state.runs = []; state.source = state.review = null; sourceText.value = ""; sourceImages.replaceChildren(); say("当前讨论身份已变化，请重新载入当前讨论；原请求与对话草稿保留。", true); render(); }
     function persist() { try { localStorage.setItem(key, JSON.stringify({ recordId: state.recordId, profile: profile.value, workspaceId: workspace.value, model: model.value, pending: state.pending, setupUnknown: state.setupUnknown })); state.storageFailed = false; return true; } catch { state.storageFailed = true; say("本机请求编号尚未保存；保持当前页，未创建 Agent。", true); return false; } }
     async function call(action, body, query = "") {
       const response = await fetch(`${base}/${action}${query ? "?" + query : ""}`, { method: body ? "POST" : "GET", credentials: "same-origin", mode: "same-origin", redirect: "error", cache: "no-store", headers: { ...(phone ? { "X-Codex-Phone": "1" } : {}), ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -37,7 +54,7 @@
     }
     function render() {
       const validSource = state.source?.recordId === state.recordId && state.source.text === sourceText.value;
-      prepare.disabled = state.busy || state.pending || !validSource || !workspace.value || !model.value || !state.config?.subscription?.connected || state.composing;
+      prepare.disabled = state.busy || state.pending || !validSource || !workspace.value || !model.value || !["fast", "high"].includes(profile.value) || !state.config?.subscription?.connected || state.composing;
       workspace.disabled = model.disabled = profile.disabled = state.busy || Boolean(state.pending);
       load.disabled = state.busy || Boolean(state.pending); confirm.disabled = state.busy || !state.review || Boolean(state.pending); dismiss.disabled = state.busy || Boolean(state.pending);
       review.hidden = !state.review && !state.pending;
@@ -53,9 +70,13 @@
         card.append(title, description, make("p", work.allowedRoot || job.workspace?.allowedRoot || "", "workflow-muted"));
         if (work.actualEffort) card.append(make("p", `实际档位：${work.actualEffort} · ${work.terminalEventObserved ? "已收到终态回执" : "尚在进行"}`, "workflow-muted"));
         if (job.error) card.append(make("p", job.error, "workflow-notice"));
-        const progress = make("pre", job.log || job.progress || "", "codex-work-progress"); card.append(progress);
+        const progress = make("pre", Array.isArray(work.progress) ? work.progress.filter(item => item && typeof item.text === "string").map(item => item.text).join("\n") : "", "codex-work-progress"); card.append(progress);
         const result = job.result || {}; if (result.text) { card.append(make("h4", "Output"), make("pre", result.text, "codex-work-progress")); if (result.reportOnly || work.reportOnly) card.append(make("p", "本轮只有报告，尚未核实文件修改。", "workflow-muted")); }
-        if (Array.isArray(result.changedFiles) && result.changedFiles.length) card.append(make("p", `已核实文件：${result.changedFiles.join("、")}`));
+        if (job.status === "completed" && work.terminalEventObserved === true && work.executionVerified === true && result.executionVerified === true && Array.isArray(result.changedFiles) && result.changedFiles.length) {
+          const files = result.changedFiles.map(changedFileText).filter(Boolean);
+          if (files.length) { const list = make("ul"); for (const text of files) list.append(make("li", text)); card.append(make("h4", "已核实文件（相对修改范围）"), list); }
+          if (files.length !== result.changedFiles.length) card.append(make("p", "部分文件变更信息尚待核对。", "workflow-muted"));
+        }
         if (["starting", "running", "cancelling", "needs_review"].includes(job.status) && work.threadId && work.turnId && !work.terminalEventObserved) {
           const cancel = button(work.cancellationVerified ? "已取消" : job.status === "cancelling" ? "等待取消回执" : "取消这个 Agent", () => void cancelWork(job)); cancel.disabled = state.busy || job.status === "cancelling"; card.append(cancel);
         }
@@ -118,21 +139,30 @@
     }
     async function cancelWork(job) {
       if (state.busy) return; const work = job.codexWork || {};
+      const scope = phone ? currentPhoneScope() : null;
+      if (phone && (!scope || job.recordId !== scope.recordId || !matchesPhoneJob(job, scope))) { retirePhoneView(); return; }
       const generation = state.generation, recordId = state.recordId;
       state.busy = true; render();
-      try { const data = await call("codex-work/cancel", { requestId: uuid(), jobId: job.id, threadId: work.threadId, turnId: work.turnId, sourceSha256: work.sourceSha256 }), actual = data.job?.codexWork;
+      try { const data = await call("codex-work/cancel", { requestId: uuid(), jobId: job.id, threadId: work.threadId, turnId: work.turnId, sourceSha256: work.sourceSha256, ...(phone ? { clientId: scope.clientId, sessionId: scope.sessionId } : {}) }), actual = data.job?.codexWork;
         if (data.job?.id !== job.id || data.job.recordId !== job.recordId || actual?.sourceSha256 !== work.sourceSha256 || actual.threadId !== work.threadId || actual.turnId !== work.turnId) throw new Error("取消回执目标不一致，请查看这个 Agent 的实际状态。");
+        if (phone && !matchesPhoneJob(data.job, scope)) throw new Error("取消回执讨论身份不一致，请查看这个 Agent 的实际状态。");
+        if (phone && !sameScope(scope, data.scope)) throw new Error("取消回执讨论身份不一致，请查看这个 Agent 的实际状态。");
         if (generation !== state.generation || recordId !== state.recordId) return;
+        if (phone && !sameScope(scope, currentPhoneScope())) { retirePhoneView(); return; }
         say(actual.cancellationVerified === true && actual.terminalEventObserved === true ? "这个 Agent 已收到电脑取消回执。" : "取消请求已接收，等待这个 Agent 的电脑终态回执。"); }
       catch (error) { if (generation === state.generation && recordId === state.recordId) say(error.message, true); } finally { state.busy = false; await readRuns(); }
     }
     async function readRuns() {
       window.clearTimeout(state.timer); if (!state.recordId || !state.active) { render(); return; }
+      const scope = phone ? currentPhoneScope() : null;
+      if (phone && !scope) { retirePhoneView(); return; }
       const generation = state.generation, recordId = state.recordId;
       try {
-        const data = await call("codex-work/runs", null, `recordId=${encodeURIComponent(recordId)}`);
+        const data = await call("codex-work/runs", null, `recordId=${encodeURIComponent(recordId)}${phone ? `&clientId=${encodeURIComponent(scope.clientId)}&sessionId=${encodeURIComponent(scope.sessionId)}` : ""}`);
         if (!state.active || generation !== state.generation || recordId !== state.recordId) return;
-        state.runs = (data.jobs || data.runs || []).filter(job => job.recordId === recordId && job.executionEngine === "codex_agent");
+        if (phone && !sameScope(scope, currentPhoneScope())) { retirePhoneView(); return; }
+        if (phone && !sameScope(scope, data.scope)) { state.runs = []; render(); throw new Error("进度回执讨论身份不一致，请重新载入当前讨论。"); }
+        state.runs = (data.jobs || data.runs || []).filter(job => job.recordId === recordId && job.executionEngine === "codex_agent" && (!phone || matchesPhoneJob(job, scope)));
         if (state.pending && state.runs.some(job => job.requestId === state.pending.requestId && job.codexWork?.sourceSha256 === state.pending.sourceSha256)) { state.pending = null; state.review = null; persist(); say("原创建请求已核对，Agent 记录已保留。"); }
         render();
         // Read progress only for visible, already accepted activity. No model,

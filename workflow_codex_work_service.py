@@ -196,6 +196,52 @@ class CodexWorkMixin:
             _fail("revision_conflict", "工作记录已更新，请保留输入后重新审核。")
         return None
 
+    def _codex_work_phone_session(self, db, client_id, session_id, record_id):
+        """Read the explicit current phone identity without touching its draft."""
+        from workflow_mobile_dialogue import _client
+        client = _client(client_id)
+        if client != client_id:
+            _fail("codex_work_source_invalid", status=403)
+        session = self._mobile_session(db, client, session_id)
+        if self._mobile_client_state(db, client)["currentSessionId"] != session["id"]:
+            _fail("dialogue_changed", "当前讨论已切换；不会取消其它讨论的 Agent。", 409)
+        if session["recordId"] != record_id:
+            _fail("codex_work_source_invalid", status=403)
+        self._mobile_source_guard(db, session)
+        return session
+
+    def _codex_work_phone_run_scope(self, db, session, source):
+        """Only the current same-task phone discussion may view/control a run.
+
+        Desktop-created runs keep mobileDialogue=None. Their task binding is
+        verified against the explicit current phone scope rather than invented
+        from the job. Draft text/revision and global progress revisions are not
+        cancellation authority and may change while this Agent runs.
+        """
+        current = self._codex_work_phone_session(db, session["clientId"], session["id"], session["recordId"])
+        if not isinstance(source, dict) or source.get("recordId") != current["recordId"]:
+            _fail("codex_work_source_invalid", status=403)
+        origin = source.get("mobileDialogue")
+        if origin is not None and (not isinstance(origin, dict)
+                or any(origin.get(key) != current[key] for key in ("id", "clientId", "recordId", "ideaId", "ideaRevision"))):
+            _fail("codex_work_source_invalid", status=403)
+        context = source.get("context")
+        actual = self._source_task(db, current["recordId"])
+        if not isinstance(context, dict) or context.get("sourceTask") != actual:
+            _fail("codex_work_source_changed", status=403)
+        if (actual is None and current.get("ideaId") is not None
+                or actual is not None and (current.get("ideaId") != actual["ideaId"]
+                                          or current.get("ideaRevision") != actual["revision"])):
+            _fail("codex_work_source_changed", status=403)
+        idea_context = self._native_idea_context(db, actual) if actual else None
+        if context.get("ideaContext") != idea_context:
+            _fail("codex_work_source_changed", status=403)
+        return True
+
+    @staticmethod
+    def _codex_work_phone_public_scope(session):
+        return {"recordId": session["recordId"], "clientId": session["clientId"], "sessionId": session["id"]}
+
     def _codex_work_images(self, db, record_id, identifiers, frozen=None, materialize=False):
         if (not isinstance(identifiers, list) or len(identifiers) > 4
                 or any(not isinstance(identifier, str) for identifier in identifiers)
@@ -466,20 +512,25 @@ class CodexWorkMixin:
                 self._revision(db, True)
 
     def codex_work_cancel(self, body, prefix="/api/workflow", authorize=None):
-        _exact(body, {"requestId", "jobId", "threadId", "turnId", "sourceSha256"})
+        _exact(body, {"requestId", "jobId", "threadId", "turnId", "sourceSha256"}
+               | ({"clientId", "sessionId"} if _phone(prefix) else set()))
         _remote_id(body["threadId"])
         _remote_id(body["turnId"])
         _digest(body["sourceSha256"])
         if authorize:
             authorize()
-        controller, interrupt = getattr(self, "codex_work", None), False
+        controller, interrupt, phone_scope = getattr(self, "codex_work", None), False, None
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             old = self._receipt(db, "codex_work_cancel", body)
             row, payload, meta, _ = self._codex_work_job_row(db, body["jobId"])
             if (body["sourceSha256"] != meta["sourceSha256"] or body["threadId"] != meta["threadId"]
-                    or body["turnId"] != meta["turnId"] or bool(payload["mobileDialogue"]) != _phone(prefix)):
+                    or body["turnId"] != meta["turnId"]):
                 _fail("codex_work_cancel_mismatch", status=403)
+            if _phone(prefix):
+                session = self._codex_work_phone_session(db, body["clientId"], body["sessionId"], row["record_id"])
+                self._codex_work_phone_run_scope(db, session, meta["source"])
+                phone_scope = self._codex_work_phone_public_scope(session)
             if old is None:
                 if controller is None or row["status"] not in ACTIVE:
                     _fail("codex_work_cancel_unavailable")
@@ -504,18 +555,35 @@ class CodexWorkMixin:
                 controller.interrupt(body["jobId"], body["threadId"], body["turnId"])
             except Exception:
                 self._codex_work_submission_unknown(body["jobId"])
-        return self._codex_work_response(body["jobId"], prefix, old is not None)
+        result = self._codex_work_response(body["jobId"], prefix, old is not None)
+        if phone_scope is not None:
+            result["scope"] = phone_scope
+        return result
 
     def codex_work_runs(self, query="", prefix="/api/workflow", authorize=None):
         values = parse_qs(query, keep_blank_values=True)
-        if len(query) > 100 or set(values) != {"recordId"} or len(values["recordId"]) != 1:
+        keys = {"recordId", "clientId", "sessionId"} if _phone(prefix) else {"recordId"}
+        if len(query) > 512 or set(values) != keys or any(len(values[key]) != 1 for key in keys):
             _fail("codex_work_request_invalid", status=400)
         if authorize:
             authorize()
         with self._db() as db:
             record = self._record(db, values["recordId"][0])
+            session = (self._codex_work_phone_session(db, values["clientId"][0], values["sessionId"][0], record["id"])
+                       if _phone(prefix) else None)
             rows = db.execute("SELECT * FROM jobs WHERE record_id=? AND kind='work' AND json_extract(payload,'$.executionEngine')='codex_agent' ORDER BY rowid", (record["id"],)).fetchall()
-            result = {"recordId": record["id"], "runs": [self._public_codex_work_job(row, prefix) for row in rows], "revision": self._revision(db)}
+            visible = []
+            for row in rows:
+                if session:
+                    _, _, meta, _ = self._codex_work_job_row(db, row["id"])
+                    try:
+                        self._codex_work_phone_run_scope(db, session, meta["source"])
+                    except _api().WorkflowError:
+                        continue
+                visible.append(self._public_codex_work_job(row, prefix))
+            result = {"recordId": record["id"], "runs": visible, "revision": self._revision(db)}
+            if session:
+                result["scope"] = self._codex_work_phone_public_scope(session)
             if authorize:
                 authorize()
             return result

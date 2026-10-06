@@ -874,4 +874,20 @@ await test("Work source waits for composition saving and local images rather tha
   const image = new Blob(["unsaved-local-image"], { type: "image/png" }); image.name = "尚未上传.png"; const picker = h.byLabel("选择图片文件"); picker.files = [image]; picker.fire("change"); await flush(); assert.equal(h.panel.getWorkSource(), null); assert.equal(h.uploads.length, 0); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
   const uncertain = harness(); uncertain.panel.setActive(true); await flush(); const other = uncertain.byLabel("提问或保存想法"); other.value = "原消息未知"; other.fire("input"); uncertain.hook(action => { if (action === "mobile/dialogue/send") throw new TypeError("receipt lost"); }); uncertain.byText("发送 ↑").click(); await flush(); const pending = JSON.parse([...uncertain.storage.values()][0]).pending; const before = uncertain.calls.length; assert.equal(uncertain.panel.getWorkSource(), null); assert.equal(uncertain.calls.length, before); assert.deepEqual(JSON.parse([...uncertain.storage.values()][0]).pending, pending);
 });
+await test("Work cancellation scope stays available during composition and uncertain sends without publishing the draft", async () => {
+  const h = harness(); assert.equal(h.panel.getWorkScope(), null); h.panel.setActive(true); await flush();
+  const expected = { clientId: h.current().clientId, sessionId: h.current().id, recordId: h.current().recordId };
+  const input = h.byLabel("提问或保存想法"); input.value = "仍在听写的私有草稿"; input.fire("compositionstart"); input.fire("input");
+  const before = h.calls.length, scope = structuredClone(h.panel.getWorkScope()); assert.deepEqual(scope, expected); assert.equal(h.panel.getWorkSource(), null);
+  scope.recordId = "foreign"; assert.deepEqual(structuredClone(h.panel.getWorkScope()), expected); assert.equal(h.calls.length, before); assert.equal(input.value, "仍在听写的私有草稿");
+  input.fire("compositionend"); h.hook(action => { if (action === "mobile/dialogue/send") throw new TypeError("receipt lost"); }); h.byText("发送 ↑").click(); await flush();
+  const pending = JSON.parse([...h.storage.values()][0]).pending, after = h.calls.length; assert.ok(pending); assert.equal(h.panel.getWorkSource(), null); assert.deepEqual(structuredClone(h.panel.getWorkScope()), expected); assert.equal(h.calls.length, after); assert.deepEqual(JSON.parse([...h.storage.values()][0]).pending, pending);
+  h.panel.clear(); assert.equal(h.panel.getWorkScope(), null);
+});
+await test("Work cancellation scope follows validated discussion changes and never adopts an invalid foreign response", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); const old = structuredClone(h.panel.getWorkScope());
+  h.switchSession({ ...h.current(), id: "new-session", recordId: "new-record", revision: 1, draft: { text: "新讨论的草稿", attachmentIds: [] } }); await h.panel.refresh();
+  assert.deepEqual(structuredClone(h.panel.getWorkScope()), { clientId: old.clientId, sessionId: "new-session", recordId: "new-record" });
+  h.current().clientId = randomUUID(); await h.panel.refresh(); assert.equal(h.panel.getWorkScope(), null); assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear(); assert.equal(h.panel.getWorkScope(), null);
+});
 console.log(`${count} mobile dialogue behavior checks passed.`);

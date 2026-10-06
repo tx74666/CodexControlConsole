@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import uuid
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from workflow_service import WorkflowError, WorkflowService, _json, _now
@@ -356,6 +357,99 @@ class ServiceChecks(unittest.TestCase):
         self.controller.active[job["id"]]["active"] = False
         self.reject(lambda: self.service.codex_work_cancel(request), "codex_work_cancel_unavailable")
         self.assertFalse(self.controller.interrupts)
+
+    def test_phone_views_and_cancels_current_desktop_agent_without_changing_draft(self):
+        client = str(uuid.uuid4())
+        initial = self.service.mobile_dialogue_open(body(clientId=client))
+        session = initial["session"]
+        self.record_id = session["recordId"]
+        job, _ = self.running()
+        draft = self.service.mobile_dialogue_draft(body(clientId=client, sessionId=session["id"],
+            expectedRevision=session["revision"], text="正在输入的新草稿，不是取消底稿", attachmentIds=[], requestedProfile="high"))
+        scope = {"recordId": self.record_id, "clientId": client, "sessionId": session["id"]}
+        runs = self.service.codex_work_runs(urlencode(scope), prefix="/api/phone/workflow")
+        self.assertEqual(runs["scope"], scope)
+        self.assertEqual([row["id"] for row in runs["runs"]], [job["id"]])
+        self.assertIsNone(runs["runs"][0]["mobileDialogue"])
+        request = body(jobId=job["id"], threadId="thread_fixture", turnId="turn_fixture",
+                       sourceSha256=job["codexWork"]["sourceSha256"], clientId=client, sessionId=session["id"])
+        wrong = {**request, "turnId": "other_turn"}
+        self.reject(lambda: self.service.codex_work_cancel(wrong, prefix="/api/phone/workflow"), "codex_work_cancel_mismatch")
+        result = self.service.codex_work_cancel(request, prefix="/api/phone/workflow")
+        self.assertEqual(result["scope"], scope)
+        self.assertIsNone(result["job"]["mobileDialogue"])
+        self.assertFalse(result["job"]["codexWork"]["cancellationVerified"])
+        self.assertTrue(self.service.codex_work_cancel(request, prefix="/api/phone/workflow")["duplicate"])
+        self.assertEqual(len(self.controller.interrupts), 1)
+        self.assertTrue(self.emit(self.event(job, "interrupt_intent", turnId="turn_fixture")))
+        terminal = self.terminal(job)
+        terminal.update(status="interrupted", terminalStatus="interrupted", cancellationVerified=True)
+        self.assertTrue(self.emit(terminal))
+        self.assertTrue(self.job(job["id"])["codexWork"]["cancellationVerified"])
+        self.assertEqual(self.service.mobile_dialogue_get("clientId=" + client)["session"], draft["session"])
+        self.assertEqual(len(self.controller.calls), 1)
+
+    def test_phone_control_rejects_foreign_record_client_and_cleared_session(self):
+        client = str(uuid.uuid4())
+        initial = self.service.mobile_dialogue_open(body(clientId=client))
+        session = initial["session"]
+        self.record_id = session["recordId"]
+        job, _ = self.running()
+        request = body(jobId=job["id"], threadId="thread_fixture", turnId="turn_fixture",
+                       sourceSha256=job["codexWork"]["sourceSha256"], clientId=client, sessionId=session["id"])
+        other_client = str(uuid.uuid4())
+        other = self.service.mobile_dialogue_open(body(clientId=other_client))["session"]
+        for values in ({"clientId": other_client, "sessionId": session["id"]},
+                       {"clientId": client, "sessionId": other["id"]},
+                       {"clientId": other_client, "sessionId": other["id"]}):
+            self.reject(lambda values=values: self.service.codex_work_cancel({**request, **values}, prefix="/api/phone/workflow"))
+            self.reject(lambda values=values: self.service.codex_work_runs(urlencode({"recordId": self.record_id, **values}), prefix="/api/phone/workflow"))
+        self.reject(lambda: self.service.codex_work_cancel({key: value for key, value in request.items() if key not in {"clientId", "sessionId"}}, prefix="/api/phone/workflow"), "codex_work_request_invalid")
+        self.service.mobile_dialogue_clear(body(clientId=client, sessionId=session["id"], expectedRevision=session["revision"]))
+        self.reject(lambda: self.service.codex_work_cancel(request, prefix="/api/phone/workflow"), "dialogue_changed")
+        self.reject(lambda: self.service.codex_work_runs(urlencode({"recordId": self.record_id, "clientId": client, "sessionId": session["id"]}), prefix="/api/phone/workflow"), "dialogue_changed")
+        self.assertFalse(self.controller.interrupts)
+        self.assertEqual(self.job(job["id"])["status"], "running")
+
+    def test_phone_cannot_cancel_a_desktop_agent_after_original_task_changes(self):
+        client = str(uuid.uuid4())
+        idea = self.service.incubator_create(body(title="原工作来源", body="明确旧底稿"))["idea"]
+        initial = self.service.mobile_dialogue_open(body(clientId=client, ideaId=idea["id"], expectedIdeaRevision=idea["revision"]))
+        session = initial["session"]
+        self.record_id = session["recordId"]
+        job, _ = self.running()
+        self.service.incubator_update(body(id=idea["id"], expectedRevision=idea["revision"], body="另一个已保存版本"))
+        request = body(jobId=job["id"], threadId="thread_fixture", turnId="turn_fixture",
+                       sourceSha256=job["codexWork"]["sourceSha256"], clientId=client, sessionId=session["id"])
+        self.reject(lambda: self.service.codex_work_cancel(request, prefix="/api/phone/workflow"))
+        self.assertFalse(self.controller.interrupts)
+
+    def test_desktop_local_authorization_can_cancel_phone_created_agent(self):
+        client = str(uuid.uuid4())
+        initial = self.service.mobile_dialogue_open(body(clientId=client))
+        session = initial["session"]
+        self.record_id = session["recordId"]
+        request = body(recordId=self.record_id, clientId=client, sessionId=session["id"], expectedRevision=session["revision"],
+            text="手机创建的确切Agent", attachmentIds=[], workspaceId="fixture",
+            workspaceAuthorizationSha256=self.workspace_binding["authorizationSha256"], requestedProfile="high", subscription=dict(Subscription.binding))
+        review = self.service.codex_work_review(request, prefix="/api/phone/workflow")
+        submitted = self.service.codex_work_submit(body(reviewId=review["reviewId"], sourceSha256=review["sourceSha256"], confirmed=True), prefix="/api/phone/workflow")
+        job = submitted["job"]
+        self.assertTrue(self.emit(self.event(job, "prepared", requestedProfile="high", actualModel="gpt-6-astra", actualEffort="high", sandboxVerified=True)))
+        self.assertTrue(self.emit(self.event(job, "send_intent", model="gpt-6-astra", effort="high")))
+        self.assertTrue(self.emit(self.event(job, "turn_started", turnId="turn_fixture", actualModel="gpt-6-astra", actualEffort="high")))
+        self.controller.active[job["id"]].update(threadId="thread_fixture", turnId="turn_fixture")
+        cancel = body(jobId=job["id"], threadId="thread_fixture", turnId="turn_fixture", sourceSha256=job["codexWork"]["sourceSha256"])
+        before = self.counts()
+        self.reject(lambda: self.service.codex_work_cancel(cancel, authorize=lambda: (_ for _ in ()).throw(WorkflowError("local authorization revoked", 403))))
+        self.assertEqual(self.counts(), before)
+        self.assertFalse(self.controller.interrupts)
+        authorizations = []
+        result = self.service.codex_work_cancel(cancel, authorize=lambda: authorizations.append(True))
+        self.assertEqual(result["job"]["mobileDialogue"]["id"], session["id"])
+        self.assertEqual(result["job"]["status"], "cancelling")
+        self.assertGreaterEqual(len(authorizations), 2)
+        self.assertEqual(self.controller.interrupts, [(job["id"], "thread_fixture", "turn_fixture")])
 
     def test_completion_with_no_changes_is_report_only_same_record(self):
         job, _ = self.running()

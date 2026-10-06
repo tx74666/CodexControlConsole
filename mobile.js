@@ -45,6 +45,7 @@
   let workView = ["dialogue", "ideas", "conversations", "workflow", "agents"].includes(initialWorkView) ? initialWorkView : "dialogue";
   const codexWorkPanel = window.CodexWorkPanel?.create(el("phoneCodexWorkPanel"), {
     phone: true, getSource: () => dialoguePanel?.getWorkSource?.() || null,
+    getScope: () => dialoguePanel?.getWorkScope?.() || null,
     onBack: () => selectWorkView("dialogue"),
     onAuth: () => showPair("配对已过期，请重新连接电脑。")
   }) || null;

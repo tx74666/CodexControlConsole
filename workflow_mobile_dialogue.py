@@ -198,13 +198,23 @@ class MobileDialogueMixin:
         # Work remains separate from Chat profile evidence. Its scoped commits
         # still wake this original discussion when progress or Output changes.
         own_work = []
-        for row in db.execute("SELECT * FROM jobs WHERE record_id=? AND kind='work' AND json_extract(payload,'$.executionEngine')='codex_agent' AND json_extract(payload,'$.mobileDialogue.id')=? AND json_extract(payload,'$.mobileDialogue.clientId')=? ORDER BY created_at DESC,id DESC LIMIT 64", (session["recordId"], session_id, client_id)):
+        for row in db.execute("SELECT * FROM jobs WHERE record_id=? AND kind='work' AND json_extract(payload,'$.executionEngine')='codex_agent' ORDER BY created_at DESC,id DESC LIMIT 64", (session["recordId"],)):
             payload = json.loads(row["payload"])
             source = payload.get("codexWork", {}).get("source", {})
             dialogue = payload.get("mobileDialogue")
-            if (isinstance(dialogue, dict) and dialogue == source.get("mobileDialogue")
-                    and dialogue.get("recordId") == session["recordId"] and source.get("recordId") == session["recordId"]):
-                own_work.append({name: row[name] for name in ("id", "status", "updated_at", "error", "result", "log")})
+            phone_owned = (isinstance(dialogue, dict) and dialogue == source.get("mobileDialogue")
+                    and dialogue.get("id") == session_id and dialogue.get("clientId") == client_id
+                    and dialogue.get("recordId") == session["recordId"] and source.get("recordId") == session["recordId"])
+            desktop_owned = False
+            if dialogue is None and source.get("mobileDialogue") is None:
+                try:
+                    _, _, meta, _ = self._codex_work_job_row(db, row["id"])
+                    desktop_owned = self._codex_work_phone_run_scope(db, session, meta["source"])
+                except _api().WorkflowError:
+                    pass
+            if phone_owned or desktop_owned:
+                own_work.append({**{name: row[name] for name in ("id", "status", "updated_at", "error", "result", "log")},
+                    "workProgressSha256": hashlib.sha256(_api()._json(payload["codexWork"]).encode("utf-8")).hexdigest()})
         if own_work:
             proof["work"] = own_work
         cursor = hashlib.sha256(_api()._json(proof).encode("utf-8")).hexdigest()

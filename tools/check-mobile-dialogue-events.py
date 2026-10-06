@@ -17,6 +17,9 @@ from workflow_service import WorkflowError
 spec = importlib.util.spec_from_file_location("relay_event_fixtures", Path(__file__).with_name("check-console-chat-relay.py"))
 fixtures = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixtures)
+work_spec = importlib.util.spec_from_file_location("desktop_work_event_fixtures", Path(__file__).with_name("check-workflow-codex-work-service.py"))
+work_fixtures = importlib.util.module_from_spec(work_spec)
+work_spec.loader.exec_module(work_fixtures)
 
 
 class DialogueEvents(unittest.TestCase):
@@ -276,6 +279,81 @@ class DialogueEvents(unittest.TestCase):
         self.fixture.controller.committed([sent["job"]["appDispatch"]["id"]])
         self.assertEqual(stream.next_event(0)["data"]["status"], "failed")
         self.assertFalse(any(item["type"] in {"prepare", "commitSend"} for item in self.fixture.messages))
+
+
+class DesktopWorkDialogueEvents(unittest.TestCase):
+    """Actual durable service actions with only an inert controller and temp data."""
+    def setUp(self):
+        self.fixture = work_fixtures.ServiceChecks(methodName="runTest")
+        self.fixture.setUp()
+        self.service = self.fixture.service
+        self.client = str(uuid.uuid4())
+        self.state = self.service.mobile_dialogue_open(work_fixtures.body(clientId=self.client))
+        self.streams = []
+
+    def tearDown(self):
+        for stream in self.streams:
+            stream.close()
+        self.fixture.tearDown()
+
+    def subscribe(self, state=None):
+        state = state or self.state
+        session = state["session"]
+        stream = self.service.mobile_dialogue_subscribe(urlencode({"clientId": session["clientId"], "sessionId": session["id"]}))
+        self.streams.append(stream)
+        stream.next_event(0)
+        return stream
+
+    def test_desktop_same_current_record_progress_and_output_wake_only_after_commit(self):
+        self.fixture.record_id = self.state["session"]["recordId"]
+        stream = self.subscribe()
+        job, _ = self.fixture.running()
+        stream.next_event(0)  # Durable submit/start changed the same source.
+        with self.assertRaises(ValueError):
+            with self.service._db() as db:
+                db.execute("UPDATE jobs SET log='rolled back local Work progress' WHERE id=?", (job["id"],))
+                raise ValueError("rollback fixture")
+        self.assertIsNone(stream.next_event(0))
+        self.assertTrue(self.fixture.emit(self.fixture.event(job, "progress", turnId="turn_fixture",
+            kind="item/agentMessage/delta", itemId="agent", text="来自桌面同一Agent的真实fixture进度")))
+        progress = stream.next_event(0)
+        self.assertEqual(progress["event"], "dialogue.result")
+        self.assertEqual(progress["data"]["recordId"], job["recordId"])
+        self.assertEqual(progress["data"]["status"], "idle", "Work cannot masquerade as a completed Chat")
+        self.assertIsNone(progress["data"]["jobId"])
+        self.assertTrue(self.fixture.emit(self.fixture.terminal(job)))
+        completed = stream.next_event(0)
+        self.assertNotEqual(completed["data"]["cursor"], progress["data"]["cursor"])
+        result = self.service.mobile_dialogue_get("clientId=" + self.client)
+        self.assertEqual(result["session"], self.state["session"])
+        self.assertEqual(result["detail"]["messages"][-1]["text"], "Actual complete report 中文")
+        self.assertFalse(result["execution"]["actualReceipt"]["verified"])
+
+    def test_foreign_record_desktop_progress_cannot_wake_current_phone(self):
+        stream = self.subscribe()
+        job, _ = self.fixture.running()  # The fixture's separate original record.
+        self.assertNotEqual(job["recordId"], self.state["session"]["recordId"])
+        self.assertTrue(self.fixture.emit(self.fixture.event(job, "progress", turnId="turn_fixture",
+            kind="item/agentMessage/delta", itemId="foreign", text="different record")))
+        self.assertIsNone(stream.next_event(0))
+
+    def test_desktop_stale_task_and_cleared_discussion_exclude_later_progress(self):
+        idea = self.service.incubator_create(work_fixtures.body(title="明确原任务", body="原版"))["idea"]
+        opened = self.service.mobile_dialogue_open(work_fixtures.body(clientId=self.client, ideaId=idea["id"], expectedIdeaRevision=idea["revision"]))
+        self.fixture.record_id = opened["session"]["recordId"]
+        job, _ = self.fixture.running()
+        stream = self.subscribe(opened)
+        self.service.incubator_update(work_fixtures.body(id=idea["id"], expectedRevision=idea["revision"], body="新的已保存来源"))
+        stream.next_event(0)  # Scope removal itself may notify; later Work may not.
+        self.assertTrue(self.fixture.emit(self.fixture.event(job, "progress", turnId="turn_fixture",
+            kind="item/agentMessage/delta", itemId="stale", text="old original task version")))
+        self.assertIsNone(stream.next_event(0))
+        session = opened["session"]
+        new = self.service.mobile_dialogue_clear(work_fixtures.body(clientId=self.client, sessionId=session["id"], expectedRevision=session["revision"]))
+        fresh = self.subscribe(new)
+        self.assertTrue(self.fixture.emit(self.fixture.event(job, "progress", turnId="turn_fixture",
+            kind="item/agentMessage/delta", itemId="cleared", text="old discussion")))
+        self.assertIsNone(fresh.next_event(0))
 
 
 if __name__ == "__main__":

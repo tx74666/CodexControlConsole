@@ -14,6 +14,7 @@ from pathlib import Path
 import sys
 import unittest
 import uuid
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from workflow_http import workflow_get, workflow_post
@@ -207,7 +208,8 @@ class CodexWorkHttpChecks(unittest.TestCase):
         self.assertTrue(self.controller.event(job["id"], "send_intent", model="gpt-6-astra", effort="high"))
         self.assertTrue(self.controller.event(job["id"], "turn_started", turnId="owned_turn", actualModel="gpt-6-astra", actualEffort="high"))
         self.assertTrue(self.controller.event(job["id"], "progress", kind="item/agentMessage/delta", itemId="owned_item", text="实际可见进度"))
-        status, runs, _ = self.request(PREFIX + "codex-work/runs?recordId=" + job["recordId"])
+        status, runs, _ = self.request(PREFIX + "codex-work/runs?" + urlencode({"recordId": job["recordId"],
+            "clientId": client, "sessionId": state["session"]["id"]}))
         self.assertEqual(status, 200, runs)
         self.assertEqual(runs["runs"][0]["codexWork"]["progress"][0]["text"], "实际可见进度")
         self.assertTrue(self.terminal(job))
@@ -223,8 +225,9 @@ class CodexWorkHttpChecks(unittest.TestCase):
         self.assertEqual(len(self.controller.submissions), 1)
 
     def test_exact_phone_cancel_is_durable_ack_not_completion_then_matching_terminal(self):
-        _, state, _, job, _ = self.start_phone()
-        payload = request_body(jobId=job["id"], threadId="owned_thread", turnId="owned_turn", sourceSha256=job["codexWork"]["sourceSha256"])
+        client, state, _, job, _ = self.start_phone()
+        payload = request_body(jobId=job["id"], threadId="owned_thread", turnId="owned_turn", sourceSha256=job["codexWork"]["sourceSha256"],
+                               clientId=client, sessionId=state["session"]["id"])
         status, wrong, _ = self.request(PREFIX + "codex-work/cancel", "POST", {**payload, "turnId": "other_turn"})
         self.assertEqual(status, 403, wrong)
         self.assertFalse(self.controller.interrupts)
@@ -240,13 +243,63 @@ class CodexWorkHttpChecks(unittest.TestCase):
         self.assertFalse(self.controller.event(job["id"], "terminal", turnId="wrong_turn", status="interrupted", terminalStatus="interrupted",
             terminalEventObserved=True, report="", error=None, cancellationVerified=True, executionVerified=False, retryAllowed=False))
         self.assertTrue(self.terminal(job, status="interrupted", terminalStatus="interrupted", report="", cancellationVerified=True))
-        status, actual, _ = self.request(PREFIX + "codex-work/runs?recordId=" + state["session"]["recordId"])
+        status, actual, _ = self.request(PREFIX + "codex-work/runs?" + urlencode({"recordId": state["session"]["recordId"],
+            "clientId": client, "sessionId": state["session"]["id"]}))
         self.assertEqual(status, 200, actual)
         run = actual["runs"][0]
         self.assertEqual(run["status"], "interrupted")
         self.assertTrue(run["codexWork"]["cancellationVerified"])
         self.assertTrue(run["codexWork"]["terminalEventObserved"])
         self.assertEqual(len(self.controller.submissions), 1)
+
+    def test_paired_phone_controls_exact_current_desktop_agent_and_desktop_controls_phone_agent(self):
+        client, state = self.open_phone()
+        session = state["session"]
+        with self.workflow._db() as db:
+            revision = int(self.workflow._revision(db))
+        review = workflow_post(self.workflow, "codex-work/review", request_body(recordId=session["recordId"], expectedRevision=revision,
+            text="桌面确认的同一Agent", attachmentIds=[], workspaceId=self.workspace["id"],
+            workspaceAuthorizationSha256=self.workspace["authorizationSha256"], requestedProfile="high", subscription=dict(CachedSubscription.binding)),
+            desktop=True, authorize=lambda: self.desktop_authorizations.append("authorized"))
+        result = workflow_post(self.workflow, "codex-work/submit", request_body(reviewId=review["reviewId"], sourceSha256=review["sourceSha256"], confirmed=True),
+            desktop=True, authorize=lambda: self.desktop_authorizations.append("authorized"))
+        job = result["job"]
+        self.assertIsNone(job["mobileDialogue"])
+        self.assertTrue(self.controller.event(job["id"], "prepared", threadId="owned_thread", requestedProfile="high", actualModel="gpt-6-astra", actualEffort="high", sandboxVerified=True))
+        self.assertTrue(self.controller.event(job["id"], "send_intent", model="gpt-6-astra", effort="high"))
+        self.assertTrue(self.controller.event(job["id"], "turn_started", turnId="owned_turn", actualModel="gpt-6-astra", actualEffort="high"))
+        scope = {"recordId": session["recordId"], "clientId": client, "sessionId": session["id"]}
+        status, visible, _ = self.request(PREFIX + "codex-work/runs?" + urlencode(scope))
+        self.assertEqual(status, 200, visible)
+        self.assertEqual(visible["scope"], scope)
+        self.assertEqual(visible["runs"][0]["id"], job["id"])
+        self.assertIsNone(visible["runs"][0]["mobileDialogue"])
+        cancel = request_body(jobId=job["id"], threadId="owned_thread", turnId="owned_turn", sourceSha256=job["codexWork"]["sourceSha256"],
+                              clientId=client, sessionId=session["id"])
+        for fields in ({"clientId": str(uuid.uuid4())}, {"turnId": "foreign_turn"}, {"sessionId": uuid.uuid4().hex}):
+            self.assertIn(self.request(PREFIX + "codex-work/cancel", "POST", {**cancel, **fields})[0], (403, 404))
+        self.assertFalse(self.controller.interrupts)
+        status, accepted, _ = self.request(PREFIX + "codex-work/cancel", "POST", cancel)
+        self.assertEqual(status, 200, accepted)
+        self.assertEqual(accepted["scope"], scope)
+        self.assertFalse(accepted["job"]["codexWork"]["cancellationVerified"])
+        self.assertEqual(self.request(PREFIX + "codex-work/cancel", "POST", cancel)[0], 200)
+        self.assertEqual(len(self.controller.interrupts), 1)
+        self.assertTrue(self.controller.event(job["id"], "interrupt_intent"))
+        self.assertTrue(self.terminal(job, status="interrupted", terminalStatus="interrupted", report="", cancellationVerified=True))
+        status, after, _ = self.request(PREFIX + "mobile/dialogue?clientId=" + client)
+        self.assertEqual(status, 200, after)
+        self.assertEqual(after["session"], state["session"])
+        phone_review, _ = self.review_phone(client, state)
+        phone_job, _ = self.submit_phone(phone_review)
+        self.assertTrue(self.controller.event(phone_job["id"], "prepared", threadId="phone_thread", requestedProfile="high", actualModel="gpt-6-astra", actualEffort="high", sandboxVerified=True))
+        self.assertTrue(self.controller.event(phone_job["id"], "send_intent", model="gpt-6-astra", effort="high"))
+        self.assertTrue(self.controller.event(phone_job["id"], "turn_started", turnId="phone_turn", actualModel="gpt-6-astra", actualEffort="high"))
+        desktop_cancel = workflow_post(self.workflow, "codex-work/cancel", request_body(jobId=phone_job["id"], threadId="phone_thread", turnId="phone_turn",
+            sourceSha256=phone_job["codexWork"]["sourceSha256"]), desktop=True, authorize=lambda: self.desktop_authorizations.append("authorized"))
+        self.assertEqual(desktop_cancel["job"]["status"], "cancelling")
+        self.assertEqual(len(self.controller.interrupts), 2)
+        self.assertEqual(len(self.controller.submissions), 2)
 
     def test_failed_own_work_cannot_enter_generic_retry_or_legacy_queued_worker(self):
         client, state = self.open_phone()
