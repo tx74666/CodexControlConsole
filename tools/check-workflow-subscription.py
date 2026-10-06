@@ -3,6 +3,7 @@ import base64
 import copy
 import ctypes
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -334,6 +335,105 @@ class SubscriptionChecks(unittest.TestCase):
         self.assertEqual(query["code_challenge"], [base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")])
         self.assertEqual(token_form["client_id"], "issued-fixture-client")
         self.assertEqual(token_form["redirect_uri"], query["redirect_uri"][0])
+
+    def test_optional_callback_scope_accepts_official_shape_and_uses_token_grant(self):
+        result = self.broker.begin_signin()
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(result["authorizationUrl"]).query)
+        self.broker.handle_callback({"state": query["state"], "code": ["fixture-code"],
+                                    "client_id": ["issued-fixture-client"], "scope": ["openid"]})
+        self.assertTrue(self.broker.get_status()["connected"])
+        self.assertEqual(self.broker._connection["scope"], self.remote.tokens["scope"])
+        token_form = next(kwargs["form"] for url, kwargs in self.remote.calls if url == api.TOKEN)
+        self.assertNotIn("scope", token_form)
+        self.assertEqual(self.runner_calls, [])
+
+    def test_duplicate_callback_scope_is_consumed_without_token_exchange(self):
+        result = self.broker.begin_signin()
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(result["authorizationUrl"]).query)
+        callback = {"state": query["state"], "code": ["fixture-code"],
+                    "client_id": ["issued-fixture-client"], "scope": ["openid", api.SCOPES]}
+        with self.assertRaises(WorkflowError) as failure:
+            self.broker.handle_callback(callback)
+        self.assertEqual(failure.exception.code, "subscription_callback_invalid")
+        self.assertIsNone(self.broker._pending)
+        self.assertEqual(self.remote.calls, [])
+        self.assertEqual(self.broker.get_status()["status"], "login_failed")
+        self.assertFalse(self.broker.get_status()["busy"])
+        callback["scope"] = [api.SCOPES]
+        with self.assertRaises(WorkflowError):
+            self.broker.handle_callback(callback)
+        self.assertEqual(self.remote.calls, [])
+
+    def test_callback_scope_cannot_upgrade_missing_token_direct_grant(self):
+        self.remote.tokens["scope"] = "openid profile email offline_access"
+        result = self.broker.begin_signin()
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(result["authorizationUrl"]).query)
+        with self.assertRaises(WorkflowError) as failure:
+            self.broker.handle_callback({"state": query["state"], "code": ["fixture-code"],
+                                        "client_id": ["issued-fixture-client"], "scope": [api.SCOPES]})
+        self.assertEqual(failure.exception.code, "subscription_not_connected")
+        self.assertEqual(self.broker._connection["scope"], self.remote.tokens["scope"])
+        self.assertFalse(self.broker.get_status()["connected"])
+        self.assertFalse(self.broker.get_status()["busy"])
+        self.assertFalse(any(url == api.MODELS for url, _ in self.remote.calls))
+        self.assertEqual(self.runner_calls, [])
+
+    def test_callback_scope_keeps_bounds_unknown_field_expiry_and_state_guards(self):
+        for kind in ("oversized", "unknown_field", "expired", "wrong_state"):
+            with self.subTest(kind=kind):
+                result = self.broker.begin_signin()
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(result["authorizationUrl"]).query)
+                pending = self.broker._pending
+                callback = {"state": query["state"], "code": ["fixture-code"],
+                            "client_id": ["issued-fixture-client"], "scope": [api.SCOPES]}
+                if kind == "oversized":
+                    callback["scope"] = ["x" * 8193]
+                elif kind == "unknown_field":
+                    callback["unknown_grant"] = [api.SCOPES]
+                elif kind == "expired":
+                    pending["deadline"] = time.monotonic() - 1
+                else:
+                    callback["state"] = ["wrong-state"]
+                with self.assertRaises(WorkflowError) as failure:
+                    self.broker.handle_callback(callback)
+                self.assertEqual(failure.exception.code, "subscription_callback_state_invalid"
+                                 if kind == "wrong_state" else "subscription_callback_invalid")
+                self.assertEqual(self.remote.calls, [])
+                if kind == "wrong_state":
+                    self.assertIs(self.broker._pending, pending)
+                    self.assertEqual(self.broker.get_status()["status"], "signing_in")
+                    self.assertTrue(self.broker.get_status()["busy"])
+                else:
+                    self.assertIsNone(self.broker._pending)
+                    self.assertFalse(self.broker.get_status()["busy"])
+
+    def test_real_loopback_callback_http_accepts_scope_once_with_fake_provider(self):
+        self.broker._open_callback = api.SubscriptionBroker._open_callback.__get__(self.broker)
+        result = self.broker.begin_signin()
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(result["authorizationUrl"]).query)
+        callback = urllib.parse.urlencode({"code": "fixture-code", "scope": api.SCOPES,
+                                          "state": query["state"][0], "client_id": "issued-fixture-client"})
+        port = self.broker._callback_server.server_port
+        def get_callback():
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                connection.request("GET", "/auth/callback?" + callback)
+                response = connection.getresponse()
+                return response.status, response.getheader("Content-Type"), response.read(16384)
+            finally:
+                connection.close()
+        status, content_type, body = get_callback()
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "text/html; charset=utf-8")
+        self.assertIn("订阅登录已处理".encode("utf-8"), body)
+        self.assertNotIn(b"fixture-code", body)
+        self.assertTrue(self.broker.get_status()["connected"])
+        self.assertIsNone(self.broker._pending)
+        count = len(self.remote.calls)
+        self.assertEqual(sum(url == api.TOKEN for url, _ in self.remote.calls), 1)
+        self.assertEqual(get_callback()[0], 400)
+        self.assertEqual(len(self.remote.calls), count)
+        self.assertEqual(self.runner_calls, [])
 
     def test_wrong_state_no_exchange_and_duplicate_correct_callback_consumed(self):
         result = self.broker.begin_signin()

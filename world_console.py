@@ -79,6 +79,71 @@ def hidden_subprocess_kwargs():
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
+def package_runtime_status(version, frozen=False):
+    result = {
+        "ok": False, "version": version, "ytDlp": False, "ytDlpVersion": "",
+        "subscriptionRuntime": False, "subscriptionModules": False,
+        "jwtVersion": "", "cryptographyVersion": "", "errors": [],
+    }
+
+    def failed(component, stage, error=None):
+        # Diagnostics never expose exception messages, paths or credentials.
+        names = {"ImportError", "ModuleNotFoundError", "OSError", "ValueError",
+                 "RuntimeError", "AttributeError", "TypeError", "UnsupportedAlgorithm"}
+        name = type(error).__name__ if error is not None else "Unavailable"
+        result["errors"].append({
+            "component": component, "stage": stage,
+            "code": name if name in names or name == "Unavailable" else "Exception",
+        })
+
+    stage = "import"
+    try:
+        import yt_dlp
+
+        stage = "module_surface"
+        result["ytDlpVersion"] = str(getattr(getattr(yt_dlp, "version", None), "__version__", ""))
+        result["ytDlp"] = callable(getattr(yt_dlp, "YoutubeDL", None))
+        if not result["ytDlp"]:
+            failed("media", stage)
+    except Exception as error:
+        failed("media", stage, error)
+
+    stage = "import"
+    try:
+        import jwt
+        import cryptography
+        from cryptography.hazmat.primitives import hashes
+        import workflow_subscription
+        import workflow_subscription_delivery
+        import workflow_subscription_stream
+
+        stage = "module_surface"
+        result["jwtVersion"] = str(getattr(jwt, "__version__", ""))
+        result["cryptographyVersion"] = str(getattr(cryptography, "__version__", ""))
+        result["subscriptionModules"] = all((
+            callable(getattr(workflow_subscription, "SubscriptionBroker", None)),
+            callable(getattr(workflow_subscription_delivery, "SubscriptionDeliveryMixin", None)),
+            callable(getattr(workflow_subscription_stream, "run_response", None)),
+        ))
+        stage = "signature"
+        signing_ready = "RS256" in jwt.algorithms.get_default_algorithms()
+        stage = "hash"
+        digest = hashes.Hash(hashes.SHA256())
+        digest.update(b"Codex Console packaged runtime check")
+        hash_ready = len(digest.finalize()) == 32
+        result["subscriptionRuntime"] = (
+            result["subscriptionModules"] and signing_ready and hash_ready
+        )
+        if not result["subscriptionRuntime"]:
+            failed("subscription", "module_surface" if not result["subscriptionModules"]
+                   else "signature" if not signing_ready else "hash")
+    except Exception as error:
+        failed("subscription", stage, error)
+
+    result["ok"] = result["ytDlp"] and (result["subscriptionRuntime"] or not frozen)
+    return result
+
+
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8898
@@ -1787,52 +1852,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/console/package-check":
             if not self.require_local_request():
                 return
-            try:
-                import yt_dlp
-
-                yt_dlp_version = str(getattr(getattr(yt_dlp, "version", None), "__version__", ""))
-                yt_dlp_ready = callable(getattr(yt_dlp, "YoutubeDL", None))
-            except (ImportError, OSError):
-                yt_dlp_version = ""
-                yt_dlp_ready = False
-            jwt_version = ""
-            cryptography_version = ""
-            subscription_modules_ready = False
-            subscription_runtime_ready = False
-            try:
-                import jwt
-                import cryptography
-                from cryptography.hazmat.primitives import hashes
-                import workflow_subscription
-                import workflow_subscription_delivery
-                import workflow_subscription_stream
-
-                jwt_version = str(getattr(jwt, "__version__", ""))
-                cryptography_version = str(getattr(cryptography, "__version__", ""))
-                subscription_modules_ready = all((
-                    callable(getattr(workflow_subscription, "SubscriptionBroker", None)),
-                    callable(getattr(workflow_subscription_delivery, "SubscriptionDeliveryMixin", None)),
-                    callable(getattr(workflow_subscription_stream, "run_response", None)),
-                ))
-                digest = hashes.Hash(hashes.SHA256())
-                digest.update(b"Codex Console packaged runtime check")
-                subscription_runtime_ready = (
-                    subscription_modules_ready
-                    and "RS256" in jwt.algorithms.get_default_algorithms()
-                    and len(digest.finalize()) == 32
-                )
-            except (ImportError, OSError, ValueError, RuntimeError):
-                subscription_runtime_ready = False
-            self.send_json({
-                "ok": yt_dlp_ready and (subscription_runtime_ready or not getattr(sys, "frozen", False)),
-                "version": APP_VERSION,
-                "ytDlp": yt_dlp_ready,
-                "ytDlpVersion": yt_dlp_version,
-                "subscriptionRuntime": subscription_runtime_ready,
-                "subscriptionModules": subscription_modules_ready,
-                "jwtVersion": jwt_version,
-                "cryptographyVersion": cryptography_version,
-            })
+            self.send_json(package_runtime_status(APP_VERSION, frozen=getattr(sys, "frozen", False)))
             return
         if parsed.path == "/api/feedback/config":
             query = urllib.parse.parse_qs(parsed.query)

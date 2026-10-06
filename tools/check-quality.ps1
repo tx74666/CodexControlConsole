@@ -144,6 +144,7 @@ $PythonChecks = @(
   "tools/check-conversations.py",
   "tools/check-thread-cache-import.py",
   "tools/check-workflow.py",
+  "tools/check-package-runtime.py",
   "tools/check-workflow-subscription.py",
   "tools/check-workflow-subscription-stream.py",
   "tools/check-workflow-subscription-delivery.py",

@@ -563,11 +563,13 @@ class WorkflowSubscription:
                 raise _error("subscription_callback_state_invalid")
             self._pending = None
             try:
-                allowed = {"state", "code", "client_id", "error", "error_description", "iss", "session_state"}
+                allowed = {"state", "code", "client_id", "scope", "error", "error_description", "iss", "session_state"}
                 if (time.monotonic() >= pending["deadline"] or len(query) > 8 or set(query) - allowed
                         or any(not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], str)
                                or len(value[0]) > 8192 for value in query.values())):
                     raise _error("subscription_callback_invalid")
+                # The optional callback scope is untrusted presentation data.
+                # Granted capabilities come only from the validated token response.
                 if "error" in query:
                     raise _error("subscription_login_not_approved")
                 if "iss" in query and query["iss"][0] != ISSUER:
