@@ -880,16 +880,107 @@ class Checks(unittest.TestCase):
                     f.controller.begin_setup(str(f.allowed))
                     f.wait(lambda: f.controller._setup_run.complete.is_set())
                 runtime = f.root / "state" / "codex-work" / "runtime-home"
-                (runtime / "config.toml").write_text('[windows]\nsandbox = "elevated"\n', encoding="utf-8")
                 before_children = len(f.children)
                 f.mode = "complete"
-                f.submit()
-                f.done()
-                self.assertEqual(f.controller.snapshot(f.run_id)["error"], "codex_work_runtime_changed")
-                self.assertEqual(len(f.children), before_children)
+                for project_config in ("", '\n[projects.' + json.dumps(str(f.allowed))
+                                       + ']\ntrust_level = "trusted"\n'):
+                    with self.subTest(projects=bool(project_config)):
+                        (runtime / "config.toml").write_text('[windows]\nsandbox = "elevated"\n'
+                                                            + project_config, encoding="utf-8")
+                        f.run_id = uuid.uuid4().hex
+                        f.submit()
+                        f.done()
+                        self.assertEqual(f.controller.snapshot(f.run_id)["error"], "codex_work_runtime_changed")
+                        self.assertEqual(len(f.children), before_children)
+                        restarted = api.CodexWorkController(f.subscription, f.root / "state", executable=sys.executable)
+                        self.assertFalse(restarted.start()["ready"])
+                        restarted.close()
+
+    def test_setup_workspace_trust_survives_restart_without_new_authorization(self):
+        f = self.fixture("setup_complete")
+        f.controller.begin_setup(str(f.workspace))
+        f.wait(lambda: f.controller._setup_run.complete.is_set())
+        root = f.root / "state" / "codex-work"
+        runtime = root / "runtime-home"
+        config = runtime / "config.toml"
+        # Real Windows setup saved a lower-case key for a mixed-case path.
+        key = str(f.workspace).lower() if os.name == "nt" else str(f.workspace)
+        config.write_text('[windows]\nsandbox = "elevated"\n\n[projects.'
+                          + json.dumps(key) + ']\ntrust_level = "trusted"\n', encoding="utf-8")
+        protected = [config, root / "setup-intent.json", next(root.glob("setup-completion-*.json"))]
+        original = {str(path): path.read_bytes() for path in protected}
+        f.controller.close()
+        f.controller = api.CodexWorkController(f.subscription, f.root / "state", executable=sys.executable,
+            popen_factory=f.spawn, rpc_timeout=2, turn_timeout=4, cli_version_reader=f.read_version)
+        status = f.controller.start()
+        self.assertEqual(status["status"], "ready")
+        self.assertTrue(status["ready"])
+        self.assertTrue(status["terminalEventObserved"])
+        self.assertFalse(f.controller.begin_setup(str(f.workspace))["accepted"])
+        self.assertEqual(len(f.children), 1)
+        self.assertEqual(f.subscription.calls, [])
+        f.mode = "complete"
+        f.submit()
+        f.done()
+        self.assertEqual(f.controller.snapshot(f.run_id)["state"], "completed")
+        self.assertEqual(sum(row.get("method") == "turn/start" for row in f.messages()), 1)
+        self.assertEqual(len(f.children), 2)
+        self.assertEqual(f.invocations[-1]["env"]["CODEX_HOME"], str(runtime))
+        self.assertIn('projects.' + json.dumps(str(f.allowed)) + '.trust_level="untrusted"',
+                      f.invocations[-1]["command"])
+        self.assertEqual({str(path): path.read_bytes() for path in protected}, original)
+
+    def test_success_receipt_only_admits_one_plain_same_setup_workspace_trust_entry(self):
+        f = self.fixture("setup_complete")
+        f.controller.begin_setup(str(f.workspace))
+        f.wait(lambda: f.controller._setup_run.complete.is_set())
+        root = f.root / "state" / "codex-work"
+        config = root / "runtime-home" / "config.toml"
+        other = f.root / "unrelated"
+        other.mkdir()
+        trusted = {"trust_level": "trusted"}
+        valid = {str(f.workspace): trusted}
+
+        def write_projects(projects, extra=""):
+            content = '[windows]\nsandbox="elevated"\n' + extra
+            if not projects:
+                content += '\n[projects]\n'
+            for path, settings in projects.items():
+                content += '\n[projects.' + json.dumps(path) + ']\n'
+                for name, value in settings.items():
+                    content += name + '=' + json.dumps(value) + '\n'
+            config.write_text(content, encoding="utf-8")
+
+        for projects, extra in (({}, ""), ({str(other): trusted}, ""),
+                ({str(f.root): trusted}, ""), ({str(f.allowed): trusted}, ""),
+                ({str(Path(f.workspace.anchor)): trusted}, ""), ({"relative": trusted}, ""),
+                ({**valid, str(other): trusted}, ""),
+                ({str(f.workspace): {"trust_level": "untrusted"}}, ""),
+                ({str(f.workspace): {**trusted, "unknown_setting": "value"}}, ""),
+                (valid, '\n[hooks]\ncommand="outside"\n'),
+                (valid, '\n[mcp_servers.other]\ncommand="outside"\n')):
+            with self.subTest(projects=projects, extra=extra):
+                write_projects(projects, extra)
+                with self.assertRaises(WorkflowError) as blocked:
+                    f.controller._runtime()
+                self.assertEqual(blocked.exception.code, "codex_work_runtime_changed")
                 restarted = api.CodexWorkController(f.subscription, f.root / "state", executable=sys.executable)
                 self.assertFalse(restarted.start()["ready"])
                 restarted.close()
+        write_projects(valid)
+        intent_path = root / "setup-intent.json"
+        original = intent_path.read_bytes()
+        intent = json.loads(original)
+        for workspace in (None, "relative", str(other), str(f.root)):
+            with self.subTest(intent_workspace=workspace):
+                intent_path.write_text(json.dumps({**intent, "workspaceRoot": workspace}), encoding="utf-8")
+                with self.assertRaises(WorkflowError) as blocked:
+                    f.controller._runtime()
+                self.assertEqual(blocked.exception.code, "codex_work_runtime_changed")
+        intent_path.write_bytes(original)
+        self.assertEqual(f.controller._runtime()[1], config.parent.resolve())
+        self.assertEqual(len(f.children), 1)
+        self.assertEqual(f.subscription.calls, [])
 
     def test_success_receipt_never_admits_extra_settings_or_unbound_receipt(self):
         f = self.fixture("setup_complete")
