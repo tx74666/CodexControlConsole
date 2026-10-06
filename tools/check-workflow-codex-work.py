@@ -53,6 +53,9 @@ while True:
     if running and (home / "fixture-release").exists():
         terminal("interrupted")
     if setup_running and (home / "fixture-setup-release").exists():
+        # Match actual 0.160.1 run_windows_sandbox_setup_and_persist(): official
+        # config mutation precedes the successful completion notification.
+        (runtime_home / "config.toml").write_text('[windows]\nsandbox = "elevated"\n', encoding="utf-8")
         emit({"method": "windowsSandbox/setupCompleted", "params": {"mode": "elevated", "success": True, "error": None}})
         setup_running = False
     try:
@@ -83,13 +86,16 @@ while True:
         setup_running = True
         emit({"id": value["id"], "result": {"started": True}})
         if mode == "setup_complete":
+            (runtime_home / "config.toml").write_text('[windows]\nsandbox = "elevated"\n', encoding="utf-8")
             emit({"method": "windowsSandbox/setupCompleted", "params": {"mode": "elevated", "success": True, "error": None}})
             setup_running = False
         elif mode == "setup_failed":
             emit({"method": "windowsSandbox/setupCompleted", "params": {"mode": "elevated", "success": False, "error": "fixture private error"}})
             setup_running = False
         elif mode == "setup_unknown":
-            break
+            # A mock abrupt process exit supplies no setupCompleted. Avoid
+            # Python finalization waiting for this fixture's daemon stdin reader.
+            os._exit(0)
     elif method == "thread/start":
         if mode == "windows_scope_required":
             emit({"id": value["id"], "error": {"code": -32603, "message":
@@ -143,7 +149,9 @@ class Subscription:
 
 class Fixture:
     def __init__(self, root, mode="complete", reject_intent=False):
-        self.root, self.mode, self.reject_intent = Path(root), mode, reject_intent
+        # Windows CI TEMP may be an 8.3 alias. Match the controller's canonical
+        # owned path without weakening any exact RPC/source comparisons.
+        self.root, self.mode, self.reject_intent = Path(root).resolve(), mode, reject_intent
         self.events, self.children, self.invocations = [], [], []
         self.workspace = self.root / "workspace"
         self.allowed = self.workspace / "allowed"
@@ -428,23 +436,86 @@ class Checks(unittest.TestCase):
         self.assertEqual([row.get("method") for row in frames], ["initialize", "initialized", "windowsSandbox/setupStart"])
         self.assertEqual(frames[-1]["params"], {"mode": "elevated", "cwd": str(f.allowed)})
         original_config = (root / "runtime-home" / "config.toml").read_bytes()
+        self.assertEqual(original_config, api.RUNTIME_CONFIG)
         (root / "fixture-setup-release").write_text("actual own fake completion", encoding="utf-8")
         f.wait(lambda: f.controller._setup_run.complete.is_set())
         self.assertTrue(f.controller.setup_status()["ready"])
         self.assertTrue(f.controller.setup_status()["terminalEventObserved"])
         self.assertFalse(f.controller.setup_status()["busy"])
+        official_config = (root / "runtime-home" / "config.toml").read_bytes()
+        self.assertNotEqual(official_config, original_config)
+        self.assertEqual(official_config.replace(b"\r\n", b"\n"), b'[windows]\nsandbox = "elevated"\n')
         f.mode = "complete"
         f.submit()
         f.done()
         self.assertEqual(f.invocations[0]["env"]["CODEX_HOME"], f.invocations[1]["env"]["CODEX_HOME"])
-        self.assertEqual((root / "runtime-home" / "config.toml").read_bytes(), original_config)
+        self.assertEqual((root / "runtime-home" / "config.toml").read_bytes(), official_config)
         self.assertIn('windows.sandbox="elevated"', f.invocations[1]["command"])
         self.assertEqual(f.controller.snapshot(f.run_id)["state"], "completed")
-        restarted = api.CodexWorkController(f.subscription, f.root / "state", executable=sys.executable)
+        restarted = api.CodexWorkController(f.subscription, f.root / "state", executable=sys.executable,
+                                           popen_factory=f.spawn, rpc_timeout=2, turn_timeout=4)
         restarted.start()
         self.assertTrue(restarted.setup_status()["ready"])
         self.assertFalse(restarted.begin_setup(str(f.allowed))["accepted"])
-        restarted.close()
+        f.controller.close()
+        f.controller = restarted
+        f.run_id = uuid.uuid4().hex
+        f.submit()
+        f.done()
+        self.assertEqual(restarted.snapshot(f.run_id)["state"], "completed")
+        self.assertEqual(f.invocations[-1]["env"]["CODEX_HOME"], f.invocations[0]["env"]["CODEX_HOME"])
+        self.assertIn('windows.sandbox="elevated"', f.invocations[-1]["command"])
+
+    def test_official_persisted_mode_requires_own_success_receipt(self):
+        for mode in ("no_setup", "setup_unknown", "setup_failed"):
+            with self.subTest(mode=mode):
+                f = self.fixture(mode)
+                if mode == "no_setup":
+                    f.controller.start()
+                else:
+                    f.controller.begin_setup(str(f.allowed))
+                    f.wait(lambda: f.controller._setup_run.complete.is_set())
+                runtime = f.root / "state" / "codex-work" / "runtime-home"
+                (runtime / "config.toml").write_text('[windows]\nsandbox = "elevated"\n', encoding="utf-8")
+                before_children = len(f.children)
+                f.mode = "complete"
+                f.submit()
+                f.done()
+                self.assertEqual(f.controller.snapshot(f.run_id)["error"], "codex_work_runtime_changed")
+                self.assertEqual(len(f.children), before_children)
+                restarted = api.CodexWorkController(f.subscription, f.root / "state", executable=sys.executable)
+                self.assertFalse(restarted.start()["ready"])
+                restarted.close()
+
+    def test_success_receipt_never_admits_extra_settings_or_unbound_receipt(self):
+        f = self.fixture("setup_complete")
+        f.controller.begin_setup(str(f.allowed))
+        f.wait(lambda: f.controller._setup_run.complete.is_set())
+        root = f.root / "state" / "codex-work"
+        runtime = root / "runtime-home"
+        config = runtime / "config.toml"
+        official = config.read_bytes()
+        for suffix in (b'[mcp_servers.other]\ncommand="other"\n', b'model_provider="other"\n',
+                       b'[permissions.other]\nextends=":danger-full-access"\n', b'#' * (api.MAX_RUNTIME_CONFIG + 1)):
+            with self.subTest(extra=suffix[:40]):
+                config.write_bytes(official + suffix)
+                with self.assertRaises(WorkflowError) as blocked:
+                    f.controller._runtime()
+                self.assertEqual(blocked.exception.code, "codex_work_runtime_changed")
+        config.write_bytes(official)
+        receipt_path = next(root.glob("setup-completion-*.json"))
+        receipt = json.loads(receipt_path.read_bytes())
+        original_receipt = receipt_path.read_bytes()
+        for changes in ({"attemptId": "f" * 32}, {"runtimeHome": str(f.workspace)},
+                        {"terminalEventObserved": False}, {"success": False}, {"mode": "unelevated"}):
+            with self.subTest(receipt=changes):
+                receipt_path.write_text(json.dumps({**receipt, **changes}), encoding="utf-8")
+                with self.assertRaises(WorkflowError) as blocked:
+                    f.controller._runtime()
+                self.assertEqual(blocked.exception.code, "codex_work_runtime_changed")
+        receipt_path.write_bytes(original_receipt)
+        self.assertEqual(f.controller._runtime()[1], runtime.resolve())
+        self.assertEqual(len(f.children), 1)
 
     def test_setup_unknown_persists_once_and_restart_cannot_retry(self):
         f = self.fixture("setup_unknown")

@@ -24,6 +24,7 @@ import stat
 import subprocess
 import threading
 import time
+import tomllib
 import uuid
 
 from workflow_service import WorkflowError
@@ -53,6 +54,8 @@ PROTECTED_DIRECTORIES = (".codex", ".ssh", ".aws", ".azure", "work", "workflow-p
                          "chatgpt-subscription", "attachments", "jobs", "siwc-probe")
 PROTECTED_PATTERNS = ("**/auth.json", "**/.env", "**/.env.*", "**/*.pem", "**/*.key",
                       "**/*.pfx", "**/*.p12", "**/*.dpapi")
+RUNTIME_CONFIG = b"# Console-owned runtime; per-process scope is supplied through -c.\n"
+MAX_RUNTIME_CONFIG = 8192
 
 
 def _error(code, message="Work 尚未完成；底稿与已发生的修改保留，不会自动重跑。", status=409):
@@ -240,14 +243,41 @@ queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
         if config.exists():
             if config.is_symlink() or getattr(config.lstat(), "st_file_attributes", 0) & 0x400:
                 raise _error("codex_work_runtime_changed")
-            if config.read_bytes() != b"# Console-owned runtime; per-process scope is supplied through -c.\n":
+            with config.open("rb") as stream:
+                content = stream.read(MAX_RUNTIME_CONFIG + 1)
+            if len(content) > MAX_RUNTIME_CONFIG:
                 raise _error("codex_work_runtime_changed")
+            if content != RUNTIME_CONFIG:
+                # The official setup RPC persists this one setting before its
+                # successful completion notification. Never adopt other config,
+                # or infer setup completion merely from the persisted mode.
+                try:
+                    parsed = tomllib.loads(content.decode("utf-8"))
+                    verified = self._verified_setup_mode(root, runtime)
+                except Exception:
+                    raise _error("codex_work_runtime_changed") from None
+                if parsed != {"windows": {"sandbox": "elevated"}} or not verified:
+                    raise _error("codex_work_runtime_changed")
         else:
             with config.open("xb") as stream:
-                stream.write(b"# Console-owned runtime; per-process scope is supplied through -c.\n")
+                stream.write(RUNTIME_CONFIG)
                 stream.flush()
                 os.fsync(stream.fileno())
         return root, runtime
+
+    def _verified_setup_mode(self, root, runtime):
+        """Only this runtime's durable observed-success receipt admits the mode."""
+        intent = self._read_setup_receipt(root / "setup-intent.json")
+        identifier = intent.get("attemptId")
+        if (set(intent) != {"format", "attemptId", "runtimeHome", "workspaceRoot", "mode", "observedAt"}
+                or intent.get("format") != 1 or intent.get("runtimeHome") != str(runtime)
+                or intent.get("mode") != "elevated" or type(identifier) is not str or not RUN_ID.fullmatch(identifier)):
+            return False
+        receipt = self._read_setup_receipt(root / ("setup-completion-" + identifier + ".json"))
+        return (set(receipt) == {"format", "attemptId", "runtimeHome", "mode", "terminalEventObserved", "success", "observedAt"}
+                and receipt.get("format") == 1 and receipt.get("attemptId") == identifier
+                and receipt.get("runtimeHome") == str(runtime) and receipt.get("mode") == "elevated"
+                and receipt.get("terminalEventObserved") is True and receipt.get("success") is True)
 
     def start(self):
         """Read only our safe setup receipts once; never setup, login or infer."""

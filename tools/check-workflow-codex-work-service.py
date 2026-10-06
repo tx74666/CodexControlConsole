@@ -81,7 +81,7 @@ class Controller:
 class ServiceChecks(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="codex-work-service-fixture-")
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.workspace = self.root / "workspace"
         self.workspace.mkdir()
         self.allowed = self.workspace / "owned"

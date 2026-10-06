@@ -109,6 +109,7 @@ class CodexWorkHttpChecks(unittest.TestCase):
 
     def setUp(self):
         fixture.WorkflowHttpChecks.setUp(self)
+        self.project = self.project.resolve()
         self.workflow.subscription = CachedSubscription()
         self.controller = InertController(self.workflow)
         self.workflow.codex_work = self.controller
