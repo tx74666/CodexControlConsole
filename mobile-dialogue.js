@@ -399,7 +399,7 @@
         // These upload responses precede the transaction/receipt. An unknown
         // outcome must keep the original nonce and files frozen.
         const code = error.data?.code || error.code;
-        if ([400, 403, 404, 413, 415].includes(error.status) || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch"].includes(code)) { uploadRequest = null; await saveFiles(); renderFiles(); }
+        if ([413, 415].includes(error.status) || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch"].includes(code)) { uploadRequest = null; await saveFiles(); renderFiles(); }
         throw error;
       }
       const attachmentIds = uploaded.uploadedAttachmentIds || uploaded.attachmentIds || (uploaded.attachments || []).map(item => item.id);

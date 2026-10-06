@@ -901,8 +901,8 @@ await test("a definite pre-write upload rejection releases only its image fence 
     h.byLabel("移除本次图片 需要更换.png").click(); await flush(); assert.equal(input.value, "原文字保持"); assert.deepEqual(h.current().draft.attachmentIds, ["original"]); assert.ok(h.byLabel("移除本次图片 已选原图.png"));
   }
 });
-await test("unknown upload 5xx or unclassified conflict keeps the exact image nonce and never retries on GET", async () => {
-  for (const error of [Object.assign(new Error("upload result unknown"), { status: 503 }), Object.assign(new Error("upload result unknown"), { status: 409, code: "unknown_upload_outcome" })]) {
+await test("unknown upload 400 403 404 5xx or unclassified conflict keeps the exact image nonce and never retries on GET", async () => {
+  for (const error of [Object.assign(new Error("upload result unknown"), { status: 400 }), Object.assign(new Error("authorization changed after upload"), { status: 403 }), Object.assign(new Error("state could not be read after upload"), { status: 404 }), Object.assign(new Error("upload result unknown"), { status: 503 }), Object.assign(new Error("upload result unknown"), { status: 409, code: "unknown_upload_outcome" })]) {
     let attempts = 0; const h = harness({ options: { async uploadAttachments() { attempts++; throw error; } } }); h.panel.setActive(true); await flush();
     const image = new Blob(["keep"], { type: "image/png" }); image.name = "待核对.png"; h.byLabel("选择图片文件").files = [image]; h.byLabel("选择图片文件").fire("change"); await flush(); h.byText("只保存").click(); await flush();
     const nonce = structuredClone([...h.files.values()].find(item => item.uploadRequest).uploadRequest); assert.equal(h.byLabel("移除本次图片 待核对.png").disabled, true); assert.equal(h.byLabel("添加图片").disabled, true);
