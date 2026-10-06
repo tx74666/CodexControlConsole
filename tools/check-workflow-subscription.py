@@ -151,6 +151,76 @@ class SubscriptionChecks(unittest.TestCase):
         status = self.broker.get_status()
         return self.broker.validate_selection("gpt-6-astra", status["catalogRevision"], status["connectionId"])
 
+    def profile_binding(self, profile):
+        status = self.broker.get_status()
+        return self.broker.validate_selection("gpt-6-astra", status["catalogRevision"], status["connectionId"], profile)
+
+    def test_cached_profile_mappings_filter_actual_catalog_without_network_or_verified_claim(self):
+        self.login()
+        self.remote.catalog["models"].append({"slug": "future-unknown", "display_name": "Unknown", "visibility": "list"})
+        self.broker.refresh_catalog()
+        before = len(self.remote.calls)
+        mapping = self.broker.get_status()["profileMappings"]
+        self.assertEqual(set(mapping), {"fast", "high", "pro"})
+        for profile, reasoning in (("fast", {"mode": "standard", "effort": "low"}),
+                ("high", {"mode": "standard", "effort": "high"}), ("pro", {"mode": "pro", "effort": "high"})):
+            self.assertEqual(mapping[profile]["reasoning"], reasoning)
+            self.assertEqual(mapping[profile]["modelSlugs"], ["gpt-6-astra"])
+            self.assertTrue(mapping[profile]["available"])
+            self.assertFalse(mapping[profile]["actualProfileVerified"])
+        mapping["pro"]["reasoning"]["mode"] = "standard"
+        self.assertEqual(self.broker.get_status()["profileMappings"]["pro"]["reasoning"]["mode"], "pro")
+        status = self.broker.get_status()
+        with self.assertRaises(WorkflowError):
+            self.broker.validate_selection("future-unknown", status["catalogRevision"], status["connectionId"], "pro")
+        self.assertEqual(len(self.remote.calls), before)
+        self.assertEqual(self.runner_calls, [])
+
+    def test_explicit_binding_rejects_cross_profile_reasoning_and_partial_new_schema(self):
+        self.login()
+        binding = self.profile_binding("pro")
+        self.assertEqual(set(binding), api.PROFILE_BINDING_KEYS)
+        for changed in ({**binding, "requestedProfile": "high"},
+                {**binding, "reasoning": {"mode": "standard", "effort": "max"}},
+                {key: value for key, value in binding.items() if key != "reasoning"}):
+            with self.assertRaises(WorkflowError):
+                self.broker._check_binding(changed)
+        self.broker._check_binding(self.binding())
+        self.assertEqual(self.runner_calls, [])
+
+    def test_new_profile_runner_receives_fourth_keyword_once_and_receipt_is_exact(self):
+        self.login()
+        row = self.prepare()
+        row["subscription"] = self.profile_binding("pro")
+        calls = []
+        def runner(token, model, inputs, *, reasoning):
+            calls.append((model, reasoning, inputs))
+            return {**completed(model), "requestedReasoning": dict(reasoning), "actualReasoning": dict(reasoning)}
+        self.broker._runner = runner
+        self.broker._process("a" * 32)
+        self.broker._process("a" * 32)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], {"mode": "pro", "effort": "high"})
+        self.assertEqual(len(self.service.successes), 1)
+        self.assertEqual(self.service.intents, ["a" * 32])
+
+    def test_new_profile_missing_or_wrong_actual_reasoning_is_unknown_without_downgrade_retry(self):
+        self.login()
+        for index, actual in enumerate((None, {"mode": "standard", "effort": "high"}, {"mode": "pro", "effort": "max"})):
+            identifier = f"{index + 1:032x}"
+            row = self.prepare(identifier)
+            row["subscription"] = self.profile_binding("pro")
+            def runner(token, model, inputs, *, reasoning, actual=actual):
+                self.runner_calls.append((model, reasoning))
+                return {**completed(model), "requestedReasoning": dict(reasoning), "actualReasoning": actual}
+            self.broker._runner = runner
+            self.broker._process(identifier)
+            self.broker._process(identifier)
+            self.assertEqual(self.service.failures[-1][2]["status"], "unknown")
+            self.assertFalse(self.service.failures[-1][2]["retryAllowed"])
+        self.assertEqual(len(self.runner_calls), 3)
+        self.assertEqual(self.service.successes, [])
+
     def prepare(self, identifier="a" * 32, text="原始问题", images=None):
         images = images or []
         frozen = {"text": text, "history": [{"role": "assistant", "content": "仅本记录历史", "createdAt": "2026-10-05T00:00:00Z"}],

@@ -53,12 +53,15 @@ class SubscriptionDeliveryMixin:
 
     def _subscription_source(self, db, dispatch_id, binding=None, token=None):
         api = _api()
+        from workflow_subscription import subscription_binding
         row = self._dispatch(db, api._id(dispatch_id))
         snapshot = json.loads(row["snapshot"])
         subscription = snapshot.get("subscription")
-        if (not isinstance(subscription, dict)
-                or set(subscription) != {"provider", "connectionId", "catalogRevision", "modelSlug"}
-                or subscription.get("provider") != PROVIDER
+        try:
+            checked = subscription_binding(subscription)
+        except api.WorkflowError:
+            raise api.WorkflowError("订阅冻结档位或来源不匹配；未发送。", 409, "subscription_source_mismatch") from None
+        if (checked != subscription
                 or snapshot.get("chatTransport") != PROVIDER
                 or snapshot.get("origin") != "workflow_discussion"
                 or row["target_kind"] != "chatgpt" or row["target_mode"] != "new"
@@ -84,6 +87,9 @@ class SubscriptionDeliveryMixin:
                 or not row["user_confirmed_at"] or row["created_at"] != row["user_confirmed_at"]
                 or job["created_at"] != row["user_confirmed_at"]):
             raise api.WorkflowError("订阅消息与原讨论冻结版本不匹配。", 409, "subscription_source_mismatch")
+        if "requestedProfile" in subscription and any(value.get("requestedProfile") != subscription["requestedProfile"]
+                for value in (snapshot, payload, frozen)):
+            raise api.WorkflowError("订阅档位与原讨论冻结版本不匹配；未发送。", 409, "subscription_source_mismatch")
         return row, snapshot, job, payload
 
     def _recover_subscription_pending(self, db):
@@ -110,7 +116,9 @@ class SubscriptionDeliveryMixin:
             if provider is None:
                 raise api.WorkflowError("请先在电脑连接 ChatGPT 订阅。", 409, "subscription_not_connected")
             selected = snapshot["subscription"]
-            verified = provider.validate_selection(selected["modelSlug"], selected["catalogRevision"], selected["connectionId"])
+            verified = (provider.validate_selection(selected["modelSlug"], selected["catalogRevision"], selected["connectionId"],
+                        requestedProfile=selected["requestedProfile"]) if "requestedProfile" in selected else
+                        provider.validate_selection(selected["modelSlug"], selected["catalogRevision"], selected["connectionId"]))
             if verified != selected:
                 raise api.WorkflowError("订阅模型或连接已改变；未发送。", 409, "subscription_selection_changed")
             binding = verified
@@ -152,7 +160,8 @@ class SubscriptionDeliveryMixin:
             if row["status"] == "completed":
                 return {"duplicate": True, "job": self._job_public(db, job)}
             intent = self._setting(db, "subscription-intent:" + dispatch_id)
-            model, text = payload["subscription"]["modelSlug"], receipt.get("output") if isinstance(receipt, dict) else None
+            selected = payload["subscription"]
+            model, text = selected["modelSlug"], receipt.get("output") if isinstance(receipt, dict) else None
             if (row["status"] != "claimed" or job["status"] != "waiting"
                     or not intent or intent.get("claimToken") != claim_token
                     or intent.get("subscription") != payload["subscription"]
@@ -166,6 +175,10 @@ class SubscriptionDeliveryMixin:
                     or not isinstance(receipt.get("responseId"), str)
                     or not re.fullmatch(r"resp_[A-Za-z0-9_-]{1,190}", receipt["responseId"])):
                 raise api.WorkflowError("订阅回答缺少准确完成回执；未标记成功。", 409, "subscription_completion_unverified")
+            explicit_profile = "requestedProfile" in selected
+            if explicit_profile and (receipt.get("requestedReasoning") != selected["reasoning"]
+                    or receipt.get("actualReasoning") != selected["reasoning"]):
+                raise api.WorkflowError("订阅回答的实际档位未准确核实；未标记档位成功。", 409, "subscription_profile_unverified")
             now = api._now()
             message = self._message(db, job["record_id"], "assistant", text, text_limit=MAX_ANSWER)
             saved = {"text": text, "messageId": message, "attachmentIds": [], "dispatchId": dispatch_id,
@@ -173,6 +186,10 @@ class SubscriptionDeliveryMixin:
                 "actualModel": receipt["actualModel"], "terminalEventObserved": True, "terminalStatus": "completed",
                 "completionEvidence": "response.completed", "completionSource": receipt.get("completionSource"),
                 "providerErrorObserved": False, "subscription": payload["subscription"], "completedAt": now}
+            saved["actualProfileVerified"] = explicit_profile
+            if explicit_profile:
+                saved.update(requestedProfile=selected["requestedProfile"], actualProfile=selected["requestedProfile"],
+                    requestedReasoning=dict(selected["reasoning"]), actualReasoning=dict(receipt["actualReasoning"]))
             db.execute("UPDATE jobs SET status='succeeded',result=?,error='',updated_at=? WHERE id=?", (api._json(saved), now, job["id"]))
             db.execute("UPDATE idea_dispatches SET status='completed',result=?,error='',updated_at=? WHERE id=?", (api._json(saved), now, dispatch_id))
             self._revision(db, True)
@@ -195,6 +212,14 @@ class SubscriptionDeliveryMixin:
             note = ("本轮发送或完成状态未能核实；原消息保留，不会自动重发。" if unknown else
                     "本轮未完成；原消息保留，不会自动重发。") + "（" + code + "）"
             result = {"source": PROVIDER, "code": code, "status": "unknown" if unknown else "failed", "retryAllowed": False}
+            if "requestedProfile" in payload["subscription"]:
+                result.update(requestedProfile=payload["subscription"]["requestedProfile"], actualProfileVerified=False,
+                    requestedReasoning=dict(payload["subscription"]["reasoning"]))
+                actual = receipt.get("actualReasoning") if isinstance(receipt, dict) else None
+                if (type(actual) is dict and set(actual) == {"mode", "effort"}
+                        and type(actual.get("mode")) is str and actual["mode"] in {"standard", "pro"}
+                        and type(actual.get("effort")) is str and actual["effort"] in {"none", "low", "medium", "high", "xhigh", "max"}):
+                    result["actualReasoning"] = dict(actual)
             if isinstance(receipt, dict) and isinstance(receipt.get("output"), str) and receipt["output"]:
                 result["partialText"] = receipt["output"][:MAX_ANSWER]
                 result["partialTextComplete"] = False

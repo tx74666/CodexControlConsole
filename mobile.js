@@ -53,7 +53,7 @@
     onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期，请重新连接电脑。"),
     getVersion: () => el("versionLabel")?.textContent || "Codex Console",
-    onModule: value => { if (value === "conversations") selectWorkView("conversations"); else if (value === "legacy") selectWorkView("ideas"); else selectTab(value); },
+    onModule: value => { if (value === "conversations") selectWorkView("conversations"); else if (value === "workflow") selectWorkView("workflow"); else if (value === "legacy") selectWorkView("ideas"); else selectTab(value); },
     onImportPack: async file => { if (!state.paired || !window.CodexMobileHandoff) throw new Error("请先完成电脑配对，手机想法包仍保留。"); const exported = await window.CodexMobileHandoff.decodePack(file); if (!state.paired) throw new Error("配对已断开，未导入。"); try { return await window.CodexMobileHandoff.importExported(exported); } catch (error) { if ([401, 403].includes(error.status)) showPair("配对已断开；导入结果待核对，请重连后用原想法包核对。"); throw error; } },
     onExecution: async idea => { if (incubatorPanel?.closeTask?.() === false) return false; selectWorkView("workflow"); const opened = await workflowPanel?.openTask?.({ ideaId: idea.id, revision: idea.revision, title: idea.title, projectId: idea.projectId, executionDraft: idea.executionDraft, mode: "work" }); if (opened) { el("phoneWorkflowDetails").open = true; window.scrollTo({ top: 0, behavior: "auto" }); } return Boolean(opened); }
   }) || null;
@@ -71,7 +71,7 @@
     if (el("phoneWorkIdeas")) el("phoneWorkIdeas").hidden = workView !== "ideas";
     if (el("phoneConversationsPanel")) el("phoneConversationsPanel").hidden = workView !== "conversations";
     const workflow = el("phoneWorkflowDetails"); if (workflow) { workflow.hidden = workView !== "workflow"; if (workView === "workflow") workflow.open = true; }
-    if (el("phoneWorkNotice")) el("phoneWorkNotice").textContent = ({ ideas: "Console 工作区 · 每条任务的底稿、Chat、Work 和 Output 都在这里。保存不等于执行；点确认发布或确认 Work 才会交给电脑。", conversations: "查看电脑抓取的真实对话快取；更新和更多历史只读取内容，不发送消息。", workflow: "看图、评价和派工由电脑 Console 处理；已接收任务可在手机离开后继续。" })[workView];
+    if (el("phoneWorkNotice")) el("phoneWorkNotice").textContent = ({ ideas: "Console 工作区 · 每条任务的底稿、Chat、Work 和 Output 都在这里。保存不等于执行；点确认发布或确认 Work 才会交给电脑。", conversations: "查看电脑抓取的真实对话快取；更新和更多历史只读取内容，不发送消息。", workflow: "查看已保存作业与 Output；Work Agent 自动执行和手机取消尚未接通。" })[workView];
     for (const button of document.querySelectorAll("#workPanel [data-work-view]")) button.setAttribute("aria-pressed", String(button.dataset.workView === workView));
     syncWorkPanelActivity();
     return true;

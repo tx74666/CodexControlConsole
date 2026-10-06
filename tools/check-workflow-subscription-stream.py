@@ -137,7 +137,7 @@ class FakeConnection:
 
 class ResponseChecks(unittest.TestCase):
     def check(self, body, *, status=200, headers=None, send_error=False, close_on_headers=False, block_size=7,
-              diagnostic=False, verification=False, input_items=None):
+              diagnostic=False, verification=False, input_items=None, reasoning=None, model=MODEL):
         response = FakeResponse(body, status, headers, block_size)
         connection = FakeConnection(response, send_error, close_on_headers)
 
@@ -149,7 +149,7 @@ class ResponseChecks(unittest.TestCase):
             return connection
 
         with patch.object(probe.http.client, "HTTPSConnection", side_effect=factory) as calls:
-            result = probe.run_response(TOKEN, MODEL, INPUT_ITEMS if input_items is None else input_items)
+            result = probe.run_response(TOKEN, model, INPUT_ITEMS if input_items is None else input_items, reasoning=reasoning)
         self.assertEqual(calls.call_count, 1)
         self.assertEqual(connection.connect_count, 1)
         self.assertEqual(len(connection.requests), 1, "Unknown or failed POST outcomes must never be repeated.")
@@ -161,6 +161,51 @@ class ResponseChecks(unittest.TestCase):
         self.assertNotIn("Authorization", result)
         self.assertNotIn("usage", result)
         return result, connection
+
+    def test_explicit_modes_and_efforts_are_independent_and_bound_to_terminal_receipt(self):
+        for mode, effort in (("standard", "low"), ("standard", "high"), ("pro", "high"), ("pro", "low"), ("standard", "max")):
+            with self.subTest(mode=mode, effort=effort):
+                reasoning = {"mode": mode, "effort": effort}
+                terminal = completed()
+                terminal["response"]["reasoning"] = {**reasoning, "summary": None, "context": "auto"}
+                result, connection = self.check(wire(created(), delta(), terminal), model="gpt-6-astra", reasoning=reasoning)
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["requestedReasoning"], reasoning)
+                self.assertEqual(result["actualReasoning"], reasoning)
+                self.assertEqual(json.loads(connection.requests[0][2])["reasoning"], reasoning)
+
+    def test_missing_or_changed_terminal_reasoning_retains_answer_without_success_or_retry(self):
+        requested = {"mode": "pro", "effort": "high"}
+        for actual in (None, {}, {"effort": "high"}, {"mode": "standard", "effort": "high"},
+                       {"mode": "pro", "effort": "max"}, {"mode": "pro", "effort": "fixture-secret"}):
+            terminal = completed()
+            terminal["response"]["reasoning"] = actual
+            result, _ = self.check(wire(created(), terminal), model="gpt-6-astra", reasoning=requested)
+            self.assertFalse(result["ok"])
+            self.assertFalse(result["responseCompleted"])
+            self.assertTrue(result["terminalEventObserved"])
+            self.assertEqual(result["output"], TEXT)
+            self.assertEqual(result["status"], "unknown")
+            self.assertTrue(result["code"].startswith("completed_reasoning_"))
+            self.assertNotIn("fixture-secret", json.dumps(result))
+
+    def test_legacy_three_argument_request_omits_reasoning_and_never_claims_a_profile(self):
+        result, connection = self.check(wire(created(), completed()))
+        self.assertTrue(result["ok"])
+        self.assertNotIn("reasoning", json.loads(connection.requests[0][2]))
+        self.assertIsNone(result["requestedReasoning"])
+        self.assertIsNone(result["actualReasoning"])
+
+    def test_explicit_reasoning_unknown_model_or_invalid_shape_never_posts(self):
+        for model, reasoning in ((MODEL, {"mode": "pro", "effort": "high"}),
+                ("gpt-6-astra", {"mode": "standard", "effort": "none"}),
+                ("gpt-6-astra", {"mode": "pro", "effort": "high", "other": True}),
+                ("gpt-6-astra", {"mode": "max", "effort": "high"})):
+            with patch.object(probe.http.client, "HTTPSConnection") as connection:
+                result = probe.run_response(TOKEN, model, INPUT_ITEMS, reasoning=reasoning)
+            connection.assert_not_called()
+            self.assertEqual(result["status"], "not_sent")
+            self.assertFalse(result["retryAllowed"])
 
 
     def test_complete_multiline_sse_and_utf8_split_boundaries_preserve_full_text(self):

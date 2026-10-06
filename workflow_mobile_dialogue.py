@@ -253,6 +253,30 @@ class MobileDialogueMixin:
         if not job or job["status"] != "succeeded" or dispatch["status"] != "completed":
             return None
         result = json.loads(job["result"] or "{}")
+        if result.get("source") == "chatgpt_subscription":
+            try:
+                row, snapshot, original_job, payload = self._subscription_source(db, dispatch["id"])
+            except _api().WorkflowError:
+                return None
+            selection = payload["subscription"]
+            message = db.execute("SELECT role,record_id FROM messages WHERE id=?", (result.get("messageId"),)).fetchone()
+            if ("requestedProfile" not in selection or original_job["id"] != job["id"]
+                    or result.get("dispatchId") != dispatch["id"] or result.get("subscription") != selection
+                    or result.get("actualProfileVerified") is not True
+                    or result.get("requestedProfile") != selection["requestedProfile"]
+                    or result.get("actualProfile") != selection["requestedProfile"]
+                    or result.get("requestedReasoning") != selection["reasoning"]
+                    or result.get("actualReasoning") != selection["reasoning"]
+                    or result.get("actualModel") != selection["modelSlug"]
+                    or result.get("terminalEventObserved") is not True or result.get("terminalStatus") != "completed"
+                    or result.get("completionEvidence") != "response.completed" or result.get("providerErrorObserved") is not False
+                    or not message or message["record_id"] != session["recordId"] or message["role"] != "assistant"):
+                return None
+            return {"requestedProfile": selection["requestedProfile"], "actualProfile": selection["requestedProfile"],
+                "actualReasoning": dict(selection["reasoning"]), "actualModel": selection["modelSlug"],
+                "subscription": selection, "source": "chatgpt_subscription",
+                "dispatchId": dispatch["id"], "jobId": job["id"], "messageId": result["messageId"],
+                "observedAt": result["completedAt"], "actualProfileVerified": True}
         evidence = result.get("browserEvidence", {})
         profile = evidence.get("profile", {})
         message = db.execute("SELECT role,record_id FROM messages WHERE id=?", (result.get("messageId"),)).fetchone()
@@ -424,13 +448,16 @@ class MobileDialogueMixin:
         # Saving a choice is not authentication, catalog refresh or inference.
         if value is None:
             return None
-        if (not isinstance(value, dict) or set(value) != {"provider", "connectionId", "catalogRevision", "modelSlug"}
+        if (not isinstance(value, dict) or set(value) not in (
+                {"provider", "connectionId", "catalogRevision", "modelSlug"},
+                {"provider", "connectionId", "catalogRevision", "modelSlug", "requestedProfile", "reasoning"})
                 or value.get("provider") != "chatgpt_subscription"
                 or any(not isinstance(value.get(key), str) or len(value[key]) > 200
                     or any(ord(character) < 32 for character in value[key])
                     for key in ("connectionId", "catalogRevision", "modelSlug"))):
             raise _api().WorkflowError("订阅模型选择格式无效，原草稿保留。", 400, "subscription_selection_invalid")
-        return {key: value[key] for key in ("provider", "connectionId", "catalogRevision", "modelSlug")}
+        from workflow_subscription import subscription_binding
+        return subscription_binding(value)
 
     def _mobile_draft(self, db, body, session):
         api = _api()
@@ -445,6 +472,8 @@ class MobileDialogueMixin:
         if not isinstance(transport, str) or transport not in CHAT_TRANSPORTS:
             raise api.WorkflowError("请选择明确的讨论通道。", 400, "chat_transport_invalid")
         choice = self._mobile_subscription_choice(body.get("subscription"))
+        if choice is not None and "requestedProfile" in choice and choice["requestedProfile"] != profile:
+            raise api.WorkflowError("订阅选择与当前档位不一致，原草稿保留。", 400, "subscription_profile_mismatch")
         if transport == "browser_chat" and choice is not None:
             raise api.WorkflowError("浏览器通道不能同时提交订阅模型。", 400, "chat_transport_invalid")
         session["draft"] = {"text": text, "attachmentIds": context["attachmentIds"]}
@@ -454,11 +483,27 @@ class MobileDialogueMixin:
             session["subscription"] = choice
         return text, context
 
-    def _mobile_execution(self, profile, observation=None):
+    def _mobile_execution(self, profile, observation=None, transport="browser_chat", subscription=None):
         execution = {"requestedProfile": profile, "actualReceipt": {"verified": False, "actualProfile": None,
             "status": "unverified", "source": None}, "supportedProfiles": [], "capability": "unverified",
             "relayStatus": "not_connected", "profileObservation": observation,
             "message": "已保留所选档位；当前普通 Chat 通道尚未验证档位切换，事件转发器尚未接通。"}
+        if transport == "chatgpt_subscription":
+            adapter = getattr(self, "subscription", None)
+            status = adapter.get_status() if adapter is not None else {}
+            mapping = status.get("profileMappings", {}).get(profile, {})
+            execution.update(relayStatus="connected" if status.get("connected") is True else "not_connected",
+                supportedProfiles=[key for key, value in status.get("profileMappings", {}).items() if value.get("available") is True],
+                message="订阅档位请求映射已准备；实际档位以本轮完成回执核实。" if mapping.get("available") is True
+                    else "订阅连接或所选档位尚未准备好，原内容与档位保留。")
+            if (isinstance(observation, dict) and observation.get("source") == "chatgpt_subscription"
+                    and observation.get("requestedProfile") == profile and observation.get("actualProfileVerified") is True
+                    and observation.get("subscription") == subscription):
+                execution.update(actualReceipt={"verified": True, "actualProfile": profile, "status": "completed",
+                    "source": "chatgpt_subscription", "actualModel": observation["actualModel"],
+                    "actualReasoning": dict(observation["actualReasoning"])},
+                    capability="verified", message="最近已完成请求的回执已核实这个模型与档位组合。")
+            return execution
         broker = getattr(self, "_chat_relay_broker", None)
         if broker is not None:
             status = broker.public_status()
@@ -496,7 +541,9 @@ class MobileDialogueMixin:
             "eligibleAttachments": [item for item in detail["attachments"] if item["id"] in eligible_ids] if detail else [],
             "preferences": {"requestedProfile": client["requestedProfile"],
                 "chatTransport": client.get("chatTransport", "browser_chat"), "subscription": client.get("subscription")},
-            "execution": self._mobile_execution(profile, observation),
+            "execution": self._mobile_execution(profile, observation,
+                session.get("chatTransport", "browser_chat") if session else client.get("chatTransport", "browser_chat"),
+                session.get("subscription") if session else client.get("subscription")),
             "resultCursor": result_state["cursor"] if result_state else None,
             "resultStatus": result_state["status"] if result_state else "idle",
             "cancellationReceipts": cancellation_receipts,
@@ -712,7 +759,9 @@ class MobileDialogueMixin:
                         selection = session.get("subscription")
                         if adapter is None or selection is None:
                             raise api.WorkflowError("请先在电脑连接 ChatGPT 订阅，并明确选择实际模型。", 409, "subscription_not_connected")
-                        subscription = adapter.validate_selection(selection["modelSlug"], selection["catalogRevision"], selection["connectionId"])
+                        subscription = (adapter.validate_selection(selection["modelSlug"], selection["catalogRevision"], selection["connectionId"],
+                            requestedProfile=selection["requestedProfile"]) if "requestedProfile" in selection else
+                            adapter.validate_selection(selection["modelSlug"], selection["catalogRevision"], selection["connectionId"]))
                         if subscription != selection:
                             raise api.WorkflowError("订阅模型目录已改变，请重新选择；原草稿保留。", 409, "subscription_selection_stale")
                     target = self._app_target(db, {"kind": "chatgpt", "mode": "new", "threadId": "", "name": "Console 手机讨论"}, bool(context["attachmentIds"]))

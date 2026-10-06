@@ -13,6 +13,7 @@ from PIL import Image
 from transfer_store import IncomingFile
 from workflow_service import WorkflowError, WorkflowService
 from workflow_http import workflow_get, workflow_post
+from workflow_subscription_stream import profile_reasoning
 
 
 def request(**value):
@@ -23,10 +24,13 @@ class Subscription:
     binding = {"provider": "chatgpt_subscription", "connectionId": "fixture-connection",
         "catalogRevision": "fixture-catalog", "modelSlug": "fixture-model"}
 
-    def validate_selection(self, model, catalog, connection):
+    def validate_selection(self, model, catalog, connection, requestedProfile=None):
         if (model, catalog, connection) != (self.binding["modelSlug"], self.binding["catalogRevision"], self.binding["connectionId"]):
             raise WorkflowError("选择已改变。", 409, "subscription_selection_changed")
-        return dict(self.binding)
+        binding = dict(self.binding)
+        if requestedProfile is not None:
+            binding.update(requestedProfile=requestedProfile, reasoning=profile_reasoning(requestedProfile, model))
+        return binding
 
     def get_status(self):
         return {"connected": True, **self.binding, "models": [{"slug": "fixture-model", "displayName": "Fixture"}]}
@@ -61,11 +65,94 @@ class DeliveryChecks(unittest.TestCase):
             "terminalStatus": "completed", "completionEvidence": "response.completed",
             "completionSource": "completed_stream_deltas", "providerErrorObserved": False, **overrides}
 
-    def ready(self):
-        identifier, body = self.send()
+    def ready(self, **extras):
+        identifier, body = self.send(**extras)
         claimed = self.service.subscription_claim(identifier)
         self.service.subscription_send_intent(identifier, claimed["claimToken"], claimed["subscription"])
         return identifier, claimed, body
+
+    def profiled(self, profile="pro"):
+        self.service.subscription.binding = {**Subscription.binding, "modelSlug": "gpt-6-astra"}
+        return self.service.subscription.validate_selection("gpt-6-astra", "fixture-catalog", "fixture-connection", profile)
+
+    def profile_receipt(self, selection, **overrides):
+        return self.receipt(actualModel=selection["modelSlug"], requestedModel=selection["modelSlug"],
+            requestedReasoning=dict(selection["reasoning"]), actualReasoning=dict(selection["reasoning"]), **overrides)
+
+    def test_three_profile_completions_save_full_answer_and_actual_receipt(self):
+        for profile in ("fast", "high", "pro"):
+            selection = self.profiled(profile)
+            identifier, claimed, _ = self.ready(subscription=selection, requestedProfile=profile)
+            text = ("完整长回答：\n" + profile + "\n") * 4000
+            result = self.service.subscription_complete(identifier, claimed["claimToken"], self.profile_receipt(selection, output=text))
+            saved = result["job"]["result"]
+            self.assertEqual(saved["text"], text)
+            self.assertTrue(saved["actualProfileVerified"])
+            self.assertEqual(saved["actualProfile"], profile)
+            self.assertEqual(saved["requestedReasoning"], selection["reasoning"])
+            self.assertEqual(saved["actualReasoning"], selection["reasoning"])
+            state = self.service.mobile_dialogue_get("clientId=" + self.client)
+            self.assertTrue(state["execution"]["actualReceipt"]["verified"])
+            self.assertEqual(state["execution"]["actualReceipt"]["actualProfile"], profile)
+
+    def test_profile_completion_missing_or_different_reasoning_cannot_create_answer(self):
+        selection = self.profiled()
+        identifier, claimed, _ = self.ready(subscription=selection, requestedProfile="pro")
+        for actual in (None, {"mode": "standard", "effort": "high"}, {"mode": "pro", "effort": "max"}):
+            receipt = self.profile_receipt(selection)
+            receipt["actualReasoning"] = actual
+            with self.assertRaises(WorkflowError) as error:
+                self.service.subscription_complete(identifier, claimed["claimToken"], receipt)
+            self.assertEqual(error.exception.code, "subscription_profile_unverified")
+        self.assertFalse(any(item["role"] == "assistant" for item in self.service.detail(self.state["session"]["recordId"])["messages"]))
+        receipt.update(ok=False, status="unknown", code="completed_reasoning_mismatch")
+        self.service.subscription_fail(identifier, claimed["claimToken"], receipt)
+        saved = self.service.detail(self.state["session"]["recordId"])["jobs"][-1]["result"]
+        self.assertFalse(saved["actualProfileVerified"])
+        self.assertEqual(saved["partialText"], "完整回答")
+        self.assertFalse(saved["retryAllowed"])
+
+    def test_mobile_profile_mismatch_rejects_without_changing_draft_or_creating_job(self):
+        selection = self.profiled("pro")
+        before = self.service.mobile_dialogue_get("clientId=" + self.client)
+        with self.assertRaises(WorkflowError) as error:
+            self.send(subscription=selection, requestedProfile="high")
+        self.assertEqual(error.exception.code, "subscription_profile_mismatch")
+        after = self.service.mobile_dialogue_get("clientId=" + self.client)
+        self.assertEqual(after["session"], before["session"])
+        self.assertEqual(after["detail"]["jobs"], before["detail"]["jobs"])
+
+    def test_changing_selected_model_cannot_reuse_previous_profile_verification(self):
+        selection = self.profiled("pro")
+        identifier, claimed, _ = self.ready(subscription=selection, requestedProfile="pro")
+        completed = self.service.subscription_complete(identifier, claimed["claimToken"], self.profile_receipt(selection))
+        old_result = completed["job"]["result"]
+        before = self.service.mobile_dialogue_get("clientId=" + self.client)
+        self.assertTrue(before["execution"]["actualReceipt"]["verified"])
+        session = before["session"]
+        changed = self.service.mobile_dialogue_draft(request(clientId=self.client, sessionId=session["id"],
+            expectedRevision=session["revision"], text="下一轮草稿", attachmentIds=[], requestedProfile="pro",
+            chatTransport="chatgpt_subscription", subscription={**selection, "modelSlug": "gpt-5.6-sol"}))
+        self.assertFalse(changed["execution"]["actualReceipt"]["verified"])
+        self.assertEqual(changed["detail"]["jobs"][-1]["result"], old_result)
+        self.assertTrue(old_result["actualProfileVerified"])
+        self.assertEqual(old_result["actualModel"], "gpt-6-astra")
+
+    def test_cross_profile_mutation_in_frozen_payload_cannot_claim_or_record_intent(self):
+        selection = self.profiled("high")
+        identifier, _ = self.send(subscription=selection, requestedProfile="high")
+        with self.service._db() as db:
+            row = self.service._dispatch(db, identifier)
+            snapshot = json.loads(row["snapshot"])
+            job = self.service._app_dispatch_job(db, row, snapshot)
+            payload = json.loads(job["payload"])
+            payload["subscription"]["reasoning"] = {"mode": "pro", "effort": "high"}
+            db.execute("UPDATE jobs SET payload=? WHERE id=?", (json.dumps(payload), job["id"]))
+        with self.assertRaises(WorkflowError):
+            self.service.subscription_claim(identifier)
+        with self.service._db() as db:
+            self.assertIsNone(self.service._setting(db, "subscription-intent:" + identifier))
+            self.assertFalse(self.service._dispatch(db, identifier)["claim_token"])
 
     def test_frozen_binding_intent_exactly_once_and_completed_original_output(self):
         identifier, claimed, body = self.ready()

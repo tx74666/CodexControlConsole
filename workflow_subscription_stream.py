@@ -40,7 +40,44 @@ _ENCODING = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
 _STATUSES = {"completed", "failed", "incomplete", "in_progress", "queued", "cancelled"}
 
 
-def _payload(model_slug, input_items):
+REASONING_MODELS = frozenset({"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"})
+PROFILE_REASONING = {"fast": {"mode": "standard", "effort": "low"},
+    "high": {"mode": "standard", "effort": "high"}, "pro": {"mode": "pro", "effort": "high"}}
+REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
+
+
+def profile_reasoning(profile, model_slug):
+    """Documented request mapping only; catalog membership and actual receipt are separate."""
+    if (not isinstance(profile, str) or profile not in PROFILE_REASONING
+            or not isinstance(model_slug, str) or model_slug not in REASONING_MODELS):
+        raise ValueError("subscription_profile_unavailable")
+    return dict(PROFILE_REASONING[profile])
+
+
+def _requested_reasoning(reasoning, model_slug):
+    if reasoning is None:
+        return None
+    if (type(reasoning) is not dict or set(reasoning) != {"mode", "effort"}
+            or type(reasoning.get("mode")) is not str or reasoning["mode"] not in {"standard", "pro"}
+            or type(reasoning.get("effort")) is not str or reasoning["effort"] not in REASONING_EFFORTS
+            or model_slug not in REASONING_MODELS
+            or model_slug in {"gpt-6-astra", "gpt-6.1-sol"} and reasoning["effort"] == "none"):
+        raise _Stop("reasoning_invalid", "not_sent")
+    return dict(reasoning)
+
+
+def _actual_reasoning(value):
+    # The API can also return context/summary fields. Publish only these two
+    # documented enum values; never infer an omitted mode from a default.
+    if (type(value) is not dict or type(value.get("mode")) is not str
+            or value["mode"] not in {"standard", "pro"}
+            or type(value.get("effort")) is not str or value["effort"] not in REASONING_EFFORTS):
+        return None
+    return {"mode": value["mode"], "effort": value["effort"]}
+
+
+def _payload(model_slug, input_items, reasoning=None):
     """Validate bounded message input without changing its text, roles or images."""
     if type(input_items) is not list or not 1 <= len(input_items) <= 512:
         raise _Stop("input_invalid", "not_sent")
@@ -93,7 +130,10 @@ def _payload(model_slug, input_items):
     try:
         encoded_input = json.dumps(input_items, ensure_ascii=False, separators=(",", ":"),
                                    sort_keys=True, allow_nan=False).encode("utf-8")
-        body = json.dumps({"model": model_slug, "store": False, "stream": True, "input": input_items},
+        request = {"model": model_slug, "store": False, "stream": True, "input": input_items}
+        if reasoning is not None:
+            request["reasoning"] = reasoning
+        body = json.dumps(request,
                           ensure_ascii=False, separators=(",", ":"), sort_keys=True,
                           allow_nan=False).encode("utf-8")
     except (TypeError, ValueError, UnicodeError):
@@ -394,7 +434,7 @@ def _text_key(event, secret, slots, identifiers, kinds):
     return index, content_index, identifier
 
 
-def run_response(access_token, model_slug, input_items):
+def run_response(access_token, model_slug, input_items, *, reasoning=None):
     """Make one explicitly reserved request; return only bounded, token-free facts.
 
 No input is read from disk or replaced with calibration text/images. Successful
@@ -411,14 +451,17 @@ never mark it completed. The caller must never retry an unknown send.
               "diagnosticOutput": "", "mimeMismatch": False,
               "terminalEventObserved": False, "terminalStatus": None, "terminalOutputKind": None,
               "terminalTextValidation": "not_observed", "completionEvidence": None, "completionSource": None,
-              "providerErrorObserved": False, "failureOrigin": "arguments"}
+              "providerErrorObserved": False, "failureOrigin": "arguments",
+              "requestedReasoning": None, "actualReasoning": None}
     if (not isinstance(access_token, str) or not 1 <= len(access_token) <= 16384
             or any(ord(character) <= 32 or ord(character) >= 127 for character in access_token)
             or not isinstance(model_slug, str) or not _MODEL.fullmatch(model_slug) or access_token in model_slug):
         return result
     result["requestedModel"] = model_slug
     try:
-        body, result["inputSha256"] = _payload(model_slug, input_items)
+        requested_reasoning = _requested_reasoning(reasoning, model_slug)
+        result["requestedReasoning"] = requested_reasoning
+        body, result["inputSha256"] = _payload(model_slug, input_items, requested_reasoning)
     except _Stop as error:
         result.update(status="not_sent", code=error.code)
         return result
@@ -572,6 +615,7 @@ never mark it completed. The caller must never retry an unknown send.
                 # a provider error.code that happens to resemble a local code.
                 result.update(terminalEventObserved=True, completionEvidence="response.completed",
                               terminalOutputKind="invalid", terminalTextValidation="invalid")
+                result["actualReasoning"] = _actual_reasoning(current.get("reasoning"))
                 output, parts, snapshot_kind = _output_snapshot(current, access_token)
                 result["terminalOutputKind"] = snapshot_kind
                 try:
@@ -609,6 +653,10 @@ never mark it completed. The caller must never retry an unknown send.
                     raise _Stop("output_too_large")
                 if not output.strip():
                     raise _Stop("completed_text_mismatch")
+                result["output"] = output.replace(access_token, "[credential redacted]")
+                if requested_reasoning is not None and result["actualReasoning"] != requested_reasoning:
+                    raise _Stop("completed_reasoning_unverified" if result["actualReasoning"] is None
+                                else "completed_reasoning_mismatch")
                 result.update(ok=True, status="completed", code="response_completed", responseCompleted=True,
                               output=output.replace(access_token, "[credential redacted]"), completedAt=_utc())
                 return result

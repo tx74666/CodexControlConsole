@@ -28,6 +28,7 @@ import urllib.request
 import uuid
 
 from workflow_service import WorkflowError
+from workflow_subscription_stream import PROFILE_REASONING, REASONING_MODELS, profile_reasoning
 
 
 ISSUER = "https://auth.openai.com"
@@ -43,6 +44,7 @@ PROVIDER = "chatgpt_subscription"
 PROTECTED_HEADER = b"CONSOLE-SUBSCRIPTION-DPAPI-v1\n"
 HINT_HEADER = b"CONSOLE-SUBSCRIPTION-ID-HINT-v1\n"
 BINDING_KEYS = {"provider", "connectionId", "catalogRevision", "modelSlug"}
+PROFILE_BINDING_KEYS = BINDING_KEYS | {"requestedProfile", "reasoning"}
 SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 MAX_IMAGE = 8 * 1024 * 1024
@@ -55,6 +57,23 @@ WINDOWS_LOCK_OFFSET = 2**31 - 1
 
 def _error(code, message="订阅通道尚未准备好；内容保留，未自动重发。", status=409):
     return WorkflowError(message, status, code)
+
+
+def subscription_binding(value):
+    """Validate a frozen legacy or explicit-profile binding without authentication or IO."""
+    if (not isinstance(value, dict) or set(value) not in (BINDING_KEYS, PROFILE_BINDING_KEYS)
+            or value.get("provider") != PROVIDER):
+        raise _error("subscription_binding_invalid")
+    binding = {key: value[key] for key in BINDING_KEYS}
+    if set(value) == PROFILE_BINDING_KEYS:
+        try:
+            reasoning = profile_reasoning(value["requestedProfile"], value["modelSlug"])
+        except ValueError:
+            raise _error("subscription_profile_unavailable", "所选模型的这个档位尚无明确支持；未降档发送。") from None
+        if type(value["reasoning"]) is not dict or value["reasoning"] != reasoning:
+            raise _error("subscription_reasoning_mismatch", "档位与 mode/effort 不匹配；原内容保留。")
+        binding.update(requestedProfile=value["requestedProfile"], reasoning=reasoning)
+    return binding
 
 
 def _code(error, fallback="subscription_operation_failed"):
@@ -462,11 +481,15 @@ class WorkflowSubscription:
             return {"connected": connected, "connectionId": self._registry["connectionId"] if self._active and self._registry else None,
                     "catalogRevision": self._catalog_revision, "models": [dict(row) for row in self._models],
                     "status": status, "busy": bool(self._auth_busy or pending_active or self._processing),
-                    "error": self._last_error}
+                    "error": self._last_error, "profileMappings": {profile: {
+                        "reasoning": dict(reasoning), "modelSlugs": [row["slug"] for row in self._models
+                            if row["slug"] in REASONING_MODELS],
+                        "available": bool(connected and any(row["slug"] in REASONING_MODELS for row in self._models)),
+                        "actualProfileVerified": False} for profile, reasoning in PROFILE_REASONING.items()}}
 
     public_status = get_status
 
-    def validate_selection(self, modelSlug, catalogRevision, connectionId):
+    def validate_selection(self, modelSlug, catalogRevision, connectionId, requestedProfile=None):
         with self._lock:
             status = self.get_status()
             if not status["connected"]:
@@ -476,13 +499,20 @@ class WorkflowSubscription:
                 raise _error("subscription_selection_stale", "订阅连接或模型目录已改变，请重新选择后确认发送。")
             if not isinstance(modelSlug, str) or not any(row["slug"] == modelSlug for row in self._models):
                 raise _error("subscription_model_unavailable", "本账号实际模型目录中没有所选模型；未降档发送。")
-            return {"provider": PROVIDER, "connectionId": connectionId,
-                    "catalogRevision": catalogRevision, "modelSlug": modelSlug}
+            binding = {"provider": PROVIDER, "connectionId": connectionId,
+                       "catalogRevision": catalogRevision, "modelSlug": modelSlug}
+            if requestedProfile is not None:
+                try:
+                    reasoning = profile_reasoning(requestedProfile, modelSlug)
+                except ValueError:
+                    raise _error("subscription_profile_unavailable", "所选模型的这个档位尚无明确支持；未降档发送。") from None
+                binding.update(requestedProfile=requestedProfile, reasoning=reasoning)
+            return binding
 
     def _check_binding(self, binding):
-        if not isinstance(binding, dict) or set(binding) != BINDING_KEYS or binding.get("provider") != PROVIDER:
-            raise _error("subscription_binding_invalid")
-        if self.validate_selection(binding["modelSlug"], binding["catalogRevision"], binding["connectionId"]) != binding:
+        checked = subscription_binding(binding)
+        if self.validate_selection(checked["modelSlug"], checked["catalogRevision"], checked["connectionId"],
+                                   checked.get("requestedProfile")) != checked:
             raise _error("subscription_selection_stale")
 
     def _open_callback(self):
@@ -840,7 +870,8 @@ class WorkflowSubscription:
                 from workflow_subscription_stream import run_response
                 runner = run_response
             wire_started = True
-            receipt = runner(token, binding["modelSlug"], inputs)
+            receipt = (runner(token, binding["modelSlug"], inputs, reasoning=dict(binding["reasoning"]))
+                       if "requestedProfile" in binding else runner(token, binding["modelSlug"], inputs))
             if not isinstance(receipt, dict):
                 raise _error("subscription_receipt_invalid")
             success = (receipt.get("ok") is True and receipt.get("responseCompleted") is True
@@ -849,6 +880,9 @@ class WorkflowSubscription:
                        and receipt.get("providerErrorObserved") is False and receipt.get("actualModel") == binding["modelSlug"]
                        and isinstance(receipt.get("output"), str) and bool(receipt["output"].strip())
                        and len(receipt["output"]) <= 128 * 1024)
+            if "requestedProfile" in binding:
+                success = (success and receipt.get("requestedReasoning") == binding["reasoning"]
+                           and receipt.get("actualReasoning") == binding["reasoning"])
             if success:
                 self.service.subscription_complete(identifier, prepared["claimToken"], receipt)
             else:
