@@ -127,8 +127,16 @@ class DevRoomChecks(unittest.TestCase):
         self.assertEqual(list(self.storage.rglob('*.tmp')), [])
 
     def test_disk_failure_preserves_original_and_does_not_leave_temporary_files(self):
+        # CI may spell TEMP with a Windows 8.3 alias while the service resolves
+        # it to a long path. Exercise equivalent alternate spelling everywhere.
+        alias_parent = self.base / 'alternate spelling'
+        alias_parent.mkdir()
+        self.root = alias_parent / '..' / self.root.name
         first = self.service.save(self.payload(body='唯一原稿'))['document']
-        original = (self.storage / 'overview.md').read_bytes()
+        document_path = self.storage / 'overview.md'
+        resolved_document = document_path.resolve()
+        self.assertNotEqual(document_path, resolved_document)
+        original = document_path.read_bytes()
         with patch('dev_room.os.replace', side_effect=OSError('fixture disk failure')):
             with self.assertRaises(OSError):
                 self.service.save(self.payload(body='新稿', revision=first['revision']))
@@ -136,15 +144,18 @@ class DevRoomChecks(unittest.TestCase):
         self.assertEqual(list(self.storage.rglob('*.tmp')), [])
         # If the backup succeeds but replacement fails, the backup must be exact.
         real_replace = os.replace
+        rejected_targets = []
 
         def reject_document(source, target):
-            if Path(target) == self.storage / 'overview.md':
+            if Path(target).resolve() == resolved_document:
+                rejected_targets.append(Path(target).resolve())
                 raise OSError('fixture final replacement failure')
             real_replace(source, target)
 
         with patch('dev_room.os.replace', side_effect=reject_document):
             with self.assertRaises(OSError):
                 self.service.save(self.payload(body='另一个新稿', revision=first['revision']))
+        self.assertEqual(rejected_targets, [resolved_document])
         self.assertEqual((self.storage / 'overview.md').read_bytes(), original)
         self.assertEqual((self.storage / '.history' / 'overview' / (first['revision'] + '.md')).read_bytes(), original)
         self.assertEqual(list(self.storage.rglob('*.tmp')), [])
