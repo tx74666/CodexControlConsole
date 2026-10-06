@@ -50,12 +50,12 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=console-agents-1.0.75-20261007">
+  <link rel="stylesheet" href="styles.css?v=console-dev-room-1.0.76-20261007">
   <link rel="stylesheet" href="transfer-panel.css?v=console-transfer-1.0.30-phone-message-20261004">
-  <link rel="stylesheet" href="workflow-panel.css?v=console-agents-1.0.75-20261007">
-  <link rel="stylesheet" href="codex-work-panel.css?v=console-agents-1.0.75-20261007">
-  <link rel="stylesheet" href="conversations-panel.css?v=console-agents-1.0.75-20261007">
-  <link rel="stylesheet" href="incubator-panel.css?v=console-agents-1.0.75-20261007">
+  <link rel="stylesheet" href="workflow-panel.css?v=console-dev-room-1.0.76-20261007">
+  <link rel="stylesheet" href="codex-work-panel.css?v=console-dev-room-1.0.76-20261007">
+  <link rel="stylesheet" href="conversations-panel.css?v=console-dev-room-1.0.76-20261007">
+  <link rel="stylesheet" href="incubator-panel.css?v=console-dev-room-1.0.76-20261007">
 </head>
 <body>
   <main class="app-shell">
@@ -562,6 +562,49 @@
     </section>
 
     <section class="randomrealm-workspace" data-module-panel="randomrealm" aria-label="RandomRealm" hidden>
+      <article id="devRoomPanel" class="panel dev-room-panel" aria-labelledby="devRoomHeading">
+        <div class="panel-head">
+          <div>
+            <div class="section-label">Project Nexus</div>
+            <h2 id="devRoomHeading">Dev Room</h2>
+          </div>
+          <span class="workspace-pill" data-dev-room-text="badge">文档</span>
+        </div>
+        <p class="dev-room-intro" data-dev-room-text="intro">给 Dev 的文档，在这里查看和修改。</p>
+        <div class="dev-room-layout">
+          <aside class="dev-room-sidebar" aria-label="Dev Room 文档">
+            <div class="dev-room-list-head">
+              <strong data-dev-room-text="documents">全部文档</strong>
+              <button id="devRoomNew" class="ghost-button" type="button" data-dev-room-text="newDocument">＋ 新建</button>
+            </div>
+            <div id="devRoomList" class="dev-room-list"></div>
+          </aside>
+          <section class="dev-room-document" aria-label="文档正文">
+            <div class="dev-room-document-head">
+              <div class="dev-room-heading-group">
+                <h3 id="devRoomTitle">总案</h3>
+                <span id="devRoomSavedAt" class="dev-room-meta"></span>
+              </div>
+              <div class="dev-room-actions">
+                <button id="devRoomEdit" class="ghost-button" type="button" data-dev-room-text="edit">编辑</button>
+                <button id="devRoomCopy" class="ghost-button" type="button" data-dev-room-text="saveCopy" hidden>保存为副本</button>
+                <button id="devRoomSave" class="ghost-button primary-action" type="button" data-dev-room-text="save" hidden>保存</button>
+              </div>
+            </div>
+            <div id="devRoomRead" class="document-content dev-room-read"></div>
+            <div id="devRoomEditor" class="dev-room-editor" hidden>
+              <label for="devRoomTitleInput" data-dev-room-text="titleLabel">文档名称</label>
+              <input id="devRoomTitleInput" type="text" maxlength="200" autocomplete="off">
+              <label for="devRoomBodyInput" data-dev-room-text="bodyLabel">正文</label>
+              <textarea id="devRoomBodyInput" spellcheck="false" placeholder="在这里写下文档内容……"></textarea>
+            </div>
+          </section>
+        </div>
+        <div class="dev-room-footer">
+          <span id="devRoomStatus" role="status" aria-live="polite"></span>
+          <button id="devRoomReload" class="dev-room-reload" type="button" data-dev-room-text="reload">重新读取</button>
+        </div>
+      </article>
       <article class="panel randomrealm-main-panel">
         <div class="panel-head">
           <div>
@@ -1365,11 +1408,11 @@
 <script src="/api/release-defaults.js"></script>
 <script src="/api/workspace-plan.js"></script>
 <script src="transfer-panel.js?v=console-transfer-1.0.30-phone-message-20261004"></script>
-<script src="workflow-panel.js?v=console-agents-1.0.75-20261007"></script>
-<script src="codex-work-panel.js?v=console-agents-1.0.75-20261007"></script>
-<script src="conversations-panel.js?v=console-agents-1.0.75-20261007"></script>
-<script src="incubator-panel.js?v=console-agents-1.0.75-20261007"></script>
-  <script src="app.js?v=console-agents-1.0.75-20261007"></script>
+<script src="workflow-panel.js?v=console-dev-room-1.0.76-20261007"></script>
+<script src="codex-work-panel.js?v=console-dev-room-1.0.76-20261007"></script>
+<script src="conversations-panel.js?v=console-dev-room-1.0.76-20261007"></script>
+<script src="incubator-panel.js?v=console-dev-room-1.0.76-20261007"></script>
+  <script src="app.js?v=console-dev-room-1.0.76-20261007"></script>
 <script src="phone-pairing.js?v=console-connect-1.0.27"></script>
 <script src="phone-offline-export.js?v=console-connect-1.0.27"></script>
 </body>

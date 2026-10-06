@@ -45,7 +45,7 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.75";
+const consoleUiVersion = "1.0.76";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -21455,3 +21455,160 @@ runtimeActivityReady = true;
 syncRuntimeActivity({ resume: true });
 scheduleProductUpdateStatusCheck();
 scheduleClockTick();
+
+// Dev Room keeps confirmed documents in the selected library and unfinished
+// edits in this window's existing local store. Reading never creates a file.
+(() => {
+  const panel = document.getElementById("devRoomPanel");
+  if (!panel) return;
+  const modulePanel = panel.closest("[data-module-panel]");
+  const byId = id => document.getElementById(`devRoom${id}`);
+  const ui = Object.fromEntries(["List", "Title", "SavedAt", "Read", "Editor", "TitleInput", "BodyInput", "Edit", "Save", "Copy", "New", "Reload", "Status"].map(id => [id, byId(id)]));
+  const copy = {
+    zh: { badge: "文档", intro: "给 Dev 的文档，在这里查看和修改。", documents: "全部文档", newDocument: "＋ 新建", edit: "编辑", preview: "查看", save: "保存", titleLabel: "文档名称", bodyLabel: "正文", reload: "重新读取", placeholder: "在这里写下文档内容……", empty: "文档，从这里开始。", emptyBody: "这份总案先留空。点「编辑」写下内容，也可以新建其他文档。", loading: "正在读取文档……", ready: "保存在当前资料库 · Project Nexus / Dev Room", draft: "草稿已保留，点击保存后更新文档。", draftError: "草稿暂时无法保留，请先复制正文。", saved: "已保存到资料库。", saving: "正在保存……", conflict: "文档或资料库已改变，当前草稿已保留。可以保存为副本，保留两份内容。", failed: "文档暂时无法读取，请重试。", saveFailed: "保存失败，草稿已保留。", untitled: "未命名文档", overview: "总案", pending: "尚未填写", recovered: "已恢复未保存的草稿。", updated: "最后保存", dirty: " · 草稿" },
+    en: { badge: "Documents", intro: "Documents for Dev. Read and edit them here.", documents: "All documents", newDocument: "+ New", edit: "Edit", preview: "View", save: "Save", titleLabel: "Document name", bodyLabel: "Content", reload: "Reload", placeholder: "Write your document here…", empty: "Start your document here.", emptyBody: "The overview is blank for now. Choose Edit to write, or create another document.", loading: "Loading documents…", ready: "Saved in the selected library · Project Nexus / Dev Room", draft: "Draft kept. Choose Save to update the document.", draftError: "The draft could not be kept. Copy your text before leaving.", saved: "Saved to the document library.", saving: "Saving…", conflict: "The document or library changed. Your draft is kept. Save as a copy to keep both versions.", failed: "Documents could not be loaded. Please retry.", saveFailed: "Save failed. Your draft is kept.", untitled: "Untitled document", overview: "Overview", pending: "Not yet written", recovered: "Unsaved draft restored.", updated: "Last saved", dirty: " · Draft" }
+  };
+  const words = () => copy[document.documentElement.lang.startsWith("zh") ? "zh" : "en"];
+  let root = "", documents = [], current = null, editing = false, busy = false, sequence = 0;
+  let statusKey = "loading";
+  const draftKey = () => `codex-console-dev-room-drafts-v1:${root}`;
+  function drafts() {
+    try {
+      const value = JSON.parse(localStorage.getItem(draftKey()) || "{}");
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+    catch { return {}; }
+  }
+  function setStatus(key) { statusKey = key; ui.Status.textContent = words()[key]; }
+  function keepDraft() {
+    if (!current || !root || !editing) return true;
+    const saved = drafts();
+    const changed = current.restored || ui.TitleInput.value !== current.title || ui.BodyInput.value !== current.body || !current.revision && current.id !== "overview";
+    if (changed) saved[current.id] = { id: current.id, title: ui.TitleInput.value, body: ui.BodyInput.value, expectedRevision: current.revision, savedAt: new Date().toISOString() };
+    else delete saved[current.id];
+    try { localStorage.setItem(draftKey(), JSON.stringify(saved)); return true; }
+    catch { setStatus("draftError"); return false; }
+  }
+  function applyDraft(document) {
+    const draft = drafts()[document.id];
+    if (!draft || typeof draft.title !== "string" || typeof draft.body !== "string" || typeof draft.expectedRevision !== "string") return document;
+    editing = true;
+    setStatus("recovered");
+    // A restored edit retains its original revision. A newer saved document
+    // must never silently become the base for an older draft.
+    return { ...document, title: draft.title, body: draft.body, revision: draft.expectedRevision, restored: true };
+  }
+  function renderList() {
+    ui.List.replaceChildren();
+    const all = new Map(documents.map(item => [item.id, item]));
+    for (const item of Object.values(drafts())) {
+      if (item && typeof item.id === "string" && typeof item.title === "string") all.set(item.id, { ...all.get(item.id), ...item, draft: true });
+    }
+    for (const item of all.values()) {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "dev-room-item";
+      button.textContent = (item.id === "overview" && !item.updatedAt && !item.draft ? words().overview : item.title || words().untitled) + (item.draft ? words().dirty : "");
+      button.setAttribute("aria-current", String(item.id === current?.id));
+      button.disabled = busy;
+      button.addEventListener("click", () => void load(item.id));
+      ui.List.appendChild(button);
+    }
+  }
+  function render() {
+    for (const node of panel.querySelectorAll("[data-dev-room-text]")) node.textContent = words()[node.dataset.devRoomText];
+    ui.Edit.textContent = editing ? words().preview : words().edit;
+    ui.Copy.textContent = document.documentElement.lang.startsWith("zh") ? "保存为副本" : "Save as a copy";
+    ui.Copy.hidden = statusKey !== "conflict";
+    ui.BodyInput.placeholder = words().placeholder;
+    ui.Editor.hidden = !editing; ui.Read.hidden = editing; ui.Save.hidden = !editing;
+    for (const element of [ui.Edit, ui.Save, ui.Copy, ui.New, ui.Reload, ui.TitleInput, ui.BodyInput]) element.disabled = busy || !current;
+    ui.New.disabled = busy || !root;
+    ui.Reload.disabled = busy;
+    if (current) {
+      ui.Title.textContent = ui.TitleInput.value || words().untitled;
+      ui.SavedAt.textContent = current.updatedAt ? `${words().updated} ${new Date(current.updatedAt).toLocaleString(document.documentElement.lang)}` : words().pending;
+      if (!editing) {
+        if (ui.BodyInput.value.trim()) ui.Read.textContent = ui.BodyInput.value;
+        else {
+          const empty = document.createElement("div"); empty.className = "dev-room-empty";
+          const heading = document.createElement("strong"); heading.textContent = words().empty;
+          const note = document.createElement("p"); note.textContent = words().emptyBody;
+          empty.append(heading, note); ui.Read.replaceChildren(empty);
+        }
+      }
+    }
+    renderList(); ui.Status.textContent = words()[statusKey];
+  }
+  function select(document) {
+    editing = false;
+    current = applyDraft(document);
+    ui.TitleInput.value = current.title; ui.BodyInput.value = current.body;
+    render();
+  }
+  async function request(url, options) {
+    const response = await fetch(url, { cache: "no-store", ...options });
+    const payload = await response.json();
+    if (!response.ok) { const error = new Error(payload.error || "Dev Room request failed"); error.status = response.status; throw error; }
+    return payload;
+  }
+  async function load(id = current?.id || "overview") {
+    if (busy || !keepDraft()) return;
+    const requestId = ++sequence;
+    busy = true; setStatus("loading"); render();
+    try {
+      const library = await request("/api/documents/state");
+      if (!library.root) throw new Error("No selected library");
+      const sameRoot = !root || root === library.root;
+      const query = new URLSearchParams({ expectedRoot: library.root, id: sameRoot ? id : "overview" });
+      const payload = await request(`/api/dev-room/state?${query}`);
+      if (requestId !== sequence) return;
+      root = payload.root; documents = payload.documents;
+      setStatus("ready");
+      const draft = drafts()[sameRoot ? id : "overview"];
+      select(payload.document || (draft ? { id: draft.id, title: "", body: "", revision: "", updatedAt: "" } : { id: "overview", title: words().overview, body: "", revision: "", updatedAt: "" }));
+    } catch { setStatus("failed"); }
+    finally { if (requestId === sequence) { busy = false; render(); } }
+  }
+  ui.New.addEventListener("click", () => {
+    if (busy || !root || !keepDraft()) return;
+    const document = { id: crypto.randomUUID(), title: words().untitled, body: "", revision: "", updatedAt: "" };
+    select(document); editing = true; keepDraft(); setStatus("draft"); render(); ui.TitleInput.focus(); ui.TitleInput.select();
+  });
+  ui.Edit.addEventListener("click", () => {
+    if (editing && !keepDraft()) return;
+    editing = !editing; render(); if (editing) ui.BodyInput.focus();
+  });
+  for (const input of [ui.TitleInput, ui.BodyInput]) input.addEventListener("input", () => {
+    if (keepDraft()) setStatus("draft");
+    ui.Title.textContent = ui.TitleInput.value || words().untitled; renderList();
+  });
+  ui.Save.addEventListener("click", async () => {
+    if (busy || !current || !keepDraft()) return;
+    busy = true; setStatus("saving"); render();
+    try {
+      const payload = await request("/api/dev-room/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRoot: root, id: current.id, title: ui.TitleInput.value, body: ui.BodyInput.value, expectedRevision: current.revision }) });
+      const kept = drafts(); delete kept[current.id];
+      try { localStorage.setItem(draftKey(), JSON.stringify(kept)); } catch { /* The saved library remains authoritative. */ }
+      documents = payload.documents; current = payload.document;
+      ui.TitleInput.value = current.title; ui.BodyInput.value = current.body;
+      editing = false; setStatus("saved");
+    } catch (error) { setStatus(error.status === 409 ? "conflict" : "saveFailed"); }
+    finally { busy = false; render(); }
+  });
+  ui.Copy.addEventListener("click", () => {
+    if (busy || !current || !keepDraft()) return;
+    const title = ui.TitleInput.value.slice(0, 190) + (document.documentElement.lang.startsWith("zh") ? "（副本）" : " (copy)");
+    const body = ui.BodyInput.value;
+    current = { id: crypto.randomUUID(), title: "", body: "", revision: "", updatedAt: "" };
+    ui.TitleInput.value = title; ui.BodyInput.value = body;
+    editing = true; keepDraft(); setStatus("draft"); render();
+    ui.Save.click();
+  });
+  ui.Reload.addEventListener("click", () => void load());
+  window.addEventListener("beforeunload", event => {
+    if (!keepDraft()) { event.preventDefault(); event.returnValue = ""; }
+  });
+  new MutationObserver(() => render()).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+  new MutationObserver(() => { if (!modulePanel.hidden) void load(); }).observe(modulePanel, { attributes: true, attributeFilter: ["hidden"] });
+  render(); if (!modulePanel.hidden) void load();
+})();

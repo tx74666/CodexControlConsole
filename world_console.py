@@ -54,6 +54,7 @@ from download_map import DownloadMapService
 from external_app_launcher import launch_or_focus_executable
 from reference_views import ReferenceViewSetService
 from document_library import DocumentLibraryService, current_memory
+from dev_room import DevRoomService, DevRoomConflict, MAX_REQUEST_BYTES as MAX_DEV_ROOM_REQUEST_BYTES
 from phone_companion import PhoneCompanionService
 from phone_device_store import PhoneDeviceStore
 from phone_discovery import DiscoveryAnnouncer
@@ -211,6 +212,7 @@ CACHE_DIR = USER_DATA_DIR / "cache" if USER_DATA_DIR != APP_DIR else APP_DIR / "
 INSTALLATION_STATE_FILE = CACHE_DIR / "installation.json"
 MEDIA_CONFIG_FILE = USER_DATA_DIR / "media.json"
 DOCUMENT_LIBRARY = DocumentLibraryService(CACHE_DIR / "documents.json")
+DEV_ROOM = DevRoomService(DOCUMENT_LIBRARY)
 _transfer_local_data = Path(os.environ.get("LOCALAPPDATA", "").strip() or Path.home() / "AppData" / "Local")
 TRANSFER_STORE = TransferStore(lambda: DOCUMENT_LIBRARY.state().get("root", ""),
                               _transfer_local_data / "CodexControlConsole" / "transfers", public_root=APP_DIR)
@@ -1580,6 +1582,20 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self._private_phone_path():
             self.send_error(404)
             return
+        if parsed.path.startswith("/api/dev-room/"):
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            try:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if (parsed.path != "/api/dev-room/state" or set(query) - {"expectedRoot", "id"}
+                        or "expectedRoot" not in query or any(len(value) != 1 for value in query.values())):
+                    raise ValueError("Dev Room 请求地址无效。")
+                self.send_json(DEV_ROOM.state(query["expectedRoot"][0], query.get("id", ["overview"])[0]))
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            except (OSError, RuntimeError):
+                self.send_json({"error": "Dev Room 文档暂时无法读取，请检查所选资料库。"}, status=503)
+            return
         if parsed.path.startswith("/api/workflow/"):
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
@@ -1982,7 +1998,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self._private_phone_path():
             self.send_error(404)
             return
-        if urllib.parse.urlparse(self.path).path.startswith(("/api/transfer/", "/api/workflow/")):
+        if urllib.parse.urlparse(self.path).path.startswith(("/api/transfer/", "/api/workflow/", "/api/dev-room/")):
             self.do_GET()
             return
         super().do_HEAD()
@@ -2004,6 +2020,20 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if not self.require_trusted_post_context():
             return
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith("/api/dev-room/"):
+            if not self.require_local_request():
+                return
+            try:
+                if parsed.path != "/api/dev-room/save" or parsed.query:
+                    raise ValueError("Dev Room 保存地址无效。")
+                self.send_json(DEV_ROOM.save(self.read_json_body(max_bytes=MAX_DEV_ROOM_REQUEST_BYTES)))
+            except DevRoomConflict as error:
+                self.send_json({"error": str(error), "code": "revision_conflict"}, status=409)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            except (OSError, RuntimeError):
+                self.send_json({"error": "Dev Room 文档未保存，请检查磁盘或稍后重试。"}, status=503)
+            return
         if parsed.path.startswith("/api/workflow/"):
             if not self.require_local_request():
                 return

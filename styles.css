@@ -1184,6 +1184,46 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.dev-room-panel { grid-column: 1 / -1; padding: 24px; }
+.dev-room-intro { margin: -3px 0 22px; color: var(--muted); font-size: 14px; }
+.dev-room-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 330px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.dev-room-sidebar { padding: 16px 12px; border-right: 1px solid var(--line); background: var(--card-bg); }
+.dev-room-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 16px; font-size: 13px; }
+.dev-room-list-head .ghost-button { padding: 6px 9px; min-height: 30px; font-size: 12px; }
+.dev-room-list { display: grid; gap: 6px; }
+.dev-room-item { width: 100%; text-align: left; padding: 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--soft); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.dev-room-item[aria-current="true"] { background: var(--panel); border-color: var(--line-strong); color: var(--green); font-weight: 700; }
+.dev-room-item:hover { background: var(--panel); }
+.dev-room-document { min-width: 0; padding: 26px 30px; }
+.dev-room-document-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 26px; }
+.dev-room-heading-group { min-width: 0; }
+.dev-room-heading-group h3 { margin: 0 0 7px; font-size: 25px; line-height: 1.4; overflow-wrap: anywhere; }
+.dev-room-meta { color: var(--muted); font-size: 12px; }
+.dev-room-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.dev-room-actions .ghost-button { min-height: 34px; padding: 7px 18px; }
+.dev-room-read { margin-top: 0; font-size: 15px; white-space: pre-wrap; }
+.dev-room-empty { padding: 36px 0; }
+.dev-room-empty strong { display: block; margin-bottom: 10px; font-size: 20px; font-weight: 500; }
+.dev-room-empty p { color: var(--muted); font-size: 14px; }
+.dev-room-editor { display: grid; gap: 9px; }
+.dev-room-editor label { color: var(--muted); font-size: 12px; }
+.dev-room-editor input, .dev-room-editor textarea { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--button-bg); color: var(--text); font: inherit; }
+.dev-room-editor textarea { min-height: 260px; resize: vertical; line-height: 1.8; }
+.dev-room-editor input:focus, .dev-room-editor textarea:focus { outline: 2px solid var(--line-strong); outline-offset: 1px; }
+.dev-room-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; color: var(--muted); font-size: 12px; }
+.dev-room-reload { border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; flex-shrink: 0; }
+.dev-room-reload:hover { color: var(--green); }
+.dev-room-panel [hidden] { display: none !important; }
+.dev-room-panel button:focus-visible { outline: 2px solid var(--line-strong); outline-offset: 2px; }
+@media (max-width: 680px) {
+  .dev-room-panel { padding: 18px; }
+  .dev-room-layout { grid-template-columns: minmax(0, 1fr); }
+  .dev-room-sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+  .dev-room-list { display: flex; overflow-x: auto; }
+  .dev-room-item { width: auto; min-width: 120px; }
+  .dev-room-document { padding: 22px 18px; }
+}
+
 .manager-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

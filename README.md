@@ -8,6 +8,10 @@ Ordinary Chat uses the signed-in ChatGPT account rather than a model API key. Th
 
 A Windows control console for music, wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.
 
+## Dev Room
+
+**RandomRealm → Dev Room** is the Project Nexus document framework. It starts with a blank overview and provides a document list, reading, editing, New and Save. Content stays in the current Document library under `projects/Project Nexus/Dev Room`; reading the blank overview does not create a file. Unfinished edits are kept locally and restored on reopening. Saves verify the selected library and document revision, retain the previous saved file, and offer Save as a copy when another edit conflicts. This first framework does not classify content or synchronize it to Unity.
+
 ## ChatGPT subscription connection
 
 Console provides an explicit optional Sign in with ChatGPT connection at `subscription.html`. Authorize the formal Console connection on this PC, then choose **ChatGPT 订阅** from the paired phone conversation's More menu and select a model returned by the account's actual catalog. This route uses the account's shared ChatGPT plan usage; it requires no API key. Browser Chat and its separate tier preferences remain available. Catalog reads, saved drafts and model selection never send messages.
