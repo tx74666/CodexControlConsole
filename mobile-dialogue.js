@@ -85,7 +85,7 @@
     }
     function say(text = "", error = false) { notice.textContent = text; notice.dataset.error = String(error); }
     function autosize(input, limit = 170) { input.style.height = "auto"; input.style.height = `${Math.min(limit, Math.max(48, input.scrollHeight || 48))}px`; input.style.overflowY = input.scrollHeight > limit ? "auto" : "hidden"; }
-    function draftKey() { return state.session?.id || "unopened"; }
+    function draftKey() { return state.session?.id || (state.pending?.action === "mobile/dialogue/clear" ? state.pending.payload?.sessionId : "") || "unopened"; }
     function renderDraftStatus() {
       draftStatus.textContent = state.storageFailed ? !offline && state.session && !state.dirty ? "草稿已同步电脑；本机保存失败" : "草稿尚未保存在此手机" : offline ? state.session || state.dirty ? "草稿已保存在此手机" : "只保存留在此手机" : state.dirty ? "草稿已保存在此手机" : state.session ? "草稿已同步电脑" : "";
     }
@@ -344,7 +344,7 @@
       if (state.view === "chat") renderConversation(); newResult.hidden = state.view !== "chat" || !state.newResults; renderEditReviews(); updateControls(); syncResultStream(); options.onViewChange?.(state.view);
     }
     function currentFiles() { return !fileOwner || fileOwner === state.session?.id ? files : []; }
-    function updateControls() { const empty = !composerInput.value.trim(), hasImages = currentFiles().length > 0 || (state.session?.draft?.attachmentIds || []).length > 0; send.disabled = state.busy || empty && !hasImages || state.composing || state.chatTransport === "chatgpt_subscription" && !subscriptionReady(); saveOnly.disabled = state.busy || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy || state.chatTransport === "chatgpt_subscription" && Boolean(state.pending); chatTransport.disabled = state.busy || Boolean(state.pending) || offline; subscriptionModel.disabled = state.busy || Boolean(state.pending) || state.subscriptionReading || !state.subscriptionStatus?.connected; if (cancelPendingButton) cancelPendingButton.disabled = state.busy || state.composing || Boolean(state.pending && state.pending.action !== "mobile/dialogue/cancel-pending"); saveEdit.hidden = !state.editorDirty; saveEdit.disabled = state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = state.busy || state.editorDirty; executionDraft.disabled = state.busy || state.editorDirty; carryIdea.disabled = state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } const imageLocked = state.busy || Boolean(state.pending) || Boolean(uploadRequest); for (const remove of imageRemovalButtons) remove.disabled = imageLocked; for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = imageLocked; void drainResults(); }
+    function updateControls() { const clearing = state.pending?.action === "mobile/dialogue/clear"; clearMenuAction.disabled = state.busy || state.composing; const empty = !composerInput.value.trim(), hasImages = currentFiles().length > 0 || (state.session?.draft?.attachmentIds || []).length > 0; send.disabled = state.busy || clearing || empty && !hasImages || state.composing || state.chatTransport === "chatgpt_subscription" && !subscriptionReady(); saveOnly.disabled = state.busy || clearing || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy || state.chatTransport === "chatgpt_subscription" && Boolean(state.pending); chatTransport.disabled = state.busy || Boolean(state.pending) || offline; subscriptionModel.disabled = state.busy || Boolean(state.pending) || state.subscriptionReading || !state.subscriptionStatus?.connected; if (cancelPendingButton) cancelPendingButton.disabled = state.busy || state.composing || Boolean(state.pending && state.pending.action !== "mobile/dialogue/cancel-pending"); saveEdit.hidden = !state.editorDirty; saveEdit.disabled = state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = state.busy || state.editorDirty; executionDraft.disabled = state.busy || state.editorDirty; carryIdea.disabled = state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } const imageLocked = state.busy || Boolean(state.pending) || Boolean(uploadRequest); for (const remove of imageRemovalButtons) remove.disabled = imageLocked; for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = imageLocked; void drainResults(); }
     async function writeFiles(value) { fileWriting++; try { await blobs.put(value); } catch (error) { fileError = true; throw error; } finally { fileWriting--; } }
     async function saveFiles() { try { await writeFiles({ id: filesKey, files, fileOwner, uploadRequest }); fileError = false; } catch (error) { fileError = true; fail(error); throw error; } }
     async function restoreSessionFiles(id) {
@@ -392,8 +392,16 @@
       if (uploadRequest.recordId !== state.session.recordId) throw new Error("待上传图片属于原讨论，请先返回原讨论保存，不会附到其它想法。");
       if (uploadRequest.route !== "mobile/dialogue/upload" || uploadRequest.scope?.clientId !== state.clientId || uploadRequest.scope?.sessionId !== state.session.id) throw new Error("旧图片上传结果尚需核对；原图片和请求仍保留，未作为新上传重复发送。");
       let uploaded;
-      if (options.uploadAttachments) uploaded = await options.uploadAttachments(intent.files, state.session, uploadRequest);
-      else { if (offline) throw new Error("图片仍保存在此手机；连接电脑后才能同步图片。"); const form = new FormData(); form.append("requestId", uploadRequest.requestId); form.append("recordId", uploadRequest.recordId); form.append("text", JSON.stringify(uploadRequest.scope)); for (const file of intent.files) form.append("files", file, file.name || "image.png"); uploaded = await call(uploadRequest.route, form); }
+      try {
+        if (options.uploadAttachments) uploaded = await options.uploadAttachments(intent.files, state.session, uploadRequest);
+        else { if (offline) throw new Error("图片仍保存在此手机；连接电脑后才能同步图片。"); const form = new FormData(); form.append("requestId", uploadRequest.requestId); form.append("recordId", uploadRequest.recordId); form.append("text", JSON.stringify(uploadRequest.scope)); for (const file of intent.files) form.append("files", file, file.name || "image.png"); uploaded = await call(uploadRequest.route, form); }
+      } catch (error) {
+        // These upload responses precede the transaction/receipt. An unknown
+        // outcome must keep the original nonce and files frozen.
+        const code = error.data?.code || error.code;
+        if ([400, 403, 404, 413, 415].includes(error.status) || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch"].includes(code)) { uploadRequest = null; await saveFiles(); renderFiles(); }
+        throw error;
+      }
       const attachmentIds = uploaded.uploadedAttachmentIds || uploaded.attachmentIds || (uploaded.attachments || []).map(item => item.id);
       if (!attachmentIds.length) throw new Error("尚未取得图片保存凭据，原图片草稿仍保留。");
       if (uploaded.session && !applyDialogue(uploaded, uploadRequest.scope.sessionId)) throw new Error("讨论已切换；原图片上传凭据保留，未附到新讨论。");
@@ -461,7 +469,7 @@
       } finally { state.busy = false; updateControls(); }
     }
     async function syncDraft() {
-      if (draftSync || !state.active || state.busy || !state.dirty || state.storageFailed || offline) return;
+      if (draftSync || !state.active || state.busy || !state.dirty || state.storageFailed || offline || state.pending?.action === "mobile/dialogue/clear") return;
       const intent = composeIntent(), text = intent.text;
       draftSync = (async () => {
         try { await ensureSession(); const id = state.session.id, data = await call("mobile/dialogue/draft", submission(intent)); if (applyDialogue(data, id) && composerInput.value === text) { state.drafts[id] = { text, tier: intent.requestedProfile, unsynced: false }; state.dirty = false; persist(); } }
@@ -489,13 +497,33 @@
         if (composerInput.value === text) { composerInput.value = ""; state.drafts[payload.sessionId] = { text: "", tier: state.tier, unsynced: false }; state.dirty = false; autosize(composerInput); } persist(); say(offline ? "想法已保存在此手机。" : "想法已保存到电脑，随时可以接着聊。"); if (data.idea) state.idea = data.idea;
       } catch (error) { if (writeRejected(error)) { state.pending = null; persist(); } fail(error); } finally { state.busy = false; updateControls(); }
     }
+    function matchingClearReceipt(data) {
+      const operation = state.pending, payload = operation?.payload;
+      if (operation?.action !== "mobile/dialogue/clear" || !payload || Object.keys(payload).sort().join(",") !== "clientId,expectedRevision,requestId,sessionId"
+          || payload.clientId !== state.clientId || typeof payload.requestId !== "string" || !payload.requestId || typeof payload.sessionId !== "string" || !payload.sessionId
+          || !Number.isSafeInteger(payload.expectedRevision) || payload.expectedRevision < 1 || data.session?.clientId !== state.clientId || data.session?.isCurrent !== true
+          || typeof data.session.id !== "string" || !data.session.id || data.session.id === payload.sessionId || typeof data.session.recordId !== "string" || !data.session.recordId || data.detail?.record?.id !== data.session.recordId || !Array.isArray(data.clearReceipts)) return null;
+      return data.clearReceipts.slice(0, 20).find(item => item && typeof item === "object"
+        && Object.keys(item).sort().join(",") === "clientId,expectedRevision,newRecordId,newSessionId,requestId,sessionId"
+        && Object.keys(payload).every(key => item[key] === payload[key]) && item.newSessionId === data.session.id && item.newRecordId === data.session.recordId) || null;
+    }
+    function finishClear(data) {
+      const receipt = matchingClearReceipt(data); if (!receipt) return false;
+      if (state.session?.id === receipt.sessionId && !saveLocalDraft()) return false;
+      if (!applyDialogue(data, state.session?.id || "")) return false;
+      state.pending = null; state.messageIds.clear(); delete state.drafts.unopened; state.newResults = false; restoreDraft(); persist(); renderView();
+      say("当前讨论已重新开始；旧草稿、原回答与保存的想法仍然保留。"); return true;
+    }
     async function clearDiscussion() {
-      if (state.busy) return;
-      if (state.pending) { say("上一条操作是否送达还需要核对，暂不切换讨论；原草稿与请求编号保留。", true); return; }
+      if (state.busy || state.composing) return;
+      if (state.pending && state.pending.action !== "mobile/dialogue/clear") { say("上一条操作是否送达还需要核对，暂不切换讨论；原草稿与请求编号保留。", true); return; }
+      if (uploadRequest) { say("上一项图片上传结果还需要核对，暂不切换讨论；原图片与上传编号保留。", true); return; }
       more.open = false; if (state.view !== "chat") return;
       state.busy = true; resultTransition = true; closeResultStream(); updateControls(); saveLocalDraft();
-      try { if (draftSync) await draftSync; await ensureSession(); if (currentFiles().length) { fileOwner = state.session.id; await saveFiles(); } const data = await call("mobile/dialogue/clear", { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision }); applyDialogue(data); state.messageIds.clear(); composerInput.value = ""; state.drafts[state.session.id] = { text: "", tier: state.tier, unsynced: false }; delete state.drafts.unopened; state.dirty = false; state.newResults = false; persist(); autosize(composerInput); renderView(); say("当前讨论已重新开始，保存的想法仍然保留。"); }
-      catch (error) { fail(error); } finally { resultTransition = false; state.busy = false; updateControls(); syncResultStream(); }
+      try { if (draftSync) await draftSync; if (state.pending?.action !== "mobile/dialogue/clear") await ensureSession(); if (currentFiles().length) { fileOwner = state.session.id; await saveFiles(); }
+        const payload = state.pending?.action === "mobile/dialogue/clear" ? state.pending.payload : durablePayload("mobile/dialogue/clear", { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision }, ["clientId", "sessionId"]);
+        const data = await call("mobile/dialogue/clear", payload); if (!finishClear(data)) throw new Error("清空结果尚待核对；请刷新查看同一次清空回执，原草稿与请求编号保留。");
+      } catch (error) { if (writeRejected(error) && state.pending?.action === "mobile/dialogue/clear") { state.pending = null; persist(); } fail(error); } finally { resultTransition = false; state.busy = false; updateControls(); syncResultStream(); }
     }
     async function rememberAnswer(sourceMessageId) {
       if (state.busy || !state.session) return; state.busy = true; updateControls();
@@ -504,7 +532,7 @@
     }
     async function refresh(recoverEvents = true) {
       if (!state.active || state.reading || state.composing && state.view === "chat" || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return false; if (recoverEvents && !resultStream) resultStopped = false; capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
-      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); if (applied && state.chatTransport === "chatgpt_subscription") await readSubscriptionStatus(); return applied; } }
+      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (state.pending?.action === "mobile/dialogue/clear") { if (finishClear(data)) return true; if (data.session?.id === state.pending.payload.sessionId && data.session?.clientId === state.clientId && applyDialogue(data, sessionId, true) && !sessionId) restoreDraft(); say("清空结果尚待核对；原草稿与请求编号保留，可再次点清空核对同一次请求。", true); return false; } if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); if (applied && state.chatTransport === "chatgpt_subscription") await readSubscriptionStatus(); return applied; } }
       catch (error) { fail(error); } finally { state.reading = false; updateControls(); syncResultStream(); }
     }
     async function showIdeas() { if (state.busy) return; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } state.view = "ideas"; say(""); renderView(); await loadIdeas(); requestAnimationFrame(() => window.scrollTo({ top: state.listScroll, behavior: "auto" })); }

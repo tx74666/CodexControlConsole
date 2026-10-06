@@ -19,6 +19,7 @@ from urllib.parse import urlencode
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from workflow_http import workflow_get, workflow_post
 from workflow_service import WorkflowError, _now
+from workflow_codex_work import PERMISSION_PROFILE, PROVIDER, preparation_receipt, scope_policy
 
 
 spec = importlib.util.spec_from_file_location("codex_work_isolated_http_fixture", Path(__file__).with_name("check-workflow-http.py"))
@@ -92,6 +93,14 @@ class InertController:
         run = self.runs[run_id]
         event = {"type": event_type, "runId": run_id, "sourceSha256": run["sourceSha256"], "threadId": run["threadId"],
                  "turnId": run["turnId"], "observedAt": _now(), **values}
+        if event_type == "prepared":
+            source = next(spec for identifier, spec in self.submissions if identifier == run_id)
+            policy = scope_policy(source["allowedRoot"], self.service.data_dir / "codex-work" / run_id / "images")
+            event.setdefault("preparationReceipt", preparation_receipt(
+                {"config": {"default_permissions": PERMISSION_PROFILE, "permissions": {PERMISSION_PROFILE: policy}}},
+                {"thread": {"id": event["threadId"]}, "model": event["actualModel"], "modelProvider": PROVIDER,
+                 "reasoningEffort": event["actualEffort"], "cwd": source["allowedRoot"], "approvalPolicy": "never",
+                 "activePermissionProfile": {"id": PERMISSION_PROFILE, "extends": ":workspace"}}))
         accepted = run["callback"](event)
         if accepted:
             run.update(threadId=event["threadId"], turnId=event["turnId"])

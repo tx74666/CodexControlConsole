@@ -81,6 +81,11 @@ while True:
             filesystem[str(home.parent)] = "write"
         if mode == "external_tools":
             config["mcp_servers"] = {"unowned": {"command": "other-tool"}}
+        if mode == "receipt_extra":
+            config["fixture_private"] = {"accessToken": os.environ["ACCESS_TOKEN"]}
+            config["permissions"]["console-work-scope"]["description"] = os.environ["ACCESS_TOKEN"]
+            config["permissions"]["console-work-scope"]["network"]["unused"] = None
+            filesystem["unused"] = None
         emit({"id": value["id"], "result": {"config": config}})
     elif method == "windowsSandbox/setupStart":
         setup_running = True
@@ -122,7 +127,7 @@ while True:
             sys.stderr.write(token + "\n")
             sys.stderr.flush()
             terminal(text="说明：" + token + "。")
-        elif mode in {"complete", "mismatch"}:
+        elif mode in {"complete", "mismatch", "receipt_extra"}:
             event("item/agentMessage/delta", itemId="answer_fixture", delta="修改说明完整。")
             terminal(mismatch=mode == "mismatch")
         elif mode == "approval":
@@ -281,6 +286,37 @@ class Checks(unittest.TestCase):
         self.assertIn('request_max_retries=0', args)
         self.assertIn('agents.enabled=false', args)
         self.assertIn('trust_level="untrusted"', args)
+
+    def test_actual_selected_prepare_echo_is_bound_and_does_not_forward_private_config(self):
+        f = self.fixture("receipt_extra")
+        f.submit()
+        f.done()
+        prepared = next(event for event in f.events if event["type"] == "prepared")
+        receipt = prepared["preparationReceipt"]
+        self.assertTrue(api.valid_preparation_receipt(receipt, allowed_root=f.allowed,
+            image_root=f.home() / "images", model=BINDING["modelSlug"], effort="high", thread_id="thread_fixture"))
+        self.assertEqual(receipt["threadStart"]["activePermissionProfile"], {"id": api.PERMISSION_PROFILE, "extends": ":workspace"})
+        self.assertEqual(receipt["evidenceType"], "configuration_and_thread_profile_echo")
+        self.assertNotIn(TOKEN, json.dumps(f.events))
+        self.assertNotIn("description", receipt["configuration"]["permissionProfile"])
+        self.assertNotIn("unused", receipt["configuration"]["permissionProfile"]["filesystem"])
+        changed = copy.deepcopy(receipt)
+        changed["configuration"]["permissionProfile"]["filesystem"]["glob_scan_max_depth"] = 3.0
+        self.assertFalse(api.valid_preparation_receipt(changed, allowed_root=f.allowed,
+            image_root=f.home() / "images", model=BINDING["modelSlug"], effort="high", thread_id="thread_fixture"))
+
+    def test_uncommitted_prepare_receipt_stops_before_intent_and_turn(self):
+        f = self.fixture()
+        original = f.event
+        def reject_preparation(event):
+            original(event)
+            return event["type"] != "prepared"
+        f.event = reject_preparation
+        f.submit()
+        f.done()
+        self.assertEqual(f.controller.snapshot(f.run_id)["error"], "codex_work_preparation_not_durable")
+        self.assertFalse(any(event["type"] == "send_intent" for event in f.events))
+        self.assertFalse(any(frame.get("method") == "turn/start" for frame in f.messages()))
 
     def test_legacy_or_changed_scope_never_starts_turn(self):
         for mode in ("legacy_read_scope", "changed_write_scope", "wrong_profile"):

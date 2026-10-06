@@ -503,6 +503,45 @@ class MobileDialogueChecks(unittest.TestCase):
         self.assertEqual(old["draft"]["text"], "问题A草稿")
         self.assertEqual(self.counts()["records"], 2)
 
+    def test_lost_clear_reply_is_recoverable_by_exact_readonly_receipt_and_same_nonce(self):
+        first = self.mutate("draft", self.open(), text="清空前未发送草稿")
+        body = request(clientId=self.client, sessionId=first["session"]["id"], expectedRevision=first["session"]["revision"])
+        cleared = self.post("dialogue/clear", body)
+        proof = {**body, "newSessionId": cleared["session"]["id"], "newRecordId": cleared["session"]["recordId"]}
+        self.assertEqual(cleared["clearReceipts"], [proof])
+        before = self.db_snapshot()
+        self.assertEqual(self.current()["clearReceipts"], [proof])
+        repeated = self.post("dialogue/clear", body)
+        self.assertTrue(repeated["duplicate"])
+        self.assertEqual(repeated["clearReceipts"], [proof])
+        self.assertEqual(self.db_snapshot(), before)
+        with self.service._db() as db:
+            self.assertEqual(self.service._mobile_session(db, self.client, first["session"]["id"])["draft"]["text"], "清空前未发送草稿")
+
+    def test_clear_receipt_never_adopts_other_client_or_later_discussion(self):
+        first = self.open()
+        cleared = self.mutate("clear", first)
+        other_client = str(uuid.uuid4())
+        self.assertEqual(self.current(other_client)["clearReceipts"], [])
+        later = self.mutate("clear", cleared)
+        self.assertEqual(len(later["clearReceipts"]), 1)
+        self.assertEqual(later["clearReceipts"][0]["sessionId"], cleared["session"]["id"])
+        self.assertNotEqual(later["clearReceipts"][0]["newSessionId"], cleared["session"]["id"])
+
+    def test_legacy_and_tampered_clear_receipts_are_not_recovery_evidence(self):
+        first = self.open()
+        body = request(clientId=self.client, sessionId=first["session"]["id"], expectedRevision=first["session"]["revision"])
+        cleared = self.post("dialogue/clear", body)
+        with self.service._db() as db:
+            row = db.execute("SELECT response FROM requests WHERE id=?", (body["requestId"],)).fetchone()
+            saved = json.loads(row["response"])
+            saved["clearReceipt"]["expectedRevision"] += 1
+            db.execute("UPDATE requests SET response=? WHERE id=?", (json.dumps(saved), body["requestId"]))
+        self.assertEqual(self.current()["clearReceipts"], [])
+        with self.service._db() as db:
+            db.execute("UPDATE requests SET response=? WHERE id=?", (json.dumps({"sessionId": cleared["session"]["id"]}), body["requestId"]))
+        self.assertEqual(self.current()["clearReceipts"], [])
+
     def test_send_freezes_one_record_profile_and_session_without_claiming_delivery(self):
         sent = self.mutate("send", self.open(), text="准确本轮问题", requestedProfile="pro")
         job = sent["job"]

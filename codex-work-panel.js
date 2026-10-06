@@ -11,7 +11,7 @@
     const valid = file.change === "added" ? file.beforeSha256 === null && digest(file.afterSha256) : file.change === "removed" ? digest(file.beforeSha256) && file.afterSha256 === null : file.change === "modified" && digest(file.beforeSha256) && digest(file.afterSha256) && file.beforeSha256 !== file.afterSha256;
     return valid ? `${({ added: "新增", modified: "修改", removed: "删除" })[file.change]}：${file.path}` : "";
   }
-  function optionsFor(control, items, selected = control.value) { control.replaceChildren(); for (const item of items) { const option = make("option", item.name || item.id); option.value = item.id; option.disabled = item.disabled === true; control.append(option); } control.value = items.some(item => item.id === selected && !item.disabled) ? selected : items.find(item => !item.disabled)?.id || ""; }
+  function optionsFor(control, items, selected = control.value, preserveMissing = false) { control.replaceChildren(); for (const item of items) { const option = make("option", item.name || item.id); option.value = item.id; option.disabled = item.disabled === true; control.append(option); } const available = items.some(item => item.id === selected && !item.disabled); if (preserveMissing && selected && !available) { const option = make("option", `原模型暂不可选：${selected}`); option.value = selected; option.disabled = true; control.append(option); } control.value = available || preserveMissing && selected ? selected : items.find(item => !item.disabled)?.id || ""; }
   function create(root, options = {}) {
     if (!root) return null;
     const phone = options.phone === true, base = options.endpoint || (phone ? "/api/phone/workflow" : "/api/workflow"), key = `console.codexWork.v1:${base}`;
@@ -54,9 +54,10 @@
     }
     function render() {
       const validSource = state.source?.recordId === state.recordId && state.source.text === sourceText.value;
-      prepare.disabled = state.busy || state.pending || !validSource || !workspace.value || !model.value || !["fast", "high"].includes(profile.value) || !state.config?.subscription?.connected || state.composing;
+      const modelAvailable = state.config?.subscription?.models?.some(item => item.slug === model.value), ready = state.config?.setup?.ready === true && state.config?.setup?.busy !== true;
+      prepare.disabled = state.busy || state.pending || !validSource || !workspace.value || !modelAvailable || !["fast", "high"].includes(profile.value) || !state.config?.subscription?.connected || !ready || state.composing;
       workspace.disabled = model.disabled = profile.disabled = state.busy || Boolean(state.pending);
-      load.disabled = state.busy || Boolean(state.pending); confirm.disabled = state.busy || !state.review || Boolean(state.pending); dismiss.disabled = state.busy || Boolean(state.pending);
+      load.disabled = state.busy || Boolean(state.pending); confirm.disabled = state.busy || !state.review || Boolean(state.pending) || !ready || !modelAvailable || !state.config?.subscription?.connected; dismiss.disabled = state.busy || Boolean(state.pending);
       review.hidden = !state.review && !state.pending;
       if (state.pending) { reviewText.textContent = "创建请求已提交或送达待核对。原请求编号已保留，不能再点一次自动重跑。请查看进度。"; confirm.disabled = true; }
       const binding = state.config?.workspaces?.find(item => item.id === workspace.value);
@@ -88,8 +89,9 @@
       const generation = state.generation, data = await call("codex-work/config"); if (generation !== state.generation) return null; state.config = data;
       if (state.setupUnknown && (data.setup?.busy === true || data.setup?.ready === true || data.setup?.attempted === true)) { state.setupUnknown = false; persist(); }
       optionsFor(workspace, (data.workspaces || []).map(item => ({ ...item, disabled: item.available === false })), workspace.value || saved.workspaceId);
-      optionsFor(model, (data.subscription?.models || []).map(item => ({ id: item.slug, name: item.name || item.slug })), model.value || saved.model);
-      render(); if (!data.subscription?.connected) say(({ catalog_loading: "正在恢复已授权的模型列表，请稍候再查看。", catalog_required: "模型列表尚未恢复，请在电脑查看订阅连接。", catalog_failed: "模型列表读取失败，请在电脑重新读取模型。" })[data.subscription?.status] || "请先在电脑连接 ChatGPT 订阅。", true);
+      optionsFor(model, (data.subscription?.models || []).map(item => ({ id: item.slug, name: item.displayName || item.name || item.slug })), model.value || saved.model, true);
+      if (state.review && (state.review.source?.subscription?.connectionId !== data.subscription?.connectionId || state.review.source?.subscription?.catalogRevision !== data.subscription?.catalogRevision || !data.subscription?.models?.some(item => item.slug === model.value))) state.review = null;
+      render(); if (!data.subscription?.connected) say(({ catalog_loading: "正在恢复已授权的模型列表，请稍候再查看。", catalog_required: "模型列表尚未恢复，请在电脑查看订阅连接。", catalog_failed: "模型列表读取失败，请在电脑重新读取模型。" })[data.subscription?.status] || "请先在电脑连接 ChatGPT 订阅。", true); else if (model.value && !data.subscription.models?.some(item => item.slug === model.value)) say("原模型暂不可选，请明确选择当前已授权模型；不会自动改用其它模型。", true);
       window.clearTimeout(state.setupTimer); if (state.active && data.setup?.busy === true) state.setupTimer = window.setTimeout(() => { if (state.active) void readConfig().catch(error => say(error.message, true)); }, 2000);
       return data;
     }

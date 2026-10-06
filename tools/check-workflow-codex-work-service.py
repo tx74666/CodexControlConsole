@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from workflow_service import WorkflowError, WorkflowService, _json, _now
 from workflow_codex_work_service import CATALOG, REVIEW_PREFIX, CodexWorkMixin
+from workflow_codex_work import PERMISSION_PROFILE, PROVIDER, preparation_receipt, scope_policy
 
 
 def body(**items):
@@ -137,6 +138,14 @@ class ServiceChecks(unittest.TestCase):
         event = {"type": event_type, "runId": job["id"], "sourceSha256": meta["sourceSha256"],
                  "threadId": "thread_fixture", "turnId": None, "observedAt": _now()}
         event.update(changes)
+        if event_type == "prepared":
+            # Synthetic RPC echoes for this isolated inert controller only.
+            policy = scope_policy(job["workspace"]["allowedRoot"], self.service.data_dir / "codex-work" / job["id"] / "images")
+            event.setdefault("preparationReceipt", preparation_receipt(
+                {"config": {"default_permissions": PERMISSION_PROFILE, "permissions": {PERMISSION_PROFILE: policy}}},
+                {"thread": {"id": event["threadId"]}, "model": event["actualModel"], "modelProvider": PROVIDER,
+                 "reasoningEffort": event["actualEffort"], "cwd": job["workspace"]["allowedRoot"], "approvalPolicy": "never",
+                 "activePermissionProfile": {"id": PERMISSION_PROFILE, "extends": ":workspace"}}))
         return event
 
     def emit(self, event):
@@ -160,6 +169,121 @@ class ServiceChecks(unittest.TestCase):
         return self.event(job, "terminal", turnId="turn_fixture", status="completed", terminalStatus="completed",
                           terminalEventObserved=True, report="Actual complete report 中文", actualModel="gpt-6-astra",
                           actualEffort="high", error=None, cancellationVerified=False, executionVerified=False, retryAllowed=False, **changes)
+
+    def test_prepare_receipt_commits_selected_rpc_echo_and_survives_terminal_and_restart(self):
+        accepted, _ = self.submit()
+        job = accepted["job"]
+        event = self.event(job, "prepared", requestedProfile="high", actualModel="gpt-6-astra", actualEffort="high", sandboxVerified=True)
+        self.assertTrue(self.emit(event))
+        with self.service._db() as independent:
+            payload = json.loads(independent.execute("SELECT payload FROM jobs WHERE id=?", (job["id"],)).fetchone()[0])
+            receipt = payload["codexWork"]["preparationReceipt"]
+            digest = payload["codexWork"]["preparationReceiptSha256"]
+        self.assertEqual(receipt, event)
+        self.assertEqual(digest, hashlib.sha256(_json(event).encode()).hexdigest())
+        public = self.job(job["id"])["codexWork"]
+        self.assertTrue(public["configurationEchoVerified"])
+        self.assertTrue(public["sandboxVerified"])
+        self.assertFalse(public["outsideScopeReadDeniedVerified"])
+        self.assertEqual(public["scopeEvidenceType"], "configuration_and_thread_profile_echo")
+        self.assertEqual(public["actualActivePermissionProfile"], {"id": PERMISSION_PROFILE, "extends": ":workspace"})
+        self.assertEqual(public["preparationReceiptSha256"], digest)
+        self.assertEqual(public["preparationReceipt"]["modelProvider"], PROVIDER)
+        self.assertNotIn(str(self.service.data_dir), _json(public))
+        event["preparationReceipt"]["threadStart"]["model"] = "caller-mutated-after-commit"
+        self.assertEqual(self.job(job["id"])["codexWork"], public)
+        self.assertTrue(self.emit(self.event(job, "send_intent", model="gpt-6-astra", effort="high")))
+        self.assertTrue(self.emit(self.event(job, "turn_started", turnId="turn_fixture", actualModel="gpt-6-astra", actualEffort="high")))
+        self.assertTrue(self.emit(self.terminal(job)))
+        recovered = WorkflowService(self.service.data_dir)
+        try:
+            result = recovered.codex_work_runs("recordId=" + self.record_id)["runs"][-1]
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["codexWork"]["preparationReceipt"], public["preparationReceipt"])
+            self.assertEqual(result["codexWork"]["preparationReceiptSha256"], digest)
+            self.assertFalse(result["codexWork"]["outsideScopeReadDeniedVerified"])
+        finally:
+            recovered.shutdown()
+        self.assertEqual(len(self.controller.calls), 1)
+
+    def test_prepare_missing_or_wrong_actual_scope_and_thread_cannot_authorize_send(self):
+        accepted, _ = self.submit()
+        job = accepted["job"]
+        original = self.event(job, "prepared", requestedProfile="high", actualModel="gpt-6-astra", actualEffort="high", sandboxVerified=True)
+        candidates = []
+        missing = copy.deepcopy(original)
+        missing.pop("preparationReceipt")
+        candidates.append(missing)
+        mutations = [
+            (["schemaVersion"], True), (["evidenceType"], "os_scope_enforced"),
+            (["configuration", "defaultPermissions"], ":danger-full-access"),
+            (["configuration", "permissionProfile", "filesystem", ":root"], "read"),
+            (["configuration", "permissionProfile", "filesystem", str(self.root)], "write"),
+            (["configuration", "permissionProfile", "filesystem", str(self.service.data_dir / "codex-work" / job["id"] / "images")], "write"),
+            (["configuration", "permissionProfile", "filesystem", "glob_scan_max_depth"], 3.0),
+            (["configuration", "permissionProfile", "network", "enabled"], True),
+            (["configuration", "permissionProfile", "network", "extra"], None),
+            (["threadStart", "activePermissionProfile", "id"], "foreign-profile"),
+            (["threadStart", "threadId"], "other-thread"), (["threadStart", "model"], "other-model"),
+            (["threadStart", "modelProvider"], "other-provider"), (["threadStart", "reasoningEffort"], "low"),
+            (["threadStart", "cwd"], str(self.workspace)), (["threadStart", "approvalPolicy"], "on-request")]
+        for keys, value in mutations:
+            event = copy.deepcopy(original)
+            target = event["preparationReceipt"]
+            for key in keys[:-1]:
+                target = target[key]
+            target[keys[-1]] = value
+            candidates.append(event)
+        for changes in ({"sourceSha256": "f" * 64}, {"sandboxVerified": 1}, {"turnId": "premature-turn"}):
+            candidates.append({**copy.deepcopy(original), **changes})
+        before = self.counts()
+        for index, event in enumerate(candidates):
+            with self.subTest(index=index):
+                self.assertFalse(self.emit(event))
+                self.assertFalse(self.emit(self.event(job, "send_intent", model="gpt-6-astra", effort="high")))
+                state = self.job(job["id"])
+                self.assertEqual(state["status"], "starting")
+                self.assertFalse(state["codexWork"]["configurationEchoVerified"])
+                self.assertIsNone(state["codexWork"]["preparationReceipt"])
+                self.assertFalse(state["codexWork"]["sendIntentRecorded"])
+                self.assertEqual(self.counts(), before)
+        self.assertTrue(self.emit(original))
+
+    def test_prepare_rechecks_current_binding_and_workspace_before_saving_echo(self):
+        accepted, _ = self.submit()
+        job = accepted["job"]
+        event = self.event(job, "prepared", requestedProfile="high", actualModel="gpt-6-astra", actualEffort="high", sandboxVerified=True)
+        self.service.subscription.connected = False
+        self.assertFalse(self.emit(event))
+        self.service.subscription.connected = True
+        with self.service._db() as db:
+            catalog = self.service._setting(db, CATALOG)
+            changed = copy.deepcopy(catalog)
+            changed["workspaces"][0]["authorizationSha256"] = "e" * 64
+            self.service._set_setting(db, CATALOG, changed)
+        self.assertFalse(self.emit(event))
+        with self.service._db() as db:
+            self.service._set_setting(db, CATALOG, catalog)
+        self.assertTrue(self.emit(event))
+
+    def test_historical_job_without_receipt_never_gains_echo_proof_or_new_send(self):
+        job, _ = self.running()
+        with self.service._db() as db:
+            payload = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (job["id"],)).fetchone()[0])
+            payload["codexWork"].pop("preparationReceipt")
+            payload["codexWork"].pop("preparationReceiptSha256")
+            db.execute("UPDATE jobs SET payload=? WHERE id=?", (_json(payload), job["id"]))
+        before = self.job(job["id"])["codexWork"]
+        self.assertFalse(before["configurationEchoVerified"])
+        self.assertFalse(before["sandboxVerified"])
+        self.assertIsNone(before["actualActivePermissionProfile"])
+        self.assertIsNone(before["preparationReceiptSha256"])
+        self.assertFalse(self.emit(self.event(job, "prepared", requestedProfile="high", actualModel="gpt-6-astra", actualEffort="high", sandboxVerified=True)))
+        self.assertFalse(self.emit(self.event(job, "send_intent", model="gpt-6-astra", effort="high")))
+        self.assertEqual(self.job(job["id"])["codexWork"], before)
+        with self.service._db() as db:
+            kept = json.loads(db.execute("SELECT payload FROM jobs WHERE id=?", (job["id"],)).fetchone()[0])["codexWork"]
+        self.assertNotIn("preparationReceipt", kept)
 
     def test_config_exact_explicit_authority_persists_and_reads_only_cache(self):
         self.assertRegex(self.workspace_binding["authorizationSha256"], r"^[a-f0-9]{64}$")
@@ -567,7 +691,12 @@ class ServiceChecks(unittest.TestCase):
         self.assertEqual(spec["images"][0]["sha256"], hashlib.sha256(data).hexdigest())
         self.assertNotIn("bytes", _json(result["job"]))
         path.write_bytes(b"mutated after acceptance")
-        self.assertTrue(self.emit(self.event(result["job"], "prepared", requestedProfile="high", actualModel="gpt-6-astra", actualEffort="high", sandboxVerified=True)))
+        prepared = self.event(result["job"], "prepared", requestedProfile="high", actualModel="gpt-6-astra", actualEffort="high", sandboxVerified=True)
+        self.assertFalse(self.emit(prepared))
+        self.assertIsNone(self.job(result["job"]["id"])["codexWork"]["preparationReceipt"])
+        path.write_bytes(data)
+        self.assertTrue(self.emit(prepared))
+        path.write_bytes(b"mutated after preparation")
         self.assertFalse(self.emit(self.event(result["job"], "send_intent", model="gpt-6-astra", effort="high")))
 
     def test_mobile_review_scope_revision_and_draft_remain_same_then_output_same_origin(self):

@@ -88,6 +88,58 @@ def _phone(prefix):
     return prefix.startswith("/api/phone/")
 
 
+def _public_preparation(meta):
+    """Only the selected persisted echo is public; no private image-root path.
+
+The operating system's out-of-scope denial needs a separate actual experiment.
+Neither a profile echo nor Windows setup completion supplies that evidence.
+"""
+    empty = {"sandboxVerified": False, "configurationEchoVerified": False,
+             "actualActivePermissionProfile": None, "preparationReceipt": None,
+             "preparationReceiptSha256": None, "scopeEvidenceType": None,
+             "outsideScopeReadDeniedVerified": False}
+    event, digest = meta.get("preparationReceipt"), meta.get("preparationReceiptSha256")
+    if event is None:
+        return empty
+    try:
+        source = meta["source"]
+        actual = event["preparationReceipt"]["threadStart"]
+        if (not CodexWorkMixin._codex_work_event_shape(event) or event["type"] != "prepared"
+                or digest != _sha(event) or event["runId"] != meta["runId"]
+                or event["sourceSha256"] != meta["sourceSha256"] or event["threadId"] != meta["threadId"]
+                or event["turnId"] is not None or event["sandboxVerified"] is not True
+                or event["requestedProfile"] != source["requestedProfile"]
+                or event["actualModel"] != source["subscription"]["modelSlug"]
+                or event["actualEffort"] != EFFORT[source["requestedProfile"]]):
+            return empty
+        selected = event["preparationReceipt"]
+        from workflow_codex_work import valid_preparation_receipt
+        reads = [key for key, value in selected["configuration"]["permissionProfile"]["filesystem"].items()
+                 if value == "read" and key != ":minimal"]
+        if len(reads) != 1:
+            return empty
+        image_root = Path(reads[0])
+        if (not image_root.is_absolute() or image_root.name != "images" or image_root.parent.name != meta["runId"]
+                or image_root.parent.parent.name != "codex-work"
+                or not valid_preparation_receipt(selected, allowed_root=source["workspace"]["allowedRoot"],
+                    image_root=image_root, model=event["actualModel"], effort=event["actualEffort"], thread_id=event["threadId"])):
+            return empty
+        # The full selected configuration stays in the private job. A stable
+        # hash binds this public summary without disclosing its staging path.
+        return {**empty, "sandboxVerified": True, "configurationEchoVerified": True,
+                "scopeEvidenceType": selected["evidenceType"],
+                "actualActivePermissionProfile": dict(actual["activePermissionProfile"]),
+                "preparationReceiptSha256": digest,
+                "preparationReceipt": {"schemaVersion": 1, "evidenceType": selected["evidenceType"],
+                    "runId": event["runId"], "sourceSha256": event["sourceSha256"], "observedAt": event["observedAt"],
+                    **{key: actual[key] for key in ("threadId", "model", "modelProvider", "reasoningEffort", "cwd", "approvalPolicy")},
+                    "activePermissionProfile": dict(actual["activePermissionProfile"]),
+                    "scopePolicySha256": _sha(selected["configuration"]["permissionProfile"]),
+                    "configurationEchoVerified": True, "outsideScopeReadDeniedVerified": False}}
+    except (KeyError, TypeError, ValueError, RecursionError):
+        return empty
+
+
 class CodexWorkMixin:
     def codex_work_setup(self, body, authorize=None):
         _exact(body, {"workspaceId", "workspaceAuthorizationSha256", "confirmed"})
@@ -407,6 +459,14 @@ class CodexWorkMixin:
                 or json.loads(message["attachment_ids"]) != review["source"]["attachmentIds"]
                 or message["created_at"] != payload["submissionTime"]["confirmedAt"]):
             _fail("codex_work_source_invalid")
+        if meta.get("preparationReceipt") is not None:
+            event = meta["preparationReceipt"]
+            if (not self._codex_work_event_shape(event) or event["type"] != "prepared"
+                    or meta.get("preparationReceiptSha256") != _sha(event)
+                    or event["runId"] != row["id"] or event["sourceSha256"] != meta["sourceSha256"]
+                    or event["threadId"] != meta["threadId"] or event["turnId"] is not None
+                    or not self._codex_work_preparation_valid(event, meta["source"])):
+                _fail("codex_work_preparation_receipt_invalid")
         return row, payload, meta, review
 
     @staticmethod
@@ -416,6 +476,7 @@ class CodexWorkMixin:
         fields = ("runId", "reviewId", "sourceSha256", "inputMessageId", "name", "threadId", "turnId", "phase", "actualModel", "actualEffort",
                   "cancellationVerified", "executionVerified", "reportOnly")
         public = {key: meta.get(key) for key in fields}
+        public.update(_public_preparation(meta))
         public.update(workspaceId=source["workspace"]["id"], requestedProfile=source["requestedProfile"],
                       workspaceName=source["workspace"]["name"], workspaceRoot=source["workspace"]["workspaceRoot"],
                       allowedRoot=source["workspace"]["allowedRoot"],
@@ -476,7 +537,8 @@ class CodexWorkMixin:
                 meta = {"runId": job_id, "reviewId": review["reviewId"], "sourceSha256": review["sourceSha256"],
                         "name": "Agent " + str(ordinal),
                         "reviewSha256": review["reviewSha256"], "source": source, "threadId": None, "turnId": None,
-                        "phase": "starting", "prepared": False, "sendIntent": None, "interruptIntent": None,
+                        "phase": "starting", "prepared": False, "preparationReceipt": None,
+                        "preparationReceiptSha256": None, "sendIntent": None, "interruptIntent": None,
                         "cancelRequest": None, "progress": [], "plan": [], "actualModel": None, "actualEffort": None,
                         "cancellationVerified": False, "executionVerified": False, "reportOnly": False}
                 payload = {"executionEngine": "codex_agent", "codexWork": meta, "text": source["text"],
@@ -628,7 +690,7 @@ class CodexWorkMixin:
     @staticmethod
     def _codex_work_event_shape(event):
         base = {"type", "runId", "threadId", "turnId", "sourceSha256", "observedAt"}
-        extras = {"prepared": {"requestedProfile", "actualModel", "actualEffort", "sandboxVerified"},
+        extras = {"prepared": {"requestedProfile", "actualModel", "actualEffort", "sandboxVerified", "preparationReceipt"},
                   "send_intent": {"model", "effort"}, "turn_started": {"actualModel", "actualEffort"},
                   "progress": {"kind", "itemId", "text"}, "plan": {"plan"},
                   "item_status": {"itemId", "itemType", "completed"}, "approval_blocked": {"code"},
@@ -653,6 +715,17 @@ class CodexWorkMixin:
             return False
         return True
 
+    def _codex_work_preparation_valid(self, event, source):
+        from workflow_codex_work import valid_preparation_receipt
+        return (event["sandboxVerified"] is True and event["requestedProfile"] == source["requestedProfile"]
+                and event["actualModel"] == source["subscription"]["modelSlug"]
+                and event["actualEffort"] == EFFORT[source["requestedProfile"]]
+                and valid_preparation_receipt(event["preparationReceipt"],
+                    allowed_root=source["workspace"]["allowedRoot"],
+                    image_root=self.data_dir / "codex-work" / event["runId"] / "images",
+                    model=source["subscription"]["modelSlug"], effort=EFFORT[source["requestedProfile"]],
+                    thread_id=event["threadId"]))
+
     def _codex_work_event(self, event):
         if not self._codex_work_event_shape(event):
             return False
@@ -675,11 +748,17 @@ class CodexWorkMixin:
                 if kind == "prepared":
                     if (status != "starting" or meta["prepared"] or not thread or turn is not None
                             or event["requestedProfile"] != source["requestedProfile"] or event["actualModel"] != model
-                            or event["actualEffort"] != effort or event["sandboxVerified"] is not True):
+                            or event["actualEffort"] != effort or not self._codex_work_preparation_valid(event, source)):
                         return False
-                    meta.update(threadId=thread, prepared=True, actualModel=model, actualEffort=effort)
+                    self._codex_work_workspace(db, source["workspace"]["id"], source["workspace"]["authorizationSha256"])
+                    self._codex_work_binding(source["subscription"])
+                    self._codex_work_images(db, source["recordId"], source["attachmentIds"], source["images"])
+                    receipt = json.loads(_api()._json(event))
+                    meta.update(threadId=thread, prepared=True, actualModel=model, actualEffort=effort,
+                                preparationReceipt=receipt, preparationReceiptSha256=_sha(receipt))
                 elif kind == "send_intent":
-                    if (not meta["prepared"] or meta["sendIntent"] is not None or not thread or turn is not None
+                    if (not meta["prepared"] or meta.get("preparationReceipt") is None
+                            or meta["sendIntent"] is not None or not thread or turn is not None
                             or event["model"] != model or event["effort"] != effort or meta["cancelRequest"]):
                         return False
                     self._codex_work_workspace(db, source["workspace"]["id"], source["workspace"]["authorizationSha256"])

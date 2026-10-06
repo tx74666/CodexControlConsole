@@ -1,7 +1,7 @@
 """Console-owned Codex stdio turns; never adopts desktop threads or old jobs.
 
 The caller durably reserves a new run and freezes its source before submit().
-Its synchronous on_event must return True for send_intent and interrupt_intent.
+Its synchronous on_event must return True for prepared, send_intent and interrupt_intent.
 No database, account file, periodic scanner or automatic retry lives here.
 Only a real matching turn/completed notification supplies a terminal outcome;
 the caller separately verifies workspace file evidence before claiming work.
@@ -41,6 +41,8 @@ MAX_STREAM = 32 * 1024 * 1024
 MAX_INPUT = 48 * 1024 * 1024
 MAX_ITEMS = 512
 MAX_PROGRESS = 256 * 1024
+MAX_PREPARATION_RECEIPT = 64 * 1024
+PREPARATION_EVIDENCE = "configuration_and_thread_profile_echo"
 ID = re.compile(r"[A-Za-z0-9_-]{1,190}\Z")
 RUN_ID = re.compile(r"[a-f0-9]{32}\Z")
 SHA = re.compile(r"[a-f0-9]{64}\Z")
@@ -155,6 +157,54 @@ def _same_scope(actual, expected):
     return (normalized_fs == expected["filesystem"] and normalized_net == expected["network"]
             and actual.get("workspace_roots") is None
             and all(key in {"extends", "filesystem", "network", "description", "workspace_roots"} for key in actual))
+
+
+def preparation_receipt(configuration, result):
+    """Select bounded observed RPC fields, never the full config or credentials.
+
+This records configuration/profile echoes. It is not an independent test that
+the operating system denied an out-of-scope read or write.
+"""
+    config = configuration["config"]
+    profile = config["permissions"][PERMISSION_PROFILE]
+    receipt = {
+        "schemaVersion": 1, "evidenceType": PREPARATION_EVIDENCE,
+        "configuration": {"defaultPermissions": config["default_permissions"],
+                          "permissionProfile": {"extends": profile["extends"],
+                              "filesystem": {key: value for key, value in profile["filesystem"].items() if value is not None},
+                              "network": {key: value for key, value in profile["network"].items() if value is not None}}},
+        "threadStart": {"threadId": result["thread"]["id"], "model": result["model"],
+                        "modelProvider": result["modelProvider"], "reasoningEffort": result["reasoningEffort"],
+                        "cwd": result["cwd"], "approvalPolicy": result["approvalPolicy"],
+                        "activePermissionProfile": dict(result["activePermissionProfile"])}}
+    if len(_canonical(receipt)) > MAX_PREPARATION_RECEIPT:
+        raise _error("codex_work_preparation_receipt_invalid")
+    # Detach nested dictionaries from the RPC reader and callback consumer.
+    return json.loads(_canonical(receipt))
+
+
+def valid_preparation_receipt(receipt, *, allowed_root, image_root, model, effort, thread_id):
+    """Check selected actual echoes against the caller's immutable scope."""
+    try:
+        if (type(receipt) is not dict or set(receipt) != {"schemaVersion", "evidenceType", "configuration", "threadStart"}
+                or type(receipt["schemaVersion"]) is not int or receipt["schemaVersion"] != 1
+                or receipt["evidenceType"] != PREPARATION_EVIDENCE
+                or len(_canonical(receipt)) > MAX_PREPARATION_RECEIPT):
+            return False
+        configuration, actual = receipt["configuration"], receipt["threadStart"]
+        if (type(configuration) is not dict or set(configuration) != {"defaultPermissions", "permissionProfile"}
+                or configuration["defaultPermissions"] != PERMISSION_PROFILE
+                or type(configuration["permissionProfile"]) is not dict
+                or set(configuration["permissionProfile"]) != {"extends", "filesystem", "network"}
+                or _canonical(configuration["permissionProfile"]) != _canonical(scope_policy(allowed_root, image_root))
+                or configuration["permissionProfile"]["network"]["enabled"] is not False):
+            return False
+        return (type(actual) is dict and actual == {
+            "threadId": thread_id, "model": model, "modelProvider": PROVIDER, "reasoningEffort": effort,
+            "cwd": str(allowed_root), "approvalPolicy": "never",
+            "activePermissionProfile": {"id": PERMISSION_PROFILE, "extends": ":workspace"}})
+    except (KeyError, TypeError, ValueError, OverflowError, RecursionError):
+        return False
 
 
 @dataclass(repr=False)
@@ -486,6 +536,8 @@ queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
                  "sourceSha256": run.spec["sourceSha256"], "observedAt": _now(), **values}
         # No raw protocol, environment, RPC error message or stderr is forwarded.
         result = run.callback(event)
+        if event_type == "prepared" and result is not True:
+            raise _error("codex_work_preparation_not_durable")
         if event_type in {"send_intent", "interrupt_intent"} and result is not True:
             raise _error("codex_work_intent_not_durable")
         return result
@@ -859,8 +911,10 @@ No provider call, process kill, thread adoption or queue scan is performed.
             if (type(profile) is not dict or profile != {"id": PERMISSION_PROFILE, "extends": policy["extends"]}):
                 raise _error("codex_work_read_scope_unsupported", "本机 Codex 未准确确认限定读写范围；未发送执行请求。")
             run.actual_model, run.actual_effort = result["model"], effort
+            receipt = preparation_receipt(configuration, result)
             self._emit(run, "prepared", requestedProfile=run.spec["requestedProfile"],
-                       actualModel=run.actual_model, actualEffort=effort, sandboxVerified=True)
+                       actualModel=run.actual_model, actualEffort=effort, sandboxVerified=True,
+                       preparationReceipt=receipt)
             # This callback is the durable fence immediately before the sole
             # inference-starting RPC. Ambiguous acknowledgement never retries.
             self._emit(run, "send_intent", model=run.actual_model, effort=effort)

@@ -547,6 +547,7 @@ class MobileDialogueMixin:
                 session = {**session, "isCurrent": identifier == client["currentSessionId"]}
             result_state = self._mobile_event_state(db, (client_id, identifier), require_current=False) if session else None
             observation = self._mobile_profile_observation(db, session) if session else None
+            clear_receipts = self._mobile_clear_receipts(db, session)
             revision = self._revision(db)
         profile = session["requestedProfile"] if session else client["requestedProfile"]
         detail = self.detail(session["recordId"], prefix) if session else None
@@ -569,7 +570,40 @@ class MobileDialogueMixin:
             "resultCursor": result_state["cursor"] if result_state else None,
             "resultStatus": result_state["status"] if result_state else "idle",
             "cancellationReceipts": cancellation_receipts,
+            "clearReceipts": clear_receipts,
             "revision": revision, **extra}
+
+    def _mobile_clear_receipts(self, db, session):
+        """Recover only an exact successful clear into this current discussion."""
+        if not session or session.get("isCurrent") is not True:
+            return []
+        fields = {"requestId", "clientId", "sessionId", "expectedRevision", "newSessionId", "newRecordId"}
+        entries = db.execute("SELECT id,fingerprint,response FROM requests WHERE kind='mobile_dialogue_clear' "
+            "AND json_extract(CASE WHEN json_valid(response) THEN response ELSE '{}' END,'$.clearReceipt.clientId')=? "
+            "AND json_extract(CASE WHEN json_valid(response) THEN response ELSE '{}' END,'$.clearReceipt.newSessionId')=? "
+            "ORDER BY rowid DESC LIMIT 20", (session["clientId"], session["id"]))
+        receipts = []
+        for entry in entries:
+            try:
+                saved = json.loads(entry["response"])
+                proof = saved.get("clearReceipt") if isinstance(saved, dict) else None
+                if (set(saved) != {"sessionId", "clearReceipt"} or not isinstance(proof, dict) or set(proof) != fields
+                        or proof["requestId"] != entry["id"] or str(uuid.UUID(entry["id"])) != entry["id"]
+                        or proof["clientId"] != session["clientId"] or proof["newSessionId"] != session["id"]
+                        or saved["sessionId"] != session["id"] or proof["newRecordId"] != session["recordId"]
+                        or proof["sessionId"] == session["id"] or type(proof["expectedRevision"]) is not int
+                        or proof["expectedRevision"] < 1):
+                    continue
+                original = {key: proof[key] for key in ("requestId", "clientId", "sessionId", "expectedRevision")}
+                if hashlib.sha256(_api()._json(original).encode("utf-8")).hexdigest() != entry["fingerprint"]:
+                    continue
+                old = self._mobile_session(db, session["clientId"], proof["sessionId"])
+                if old["recordId"] == session["recordId"] or old["revision"] < proof["expectedRevision"]:
+                    continue
+                receipts.append(proof)
+            except (ValueError, TypeError, KeyError, AttributeError, sqlite3.Error):
+                continue
+        return receipts
 
     def mobile_dialogue_get(self, query="", prefix="/api/workflow"):
         params = _query(query, {"clientId"})
@@ -615,8 +649,11 @@ class MobileDialogueMixin:
                 session_id = old["sessionId"]
             else:
                 self._mobile_guard(db, body, client_id)
-                session_id = self._mobile_new_session(db, client_id)["id"]
-                self._receipt(db, "mobile_dialogue_clear", body, {"sessionId": session_id})
+                session = self._mobile_new_session(db, client_id)
+                session_id = session["id"]
+                proof = {key: body[key] for key in ("requestId", "clientId", "sessionId", "expectedRevision")}
+                proof.update(newSessionId=session_id, newRecordId=session["recordId"])
+                self._receipt(db, "mobile_dialogue_clear", body, {"sessionId": session_id, "clearReceipt": proof})
                 self._revision(db, True)
             if authorize:
                 authorize()
