@@ -178,7 +178,7 @@
         if (value === "legacy" || value === "settings") {
           const section = el(value === "legacy" ? "phoneLegacyWork" : "phoneSettings");
           section.hidden = false; section.open = true; section.scrollIntoView?.({ block: "start", behavior: "smooth" });
-        } else if (value === "conversations") void openComputerWork(); else selectTab(value);
+        } else if (value === "conversations" || value === "workflow") void openComputerWork(); else selectTab(value);
       },
       onHandoffReserve: () => reserveIdeaHandoff(),
       onHandoff: (reservation, idea) => phoneHandoff.send(reservation, idea.id, idea.revision, idea.retryPending),

@@ -82,6 +82,24 @@ function tabStroke(h, { target = h.get(`${h.api.state.tab}Panel`), dx = 90, dy =
   return prevented;
 }
 
+await test("dialogue connection label follows actual host receipts and pairing state", () => {
+  const receipts = [], dialogue = { setActive() {}, clear() {}, setConnectionStatus(text, connected) { receipts.push({ text, connected }); } };
+  const h = harness(source, "http://192.0.2.1:8899/mobile.html", { dialogue });
+  dialogue.options.onConnectionState(true);
+  assert.equal(receipts.length, 0, "an unpaired page cannot claim a computer connection");
+  h.ready(); dialogue.options.onConnectionState(true);
+  assert.equal(h.get("connectionLabel").textContent, "已连接");
+  assert.equal(receipts.at(-1).connected, true);
+  assert.equal(dialogue.options.getConnectionStatus().connected, true);
+  dialogue.options.onConnectionState(false);
+  assert.equal(h.get("connectionLabel").textContent, "连接中断");
+  assert.equal(receipts.at(-1).text, "连接中断");
+  assert.equal(dialogue.options.getConnectionStatus().connected, false);
+  h.api.showPair();
+  assert.equal(receipts.at(-1).text, "未连接");
+  assert.equal(receipts.at(-1).connected, false);
+  assert.equal(h.calls.length, 0, "showing connection state cannot send or run a task");
+});
 await test("Default dialogue preserves an explicit legacy picture and dispatch workspace", () => {
   assert.deepEqual([...html.matchAll(/data-work-view="([^"]+)"/g)].map(match => match[1]), ["dialogue", "ideas", "agents", "conversations", "workflow"]); assert.match(html, /data-work-view="workflow"[^>]*>独立工作记录/); assert.match(html, /<summary>其它入口<\/summary>/); assert.match(html, /id="phoneWorkflowDetails"[^>]*hidden/); assert.equal([...html.matchAll(/id="phoneWorkflowPanel"/g)].length, 1);
   const h = harness(); h.ready(); h.api.selectTab("work"); assert.equal(h.get("phoneWorkflowDetails").hidden, true); assert.equal(h.panels.incubator.active, true); assert.equal(h.panels.workflow.active, false); assert.match(h.get("phoneWorkNotice").textContent, /点确认发布/);

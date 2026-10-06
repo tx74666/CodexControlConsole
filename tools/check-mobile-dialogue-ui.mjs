@@ -34,7 +34,10 @@ class Element {
   contains(node) { return this === node || this.children.some(child => child.contains(node)); }
   fire(event, value = {}) { for (const callback of this.listeners.get(event) || []) callback({ preventDefault() {}, ...value }); }
   click() { if (!this.disabled) this.fire("click"); }
-  focus() { this.focused = true; }
+  focus(options) { this.focused = true; this.focusOptions = options; if (this.ownerDocument) this.ownerDocument.activeElement = this; }
+  showModal() { this.open = true; this.modal = true; }
+  close() { this.open = false; this.modal = false; this.fire("close"); }
+  getBoundingClientRect() { return { left: 0, top: 0, right: 320, bottom: 700 }; }
 }
 function harness({ storage = new Map(), session = true, offline = false, resumed = null, fileRows = new Map(), options = {}, transport = null } = {}) {
   const root = new Element(), calls = [], events = new Map(), scrolls = [], copies = [], timers = new Map(), receipts = new Map(), files = fileRows, uploads = [], projects = [], attachments = new Map();
@@ -75,6 +78,8 @@ function harness({ storage = new Map(), session = true, offline = false, resumed
     const answer = value(); if (action === "mobile/dialogue/save") answer.idea = structuredClone(ideas[0]); if (payload) receipts.set(payload.requestId, structuredClone(answer)); return answer;
   };
   const runtime = { URL, URLSearchParams, FormData, Blob, structuredClone, console, AbortController, TextDecoder, crypto: { randomUUID }, localStorage: { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value) }, navigator: { onLine: true, clipboard: { async writeText(text) { copies.push(text); } } }, document: { createElement: tag => new Element(tag), documentElement: { scrollHeight: 2000 }, addEventListener(event, callback) { events.set(event, callback); } }, location: { origin: "http://fixture.test" }, requestAnimationFrame: callback => callback(), window: { location: { href: "http://fixture.test/" }, innerHeight: 700, scrollY: 0, addEventListener(event, callback) { events.set(event, callback); }, scrollTo(value) { scrolls.push(value); this.scrollY = value.top; }, setTimeout(callback) { const id = randomUUID(); timers.set(id, callback); return id; }, clearTimeout(id) { timers.delete(id); } } };
+  runtime.document.body = new Element("body"); runtime.document.body.style.position = ""; runtime.document.body.style.top = ""; runtime.document.body.style.width = ""; runtime.document.body.style.overflow = "";
+  runtime.document.createElement = tag => { const node = new Element(tag); node.ownerDocument = runtime.document; return node; }; root.ownerDocument = runtime.document;
   if (transport) runtime.fetch = async (url, fetchOptions) => { const parsed = new URL(url, runtime.location.origin), action = parsed.pathname.replace(/^\/api\/phone\/workflow\//, "") + parsed.search; if (parsed.pathname.endsWith("/mobile/dialogue/events")) return transport.open(parsed.href, fetchOptions); const data = await endpoint(action, fetchOptions.body ? JSON.parse(fetchOptions.body) : undefined); return { ok: true, status: 200, async json() { return data; } }; };
   runInNewContext(source, runtime); const panel = runtime.window.CodexMobileDialogue.create(root, { endpoint: transport ? "/api/phone/workflow" : endpoint, offline, blobStore: { async get(key) { return files.get(key); }, async put(value) { if (fileQuotaFailure) throw new Error("图片存储空间不足"); files.set(value.id, value); } }, async uploadAttachments(items, expected, uploadRequest) { assert.equal(uploadRequest.route, "mobile/dialogue/upload"); assert.deepEqual(Object.keys(uploadRequest.scope).sort(), ["clientId", "expectedRevision", "sessionId"]); assert.equal(uploadRequest.recordId, current.recordId); assert.equal(uploadRequest.scope.sessionId, current.id); assert.equal(uploadRequest.scope.clientId, current.clientId); assert.equal(uploadRequest.scope.expectedRevision, current.revision); uploads.push({ sessionId: current.id, recordId: current.recordId, count: items.length, request: structuredClone(uploadRequest) }); const incoming = items.map((file, index) => ({ id: `attachment-${index}`, name: file.name, mimeType: file.type, size: file.size, url: `http://fixture.test/images/attachment-${index}` })); for (const item of incoming) attachments.set(item.id, item); current.uploadedAttachmentIds = [...(current.uploadedAttachmentIds || []), ...incoming.map(item => item.id)]; current.revision++; return { ...value(), uploadedAttachmentIds: incoming.map(item => item.id) }; }, ...options });
   if (current && !current.clientId) current.clientId = JSON.parse([...storage.values()][0]).clientId;
@@ -943,5 +948,60 @@ await test("foreign stale or malformed clear receipts cannot release the pending
 await test("a definite clear rejection releases only its unsent nonce and clear cannot interrupt Chinese composition", async () => {
   const h = harness(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "保留中文输入"; input.fire("compositionstart"); h.byText("清空当前讨论").click(); await flush(); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/clear").length, 0); input.fire("compositionend");
   h.hook(action => { if (action === "mobile/dialogue/clear") throw Object.assign(new Error("草稿版本冲突，未清空"), { status: 409, code: "revision_conflict" }); }); h.byText("清空当前讨论").click(); await flush(); assert.equal(JSON.parse([...h.storage.values()][0]).pending, null); assert.equal(input.value, "保留中文输入"); assert.equal(h.current().id, "session-a"); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+});
+await test("sidebar opens without a request or keyboard focus and restores the exact draft and scroll on Escape", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); h.uploadedImage("original", "原图.png"); h.current().draft.attachmentIds = ["original"]; await h.panel.refresh();
+  const input = h.byLabel("提问或保存想法"), toggle = h.byLabel("打开侧栏"), sidebar = h.byClass("dialogue-sidebar"); input.value = "还在中文选词，保留原图和草稿"; input.fire("input"); input.fire("compositionstart"); input.focus();
+  h.runtime.window.scrollY = 360; const before = h.calls.length, stored = [...h.storage.values()][0], source = structuredClone(h.current()); toggle.click();
+  assert.equal(sidebar.open, true); assert.equal(toggle.attributes["aria-expanded"], "true"); assert.equal(h.runtime.document.activeElement, h.byLabel("关闭侧栏")); assert.equal(h.runtime.document.body.style.position, "fixed"); assert.equal(h.runtime.document.body.style.top, "-360px");
+  assert.equal(h.calls.length, before); assert.equal([...h.storage.values()][0], stored); assert.deepEqual(h.current(), source); assert.equal(input.value, "还在中文选词，保留原图和草稿");
+  let prevented = false; sidebar.fire("keydown", { key: "Escape", preventDefault() { prevented = true; } }); await flush();
+  assert.equal(prevented, true); assert.equal(sidebar.open, false); assert.equal(toggle.attributes["aria-expanded"], "false"); assert.equal(h.runtime.document.activeElement, toggle); assert.equal(h.runtime.document.body.style.position, ""); assert.equal(h.runtime.document.body.style.overflow, ""); assert.equal(h.runtime.window.scrollY, 360); assert.equal(h.calls.length, before);
+  input.fire("compositionend");
+});
+await test("sidebar traps Tab within expanded visible controls and closes only on the backdrop or close action", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); const sidebar = h.byClass("dialogue-sidebar"), close = h.byLabel("关闭侧栏"), more = h.byClass("dialogue-sidebar-more"); h.byLabel("打开侧栏").click();
+  close.focus(); sidebar.fire("keydown", { key: "Tab", shiftKey: true }); assert.equal(h.runtime.document.activeElement, more.children[0]);
+  more.children[0].focus(); sidebar.fire("keydown", { key: "Tab" }); assert.equal(h.runtime.document.activeElement, close);
+  more.open = true; close.focus(); sidebar.fire("keydown", { key: "Tab", shiftKey: true }); assert.equal(h.runtime.document.activeElement, h.byText("原工作区与导入"));
+  sidebar.fire("keydown", { key: "Tab" }); assert.equal(h.runtime.document.activeElement, close);
+  sidebar.fire("click", { target: sidebar, clientX: 280, clientY: 550 }); assert.equal(sidebar.open, true);
+  sidebar.fire("click", { target: sidebar, clientX: 370, clientY: 300 }); assert.equal(sidebar.open, false); assert.equal(h.runtime.document.body.style.position, "");
+  h.byLabel("打开侧栏").click(); close.click(); assert.equal(sidebar.open, false); assert.equal(h.runtime.document.activeElement, h.byLabel("打开侧栏"));
+});
+await test("sidebar navigation reuses saved ideas and the current discussion without clearing edits or changing identity", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "回到这条讨论再继续"; input.fire("input"); const source = structuredClone(h.current()); h.runtime.window.scrollY = 210;
+  h.byLabel("打开侧栏").click(); h.byText("保存的想法").click(); await flush(); assert.equal(h.root.dataset.view, "ideas"); assert.equal(h.byClass("dialogue-sidebar").open, false); assert.equal(input.value, "回到这条讨论再继续");
+  const search = h.byLabel("搜索想法"); search.value = "裙子"; search.fire("input"); await flush(); h.runtime.window.scrollY = 390; h.byClass("dialogue-idea-row").click(); await flush(); const body = h.byLabel("想法内容"); body.value = "尚未提交的正文修改"; body.fire("input");
+  h.byLabel("打开侧栏").click(); h.byText("当前对话").click(); await flush(); assert.equal(h.root.dataset.view, "chat"); assert.equal(h.runtime.window.scrollY, 210); assert.equal(input.value, "回到这条讨论再继续"); assert.equal(h.current().id, source.id); assert.equal(h.current().recordId, source.recordId);
+  h.byLabel("打开侧栏").click(); h.byText("保存的想法").click(); await flush(); assert.equal(search.value, "裙子"); assert.equal(h.runtime.window.scrollY, 390); h.byClass("dialogue-idea-row").click(); await flush(); assert.equal(body.value, "尚未提交的正文修改");
+  assert.equal(h.calls.some(item => ["mobile/dialogue/send", "mobile/dialogue/clear", "mobile/dialogue/save", "mobile/idea/update"].includes(item.action)), false);
+});
+await test("sidebar existing module routes and offline connection keep drafts without dispatch or fake progress", async () => {
+  const modules = [], h = harness({ options: { onModule(value) { modules.push(value); } } }); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "看过电脑会话后继续这段话"; input.fire("input");
+  for (const [label, expected] of [["电脑会话", "conversations"], ["Work · 执行进度", "workflow"], ["互传", "transfer"], ["音乐", "music"], ["资料", "documents"]]) { h.byLabel("打开侧栏").click(); h.byText(label).click(); await flush(); assert.equal(h.byClass("dialogue-sidebar").open, false); assert.equal(modules.at(-1), expected); assert.equal(input.value, "看过电脑会话后继续这段话"); }
+  assert.equal(h.calls.some(item => ["mobile/dialogue/send", "mobile/dialogue/clear", "mobile/dialogue/cancel-pending"].includes(item.action)), false);
+  let connects = 0; const local = harness({ offline: true, options: { onConnect() { connects++; } } }); local.panel.setActive(true); await flush(); const localInput = local.byLabel("提问或保存想法"); localInput.value = "电脑不在线也保留"; localInput.fire("input"); const before = local.calls.length;
+  local.byLabel("打开侧栏").click(); assert.equal(connects, 0); assert.equal(local.calls.length, before); local.byText("连接电脑继续").click(); assert.equal(connects, 1); assert.equal(localInput.value, "电脑不在线也保留"); assert.equal(local.byText("电脑会话"), undefined); assert.equal(local.calls.length, before);
+});
+await test("deactivation pagehide and clear release sidebar scroll locks without focusing a hidden panel", async () => {
+  for (const leave of [h => h.panel.setActive(false), h => h.events.get("pagehide")(), h => h.panel.clear()]) {
+    const h = harness(); h.panel.setActive(true); await flush(); h.runtime.document.body.style.overflow = "clip"; h.runtime.window.scrollY = 280; h.byLabel("打开侧栏").click(); const focused = h.runtime.document.activeElement; leave(h);
+    assert.equal(h.byClass("dialogue-sidebar").open, false); assert.equal(h.runtime.document.body.style.position, ""); assert.equal(h.runtime.document.body.style.overflow, "clip"); assert.equal(h.runtime.window.scrollY, 280); assert.equal(h.runtime.document.activeElement, focused);
+  }
+});
+await test("topbar displays only host-provided connection state and the actual idea title", async () => {
+  const h = harness(), badge = h.byClass("dialogue-connection"); assert.equal(badge.hidden, true); const before = h.calls.length; h.panel.setConnectionStatus("已连接", true); assert.equal(badge.textContent, "已连接"); assert.equal(badge.dataset.connected, "true"); assert.equal(h.calls.length, before);
+  h.panel.setConnectionStatus("连接中断", false); assert.equal(badge.dataset.connected, "false"); h.panel.setConnectionStatus("", undefined); assert.equal(badge.hidden, true);
+  const known = harness({ options: { getConnectionStatus: () => ({ text: "正在连接电脑", connected: false }) } }); assert.equal(known.byClass("dialogue-connection").textContent, "正在连接电脑"); assert.equal(known.byClass("dialogue-connection").hidden, false);
+  h.panel.setActive(true); await flush(); await h.panel.openIdea("idea-1"); assert.equal(h.byClass("dialogue-title").textContent, "裙子双模式"); h.byText("继续讨论").click(); await flush(); assert.equal(h.byClass("dialogue-title").textContent, "裙子双模式"); assert.equal(h.calls.some(item => item.action === "mobile/dialogue/send"), false);
+});
+await test("returning from idea B cannot borrow its title for idea A discussion without a source task", async () => {
+  const h = harness(); h.ideas.push({ id: "idea-2", revision: 1, title: "B：另一个想法", body: "与 A 不同的主题", archived: false, executionDraft: "", keyPoints: [] }); h.panel.setActive(true); await flush();
+  await h.panel.openIdea("idea-1"); h.byText("继续讨论").click(); await flush(); const source = structuredClone(h.current()); assert.equal(source.ideaId, "idea-1"); assert.equal(h.value().detail.sourceTask, undefined);
+  const input = h.byLabel("提问或保存想法"); input.value = "只继续 A 的讨论"; input.fire("input"); h.byLabel("打开侧栏").click(); h.byText("保存的想法").click(); await flush(); await h.panel.openIdea("idea-2"); assert.equal(h.byClass("dialogue-title").textContent, "B：另一个想法");
+  h.byLabel("打开侧栏").click(); h.byText("当前对话").click(); await flush(); assert.equal(h.byClass("dialogue-title").textContent, "想法讨论"); assert.doesNotMatch(h.byClass("dialogue-context").textContent, /B：另一个想法/); assert.equal(h.current().ideaId, source.ideaId); assert.equal(h.current().recordId, source.recordId); assert.equal(h.current().id, source.id); assert.equal(input.value, "只继续 A 的讨论");
+  h.hook(action => { if (!action.startsWith("mobile/dialogue?")) return; const data = h.value(); data.detail.sourceTask = { ideaId: "idea-2", title: "B：另一个想法" }; return data; }); await h.panel.refresh(); assert.equal(h.byClass("dialogue-title").textContent, "想法讨论"); assert.doesNotMatch(h.byClass("dialogue-context").textContent, /B：另一个想法/); h.hook(null);
+  h.byText("发送 ↑").click(); await flush(); const sent = h.calls.filter(item => item.action === "mobile/dialogue/send"); assert.equal(sent.length, 1); assert.equal(sent[0].payload.sessionId, source.id); assert.equal(sent[0].payload.text, "只继续 A 的讨论"); assert.equal(h.current().ideaId, "idea-1"); assert.equal(h.current().recordId, source.recordId);
 });
 console.log(`${count} mobile dialogue behavior checks passed.`);

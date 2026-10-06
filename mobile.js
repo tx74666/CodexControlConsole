@@ -59,6 +59,7 @@
     onConnectionState: connected => updateConnectionState(connected),
     onAuth: () => showPair("配对已过期，请重新连接电脑。"),
     getVersion: () => el("versionLabel")?.textContent || "Codex Console",
+    getConnectionStatus: () => ({ text: el("connectionLabel")?.textContent || "", connected: el("connectionLabel")?.dataset.connected === "true" }),
     onModule: value => { if (value === "conversations") selectWorkView("conversations"); else if (value === "workflow") selectWorkView("agents"); else if (value === "legacy") selectWorkView("ideas"); else selectTab(value); },
     onImportPack: async file => { if (!state.paired || !window.CodexMobileHandoff) throw new Error("请先完成电脑配对，手机想法包仍保留。"); const exported = await window.CodexMobileHandoff.decodePack(file); if (!state.paired) throw new Error("配对已断开，未导入。"); try { return await window.CodexMobileHandoff.importExported(exported); } catch (error) { if ([401, 403].includes(error.status)) showPair("配对已断开；导入结果待核对，请重连后用原想法包核对。"); throw error; } },
     onExecution: async idea => { if (incubatorPanel?.closeTask?.() === false) return false; selectWorkView("workflow"); const opened = await workflowPanel?.openTask?.({ ideaId: idea.id, revision: idea.revision, title: idea.title, projectId: idea.projectId, executionDraft: idea.executionDraft, mode: "work" }); if (opened) { el("phoneWorkflowDetails").open = true; window.scrollTo({ top: 0, behavior: "auto" }); } return Boolean(opened); }
@@ -201,6 +202,7 @@
     if (!state.paired) return;
     el("connectionLabel").textContent = connected ? "已连接" : "连接中断";
     el("connectionLabel").dataset.connected = String(Boolean(connected));
+    dialoguePanel?.setConnectionStatus?.(el("connectionLabel").textContent, Boolean(connected));
   }
   function date(value) {
     if (!value) return "尚未记录";
@@ -274,6 +276,7 @@
     el("appScreen").hidden = true; el("bottomNav").hidden = true;
     el("connectionLabel").dataset.connected = "false";
     el("connectionLabel").textContent = "未连接";
+    dialoguePanel?.setConnectionStatus?.("未连接", false);
     el("updatedLabel").textContent = "";
     notice("appNotice");
   }
@@ -338,7 +341,7 @@
     state.dashboard = data; state.paired = true; uiUpdate.trusted = true;
     renderVersion(data.version);
     el("pairScreen").hidden = true; el("offlineScreen").hidden = true; el("appScreen").hidden = false; el("bottomNav").hidden = false;
-    el("connectionLabel").textContent = "已连接"; el("connectionLabel").dataset.connected = "true";
+    updateConnectionState(true);
     el("updatedLabel").textContent = `页面读取于 ${date(new Date().toISOString())}`;
     renderPlan(livePlan.snapshot ? { plan: livePlan.snapshot.plan, label: `电脑 → 手机 · 上次同步 ${date(livePlan.snapshot.updatedAt)}。修改请在电脑完成。` } : data.plan); renderDevice(data.device); renderDocuments(); selectTab(state.tab); notice("appNotice");
     ideaReceiver?.activate();

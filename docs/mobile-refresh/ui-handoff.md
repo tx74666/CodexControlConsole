@@ -1,0 +1,63 @@
+# Mod 手机改版交接 · 2026-10-07
+
+本文件由 Mod 单独维护。本轮是已实现、已隔离验证的第一阶段界面改动；服务、共享契约、版本发布与正式安装仍由 Codex Console 最终集成。
+
+## 方向与协作
+
+用户要求 Console 成为手机构思、整理、长期保存、派明确任务、查看电脑真实进展和进入原上下文沟通的入口，电脑负责执行。复用现有讨论、想法、草稿、附件、会话及 Work 组件。普通发送只讨论，只保存不发送，执行仍核对冻结版本、实际工作区及范围。
+
+- Mod：本阶段手机导航、顶栏及相关 UI 回归；后续消息阅读等改进按下一阶段交接。
+- Codex Console：底层通道、存储、协议、共享配置/版本及最终集成、发布和安全自动更新。
+- Text：原 Dev Room 文档工作；双方未约定的新文案/分类不能在这次改版中自行扩展。
+
+已使用本机正式 `codex queue`，向准确原会话各发送一次协作消息：Console thread `01a10aea-6f79-7683-a570-86935624f6a4`，消息 `01a112dd-3bae-7602-9baa-76a6d0f37642`；Text thread `01a112bf-be23-7ab3-bfe4-de7ac384a296`，消息 `01a112dd-64ae-73a0-a30f-1e47a85f26a1`。Console 已通过真实跨聊天工具回复并明确确认上述分工及 Mod 手机文件写入权；Text 当时仍在队列中。入队、取走和对方回复是不同证据，不强行中断正在运行的工作。
+
+Console 最新回信确认：既有正式验收已经证明订阅 Chat 回到手机、Work 有边界文件修改及同记录 Output、单个 Agent 真实取消；Work Pro、原生 shell 运行/编译、手机完整执行/取消仍未验收或未接入。旧计划中的未接通结论不能替代最新证据，本阶段未修改这些真实通道。
+
+## 实际工作副本
+
+- 仓库主工作区：`D:/Codex/ControlConsole`；当时核对 `main`，无未提交改动。
+- 独立实现目录：`D:/Codex/ControlConsole-Mod-Mobile`。
+- 分支：`mod/mobile-refresh-20261007`。
+- 基线：`dcf2aebe2008b55e68e6ca70baef78350e7ce095`。
+- 主工作区、正式安装、原私有数据库均未被本阶段实现覆盖。
+- 交接文档在上述独立工作区；同名主工作区文件不会自动同步。
+
+## 已实现
+
+1. 复用现有讨论和想法列表/详情，增加一个侧栏入口。当前讨论、保存的想法、电脑会话及 Work 常用入口放在侧栏；互传、音乐、资料和原工作区/导入放在折叠的更多功能中。
+2. 使用原生模态 dialog，支持关闭、外侧点击、Escape、Tab 焦点循环；关闭时恢复原页面滚动和样式。停用、页面离开和清除私有显示时释放侧栏。打开侧栏不请求、派发或取消任务，不聚焦输入框。
+3. 保留想法和更多按钮以及清空、刷新、通道、模型状态、版本及想法包导入。顶部只使用匹配当前讨论来源的想法名称，浏览其它想法不能改错实际讨论标题；连接状态只展示宿主提供的电脑回执。
+4. 联网当前对话隐藏原重复 app-header，安全区归入当前顶栏；离线页继续使用原外层安全区。修正离线根组件高度选择器，避免共享全屏样式遗漏根元素。
+5. 修复离线 `workflow` 导航原先进入不支持的 tab 而无响应的问题；现在复用现有电脑连接/原工作区入口，保留原本机内容，不上传或执行。
+
+未修改任何后端、数据库结构、发送协议、模型账号、任务能力映射或依赖。会话快取仍按原能力显示；本阶段侧栏入口不证明外部会话可以实时继续/中断。
+
+## 改动文件与宿主接口
+
+源码：`mobile-dialogue.js`、`mobile-dialogue.css`、`mobile.js`、`phone/app.js`、`phone/styles.css`。
+
+回归：`tools/check-mobile-dialogue-ui.mjs`、`tools/check-mobile-ui.mjs`、`tools/check-phone-offline-ui.mjs`。
+
+唯一新增的本机 UI 接口为可选 `options.getConnectionStatus()` 返回 `{text, connected}`，以及组件 `setConnectionStatus(text, connected)`。联网宿主根据原 `connectionLabel` 的实际连接回执同步此字段；没有宿主状态则隐藏。连接状态不等同于任务执行状态。无后端契约变更。
+
+## 验证
+
+- `node --check mobile-dialogue.js`、`mobile.js`、`phone/app.js`：通过。
+- `node tools/check-mobile-dialogue-ui.mjs`：162 项通过，含新增 6 项侧栏行为及两想法标题/实际发送来源隔离。
+- `node tools/check-mobile-ui.mjs`：81 项通过，含实际宿主连接状态/配对保护。
+- `node tools/check-phone-offline-ui.mjs`：74 项通过，含 Work/会话 × 已记住/未记住电脑四种导航及资料不变回归。
+- `node tools/check-mobile-dialogue-local.mjs`：通过，覆盖草稿、清空身份、选图与版本来源。
+- `node tools/check-work-navigation.mjs`：15 项通过，桌面既有 Work 导航无回退。
+- `git diff --check`：通过。
+- 浏览器：新建非持久 Chromium context，以虚构 HTTPS 来源和只读静态资产白名单运行，没有服务端端口、生产数据、登录会话、模型请求或派工。390×844 与 320×844 无横向溢出、输入/发送可见；只保存完整想法、侧栏焦点/Escape/滚动恢复、页面刷新恢复中文草稿、离线 Work 进入电脑连接均通过；无运行错误或未列明请求。
+
+浏览器脚本、JSON 证据和截图保存在 `D:/Codex/Artifacts/console-collaboration/20261007/`：`check-mobile-refresh-browser.cjs`、`browser-proof.json`、`mobile-sidebar-390.png`、`mobile-ideas-390.png`、`mobile-dialogue-390.png`、`mobile-dialogue-320.png`。这是隔离浏览器验证，iPhone 真机键盘、听写、实际安全区和后台行为仍未验收。
+
+## 参照与集成
+
+已核查 [LibreChat 官网](https://www.librechat.ai/) 与 [官方仓库](https://github.com/LibreChat-AI/LibreChat)，本阶段采用成熟的侧栏切换及底部输入交互组织。保留 Console 现有技术与实现，没有移植 LibreChat 源码、后台或依赖。
+
+由 Console 审查分支差异后统一集成，先核对其最新基线和文件写入权，保护 Text 的 Dev Room 工作。`mobile.js` 是 5 行小改动，`phone/app.js` 是单行路由修复，`phone/styles.css` 是单个选择器修复；不应以整文件覆盖处理冲突。共享资源版本和缓存标签仍为基线 1.0.77，由 Console 在正式发行统一处理。随后运行项目规定检查、发布并按既有授权安全自动更新，核验正在运行版本、在途任务与原用户资料；本阶段不能称已发布或本机已更新。
+
+下一阶段未包含：把具体想法/任务直接放入统一侧栏、消息 Markdown/代码块、安全富文本复用、现有授权外部会话的实时续聊/任务控制、完整真机/真实通道验收。先完成本阶段安全集成，再依据真实能力继续，避免重写已具备的存储和执行链路。

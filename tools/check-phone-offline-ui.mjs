@@ -21,7 +21,7 @@ const inbox = () => ({ entries: [
 ] });
 const dashboard = () => ({ version: "1.0.14", plan: plan(), device: { currentMemory: { status: "available", usedPercent: 91, availableBytes: 1024 ** 3, totalBytes: 16 * 1024 ** 3, readAt: "2026-10-01T11:00:00+08:00" }, model: "Dell fixture", cpuModel: "CPU", gpuModels: ["GPU"], sampledAt: "2026-09-27T11:00:00+08:00", installedMemoryBytes: 16 * 1024 ** 3 }, documents: { inbox: inbox(), guide: { items: [{ title: "阅读重点", path: "human.md", highlights: ["重点"] }] }, references: { items: [{ id: "nodes", defaultLanguage: "zh-CN", variants: [{ language: "zh-CN", label: "中文", title: "节点参考", path: "nodes.zh.md", available: true }, { language: "en", label: "English", title: "Nodes", path: "nodes.en.md", available: true }] }] } } });
 const playlist = () => ({ playback: "phone", tracks: [{ name: "<script>One</script>", path: "local/one.mp3", type: "mp3", size: 100 }, { name: "Two", path: "album/two.m4a", type: "m4a", size: 200 }, { name: "三首", path: "album/three.mp3", type: "mp3", lyrics: true, lyricsLanguage: "zh", lyricsLanguages: [{ code: "zh", label: "Chinese" }, { code: "en", label: "English" }] }], truncated: false });
-function harness({ syncEnabled = false, withIncubator = false, storage = null, storeData = null } = {}) {
+function harness({ syncEnabled = false, withIncubator = false, withDialogue = false, storage = null, storeData = null } = {}) {
   class Element {
     constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.attributes = {}; this._text = ""; this.hidden = false; this.value = ""; this.classList = { add() {} }; this.style = { setProperty(key, value) { this[key] = value; } }; }
     append(...items) { this.children.push(...items); }
@@ -41,6 +41,7 @@ function harness({ syncEnabled = false, withIncubator = false, storage = null, s
     remove() { this.removed = true; }
   }
   const nodes = new Map(), calls = [], answers = [], saved = storage || new Map(), timers = new Map(); let nextTimer = 1;
+  const dialogue = { root: null, options: null, active: false, createCalls: 0 };
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const audio = get("musicAudio"); audio.paused = true; audio.currentTime = 0; audio.duration = NaN; audio.src = ""; audio.playCalls = 0; audio.pauseCalls = 0; audio.loadCalls = 0; const mediaEvents = [];
   audio.pause = () => { audio.paused = true; audio.pauseCalls++; mediaEvents.push("pause"); };
@@ -68,7 +69,8 @@ function harness({ syncEnabled = false, withIncubator = false, storage = null, s
   };
   const registration = { waiting: null, installing: null, updateCalls: 0, addEventListener(name, callback) { registrationEvents.set(name, callback); }, async update() { this.updateCalls++; if (this.updateError) throw this.updateError; if (this.onUpdate) await this.onUpdate(); } };
   const runtime = { URL, URLSearchParams, AbortController, TypeError, Request, document, history, navigator: { onLine: true, serviceWorker: { controller: {}, ready: Promise.resolve(registration), register: async (...args) => { registrations.push(args); return registration; }, addEventListener(name, callback) { workerEvents.set(name, callback); } } }, PhoneStore, Blob, atob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html", reload() { reloads.push(true); } }, addEventListener(name, callback) { addEvent(windowEvents, name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
-  const names = "incubatorApi,ensurePhoneIncubator,openComputerWork,updateIsIdle,parseTransferAddress,acceptTransferQr,transferAddress,restoreTransferConnection,openTransferConnection,forgetTransferConnection,state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
+  if (withDialogue) runtime.window.CodexMobileDialogue = { create(root, options) { dialogue.root = root; dialogue.options = options; dialogue.createCalls++; return { setActive(value) { dialogue.active = Boolean(value); }, canReload: () => true }; } };
+  const names = "incubatorApi,ensurePhoneIncubator,ensurePhoneDialogue,openComputerWork,updateIsIdle,parseTransferAddress,acceptTransferQr,transferAddress,restoreTransferConnection,openTransferConnection,forgetTransferConnection,state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
   assert.ok(source.includes("  void bootstrap();\n})();"), "test export insertion must match only bootstrap footer");
   // Exercise deferred sync explicitly in isolated tests; production stays offline by default.
   const testSource = syncEnabled ? source.replace("const TASK_SYNC_ENABLED = false;", "const TASK_SYNC_ENABLED = true;") : source;
@@ -76,7 +78,7 @@ function harness({ syncEnabled = false, withIncubator = false, storage = null, s
   if (withIncubator) runInNewContext(incubatorSource, runtime);
   runInNewContext(testSource.replace("  void bootstrap();\n})();", `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
-  return { api, stores, PhoneStore, runtime, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, timers, documentEvents, windowEvents, workerEvents, registrationEvents, registration, registrations, reloads, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
+  return { api, dialogue, stores, PhoneStore, runtime, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, timers, documentEvents, windowEvents, workerEvents, registrationEvents, registration, registrations, reloads, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
 }
 
 function importFixture() {
@@ -620,6 +622,25 @@ await test("computer Work entry navigates only after a saved LAN address and nev
   h.stores.get("settings").set("transferConnection", { id: "transferConnection", address: "http://codex-0123456789abcdef.local:8899/?tab=transfer" }); await h.api.restoreTransferConnection();
   await h.api.incubatorApi("incubator/create", { requestId: requestId(17), title: "不会自动上传" }); await h.api.openComputerWork();
   assert.equal(h.runtime.window.location.href, "http://codex-0123456789abcdef.local:8899/?tab=work&workView=dialogue"); assert.equal(h.get("computerWorkOpen").textContent, "打开 Console 工作区"); assert.equal(h.calls.length, 0); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 1);
+});
+await test("offline sidebar Work and conversations use the computer entry and preserve local ideas and drafts", async () => {
+  for (const module of ["workflow", "conversations"]) for (const remembered of [false, true]) {
+    const h = harness({ withDialogue: true }); h.ready();
+    const draftKey = "codexMobileDialogue.v1:offline", draft = JSON.stringify({ clientId: "fixture-client", tier: "high", drafts: { unopened: { text: "本机未发送草稿", unsynced: true, userEdited: true } } }); h.saved.set(draftKey, draft);
+    await h.api.incubatorApi("incubator/create", { requestId: requestId(71), title: "只保留在手机的想法", body: "原底稿不能随着导航上传" });
+    h.stores.get("records").set("mobile-image-draft:fixture-image", { id: "mobile-image-draft:fixture-image", originalName: "本机原图.png" });
+    h.stores.get("media").set("fixture-image", { id: "fixture-image", blob: new Blob(["local original image"]) });
+    let forbiddenCalls = 0;
+    const forbidden = () => { forbiddenCalls++; throw new Error("Sidebar navigation must not invoke models, dispatches, or uploads."); };
+    h.runtime.window.CodexPhoneDialogueLocal = { endpoint: forbidden, uploadAttachments: forbidden, buildExport: forbidden };
+    if (remembered) { h.stores.get("settings").set("transferConnection", { id: "transferConnection", address: "http://codex-0123456789abcdef.local:8899/?tab=transfer" }); await h.api.restoreTransferConnection(); }
+    h.api.selectTab("work"); const adapter = h.api.ensurePhoneDialogue(); assert.ok(adapter); assert.equal(h.dialogue.createCalls, 1); assert.equal(h.dialogue.root, h.get("phoneDialogue")); assert.equal(h.dialogue.options.offline, true); assert.equal(h.dialogue.active, true);
+    const beforeRecords = JSON.stringify([...h.stores.get("records")]), beforeDrafts = JSON.stringify([...h.saved]), beforeLocation = h.runtime.window.location.href;
+    h.dialogue.options.onModule(module); await settle();
+    if (remembered) { assert.equal(h.runtime.window.location.href, "http://codex-0123456789abcdef.local:8899/?tab=work&workView=dialogue"); assert.equal(h.api.state.tab, "work"); }
+    else { assert.equal(h.api.state.tab, "transfer"); assert.equal(h.runtime.window.location.href, beforeLocation); assert.match(h.get("transferNotice").textContent, /配对后打开电脑工作区/); assert.equal(h.dialogue.active, false); }
+    assert.equal(forbiddenCalls, 0); assert.equal(h.calls.length, 0); assert.equal(JSON.stringify([...h.stores.get("records")]), beforeRecords); assert.equal(JSON.stringify([...h.saved]), beforeDrafts); assert.equal(h.saved.get(draftKey), draft); assert.equal(h.stores.get("media").size, 1); assert.equal(await h.stores.get("media").get("fixture-image").blob.text(), "local original image");
+  }
 });
 await test("PhoneStore commits atomic record transforms and aborts without overwriting existing private stores", async () => {
   const saved = new Map([["library", { id: "library", privateText: "original library" }]]), self = {}; let opens = 0;
