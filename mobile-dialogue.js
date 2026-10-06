@@ -43,13 +43,15 @@
     sidebar.id = sidebarId; sidebar.setAttribute("aria-label", "切换内容"); sidebar.setAttribute("aria-modal", "true"); sidebarNav.setAttribute("aria-label", "Console 内容");
     const sidebarButton = button("☰", openSidebar, "dialogue-sidebar-toggle"), sidebarClose = button("×", () => closeSidebar(), "dialogue-sidebar-close");
     sidebarButton.setAttribute("aria-label", "打开侧栏"); sidebarButton.setAttribute("aria-controls", sidebarId); sidebarButton.setAttribute("aria-expanded", "false"); sidebarClose.setAttribute("aria-label", "关闭侧栏");
-    const sidebarMainButtons = [], sidebarExtraButtons = [], sidebarMore = make("details", "", "dialogue-sidebar-more"), sidebarMoreSummary = make("summary", "更多功能");
-    const sidebarAction = (label, action, extra = false) => { const item = button(label, () => { closeSidebar(false); capturePointEditor(); if (state.view === "detail" && state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); action(); }, "dialogue-sidebar-item"); (extra ? sidebarExtraButtons : sidebarMainButtons).push(item); return item; };
+    const sidebarMainButtons = [], sidebarExtraButtons = [], sidebarIdeas = make("section", "", "dialogue-sidebar-ideas"), sidebarIdeasNote = make("p"), sidebarIdeaList = make("div", "", "dialogue-sidebar-idea-list"), sidebarMore = make("details", "", "dialogue-sidebar-more"), sidebarMoreSummary = make("summary", "更多功能");
+    let sidebarIdeaButtons = [], loadedIdeaList = null, detailReturn = null;
+    sidebarIdeas.append(make("h3", "当前想法列表"), sidebarIdeasNote, sidebarIdeaList);
+    const sidebarAction = (label, action, extra = false) => { const item = button(label, () => { leaveSidebar(); action(); }, "dialogue-sidebar-item"); (extra ? sidebarExtraButtons : sidebarMainButtons).push(item); return item; };
     const currentDiscussion = sidebarAction("当前对话", showCurrentDiscussion), savedIdeas = sidebarAction("保存的想法", () => void showIdeas());
-    sidebarNav.append(currentDiscussion, savedIdeas, sidebarAction(offline ? "连接电脑继续" : "电脑会话", () => offline ? options.onConnect?.() : openModule("conversations")), sidebarAction("Work · 执行进度", () => openModule("workflow")));
+    sidebarNav.append(currentDiscussion, savedIdeas, sidebarAction(offline ? "连接电脑继续" : "电脑会话", () => offline ? options.onConnect?.() : openModule("conversations")), sidebarAction("当前对话的执行进度", () => openModule("workflow")));
     sidebarMore.append(sidebarMoreSummary);
     for (const item of [{ label: "互传", module: "transfer" }, { label: "音乐", module: "music" }, { label: "资料", module: "documents" }, { label: "原工作区与导入", module: "legacy" }, ...(offline ? [{ label: "资料与更新", module: "settings" }] : [])]) sidebarMore.append(sidebarAction(item.label, () => openModule(item.module), true));
-    sidebarHeading.append(make("strong", "Console"), sidebarClose); sidebar.append(sidebarHeading, sidebarNav, sidebarMore);
+    sidebarHeading.append(make("strong", "Console"), sidebarClose); sidebar.append(sidebarHeading, sidebarNav, sidebarIdeas, sidebarMore);
     let sidebarReturnFocus = null, sidebarScroll = 0, sidebarBodyStyle = null, sidebarRestoreFocus = true;
     const back = button("‹ 返回", () => void goBack(), "dialogue-back"), ideasButton = button("想法", () => void showIdeas());
     const more = make("details", "", "dialogue-more"), summary = make("summary", "更多"), menu = make("div", "", "dialogue-menu"), menuMeta = make("p", "", "dialogue-menu-meta");
@@ -94,7 +96,7 @@
     sidebar.addEventListener("keydown", event => {
       if (event.key === "Escape") { event.preventDefault(); closeSidebar(); return; }
       if (event.key !== "Tab") return;
-      const targets = [sidebarClose, ...sidebarMainButtons, sidebarMoreSummary, ...(sidebarMore.open ? sidebarExtraButtons : [])].filter(item => !item.disabled), first = targets[0], last = targets.at(-1), active = document.activeElement;
+      const targets = [sidebarClose, ...sidebarMainButtons, ...sidebarIdeaButtons, sidebarMoreSummary, ...(sidebarMore.open ? sidebarExtraButtons : [])].filter(item => !item.disabled), first = targets[0], last = targets.at(-1), active = document.activeElement;
       if (event.shiftKey && (active === first || !targets.includes(active))) { event.preventDefault(); last.focus({ preventScroll: true }); }
       else if (!event.shiftKey && (active === last || !targets.includes(active))) { event.preventDefault(); first.focus({ preventScroll: true }); }
     });
@@ -104,10 +106,33 @@
       if (!state.active || sidebar.open || typeof sidebar.showModal !== "function") return;
       more.open = ideaMore.open = savedImagePicker.open = false;
       sidebarReturnFocus = sidebarButton; sidebarScroll = window.scrollY; sidebarRestoreFocus = true;
+      renderSidebarIdeas();
       currentDiscussion.setAttribute("aria-current", state.view === "chat" ? "page" : "false"); savedIdeas.setAttribute("aria-current", state.view !== "chat" ? "page" : "false");
       sidebar.showModal(); sidebarButton.setAttribute("aria-expanded", "true");
       if (document.body) { const style = document.body.style; sidebarBodyStyle = Object.fromEntries(["position", "top", "width", "overflow"].map(key => [key, style[key]])); Object.assign(style, { position: "fixed", top: `-${sidebarScroll}px`, width: "100%", overflow: "hidden" }); }
       sidebarClose.focus({ preventScroll: true });
+    }
+    function leaveSidebar() { closeSidebar(false); capturePointEditor(); if (state.view === "detail" && state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); }
+    function renderSidebarIdeas() {
+      sidebarIdeaButtons = []; sidebarIdeaList.replaceChildren();
+      if (!loadedIdeaList) { sidebarIdeasNote.textContent = "先打开想法列表，就能在这里找到已读取的想法。"; return; }
+      const scope = loadedIdeaList, projectName = scope.project === "unclassified" ? "未归类" : scope.project ? state.projects.find(item => item.id === scope.project)?.name || "所选项目" : "全部项目";
+      sidebarIdeasNote.textContent = [scope.archived ? "归档想法" : "未归档想法", projectName, scope.search ? `搜索「${scope.search.slice(0, 60)}」` : "", state.ideas.length > 6 ? "前 6 条" : ""].filter(Boolean).join(" · ");
+      const seen = new Set();
+      for (const idea of state.ideas.filter(item => { if (typeof item?.id !== "string" || !item.id || seen.has(item.id)) return false; seen.add(item.id); return true; }).slice(0, 6)) {
+        const item = button("", () => { leaveSidebar(); void openSidebarIdea(idea.id); }, "dialogue-sidebar-idea"), draft = state.editDrafts[idea.id], point = state.pointDrafts[idea.id];
+        item.append(make("strong", idea.title || "未命名想法"), make("span", [state.projects.find(project => project.id === idea.projectId)?.name || "未归类", when(idea.updatedAt) || "保存日期未记录", idea.archived ? "已归档" : ""].filter(Boolean).join(" · ")));
+        if (draft?.dirty || draft?.executionDirty || point?.ideaId === idea.id) item.append(make("span", state.storageFailed ? "编辑草稿尚未保存" : "本机编辑草稿"));
+        item.disabled = state.busy; item.setAttribute("aria-current", state.view === "chat" ? state.session?.ideaId === idea.id ? "page" : "false" : state.idea?.id === idea.id && ["detail", "execution"].includes(state.view) ? "page" : "false"); sidebarIdeaButtons.push(item); sidebarIdeaList.append(item);
+      }
+      if (!sidebarIdeaButtons.length) sidebarIdeasNote.textContent += " · 当前筛选下没有想法";
+    }
+    async function openSidebarIdea(id) {
+      if (state.busy) return;
+      let origin = detailReturn;
+      if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); origin = { view: "chat", sessionId: state.session?.id || "", recordId: state.session?.recordId || "" }; }
+      else if (state.view === "ideas") origin = null;
+      await openIdea(id, false, origin);
     }
     function closeSidebar(restoreFocus = true) { if (!sidebar.open && !sidebarBodyStyle) return; sidebarRestoreFocus = restoreFocus; if (sidebar.open) sidebar.close(); finishSidebarClose(); }
     function finishSidebarClose() {
@@ -123,8 +148,10 @@
       if (state.view === "ideas") { state.listScroll = window.scrollY; persist(); }
       else if (state.view === "detail" && state.editorDirty) persistEditor();
       else if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution();
-      state.view = "chat"; renderView(); requestAnimationFrame(() => window.scrollTo({ top: state.chatScroll, behavior: "auto" }));
+      detailReturn = null; state.view = "chat"; renderView(); restoreChatPosition();
     }
+    function restoreChatPosition() { const generation = state.generation, sessionId = state.session?.id || "", recordId = state.session?.recordId || "", scroll = state.chatScroll; requestAnimationFrame(() => { if (state.active && generation === state.generation && state.view === "chat" && !sidebar.open && sessionId === (state.session?.id || "") && recordId === (state.session?.recordId || "")) window.scrollTo({ top: scroll, behavior: "auto" }); }); }
+    function restoreListPosition(generation, scroll) { if (!state.active || generation !== state.generation || state.view !== "ideas") return; requestAnimationFrame(() => { if (state.active && generation === state.generation && state.view === "ideas" && !sidebar.open && scroll === state.listScroll) window.scrollTo({ top: scroll, behavior: "auto" }); }); }
     const storageFailureNotice = "这台手机暂时无法保存草稿，请保留页面并复制内容。";
     const acceptedSendNotices = ["请求已接收，等待原聊天的实际回答。", "请求已保存；普通 Chat 自动转发尚未接通。", "请求已接收，等待本轮真实回答；接收不等于完成。"];
     function persist() {
@@ -327,7 +354,7 @@
     function renderConversation() {
       if (state.view === "chat") title.textContent = currentDiscussionTitle();
       if (state.view !== "chat") { for (const node of [context, welcome, messages, pending]) node.hidden = true; return; }
-      const atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 150;
+      const atBottom = window.innerHeight + (sidebar.open ? sidebarScroll : window.scrollY) >= document.documentElement.scrollHeight - 150;
       const values = Array.isArray(state.detail?.messages) ? state.detail.messages : [];
       const fresh = values.some(item => item.role === "assistant" && !state.messageIds.has(item.id));
       state.messageIds = new Set(values.map(item => item.id)); messages.replaceChildren();
@@ -387,7 +414,12 @@
       }
       context.hidden = !state.session?.ideaId; contextText.textContent = state.session?.ideaId ? `围绕「${currentDiscussionTitle()}」继续聊` : "";
       welcome.hidden = Boolean(values.length || state.session?.ideaId); messages.hidden = !values.length;
-      if (fresh && state.view === "chat") { if (atBottom) requestAnimationFrame(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" })); else { state.newResults = true; newResult.hidden = false; } }
+      if (fresh && state.view === "chat") {
+        if (atBottom && !sidebar.open) {
+          const generation = state.generation, sessionId = state.session?.id || "", recordId = state.session?.recordId || "";
+          requestAnimationFrame(() => { if (state.active && generation === state.generation && state.view === "chat" && !sidebar.open && sessionId === (state.session?.id || "") && recordId === (state.session?.recordId || "")) window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" }); });
+        } else { state.newResults = true; newResult.hidden = false; }
+      }
     }
     function latestDialogueFailure() {
       const session = state.session;
@@ -405,7 +437,7 @@
       if (state.view === "chat") renderConversation(); newResult.hidden = state.view !== "chat" || !state.newResults; renderEditReviews(); updateControls(); syncResultStream(); options.onViewChange?.(state.view);
     }
     function currentFiles() { return !fileOwner || fileOwner === state.session?.id ? files : []; }
-    function updateControls() { const clearing = state.pending?.action === "mobile/dialogue/clear"; clearMenuAction.disabled = state.busy || state.composing; const empty = !composerInput.value.trim(), hasImages = currentFiles().length > 0 || (state.session?.draft?.attachmentIds || []).length > 0; send.disabled = state.busy || clearing || empty && !hasImages || state.composing || state.chatTransport === "chatgpt_subscription" && !subscriptionReady(); saveOnly.disabled = state.busy || clearing || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy || state.chatTransport === "chatgpt_subscription" && Boolean(state.pending); chatTransport.disabled = state.busy || Boolean(state.pending) || offline; subscriptionModel.disabled = state.busy || Boolean(state.pending) || state.subscriptionReading || !state.subscriptionStatus?.connected; if (cancelPendingButton) cancelPendingButton.disabled = state.busy || state.composing || Boolean(state.pending && state.pending.action !== "mobile/dialogue/cancel-pending"); saveEdit.hidden = !state.editorDirty; saveEdit.disabled = state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = state.busy || state.editorDirty; executionDraft.disabled = state.busy || state.editorDirty; carryIdea.disabled = state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } const imageLocked = state.busy || Boolean(state.pending) || Boolean(uploadRequest); for (const remove of imageRemovalButtons) remove.disabled = imageLocked; for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = imageLocked; void drainResults(); }
+    function updateControls() { const clearing = state.pending?.action === "mobile/dialogue/clear"; clearMenuAction.disabled = state.busy || state.composing; const empty = !composerInput.value.trim(), hasImages = currentFiles().length > 0 || (state.session?.draft?.attachmentIds || []).length > 0; send.disabled = state.busy || clearing || empty && !hasImages || state.composing || state.chatTransport === "chatgpt_subscription" && !subscriptionReady(); saveOnly.disabled = state.busy || clearing || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy || state.chatTransport === "chatgpt_subscription" && Boolean(state.pending); chatTransport.disabled = state.busy || Boolean(state.pending) || offline; subscriptionModel.disabled = state.busy || Boolean(state.pending) || state.subscriptionReading || !state.subscriptionStatus?.connected; if (cancelPendingButton) cancelPendingButton.disabled = state.busy || state.composing || Boolean(state.pending && state.pending.action !== "mobile/dialogue/cancel-pending"); ideaTitle.disabled = ideaBody.disabled = executionText.disabled = !state.idea; copyIdea.disabled = archiveIdea.disabled = !state.idea || state.busy; saveEdit.hidden = !state.editorDirty; saveEdit.disabled = !state.idea || state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = !state.idea || state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = !state.idea || state.busy || state.editorDirty; executionDraft.disabled = !state.idea || state.busy || state.editorDirty; carryIdea.disabled = !state.idea || state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy || !state.idea; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } const imageLocked = state.busy || Boolean(state.pending) || Boolean(uploadRequest); for (const remove of imageRemovalButtons) remove.disabled = imageLocked; for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = imageLocked; void drainResults(); }
     async function writeFiles(value) { fileWriting++; try { await blobs.put(value); } catch (error) { fileError = true; throw error; } finally { fileWriting--; } }
     async function saveFiles() { try { await writeFiles({ id: filesKey, files, fileOwner, uploadRequest }); fileError = false; } catch (error) { fileError = true; fail(error); throw error; } }
     async function restoreSessionFiles(id) {
@@ -596,29 +628,41 @@
       try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (state.pending?.action === "mobile/dialogue/clear") { if (finishClear(data)) return true; if (data.session?.id === state.pending.payload.sessionId && data.session?.clientId === state.clientId && applyDialogue(data, sessionId, true) && !sessionId) restoreDraft(); say("清空结果尚待核对；原草稿与请求编号保留，可再次点清空核对同一次请求。", true); return false; } if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); if (applied && state.chatTransport === "chatgpt_subscription") await readSubscriptionStatus(); return applied; } }
       catch (error) { fail(error); } finally { state.reading = false; updateControls(); syncResultStream(); }
     }
-    async function showIdeas() { if (state.busy) return; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } state.view = "ideas"; say(""); renderView(); await loadIdeas(); requestAnimationFrame(() => window.scrollTo({ top: state.listScroll, behavior: "auto" })); }
+    async function showIdeas() { if (state.busy) return; const generation = state.generation, scroll = state.listScroll; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } detailReturn = null; state.view = "ideas"; say(""); renderView(); await loadIdeas(); restoreListPosition(generation, scroll); }
     async function loadIdeas() {
       const currentSearch = state.search, currentProject = state.project, archived = state.archived;
       try { const data = await call(`mobile/ideas?search=${encodeURIComponent(currentSearch)}&projectId=${encodeURIComponent(currentProject)}&archived=${archived ? "1" : "0"}`); if (currentSearch !== state.search || currentProject !== state.project || archived !== state.archived) return;
-        state.ideas = Array.isArray(data.ideas) ? data.ideas : []; state.projects = Array.isArray(data.projects) ? data.projects : []; renderIdeas(); }
+        state.ideas = Array.isArray(data.ideas) ? data.ideas : []; state.projects = Array.isArray(data.projects) ? data.projects : []; loadedIdeaList = { search: currentSearch, project: currentProject, archived }; renderIdeas(); }
       catch (error) { fail(error); }
     }
     function renderIdeas() {
       project.replaceChildren(); for (const item of [{ id: "", name: "全部项目" }, { id: "unclassified", name: "未归类" }, ...state.projects]) { const option = make("option", item.name || item.label || item.id); option.value = item.id; project.append(option); } project.value = state.project;
-      ideaList.replaceChildren(); archiveToggle.textContent = state.archived ? "返回未归档" : "查看归档"; title.textContent = state.archived ? "归档想法" : "想法";
+      ideaList.replaceChildren(); archiveToggle.textContent = state.archived ? "返回未归档" : "查看归档"; if (state.view === "ideas") title.textContent = state.archived ? "归档想法" : "想法";
       if (!state.ideas.length) ideaList.append(make("p", state.search ? "没有找到这条想法，试试别的词。" : state.archived ? "还没有归档的想法。" : "值得留下的念头，点「只保存」就会出现在这里。", "dialogue-empty"));
       for (const idea of state.ideas) { const row = button("", () => void openIdea(idea.id), "dialogue-idea-row"), meta = make("div", "", "dialogue-idea-meta"); row.append(make("h3", idea.title || "未命名想法"), make("p", String(idea.body || "").slice(0, 220), "dialogue-idea-preview")); meta.append(make("span", state.projects.find(item => item.id === idea.projectId)?.name || "未归类"), make("span", when(idea.updatedAt))); if (idea.archived) meta.append(make("span", "已归档", "dialogue-archive-label")); row.append(meta); ideaList.append(row); }
+      renderSidebarIdeas();
     }
-    async function openIdea(id, refreshing = false) {
+    async function openIdea(id, refreshing = false, origin = null) {
       if (!id || state.busy) return;
       const sequence = ++ideaSequence;
-      if (!refreshing) { closeManagement(); state.listScroll = window.scrollY; persist(); state.view = "detail"; say(""); renderView(); }
-      try { const data = await call(`mobile/idea?id=${encodeURIComponent(id)}`); if (sequence !== ideaSequence || state.view === "chat" || state.view === "ideas" || refreshing && (pointEditor?.composing || editComposing.body || editComposing.execution)) return; if (data.idea?.id !== id) throw new Error("这条想法的身份暂时无法核对。"); state.idea = data.idea; state.ideaDetail = data.detail || null; const local = state.editDrafts[id]; if (local && typeof local.executionDraft === "string" && local.executionDirty === undefined) { local.executionDirty = local.executionDraft !== (data.idea.executionDraft || ""); if (!local.executionDirty) local.executionSource = editSource("execution", data.idea); persist(); } if (!state.editorDirty || !refreshing) { ideaTitle.value = local?.dirty ? local.title : data.idea?.title || ""; ideaBody.value = local?.dirty ? local.body : data.idea?.body || ""; state.editorDirty = Boolean(local?.dirty); } if (state.view === "execution" && !local?.executionDirty) executionText.value = data.idea.executionDraft || ""; renderIdea(); if (!refreshing) window.scrollTo({ top: 0, behavior: "auto" }); }
-      catch (error) { fail(error); }
+      if (!refreshing) {
+        capturePointEditor(); if (state.view === "detail" && state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution();
+        closeManagement(); if (state.view === "ideas") state.listScroll = window.scrollY; detailReturn = origin; persist(); state.idea = state.ideaDetail = null; state.editorDirty = false; pointEditor = null; clearPack(); state.view = "detail"; say("正在读取想法…"); renderIdea(); renderView();
+      }
+      try {
+        const data = await call(`mobile/idea?id=${encodeURIComponent(id)}`); if (sequence !== ideaSequence || state.view === "chat" || state.view === "ideas" || refreshing && (pointEditor?.composing || editComposing.body || editComposing.execution)) return; if (data.idea?.id !== id) throw new Error("这条想法的身份暂时无法核对。");
+        state.idea = data.idea; state.ideaDetail = data.detail || null; const local = state.editDrafts[id];
+        if (local && typeof local.executionDraft === "string" && local.executionDirty === undefined) { local.executionDirty = local.executionDraft !== (data.idea.executionDraft || ""); if (!local.executionDirty) local.executionSource = editSource("execution", data.idea); persist(); }
+        if (!state.editorDirty || !refreshing) { ideaTitle.value = local?.dirty ? local.title : data.idea?.title || ""; ideaBody.value = local?.dirty ? local.body : data.idea?.body || ""; state.editorDirty = Boolean(local?.dirty); }
+        if (state.view === "execution" && !local?.executionDirty) executionText.value = data.idea.executionDraft || ""; renderIdea(); if (!refreshing) { say(""); window.scrollTo({ top: 0, behavior: "auto" }); }
+      }
+      catch (error) { if (sequence === ideaSequence && ["detail", "execution"].includes(state.view)) fail(error); }
     }
     function renderIdea() {
       if (state.view === "detail") title.textContent = state.idea?.title || "想法";
-      const idea = state.idea; if (!idea) return; capturePointEditor(); pointEditor = null; detailMeta.textContent = `${when(idea.updatedAt)} · ${state.projects.find(item => item.id === idea.projectId)?.name || "未归类"}${idea.archived ? " · 已归档" : ""}`; archiveIdea.textContent = idea.archived ? "取消归档" : "归档想法"; autosize(ideaBody, 12000); pointsList.replaceChildren();
+      const idea = state.idea;
+      if (!idea) { ideaTitle.value = ideaBody.value = executionText.value = detailMeta.textContent = ""; pointsList.replaceChildren(); points.hidden = true; detailAttachments.replaceChildren(); renderEditReviews(); updateControls(); return; }
+      capturePointEditor(); pointEditor = null; detailMeta.textContent = `${when(idea.updatedAt)} · ${state.projects.find(item => item.id === idea.projectId)?.name || "未归类"}${idea.archived ? " · 已归档" : ""}`; archiveIdea.textContent = idea.archived ? "取消归档" : "归档想法"; autosize(ideaBody, 12000); pointsList.replaceChildren();
       if (packUrl && (packIdeaId !== idea.id || packRevision !== idea.revision)) clearPack();
       const keyPoints = Array.isArray(idea.keyPoints) ? idea.keyPoints : [], draft = state.pointDrafts[idea.id]; points.hidden = !keyPoints.length && !draft;
       for (const point of keyPoints) { const row = make("div", "", "dialogue-point"), actions = make("div", "", "dialogue-point-actions"), pointText = make("p", point.text || ""); actions.append(make("span", point.kind === "decision" ? "你确认的决定" : "待确认的建议"), button(point.kind === "decision" ? "改为建议" : "确认为决定", () => void changePointKind(idea.id, point.id, point.kind === "decision" ? "suggestion" : "decision")), button("编辑", () => editPoint(idea.id, point, row)), button("删除", () => void updateIdea({ keyPoints: keyPoints.filter(item => item.id !== point.id).map(pointInput) }, idea.id))); row.append(pointText, actions); pointsList.append(row); if (draft?.pointId === point.id) renderPointDraft(row, draft); }
@@ -810,7 +854,7 @@
       if (state.busy || !state.idea || state.editorDirty) return; state.busy = true; updateControls();
       if (state.pending) { state.busy = false; updateControls(); say("上一条操作是否送达还需要核对，暂不切换讨论；原草稿与请求编号保留。", true); return; }
       resultTransition = true; closeResultStream();
-      try { if (draftSync) await draftSync; saveLocalDraft(); const data = await call("mobile/dialogue/open", { requestId: uuid(), clientId: state.clientId, ideaId: state.idea.id, expectedIdeaRevision: state.idea.revision }); state.messageIds.clear(); applyDialogue(data); state.view = "chat"; restoreDraft(); renderView(); say(""); window.scrollTo({ top: 0, behavior: "auto" }); }
+      try { if (draftSync) await draftSync; saveLocalDraft(); const data = await call("mobile/dialogue/open", { requestId: uuid(), clientId: state.clientId, ideaId: state.idea.id, expectedIdeaRevision: state.idea.revision }); state.messageIds.clear(); applyDialogue(data); detailReturn = null; state.view = "chat"; restoreDraft(); renderView(); say(""); window.scrollTo({ top: 0, behavior: "auto" }); }
       catch (error) { fail(error); } finally { resultTransition = false; state.busy = false; updateControls(); syncResultStream(); }
     }
     function showExecutionDraft() { if (!state.idea || state.editorDirty) return; closeManagement(); state.view = "execution"; const draft = state.editDrafts[state.idea.id]; executionText.value = draft?.executionDirty ? draft.executionDraft : state.idea.executionDraft || state.idea.body || ""; if (!draft?.executionDirty && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); renderView(); autosize(executionText, 12000); window.scrollTo({ top: 0, behavior: "auto" }); }
@@ -844,7 +888,15 @@
       if (frozen.generation !== state.generation || state.idea?.id !== frozen.id || state.idea.executionDraft !== frozen.text) return;
       const result = await options.onExecution?.({ ...state.idea, ideaId: frozen.id, executionDraft: frozen.text }); if (result === false) say("工作区暂时无法打开，执行稿已保留。", true);
     }
-    async function goBack() { if (state.busy) return; closeManagement(); if (state.view === "execution") { state.view = "detail"; renderView(); return; } if (state.view === "detail") { if (state.editorDirty) persistEditor(); state.view = "ideas"; renderView(); await loadIdeas(); requestAnimationFrame(() => window.scrollTo({ top: state.listScroll, behavior: "auto" })); } else { state.listScroll = window.scrollY; persist(); state.view = "chat"; renderView(); requestAnimationFrame(() => window.scrollTo({ top: state.chatScroll, behavior: "auto" })); } }
+    async function goBack() {
+      if (state.busy) return; capturePointEditor(); closeManagement();
+      if (state.view === "execution") { state.view = "detail"; renderView(); return; }
+      if (state.view === "detail") {
+        if (state.editorDirty) persistEditor();
+        if (detailReturn?.view === "chat") { const origin = detailReturn; detailReturn = null; state.view = "chat"; renderView(); if (origin.sessionId === (state.session?.id || "") && origin.recordId === (state.session?.recordId || "")) restoreChatPosition(); return; }
+        const generation = state.generation, scroll = state.listScroll; state.view = "ideas"; renderView(); await loadIdeas(); restoreListPosition(generation, scroll);
+      } else { state.listScroll = window.scrollY; persist(); detailReturn = null; state.view = "chat"; renderView(); restoreChatPosition(); }
+    }
     function persistEditor() { if (!state.idea) return; const previous = state.editDrafts[state.idea.id] || {}; state.editDrafts[state.idea.id] = { ...previous, title: ideaTitle.value, body: ideaBody.value, dirty: true, bodySource: previous.dirty ? previous.bodySource : editSource("body") }; state.editorDirty = true; persist(); autosize(ideaBody, 12000); renderEditReviews(); updateControls(); }
     function openModule(module) { saveLocalDraft(); void syncDraft(); options.onModule?.(module); }
     function getWorkSource() {
@@ -889,7 +941,7 @@
     window.addEventListener("codex:dialogue-result", event => { if (state.active && event.detail?.clientId === state.clientId && event.detail?.sessionId === state.session?.id && event.detail?.recordId === state.session?.recordId) void refresh(); });
     persist(); restoreDraft(); renderCapability(); renderView();
     fileReading = blobs.get(filesKey).then(value => { if (value?.files) { files = value.files; fileOwner = value.fileOwner || null; uploadRequest = value.uploadRequest || null; renderFiles(); } }).catch(() => { /* No claim of file recovery is made without a readable store. */ }).finally(() => { fileReading = null; });
-    return { setConnectionStatus, setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { closeSidebar(false); closeResultStream(); capturePointEditor(); saveLocalDraft(); more.open = false; } }, refresh, getWorkSource, getWorkScope, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { closeSidebar(false); closeResultStream(); resultKey = resultCursor = ""; resultPending = null; capturePointEditor(); pointEditor = null; state.generation += 1; state.subscriptionReading = false; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.idea = state.ideaDetail = state.management = null; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
+    return { setConnectionStatus, setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { closeSidebar(false); closeResultStream(); capturePointEditor(); saveLocalDraft(); more.open = false; } }, refresh, getWorkSource, getWorkScope, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { closeSidebar(false); closeResultStream(); resultKey = resultCursor = ""; resultPending = null; capturePointEditor(); pointEditor = null; state.generation += 1; state.subscriptionReading = false; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.idea = state.ideaDetail = state.management = null; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; loadedIdeaList = detailReturn = null; renderSidebarIdeas(); state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
   }
   window.CodexMobileDialogue = Object.freeze({ create });
 })();

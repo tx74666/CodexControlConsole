@@ -636,7 +636,7 @@ await test("a failed durable picture removal keeps every actual file and allows 
   h.quota(false); h.byLabel("移除本次图片 不能丢失.png").click(); await flush(); assert.equal([...h.files.values()].some(row => row.files?.length), false); assert.equal(input.value, "保留文字"); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0); assert.equal(h.uploads.length, 0);
 });
 await test("the explicit Work progress menu preserves the draft without sending or creating another discussion", async () => {
-  const modules = [], h = harness({ options: { onModule(value) { modules.push(value); } } }); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "回来看进度以后继续写"; input.fire("input"); const original = structuredClone(h.current()); h.byText("Work · 执行进度").click(); await flush();
+  const modules = [], h = harness({ options: { onModule(value) { modules.push(value); } } }); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "回来看进度以后继续写"; input.fire("input"); const original = structuredClone(h.current()); h.byText("当前对话的执行进度").click(); await flush();
   assert.deepEqual(modules, ["workflow"]); assert.equal(h.current().id, original.id); assert.equal(input.value, "回来看进度以后继续写"); assert.equal(h.current().draft.text, input.value); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send" || item.action === "mobile/dialogue/open").length, 0);
 });
 await test("an old upload nonce without dialogue scope preserves its files and is never resent", async () => {
@@ -899,7 +899,7 @@ await test("Work source is an independent cache snapshot of this discussion and 
 });
 await test("Work source waits for composition saving and local images rather than silently exporting an incomplete draft", async () => {
   const h = harness(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "不能提前交接的中文草稿"; input.fire("compositionstart"); input.fire("input"); assert.equal(h.panel.getWorkSource(), null); input.fire("compositionend");
-  const wait = deferred(); h.hook(action => action === "mobile/dialogue/draft" ? wait.promise : undefined); h.byText("Work · 执行进度").click(); assert.equal(h.panel.getWorkSource(), null); await flush(); wait.resolve(h.value()); await flush(); h.hook(null); assert.equal(h.panel.getWorkSource().text, input.value);
+  const wait = deferred(); h.hook(action => action === "mobile/dialogue/draft" ? wait.promise : undefined); h.byText("当前对话的执行进度").click(); assert.equal(h.panel.getWorkSource(), null); await flush(); wait.resolve(h.value()); await flush(); h.hook(null); assert.equal(h.panel.getWorkSource().text, input.value);
   h.current().draft.attachmentIds = ["missing-original"]; await h.panel.refresh(); assert.equal(h.panel.getWorkSource(), null); h.current().draft.attachmentIds = []; await h.panel.refresh();
   const image = new Blob(["unsaved-local-image"], { type: "image/png" }); image.name = "尚未上传.png"; const picker = h.byLabel("选择图片文件"); picker.files = [image]; picker.fire("change"); await flush(); assert.equal(h.panel.getWorkSource(), null); assert.equal(h.uploads.length, 0); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
   const uncertain = harness(); uncertain.panel.setActive(true); await flush(); const other = uncertain.byLabel("提问或保存想法"); other.value = "原消息未知"; other.fire("input"); uncertain.hook(action => { if (action === "mobile/dialogue/send") throw new TypeError("receipt lost"); }); uncertain.byText("发送 ↑").click(); await flush(); const pending = JSON.parse([...uncertain.storage.values()][0]).pending; const before = uncertain.calls.length; assert.equal(uncertain.panel.getWorkSource(), null); assert.equal(uncertain.calls.length, before); assert.deepEqual(JSON.parse([...uncertain.storage.values()][0]).pending, pending);
@@ -1004,7 +1004,7 @@ await test("sidebar navigation reuses saved ideas and the current discussion wit
 });
 await test("sidebar existing module routes and offline connection keep drafts without dispatch or fake progress", async () => {
   const modules = [], h = harness({ options: { onModule(value) { modules.push(value); } } }); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "看过电脑会话后继续这段话"; input.fire("input");
-  for (const [label, expected] of [["电脑会话", "conversations"], ["Work · 执行进度", "workflow"], ["互传", "transfer"], ["音乐", "music"], ["资料", "documents"]]) { h.byLabel("打开侧栏").click(); h.byText(label).click(); await flush(); assert.equal(h.byClass("dialogue-sidebar").open, false); assert.equal(modules.at(-1), expected); assert.equal(input.value, "看过电脑会话后继续这段话"); }
+  for (const [label, expected] of [["电脑会话", "conversations"], ["当前对话的执行进度", "workflow"], ["互传", "transfer"], ["音乐", "music"], ["资料", "documents"]]) { h.byLabel("打开侧栏").click(); h.byText(label).click(); await flush(); assert.equal(h.byClass("dialogue-sidebar").open, false); assert.equal(modules.at(-1), expected); assert.equal(input.value, "看过电脑会话后继续这段话"); }
   assert.equal(h.calls.some(item => ["mobile/dialogue/send", "mobile/dialogue/clear", "mobile/dialogue/cancel-pending"].includes(item.action)), false);
   let connects = 0; const local = harness({ offline: true, options: { onConnect() { connects++; } } }); local.panel.setActive(true); await flush(); const localInput = local.byLabel("提问或保存想法"); localInput.value = "电脑不在线也保留"; localInput.fire("input"); const before = local.calls.length;
   local.byLabel("打开侧栏").click(); assert.equal(connects, 0); assert.equal(local.calls.length, before); local.byText("连接电脑继续").click(); assert.equal(connects, 1); assert.equal(localInput.value, "电脑不在线也保留"); assert.equal(local.byText("电脑会话"), undefined); assert.equal(local.calls.length, before);
@@ -1028,5 +1028,86 @@ await test("returning from idea B cannot borrow its title for idea A discussion 
   h.byLabel("打开侧栏").click(); h.byText("当前对话").click(); await flush(); assert.equal(h.byClass("dialogue-title").textContent, "想法讨论"); assert.doesNotMatch(h.byClass("dialogue-context").textContent, /B：另一个想法/); assert.equal(h.current().ideaId, source.ideaId); assert.equal(h.current().recordId, source.recordId); assert.equal(h.current().id, source.id); assert.equal(input.value, "只继续 A 的讨论");
   h.hook(action => { if (!action.startsWith("mobile/dialogue?")) return; const data = h.value(); data.detail.sourceTask = { ideaId: "idea-2", title: "B：另一个想法" }; return data; }); await h.panel.refresh(); assert.equal(h.byClass("dialogue-title").textContent, "想法讨论"); assert.doesNotMatch(h.byClass("dialogue-context").textContent, /B：另一个想法/); h.hook(null);
   h.byText("发送 ↑").click(); await flush(); const sent = h.calls.filter(item => item.action === "mobile/dialogue/send"); assert.equal(sent.length, 1); assert.equal(sent[0].payload.sessionId, source.id); assert.equal(sent[0].payload.text, "只继续 A 的讨论"); assert.equal(h.current().ideaId, "idea-1"); assert.equal(h.current().recordId, source.recordId);
+});
+await test("sidebar lists only up to six already read ideas in order and replaces keyboard targets on refresh", async () => {
+  const h = harness(); h.projects.push({ id: "project-a", name: "原有项目" }); h.ideas[0].projectId = "project-a";
+  for (let n = 2; n <= 8; n++) h.ideas.push({ ...structuredClone(h.ideas[0]), id: `idea-${n}`, title: `已存想法 ${n}` });
+  h.panel.setActive(true); await flush(); const sidebar = h.byClass("dialogue-sidebar"), list = h.byClass("dialogue-sidebar-idea-list"), section = h.byClass("dialogue-sidebar-ideas"), before = h.calls.length;
+  h.byLabel("打开侧栏").click(); assert.equal(list.children.length, 0); assert.match(section.textContent, /先打开想法列表/); assert.equal(h.calls.length, before); h.byLabel("关闭侧栏").click();
+  h.byText("想法").click(); await flush(); h.byLabel("打开侧栏").click();
+  assert.deepEqual(list.children.map(item => item.children[0].textContent), ["裙子双模式", "已存想法 2", "已存想法 3", "已存想法 4", "已存想法 5", "已存想法 6"]);
+  assert.match(list.children[0].textContent, /原有项目.*10\/5/); assert.match(section.children[1].textContent, /未归档想法.*全部项目.*前 6 条/); assert.doesNotMatch(section.textContent, /本机编辑草稿|执行中|任务数/);
+  const removed = list.children[5]; removed.focus(); let prevented = false; sidebar.fire("keydown", { key: "Tab", preventDefault() { prevented = true; } }); assert.equal(prevented, false); assert.equal(h.runtime.document.activeElement, removed);
+  h.byLabel("关闭侧栏").click(); h.ideas.splice(1); await h.panel.refresh(); h.byLabel("打开侧栏").click(); assert.equal(list.children.length, 1);
+  removed.focus(); sidebar.fire("keydown", { key: "Tab" }); assert.equal(h.runtime.document.activeElement, h.byLabel("关闭侧栏"));
+  list.children[0].focus(); prevented = false; sidebar.fire("keydown", { key: "Tab", preventDefault() { prevented = true; } }); assert.equal(prevented, false);
+  h.panel.clear(); assert.equal(list.children.length, 0); assert.match(section.textContent, /先打开想法列表/);
+});
+await test("sidebar names the loaded search project and archive scope while a newer filter is still unread", async () => {
+  const h = harness(); h.projects.push({ id: "project-a", name: "设计项目" }); h.ideas[0].projectId = "project-a"; h.ideas.push({ ...structuredClone(h.ideas[0]), id: "archived-a", title: "归档原想法", archived: true }); h.panel.setActive(true); await flush(); h.byText("想法").click(); await flush();
+  const search = h.byLabel("搜索想法"), project = h.byLabel("按项目筛选"); search.value = "裙子"; search.fire("input"); await flush(); project.value = "project-a"; project.fire("change"); await flush();
+  const section = h.byClass("dialogue-sidebar-ideas"), list = h.byClass("dialogue-sidebar-idea-list"), wait = deferred(); h.hook(action => action.startsWith("mobile/ideas?") ? wait.promise : undefined); search.value = "尚未读取的新词"; search.fire("input"); h.byLabel("打开侧栏").click();
+  assert.match(section.children[1].textContent, /未归档想法.*设计项目.*搜索「裙子」/); assert.doesNotMatch(section.children[1].textContent, /尚未读取/); h.byLabel("关闭侧栏").click();
+  wait.resolve({ ideas: [], projects: h.projects }); await flush(); h.hook(null); h.byLabel("打开侧栏").click(); assert.equal(list.children.length, 0); assert.match(section.children[1].textContent, /搜索「尚未读取的新词」.*当前筛选下没有想法/); h.byLabel("关闭侧栏").click();
+  h.byText("查看归档").click(); await flush(); h.byLabel("打开侧栏").click(); assert.match(section.children[1].textContent, /^归档想法/); assert.equal(list.children[0].children[0].textContent, "归档原想法"); assert.match(list.children[0].textContent, /已归档/);
+  assert.equal(h.calls.some(item => ["mobile/dialogue/open", "mobile/dialogue/send", "mobile/idea/update"].includes(item.action)), false);
+});
+await test("a sidebar idea opens its original record and returns to the exact chat draft without replacing list scroll", async () => {
+  const h = harness(); h.ideas.push({ ...structuredClone(h.ideas[0]), id: "idea-2", title: "B 的原记录", body: "B 的已保存正文", workflowRecordId: "record-b-saved" }); h.panel.setActive(true); await flush(); h.runtime.window.scrollY = 210;
+  h.byText("想法").click(); await flush(); h.runtime.window.scrollY = 380; h.byClass("dialogue-idea-row").click(); await flush(); h.byText("‹ 返回").click(); await flush(); assert.equal(h.runtime.window.scrollY, 380); h.byText("‹ 返回").click(); await flush();
+  const input = h.byLabel("提问或保存想法"), source = structuredClone(h.current()); input.value = "A 讨论的本机草稿\n第二行也保留"; input.fire("input"); h.runtime.window.scrollY = 640; const before = h.calls.length;
+  h.byLabel("打开侧栏").click(); h.byClass("dialogue-sidebar-idea-list").children[1].click(); await flush(); assert.equal(h.root.dataset.view, "detail"); assert.equal(h.byLabel("想法内容").value, "B 的已保存正文"); assert.equal(h.byClass("dialogue-title").textContent, "B 的原记录");
+  assert.equal(h.current().id, source.id); assert.equal(h.current().recordId, source.recordId); assert.equal(h.panel.getWorkScope().recordId, source.recordId); assert.equal(h.calls.slice(before).filter(item => item.action === "mobile/idea?id=idea-2").length, 1);
+  assert.equal(h.calls.slice(before).some(item => ["mobile/dialogue/open", "mobile/dialogue/send", "mobile/dialogue/save", "mobile/idea/update"].includes(item.action)), false);
+  h.byText("‹ 返回").click(); await flush(); assert.equal(h.root.dataset.view, "chat"); assert.equal(h.runtime.window.scrollY, 640); assert.equal(input.value, "A 讨论的本机草稿\n第二行也保留");
+  h.byText("想法").click(); await flush(); assert.equal(h.runtime.window.scrollY, 380); assert.equal(JSON.parse([...h.storage.values()][0]).listScroll, 380);
+});
+await test("sidebar switching keeps independent body execution and point drafts with accurate local markers", async () => {
+  const h = harness(); for (let n = 2; n <= 4; n++) h.ideas.push({ ...structuredClone(h.ideas[0]), id: `idea-${n}`, title: `想法 ${n}`, body: `已保存正文 ${n}`, executionDraft: `已保存执行稿 ${n}` }); h.panel.setActive(true); await flush(); h.byText("想法").click(); await flush();
+  const choose = async index => { h.byLabel("打开侧栏").click(); h.byClass("dialogue-sidebar-idea-list").children[index].click(); await flush(); };
+  await choose(0); h.byLabel("想法内容").value = "A 正文只留在本机"; h.byLabel("想法内容").fire("input");
+  await choose(1); h.byText("执行稿").click(); h.byLabel("执行稿").value = "B 执行稿尚未交给 Codex"; h.byLabel("执行稿").fire("input");
+  await choose(2); h.byText("编辑").click(); h.byLabel("编辑长期要点").value = "C 长期要点草稿"; h.byLabel("编辑长期要点").fire("input"); h.byLabel("要点类型").value = "decision"; h.byLabel("要点类型").fire("change");
+  await choose(0); assert.equal(h.byLabel("想法内容").value, "A 正文只留在本机"); h.byLabel("打开侧栏").click(); const rows = h.byClass("dialogue-sidebar-idea-list").children;
+  assert.deepEqual(rows.map(item => /本机编辑草稿/.test(item.textContent)), [true, true, true, false]); assert.equal(rows[0].attributes["aria-current"], "page"); rows[1].click(); await flush(); h.byText("执行稿").click(); assert.equal(h.byLabel("执行稿").value, "B 执行稿尚未交给 Codex");
+  await choose(2); assert.equal(h.byLabel("编辑长期要点").value, "C 长期要点草稿"); assert.equal(h.byLabel("要点类型").value, "decision");
+  const saved = JSON.parse([...h.storage.values()][0]); assert.equal(saved.editDrafts["idea-1"].body, "A 正文只留在本机"); assert.equal(saved.editDrafts["idea-2"].executionDraft, "B 执行稿尚未交给 Codex"); assert.equal(saved.pointDrafts["idea-3"].text, "C 长期要点草稿");
+  assert.equal(h.calls.some(item => ["mobile/dialogue/open", "mobile/dialogue/send", "mobile/idea/update"].includes(item.action)), false);
+});
+await test("a new idea read hides and disables A until its own receipt and late B cannot replace C", async () => {
+  const executed = [], h = harness({ options: { onExecution(value) { executed.push(value); } } }); h.ideas.push({ ...structuredClone(h.ideas[0]), id: "idea-2", title: "B 读取记录", body: "B 正文" }, { ...structuredClone(h.ideas[0]), id: "idea-3", title: "C 读取记录", body: "C 正文" }); h.panel.setActive(true); await flush(); await h.panel.openIdea("idea-1"); h.byLabel("想法内容").value = "A 必须保留的修改"; h.byLabel("想法内容").fire("input");
+  const b = deferred(), c = deferred(), bValue = { idea: structuredClone(h.ideas[1]), detail: null }, cValue = { idea: structuredClone(h.ideas[2]), detail: null }; h.hook(action => action === "mobile/idea?id=idea-2" ? b.promise : action === "mobile/idea?id=idea-3" ? c.promise : undefined); const openingB = h.panel.openIdea("idea-2");
+  assert.equal(h.byLabel("想法内容").value, ""); assert.equal(h.byLabel("想法标题").value, ""); assert.equal(h.byLabel("想法内容").disabled, true); assert.equal(h.byText("继续讨论").disabled, true); assert.equal(h.byText("执行稿").disabled, true); assert.equal(h.byText("归档想法").disabled, true); assert.equal(h.byText("交给 Codex").disabled, true); assert.match(h.byClass("dialogue-notice").textContent, /正在读取想法/); assert.equal(h.byText("编辑"), undefined);
+  h.byText("继续讨论").click(); h.byText("执行稿").click(); h.byText("交给 Codex").click(); h.byText("归档想法").click(); const openingC = h.panel.openIdea("idea-3"); c.resolve(cValue); await openingC;
+  assert.equal(h.byLabel("想法内容").value, "C 正文"); assert.equal(h.byLabel("想法内容").disabled, false); assert.equal(h.byClass("dialogue-title").textContent, "C 读取记录"); assert.equal(h.byClass("dialogue-notice").textContent, ""); b.resolve(bValue); await openingB;
+  assert.equal(h.byLabel("想法内容").value, "C 正文"); assert.equal(h.byClass("dialogue-title").textContent, "C 读取记录"); h.hook(null); await h.panel.openIdea("idea-1"); assert.equal(h.byLabel("想法内容").value, "A 必须保留的修改");
+  assert.equal(executed.length, 0); assert.equal(h.calls.some(item => ["mobile/dialogue/open", "mobile/dialogue/send", "mobile/idea/update", "mobile/idea/archive"].includes(item.action)), false);
+});
+await test("fresh answers behind the sidebar preserve both history and bottom positions while the body is fixed", async () => {
+  for (const position of [20, 1400]) {
+    const h = harness(); h.message({ id: "old-user", role: "user", text: "原讨论" }); h.panel.setActive(true); await flush(); h.runtime.window.scrollY = position; h.byLabel("打开侧栏").click(); h.runtime.window.scrollY = 0; h.scrolls.length = 0;
+    h.message({ id: `new-${position}`, role: "assistant", text: "新回复也在原讨论" }); await h.panel.refresh(); assert.equal(h.byClass("dialogue-sidebar").open, true); assert.equal(h.scrolls.length, 0); assert.equal(h.runtime.document.body.style.top, `-${position}px`); assert.equal(h.byText("有新回复 ↓").hidden, false);
+    h.byLabel("关闭侧栏").click(); assert.equal(h.runtime.window.scrollY, position); h.byText("有新回复 ↓").click(); assert.equal(h.runtime.window.scrollY, 2000);
+  }
+});
+await test("a deferred fresh-answer scroll checks current view sidebar and discussion identity", async () => {
+  for (const leave of ["detail", "sidebar", "another-discussion", "inactive"]) {
+    const h = harness(); h.message({ id: "old-user", role: "user", text: "原讨论" }); h.panel.setActive(true); await flush(); h.runtime.window.scrollY = 1400; const frames = []; h.runtime.requestAnimationFrame = callback => frames.push(callback); h.message({ id: "fresh-answer", role: "assistant", text: "等待绘制的新回复" }); await h.panel.refresh(); assert.equal(frames.length, 1);
+    if (leave === "detail") await h.panel.openIdea("idea-1"); else if (leave === "sidebar") h.byLabel("打开侧栏").click(); else if (leave === "inactive") h.panel.setActive(false); else { h.switchSession({ ...h.current(), id: "session-other", recordId: "record-other" }); await h.panel.refresh(); }
+    h.scrolls.length = 0; frames.forEach(callback => callback()); assert.equal(h.scrolls.length, 0, leave);
+  }
+  const h = harness(); h.panel.setActive(true); await flush(); h.runtime.window.scrollY = 1400; const frames = []; h.runtime.requestAnimationFrame = callback => frames.push(callback); h.message({ id: "same-discussion-answer", role: "assistant", text: "仍在同一讨论底部" }); await h.panel.refresh(); h.scrolls.length = 0; frames.forEach(callback => callback()); assert.equal(h.scrolls.at(-1).top, 2000);
+});
+await test("return scroll callbacks cannot move a cleared or inactive host after list loading", async () => {
+  for (const entry of ["ideas", "back"]) for (const leave of ["clear", "inactive"]) {
+    const h = harness(); h.panel.setActive(true); await flush(); if (entry === "back") await h.panel.openIdea("idea-1");
+    const frames = [], wait = deferred(); h.runtime.requestAnimationFrame = callback => frames.push(callback); h.hook(action => action.startsWith("mobile/ideas?") ? wait.promise : undefined);
+    const opening = entry === "ideas" ? h.panel.showIdeas() : (h.byText("‹ 返回").click(), null); await until(() => h.calls.some(item => item.action.startsWith("mobile/ideas?")), "list read started");
+    leave === "clear" ? h.panel.clear() : h.panel.setActive(false); wait.resolve({ ideas: h.ideas, projects: h.projects }); if (opening) await opening; await flush(); h.scrolls.length = 0; frames.forEach(callback => callback()); assert.equal(h.scrolls.length, 0, `${entry} / ${leave}`);
+  }
+  for (const leave of ["clear", "inactive"]) {
+    const h = harness(); h.panel.setActive(true); await flush(); h.byText("想法").click(); await flush(); const frames = []; h.runtime.requestAnimationFrame = callback => frames.push(callback); h.byText("‹ 返回").click(); assert.equal(frames.length, 1);
+    leave === "clear" ? h.panel.clear() : h.panel.setActive(false); h.scrolls.length = 0; frames.forEach(callback => callback()); assert.equal(h.scrolls.length, 0, `chat / ${leave}`);
+  }
 });
 console.log(`${count} mobile dialogue behavior checks passed.`);
