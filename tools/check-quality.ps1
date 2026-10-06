@@ -92,6 +92,8 @@ $PythonSources = @(
   "workflow_subscription_delivery.py",
   "workflow_script_proposals.py",
   "workflow_native_work.py",
+  "workflow_codex_work.py",
+  "workflow_codex_work_service.py",
   "workflow_process.py",
   "workflow_http.py",
   "workflow_models.py",
@@ -146,6 +148,9 @@ $PythonChecks = @(
   "tools/check-workflow.py",
   "tools/check-package-runtime.py",
   "tools/check-workflow-subscription.py",
+  "tools/check-workflow-codex-work.py",
+  "tools/check-workflow-codex-work-service.py",
+  "tools/check-workflow-codex-work-http.py",
   "tools/check-workflow-subscription-stream.py",
   "tools/check-workflow-subscription-delivery.py",
   "tools/check-mobile-dialogue.py",
@@ -200,6 +205,9 @@ try {
     "mobile.js",
     "mobile.css",
     "mobile-dialogue.js",
+    "codex-work-panel.js",
+    "codex-work-panel.css",
+    "tools/check-codex-work-panel-ui.mjs",
     "subscription.html",
     "subscription.css",
     "subscription.js",
@@ -271,6 +279,8 @@ try {
   Invoke-QualityStep "Conversation browser UI" { & $Node tools/check-conversations-ui.mjs }
   Invoke-QualityStep "Task incubator UI" { & $Node tools/check-incubator-ui.mjs }
   Invoke-QualityStep "Workflow JavaScript syntax" { & $Node --check workflow-panel.js }
+  Invoke-QualityStep "Codex Work JavaScript syntax" { & $Node --check codex-work-panel.js }
+  Invoke-QualityStep "Codex Work UI" { & $Node tools/check-codex-work-panel-ui.mjs }
   Invoke-QualityStep "Workflow UI" { & $Node tools/check-workflow-ui.mjs }
   Invoke-QualityStep "Bidirectional transfer UI" { & $Node tools/check-transfer-ui.mjs }
   Invoke-QualityStep "Document reader JavaScript syntax" { & $Node --check document-reader.js }

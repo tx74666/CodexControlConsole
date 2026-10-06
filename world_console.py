@@ -59,6 +59,7 @@ from phone_device_store import PhoneDeviceStore
 from phone_discovery import DiscoveryAnnouncer
 from transfer_store import TransferStore, TransferError, read_transfer_request, send_transfer_attachment
 from workflow_service import WorkflowError, WorkflowService
+from workflow_codex_work import CodexWorkController
 from workflow_chat_relay import ChatRelayBroker
 from workflow_subscription import SubscriptionBroker
 from workflow_models import WorkflowModels, WorkflowModelError
@@ -454,6 +455,18 @@ def workflow_job_finished():
     CONSOLE_WINDOW_SESSIONS.reconsider_shutdown()
 
 
+def find_codex_work_cli():
+    """Locate the installed Codex binary; never guess a retired version hash."""
+    vendor_bin = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "OpenAI/Codex/bin"
+    candidates = list(vendor_bin.glob("*/codex.exe")) if vendor_bin.is_dir() else []
+    candidates = [path for path in candidates if path.is_file() and not path.is_symlink()
+                  and not getattr(path, "is_junction", lambda: False)()
+                  and not getattr(path.parent, "is_junction", lambda: False)()]
+    if candidates:
+        return str(max(candidates, key=lambda path: path.stat().st_mtime_ns).resolve())
+    return shutil.which("codex")
+
+
 WORKFLOW_DATA_DIR = USER_DATA_DIR / "workflow-private"
 WORKFLOW_MODELS = WorkflowModels(WORKFLOW_DATA_DIR)
 WORKFLOW_SERVICE = WorkflowService(
@@ -470,6 +483,8 @@ CHAT_RELAY_BROKER = ChatRelayBroker(WORKFLOW_SERVICE)
 WORKFLOW_SERVICE._chat_relay_broker = CHAT_RELAY_BROKER
 SUBSCRIPTION_BROKER = SubscriptionBroker(WORKFLOW_SERVICE)
 WORKFLOW_SERVICE.subscription = SUBSCRIPTION_BROKER
+WORKFLOW_SERVICE.codex_work = CodexWorkController(SUBSCRIPTION_BROKER, WORKFLOW_DATA_DIR,
+    version=APP_VERSION, executable=find_codex_work_cli())
 
 WORLD_CACHE = CACHE_DIR / "world.geojson"
 TRANSLATION_CACHE = CACHE_DIR / "translations.json"
@@ -12178,6 +12193,7 @@ def main():
             server_thread.start()
             WORKFLOW_SERVICE.start()
             SUBSCRIPTION_BROKER.start()
+            WORKFLOW_SERVICE.codex_work.start()
             try:
                 CHAT_RELAY_BROKER.start()
             except (OSError, ValueError, sqlite3.Error):

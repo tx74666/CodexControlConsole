@@ -1,0 +1,8 @@
+.codex-work-panel { gap: 16px; }
+.codex-work-source { display: grid; gap: 12px; }
+.codex-work-source textarea { width: 100%; resize: vertical; box-sizing: border-box; }
+.codex-work-agent { border: 1px solid var(--border, #34405b); border-radius: 18px; padding: 16px; margin: 12px 0; background: var(--surface, #1b2234); }
+.codex-work-agent h3 { margin-top: 0; }
+.codex-work-progress, .codex-work-review-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; font: inherit; }
+.codex-work-panel .workflow-button { min-height: 44px; }
+.codex-work-panel select, .codex-work-panel input { min-height: 44px; }

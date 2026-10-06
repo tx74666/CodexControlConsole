@@ -1654,16 +1654,17 @@ await test("production worker runtime uses branded WorkerGlobalScope default tim
 });
 await test("production worker default timers clear on readiness cancellation or error and never deliver prepare", async () => {
   for (const trigger of ["cancel", "error"]) {
-    const f = await brandWorkerRuntime(), send = f.api.tabs.sendMessage.bind(f.api.tabs); let release;
+    const f = await brandWorkerRuntime(), send = f.api.tabs.sendMessage.bind(f.api.tabs); let release, reached;
+    const readonlyReached = new Promise(resolve => { reached = resolve; });
     f.api.tabs.sendMessage = (id, value, options) => {
       if (value.type !== "relay.content.readiness") return send(id, value, options);
       f.calls.push({ id, value: clone(value), options: clone(options) });
       if (trigger === "error") return Promise.reject(new Error("fixture readonly DOM rejected"));
-      return new Promise(resolve => { release = resolve; });
+      return new Promise(resolve => { release = resolve; reached(); });
     };
     const pending = f.controller.native(prepare);
     if (trigger === "cancel") {
-      await brandTurnUntil(() => typeof release === "function", "Worker readonly probe was never reached");
+      await brandSettled(readonlyReached, "Worker readonly probe was never reached");
       assert.equal(f.timing.timers.size, 1); f.controller.cancelOwned();
     }
     await brandSettled(pending, "Worker cancellation/error did not settle");

@@ -57,6 +57,7 @@ ASSETS = {
     "/mobile-handoff.js": "mobile-handoff.js",
     "/transfer-panel.js": "transfer-panel.js", "/transfer-panel.css": "transfer-panel.css",
     "/workflow-panel.js": "workflow-panel.js", "/workflow-panel.css": "workflow-panel.css",
+    "/codex-work-panel.js": "codex-work-panel.js", "/codex-work-panel.css": "codex-work-panel.css",
     "/incubator-panel.js": "incubator-panel.js", "/incubator-panel.css": "incubator-panel.css",
     "/conversations-panel.js": "conversations-panel.js", "/conversations-panel.css": "conversations-panel.css",
     "/mobile.webmanifest": "mobile.webmanifest",
@@ -458,6 +459,7 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                         authorize()
                         result = workflow_import_idea(companion.workflow_service, fields, files, prefix="/api/phone/workflow", authorize=authorize)
                 elif action in {"create", "message", "submit", "discuss", "transcribe", "retry", "task-record", "app-work", "app-work/end",
+                                "codex-work/review", "codex-work/submit", "codex-work/cancel", "codex-work/setup", "codex-work/workspaces",
                                 "incubator/create", "incubator/update", "incubator/publish", "incubator/refinement/pause", "conversations/request",
                                 "mobile/dialogue/open", "mobile/dialogue/draft", "mobile/dialogue/clear", "mobile/dialogue/send",
                                 "mobile/dialogue/cancel-pending",

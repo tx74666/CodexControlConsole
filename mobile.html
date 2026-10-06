@@ -11,19 +11,21 @@
   <link rel="manifest" href="/mobile.webmanifest">
   <link rel="apple-touch-icon" href="/phone/phone-icon-180.png?v=phone-white-72" sizes="180x180">
   <link rel="icon" href="/phone/phone-icon-192.png?v=phone-white-72" type="image/png">
-  <link rel="stylesheet" href="/mobile.css?v=console-agents-1.0.66-20261006">
+  <link rel="stylesheet" href="/mobile.css?v=console-agents-1.0.67-20261006">
   <link rel="stylesheet" href="/transfer-panel.css?v=console-transfer-1.0.30-phone-message-20261004">
   <script src="/transfer-panel.js?v=console-transfer-1.0.30-phone-message-20261004" defer></script>
-  <link rel="stylesheet" href="/workflow-panel.css?v=console-agents-1.0.66-20261006">
-  <script src="/workflow-panel.js?v=console-agents-1.0.66-20261006" defer></script>
-  <link rel="stylesheet" href="/incubator-panel.css?v=console-agents-1.0.66-20261006">
-  <script src="/incubator-panel.js?v=console-agents-1.0.66-20261006" defer></script>
-  <link rel="stylesheet" href="/conversations-panel.css?v=console-agents-1.0.66-20261006">
-  <script src="/conversations-panel.js?v=console-agents-1.0.66-20261006" defer></script>
-  <link rel="stylesheet" href="/mobile-dialogue.css?v=console-agents-1.0.66-20261006">
-  <script src="/mobile-dialogue.js?v=console-agents-1.0.66-20261006" defer></script>
-  <script src="/mobile-handoff.js?v=console-agents-1.0.66-20261006" defer></script>
-  <script src="/mobile.js?v=console-agents-1.0.66-20261006" defer></script>
+  <link rel="stylesheet" href="/workflow-panel.css?v=console-agents-1.0.67-20261006">
+  <script src="/workflow-panel.js?v=console-agents-1.0.67-20261006" defer></script>
+  <link rel="stylesheet" href="/codex-work-panel.css?v=console-agents-1.0.67-20261006">
+  <script src="/codex-work-panel.js?v=console-agents-1.0.67-20261006" defer></script>
+  <link rel="stylesheet" href="/incubator-panel.css?v=console-agents-1.0.67-20261006">
+  <script src="/incubator-panel.js?v=console-agents-1.0.67-20261006" defer></script>
+  <link rel="stylesheet" href="/conversations-panel.css?v=console-agents-1.0.67-20261006">
+  <script src="/conversations-panel.js?v=console-agents-1.0.67-20261006" defer></script>
+  <link rel="stylesheet" href="/mobile-dialogue.css?v=console-agents-1.0.67-20261006">
+  <script src="/mobile-dialogue.js?v=console-agents-1.0.67-20261006" defer></script>
+  <script src="/mobile-handoff.js?v=console-agents-1.0.67-20261006" defer></script>
+  <script src="/mobile.js?v=console-agents-1.0.67-20261006" defer></script>
 </head>
 <body>
   <header class="app-header" id="appHeader">
@@ -56,9 +58,10 @@
       <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
       <section id="workPanel" class="tab-panel" hidden aria-label="工作记录">
         <div id="phoneDialoguePanel"></div>
-        <nav class="work-view-nav" aria-label="Console 工作区"><button type="button" data-work-view="dialogue" aria-pressed="true">返回对话</button><button type="button" data-work-view="ideas" aria-pressed="false">任务工作区</button><details class="work-view-more"><summary>其它入口</summary><button type="button" data-work-view="conversations" aria-pressed="false">Projects / Recents · 会话</button><button type="button" data-work-view="workflow" aria-pressed="false">独立工作记录</button></details></nav>
+        <nav class="work-view-nav" aria-label="Console 工作区"><button type="button" data-work-view="dialogue" aria-pressed="true">返回对话</button><button type="button" data-work-view="ideas" aria-pressed="false">任务工作区</button><button type="button" data-work-view="agents" aria-pressed="false">Work Agents</button><details class="work-view-more"><summary>其它入口</summary><button type="button" data-work-view="conversations" aria-pressed="false">Projects / Recents · 会话</button><button type="button" data-work-view="workflow" aria-pressed="false">独立工作记录</button></details></nav>
         <div id="phoneWorkIdeas"><div id="phoneIncubatorPanel"></div></div>
         <div id="phoneConversationsPanel" hidden></div>
+        <div id="phoneCodexWorkPanel" hidden></div>
         <p id="phoneWorkNotice" class="muted small">Console 工作区 · 任务底稿、Chat、Work 和 Output 在同一处。保存不等于执行。</p>
         <details id="phoneWorkflowDetails" class="document-section" hidden><summary>工作记录与电脑执行</summary><div id="phoneWorkflowPanel"></div></details>
         <details class="document-section"><summary>执行清单</summary>

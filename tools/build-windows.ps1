@@ -270,6 +270,8 @@ if ($BuildApplication) {
   @{ Source = "transfer-panel.css"; Destination = "." },
   @{ Source = "workflow-panel.js"; Destination = "." },
   @{ Source = "workflow-panel.css"; Destination = "." },
+  @{ Source = "codex-work-panel.js"; Destination = "." },
+  @{ Source = "codex-work-panel.css"; Destination = "." },
   @{ Source = "incubator-panel.js"; Destination = "." },
   @{ Source = "incubator-panel.css"; Destination = "." },
   @{ Source = "conversations-panel.js"; Destination = "." },

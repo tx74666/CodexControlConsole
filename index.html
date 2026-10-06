@@ -50,11 +50,12 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=console-agents-1.0.66-20261006">
+  <link rel="stylesheet" href="styles.css?v=console-agents-1.0.67-20261006">
   <link rel="stylesheet" href="transfer-panel.css?v=console-transfer-1.0.30-phone-message-20261004">
-  <link rel="stylesheet" href="workflow-panel.css?v=console-agents-1.0.66-20261006">
-  <link rel="stylesheet" href="conversations-panel.css?v=console-agents-1.0.66-20261006">
-  <link rel="stylesheet" href="incubator-panel.css?v=console-agents-1.0.66-20261006">
+  <link rel="stylesheet" href="workflow-panel.css?v=console-agents-1.0.67-20261006">
+  <link rel="stylesheet" href="codex-work-panel.css?v=console-agents-1.0.67-20261006">
+  <link rel="stylesheet" href="conversations-panel.css?v=console-agents-1.0.67-20261006">
+  <link rel="stylesheet" href="incubator-panel.css?v=console-agents-1.0.67-20261006">
 </head>
 <body>
   <main class="app-shell">
@@ -157,7 +158,7 @@
 
       <div class="console-view-stage">
         <section id="consoleWorkView" class="console-subview panel" data-console-view="work" role="tabpanel" aria-labelledby="consoleWorkTab">
-          <nav class="work-view-nav" aria-label="Console 工作区"><button type="button" data-work-view="ideas" aria-pressed="true">任务 · Chat / Work / Output</button><details class="work-view-more"><summary>其它入口</summary><button type="button" data-work-view="conversations" aria-pressed="false">Projects / Recents · 会话</button><button type="button" data-work-view="workflow" aria-pressed="false">独立工作记录</button></details></nav>
+          <nav class="work-view-nav" aria-label="Console 工作区"><button type="button" data-work-view="ideas" aria-pressed="true">任务 · Chat / Work / Output</button><button type="button" data-work-view="agents" aria-pressed="false">Work Agents</button><details class="work-view-more"><summary>其它入口</summary><button type="button" data-work-view="conversations" aria-pressed="false">Projects / Recents · 会话</button><button type="button" data-work-view="workflow" aria-pressed="false">独立工作记录</button></details></nav>
           <details class="work-secondary"><summary>ChatGPT 订阅连接</summary><p>正式授权后，手机可选择账号实际提供的模型，文字与选图的回答保存回原记录。</p><a href="./subscription.html">打开订阅连接设置</a></details>
           <div id="desktopWorkIdeas"><div id="desktopIncubatorPanel"></div></div>
           <div id="desktopConversationsPanel" hidden></div>
@@ -182,6 +183,7 @@
         <div id="workspaceTodoList" class="workspace-todo-list"></div>
       </section>
           </details>
+          <div id="desktopCodexWorkPanel" hidden></div>
           <details id="desktopWorkflowDetails" class="work-secondary" hidden><summary>工作记录与电脑执行</summary><div id="desktopWorkflowPanel"></div></details>
         </section>
         <section id="consoleTransferView" class="console-subview panel" data-console-view="transfer" role="tabpanel" aria-labelledby="consoleTransferTab" hidden>
@@ -1365,10 +1367,11 @@
 <script src="/api/release-defaults.js"></script>
 <script src="/api/workspace-plan.js"></script>
 <script src="transfer-panel.js?v=console-transfer-1.0.30-phone-message-20261004"></script>
-<script src="workflow-panel.js?v=console-agents-1.0.66-20261006"></script>
-<script src="conversations-panel.js?v=console-agents-1.0.66-20261006"></script>
-<script src="incubator-panel.js?v=console-agents-1.0.66-20261006"></script>
-  <script src="app.js?v=console-agents-1.0.66-20261006"></script>
+<script src="workflow-panel.js?v=console-agents-1.0.67-20261006"></script>
+<script src="codex-work-panel.js?v=console-agents-1.0.67-20261006"></script>
+<script src="conversations-panel.js?v=console-agents-1.0.67-20261006"></script>
+<script src="incubator-panel.js?v=console-agents-1.0.67-20261006"></script>
+  <script src="app.js?v=console-agents-1.0.67-20261006"></script>
 <script src="phone-pairing.js?v=console-connect-1.0.27"></script>
 <script src="phone-offline-export.js?v=console-connect-1.0.27"></script>
 </body>

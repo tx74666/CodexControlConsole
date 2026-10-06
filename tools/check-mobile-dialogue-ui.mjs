@@ -31,6 +31,7 @@ class Element {
   set innerHTML(_) { throw new Error("Untrusted content must stay text."); }
   setAttribute(key, value) { this.attributes[key] = String(value); }
   addEventListener(event, callback) { const items = this.listeners.get(event) || []; items.push(callback); this.listeners.set(event, items); }
+  contains(node) { return this === node || this.children.some(child => child.contains(node)); }
   fire(event, value = {}) { for (const callback of this.listeners.get(event) || []) callback({ preventDefault() {}, ...value }); }
   click() { if (!this.disabled) this.fire("click"); }
   focus() { this.focused = true; }
@@ -809,5 +810,68 @@ await test("legacy missing or ambiguous message timestamps stay unknown without 
   h.panel.setActive(true); await flush(); await h.panel.refresh();
   for (const row of h.byClass("dialogue-messages").children) { const clock = row.children[0].children.find(item => item.tagName === "TIME"); assert.equal(clock.textContent, "时间未记录"); assert.equal(clock.attributes.datetime, undefined); }
   assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear();
+});
+await test("outside taps dismiss only dialogue popups without consuming input or reopening their summary", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); h.uploadedImage("selected", "原选图.png"); h.current().draft.attachmentIds = ["selected"]; await h.panel.refresh();
+  const input = h.byLabel("提问或保存想法"); input.value = "中文语音仍在输入"; input.selectionStart = 2; input.selectionEnd = 5; input.fire("compositionstart"); input.fire("input");
+  const more = h.byClass("dialogue-more"), images = h.byClass("dialogue-saved-image-picker"), tap = target => h.events.get("pointerdown")({ target, preventDefault() { throw new Error("outside dismissal must not consume the tap"); } });
+  more.open = true; tap(more.children[0]); assert.equal(more.open, true); more.open = !more.open; assert.equal(more.open, false);
+  more.open = true; tap(h.byLabel("讨论通道")); assert.equal(more.open, true);
+  images.open = true; tap(h.byLabel("本次引用 原选图.png")); assert.equal(images.open, true); assert.equal(more.open, false);
+  more.open = images.open = true; const before = h.calls.length; tap(input); assert.equal(more.open, false); assert.equal(images.open, false);
+  assert.equal(input.value, "中文语音仍在输入"); assert.equal(input.selectionStart, 2); assert.equal(input.selectionEnd, 5); assert.equal(h.byText("发送 ↑").disabled, true); assert.deepEqual(h.current().draft.attachmentIds, ["selected"]); assert.equal(h.calls.length, before);
+  input.fire("compositionend"); assert.equal(h.byText("发送 ↑").disabled, false);
+  await h.panel.openIdea("idea-1"); const ideaMore = h.byClass("dialogue-detail-actions").children.find(node => node.tagName === "DETAILS"), body = h.byLabel("想法内容"); body.value = "保留想法中文选区"; body.selectionStart = 1; body.selectionEnd = 4; body.fire("compositionstart"); body.fire("input"); ideaMore.open = true; tap(ideaMore.children[0]); assert.equal(ideaMore.open, true); tap(body); assert.equal(ideaMore.open, false); assert.equal(body.value, "保留想法中文选区"); assert.equal(body.selectionStart, 1); assert.equal(body.selectionEnd, 4); body.fire("compositionend"); h.panel.clear();
+  const after = h.calls.length; more.open = true; tap(new Element()); assert.equal(more.open, true); assert.equal(h.calls.length, after);
+});
+await test("catalog initialization visibly blocks the picker and restores real choices without selecting or sending", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "等待目录时保留正文"; input.fire("input");
+  const wait = deferred(); h.hook(action => action === "subscription/status" ? wait.promise : undefined);
+  const channel = h.byLabel("讨论通道"); channel.value = "chatgpt_subscription"; channel.fire("change");
+  assert.match(h.byClass("dialogue-model-feedback").textContent, /正在读取.*模型状态/); assert.equal(h.byLabel("ChatGPT 订阅实际模型").disabled, true); assert.equal(h.byText("查看模型状态").disabled, true);
+  wait.resolve({ ...subscriptionCatalog(), connected: false, catalogRevision: null, models: [], profileMappings: {}, status: "catalog_required" }); await flush(); h.hook(null);
+  assert.match(h.byClass("dialogue-model-feedback").textContent, /模型目录尚未准备好.*电脑/); assert.equal(h.byClass("dialogue-model-row").hidden, false); assert.equal(h.byText("查看模型状态").hidden, false); assert.equal(input.value, "等待目录时保留正文"); assert.equal(h.byText("发送 ↑").disabled, true);
+  for (const [state, message] of [["catalog_loading", /正在恢复模型目录/], ["catalog_failed", /读取模型目录未完成/]]) { h.setSubscriptionStatus({ ...subscriptionCatalog(), connected: false, models: [], catalogRevision: null, profileMappings: {}, status: state }); h.byText("查看模型状态").click(); await flush(); assert.match(h.byClass("dialogue-model-feedback").textContent, message); assert.equal(h.byLabel("ChatGPT 订阅实际模型").disabled, true); }
+  h.setSubscriptionStatus(subscriptionCatalog()); const before = h.calls.length; h.byText("查看模型状态").click(); await flush(); const requests = h.calls.slice(before); assert.deepEqual(requests.map(item => item.action), ["subscription/status"]); assert.equal(requests[0].payload, undefined);
+  const picker = h.byLabel("ChatGPT 订阅实际模型"); assert.equal(picker.disabled, false); assert.equal(picker.value, ""); assert.deepEqual(picker.children.map(item => item.value), ["", "model-first", "model-second"]); assert.equal(h.byText("发送 ↑").disabled, true);
+  picker.value = "model-second"; picker.fire("change"); await flush(); assert.equal(h.byText("发送 ↑").disabled, false); assert.equal(input.value, "等待目录时保留正文"); assert.equal(h.calls.some(item => item.action.includes("signin") || item.action === "subscription/models" || item.action === "mobile/dialogue/send"), false);
+});
+await test("stale model feedback stays visible outside More and requires an explicit recovered selection", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); await chooseSubscription(h); const input = h.byLabel("提问或保存想法"); input.value = "旧模型和档位原文"; input.fire("input");
+  h.setSubscriptionStatus({ ...subscriptionCatalog(), catalogRevision: "catalog-recovered" }); h.byText("查看订阅连接").click(); await flush();
+  assert.match(h.byClass("dialogue-model-feedback").textContent, /目录或连接已变化.*重新选择/); assert.equal(h.byClass("dialogue-more").open, undefined); assert.equal(h.byLabel("ChatGPT 订阅实际模型").value, "stale:model-second"); assert.equal(h.byText("发送 ↑").disabled, true);
+  h.byLabel("ChatGPT 订阅实际模型").value = "model-first"; h.byLabel("ChatGPT 订阅实际模型").fire("change"); await flush(); assert.match(h.byClass("dialogue-model-feedback").textContent, /当前选择已保存/); assert.equal(h.byLabel("回答档位").value, "high"); assert.equal(input.value, "旧模型和档位原文"); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+});
+const subscriptionReviewJob = (h, extra = {}) => ({ ...scopedMobileJob(h, "waiting", "raw exception must not be rendered"), chatTransport: "chatgpt_subscription", subscription: { provider: "chatgpt_subscription", connectionId: "connection-actual", catalogRevision: "catalog-actual", modelSlug: "model-second", requestedProfile: "high", reasoning: { mode: "standard", effort: "high" } }, subscriptionPhase: "unknown", appDispatch: { id: "4".repeat(32), status: "needs_review", error: "private raw error must not be rendered" }, result: { source: "chatgpt_subscription", status: "unknown", code: "completed_reasoning_unverified", actualProfileVerified: false, partialText: "这是真实收到但尚待核对的文字。\n<script>不能执行</script>", partialTextComplete: false }, ...extra });
+await test("subscription review shows a safe specific reason and received text without a completed assistant or replay", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); await chooseSubscription(h); const original = "A：唯一确认消息"; h.message({ id: "original-question", role: "user", text: original }); h.setJobs([subscriptionReviewJob(h)]);
+  const input = h.byLabel("提问或保存想法"); input.value = "B：之后中文草稿"; input.fire("input"); await h.panel.refresh();
+  assert.equal(h.byClass("dialogue-pending").dataset.status, "needs_review"); assert.match(h.byClass("dialogue-pending").textContent, /实际档位未返回/); assert.match(h.byClass("dialogue-review-label").textContent, /已收到文字 · 待核对/); assert.equal(h.byClass("dialogue-review-text").textContent, subscriptionReviewJob(h).result.partialText);
+  assert.doesNotMatch(h.root.textContent, /raw exception|private raw|回答已保存|最近回执已核实/); assert.equal(h.byClass("dialogue-messages").children.filter(row => row.dataset.role === "assistant").length, 0); assert.equal(input.value, "B：之后中文草稿"); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  for (const [code, expected] of [["completed_reasoning_mismatch", /实际档位.*不一致/], ["unknown_provider_code_token_secret", /证据尚未核实/]]) { const job = subscriptionReviewJob(h); job.result.code = code; h.setJobs([job]); await h.panel.refresh(); assert.match(h.byClass("dialogue-pending").textContent, expected); assert.doesNotMatch(h.root.textContent, /unknown_provider_code_token_secret/); }
+});
+await test("foreign or malformed review evidence never becomes visible received text in the current session", async () => {
+  for (const alter of [job => { job.mobileDialogue.id = "old-session"; }, job => { job.mobileDialogue.clientId = randomUUID(); }, job => { job.mobileDialogue.recordId = "foreign-record"; }, job => { job.result.source = "foreign_source"; }, job => { job.result.status = "completed"; }, job => { job.result.partialTextComplete = true; }, job => { job.result.partialText = "x".repeat(128 * 1024 + 1); }]) {
+    const h = harness(), job = subscriptionReviewJob(h); alter(job); h.setJobs([job]); h.panel.setActive(true); await flush(); assert.equal(h.byClass("dialogue-review-answer"), undefined); assert.doesNotMatch(h.root.textContent, /这是真实收到|raw exception|private raw/); assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear();
+  }
+});
+await test("review read preserves a durable unknown send nonce and later draft without automatic retry", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); await chooseSubscription(h); const input = h.byLabel("提问或保存想法"); input.value = "A：送达未知的原请求"; input.fire("input"); h.hook(action => { if (action === "mobile/dialogue/send") throw new TypeError("response lost"); }); h.byText("发送 ↑").click(); await flush();
+  const frozen = JSON.parse([...h.storage.values()][0]).pending; input.value = "B：新草稿保留"; input.fire("input"); h.hook(null); h.setJobs([subscriptionReviewJob(h)]); await h.panel.refresh();
+  assert.deepEqual(JSON.parse([...h.storage.values()][0]).pending, frozen); assert.equal(input.value, "B：新草稿保留"); assert.equal(h.byLabel("回答档位").disabled, true); assert.match(h.byClass("dialogue-review-label").textContent, /待核对/); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1);
+});
+await test("Work source is an independent cache snapshot of this discussion and never submits or drops selected images", async () => {
+  const h = harness(); assert.equal(h.panel.getWorkSource(), null); h.panel.setActive(true); await flush(); h.uploadedImage("original-image", "本轮原图.png"); h.current().draft.attachmentIds = ["original-image"]; await h.panel.refresh();
+  const input = h.byLabel("提问或保存想法"); input.value = "  当前草稿原文\n保留换行  "; input.fire("input"); const before = h.calls.length, source = structuredClone(h.panel.getWorkSource());
+  assert.deepEqual(Object.keys(source).sort(), ["attachmentIds", "clientId", "expectedRevision", "recordId", "sessionId", "text"]); assert.equal(source.recordId, h.current().recordId); assert.equal(source.clientId, h.current().clientId); assert.equal(source.sessionId, h.current().id); assert.equal(source.expectedRevision, h.current().revision); assert.equal(source.text, input.value); assert.deepEqual(source.attachmentIds, ["original-image"]);
+  source.attachmentIds.push("tampered-copy"); assert.deepEqual(structuredClone(h.panel.getWorkSource()).attachmentIds, ["original-image"]); assert.equal(h.calls.length, before);
+  h.panel.setActive(false); assert.equal(h.panel.getWorkSource().text, input.value); assert.equal(h.calls.length, before); h.panel.clear(); assert.equal(h.panel.getWorkSource(), null);
+});
+await test("Work source waits for composition saving and local images rather than silently exporting an incomplete draft", async () => {
+  const h = harness(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "不能提前交接的中文草稿"; input.fire("compositionstart"); input.fire("input"); assert.equal(h.panel.getWorkSource(), null); input.fire("compositionend");
+  const wait = deferred(); h.hook(action => action === "mobile/dialogue/draft" ? wait.promise : undefined); h.byText("Work · 执行进度").click(); assert.equal(h.panel.getWorkSource(), null); await flush(); wait.resolve(h.value()); await flush(); h.hook(null); assert.equal(h.panel.getWorkSource().text, input.value);
+  h.current().draft.attachmentIds = ["missing-original"]; await h.panel.refresh(); assert.equal(h.panel.getWorkSource(), null); h.current().draft.attachmentIds = []; await h.panel.refresh();
+  const image = new Blob(["unsaved-local-image"], { type: "image/png" }); image.name = "尚未上传.png"; const picker = h.byLabel("选择图片文件"); picker.files = [image]; picker.fire("change"); await flush(); assert.equal(h.panel.getWorkSource(), null); assert.equal(h.uploads.length, 0); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 0);
+  const uncertain = harness(); uncertain.panel.setActive(true); await flush(); const other = uncertain.byLabel("提问或保存想法"); other.value = "原消息未知"; other.fire("input"); uncertain.hook(action => { if (action === "mobile/dialogue/send") throw new TypeError("receipt lost"); }); uncertain.byText("发送 ↑").click(); await flush(); const pending = JSON.parse([...uncertain.storage.values()][0]).pending; const before = uncertain.calls.length; assert.equal(uncertain.panel.getWorkSource(), null); assert.equal(uncertain.calls.length, before); assert.deepEqual(JSON.parse([...uncertain.storage.values()][0]).pending, pending);
 });
 console.log(`${count} mobile dialogue behavior checks passed.`);

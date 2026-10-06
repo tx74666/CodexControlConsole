@@ -755,7 +755,7 @@ class SubscriptionChecks(unittest.TestCase):
         self.broker.refresh_catalog()
         self.assertEqual(self.broker._connection["accessToken"], "fixture-access-B")
 
-    def test_restart_preserves_registration_hints_but_no_network_or_queue_replay(self):
+    def test_restart_restores_catalog_once_with_original_grant_without_queue_replay(self):
         self.login()
         original = dict(self.broker._registry)
         self.broker.close()
@@ -764,12 +764,219 @@ class SubscriptionChecks(unittest.TestCase):
         self.assertIsNone(self.broker._registry)
         self.assertEqual(self.broker.get_status()["status"], "disconnected")
         self.broker.start()
+        self.broker._catalog_thread.join(2)
+        self.assertFalse(self.broker._catalog_thread.is_alive())
         self.assertEqual(self.broker._registry, original)
-        self.assertEqual(self.broker.get_status()["status"], "catalog_required")
-        self.assertEqual(len(self.remote.calls), count)
+        self.assertEqual(self.broker.get_status()["status"], "connected")
+        self.assertEqual(self.remote.calls[count:], [(api.MODELS, {"bearer": "fixture-access-A"})])
         self.assertEqual(self.service.claims, [])
-        self.broker.refresh_catalog()
+        for _ in range(3):
+            self.broker.start()
+            self.broker.get_status()
+        self.assertEqual(len(self.remote.calls), count + 1)
+        self.assertEqual(self.runner_calls, [])
         self.assertTrue(self.broker.get_status()["connected"])
+
+    def restart_catalog_gate(self, *, gate_url=api.MODELS, failure=None):
+        self.broker.close()
+        self.broker = self.make_broker()
+        entered, release = threading.Event(), threading.Event()
+        self.catalog_gate_attempts = []
+        original = self.broker._request
+        def delayed(url, **kwargs):
+            if url == gate_url and threading.current_thread().name == "console-subscription-startup-catalog":
+                self.catalog_gate_attempts.append(url)
+                entered.set()
+                if not release.wait(5):
+                    raise AssertionError("Fixture catalog gate was not released")
+                if failure is not None:
+                    raise failure
+            return original(url, **kwargs)
+        self.broker._request = delayed
+        self.broker.start()
+        return entered, release
+
+    def finish_catalog_gate(self, release):
+        release.set()
+        self.broker._catalog_thread.join(2)
+        self.assertFalse(self.broker._catalog_thread.is_alive())
+
+    def test_startup_catalog_get_keeps_cached_status_responsive_and_busy(self):
+        self.login()
+        entered, release = self.restart_catalog_gate()
+        returned, statuses = threading.Event(), []
+        try:
+            self.assertTrue(entered.wait(2))
+            reader = threading.Thread(target=lambda: (statuses.append(self.broker.get_status()), returned.set()))
+            reader.start()
+            self.assertTrue(returned.wait(1), "Status must not wait for the provider")
+            reader.join(2)
+            self.assertEqual(statuses[0]["status"], "catalog_loading")
+            self.assertTrue(statuses[0]["busy"])
+            self.assertFalse(statuses[0]["connected"])
+            self.assertEqual(self.service.claims, [])
+        finally:
+            self.finish_catalog_gate(release)
+        self.assertTrue(self.broker.get_status()["connected"])
+        self.assertFalse(self.broker.get_status()["busy"])
+
+    def test_startup_catalog_failure_is_cached_once_and_never_retries_on_get(self):
+        self.login()
+        entered, release = self.restart_catalog_gate(failure=WorkflowError("fixture", 409, "fixture_catalog_refused"))
+        try:
+            self.assertTrue(entered.wait(2))
+        finally:
+            self.finish_catalog_gate(release)
+        count = len(self.remote.calls)
+        for _ in range(4):
+            self.broker.start()
+            status = self.broker.get_status()
+        self.assertEqual(len(self.remote.calls), count)
+        self.assertEqual(self.catalog_gate_attempts, [api.MODELS])
+        self.assertEqual(status["status"], "catalog_failed")
+        self.assertEqual(status["error"], "fixture_catalog_refused")
+        self.assertFalse(status["busy"])
+        self.assertEqual(self.runner_calls, [])
+
+    def test_startup_missing_direct_scope_and_reserved_refresh_cannot_fetch_models(self):
+        for state in ("scope", "blocked"):
+            with self.subTest(state=state):
+                self.login()
+                connection = dict(self.broker._connection)
+                if state == "scope":
+                    connection["scope"] = "openid profile email"
+                else:
+                    connection["refreshBlocked"] = True
+                self.broker._save_connection(connection)
+                self.broker.close()
+                count = len(self.remote.calls)
+                self.broker = self.make_broker()
+                self.broker.start()
+                self.assertIsNone(self.broker._catalog_thread)
+                self.assertEqual(len(self.remote.calls), count)
+                self.assertFalse(self.broker.get_status()["connected"])
+                self.assertEqual(self.broker.get_status()["error"], "subscription_direct_scope_missing" if state == "scope" else "subscription_reauth_required")
+                self.broker.close()
+                # Each subcase uses its own fresh fixture grant.
+                self.broker = self.make_broker()
+
+    def test_startup_expired_access_rotates_once_outside_status_lock_then_reads_catalog(self):
+        self.login()
+        self.broker._save_connection({**self.broker._connection, "expiresAt": self.now - 1})
+        self.remote.refresh = lambda: {**self.remote.tokens, "access_token": "fixture-access-B", "refresh_token": "fixture-refresh-B"}
+        count = len(self.remote.calls)
+        entered, release = self.restart_catalog_gate(gate_url=api.TOKEN)
+        returned, statuses = threading.Event(), []
+        try:
+            self.assertTrue(entered.wait(2))
+            reader = threading.Thread(target=lambda: (statuses.append(self.broker.get_status()), returned.set()))
+            reader.start()
+            self.assertTrue(returned.wait(1))
+            reader.join(2)
+            self.assertTrue(statuses[0]["busy"])
+        finally:
+            self.finish_catalog_gate(release)
+        calls = self.remote.calls[count:]
+        self.assertEqual([url for url, _ in calls], [api.TOKEN, api.MODELS])
+        self.assertEqual(calls[0][1]["form"]["grant_type"], "refresh_token")
+        self.assertEqual(calls[1][1], {"bearer": "fixture-access-B"})
+        self.assertEqual(self.broker._connection["refreshToken"], "fixture-refresh-B")
+        self.assertEqual(self.runner_calls, [])
+
+    def test_disconnect_during_startup_get_cannot_restore_old_models_or_connection(self):
+        self.login()
+        entered, release = self.restart_catalog_gate()
+        try:
+            self.assertTrue(entered.wait(2))
+            self.broker.disconnect()
+            self.assertFalse(self.broker._credential_path.exists())
+        finally:
+            self.finish_catalog_gate(release)
+        self.assertFalse(self.broker.get_status()["connected"])
+        self.assertEqual(self.broker.get_status()["status"], "disconnected")
+        self.assertEqual(self.broker.get_status()["models"], [])
+        self.assertIsNone(self.broker._connection)
+
+    def test_new_signin_during_startup_get_keeps_new_catalog_after_late_old_reply(self):
+        self.login()
+        entered, release = self.restart_catalog_gate()
+        # Give the pending old reply a different catalog so a stale publish is
+        # observable, without inventing a second provider call for that reply.
+        try:
+            self.assertTrue(entered.wait(2))
+            original = self.broker._parse_catalog
+            self.broker._parse_catalog = lambda doc, cid: original(
+                {"models": [{"slug": "old-model", "display_name": "Old", "visibility": "list"}]}
+                if threading.current_thread().name == "console-subscription-startup-catalog" else doc, cid)
+            self.remote.catalog = {"models": [{"slug": "gpt-5.6-sol", "display_name": "New", "visibility": "list"}]}
+            self.login()
+            self.assertEqual(self.broker.get_status()["models"][0]["slug"], "gpt-5.6-sol")
+        finally:
+            self.finish_catalog_gate(release)
+        self.assertEqual(self.broker.get_status()["models"], [{"slug": "gpt-5.6-sol", "displayName": "New"}])
+        self.assertEqual(self.broker.get_status()["status"], "connected")
+
+    def test_close_during_startup_get_retains_mutex_until_owned_read_finishes(self):
+        self.login()
+        entered, release = self.restart_catalog_gate()
+        try:
+            self.assertTrue(entered.wait(2))
+            self.broker.close()
+            self.assertEqual(self.broker.get_status()["status"], "closed")
+            self.assertFalse(self.broker._process_file.closed)
+        finally:
+            self.finish_catalog_gate(release)
+        self.assertTrue(self.broker._process_file.closed)
+        self.assertEqual(self.broker.get_status()["models"], [])
+
+    def test_disconnect_during_startup_token_rotation_cannot_save_late_credential(self):
+        self.login()
+        self.broker._save_connection({**self.broker._connection, "expiresAt": self.now - 1})
+        entered, release = self.restart_catalog_gate(gate_url=api.TOKEN)
+        try:
+            self.assertTrue(entered.wait(2))
+            self.broker.disconnect()
+        finally:
+            self.finish_catalog_gate(release)
+        self.assertFalse(self.broker._credential_path.exists())
+        self.assertIsNone(self.broker._connection)
+        self.assertEqual(self.broker.get_status()["status"], "disconnected")
+
+    def test_internal_work_token_is_exact_bound_and_not_in_public_status(self):
+        self.login()
+        binding, count = self.binding(), len(self.remote.calls)
+        result = self.broker.prepare_work_connection(binding)
+        self.assertEqual(result, {"accessToken": "fixture-access-A", "subscription": binding})
+        self.assertEqual(len(self.remote.calls), count)
+        self.assertNotIn("fixture-access-A", json.dumps(self.broker.get_status()))
+        self.assertEqual(self.service.claims, [])
+        self.assertEqual(self.runner_calls, [])
+
+    def test_internal_work_token_rejects_pro_binding_stale_scope_and_unknown_models(self):
+        self.login()
+        binding = self.binding()
+        invalid = [self.profile_binding("pro"), {**binding, "connectionId": "b" * 32},
+                   {**binding, "catalogRevision": "c" * 64}, {**binding, "modelSlug": "unknown-model"}]
+        count = len(self.remote.calls)
+        for value in invalid:
+            with self.assertRaises(WorkflowError):
+                self.broker.prepare_work_connection(value)
+        self.assertEqual(len(self.remote.calls), count)
+        self.broker._connection["scope"] = "openid profile"
+        with self.assertRaises(WorkflowError):
+            self.broker.prepare_work_connection(binding)
+        self.assertEqual(len(self.remote.calls), count)
+
+    def test_internal_work_token_refreshes_fresh_access_without_model_or_inference_call(self):
+        self.login()
+        binding = self.binding()
+        self.broker._connection["expiresAt"] = self.now - 1
+        self.remote.refresh = lambda: {**self.remote.tokens, "access_token": "fixture-work-fresh"}
+        count = len(self.remote.calls)
+        result = self.broker.prepare_work_connection(binding)
+        self.assertEqual(result, {"accessToken": "fixture-work-fresh", "subscription": binding})
+        self.assertEqual([url for url, _ in self.remote.calls[count:]], [api.TOKEN])
+        self.assertEqual(self.runner_calls, [])
 
     def test_disconnect_revoke_bound_endpoint_keeps_mapping_and_inflight_rows(self):
         self.login()

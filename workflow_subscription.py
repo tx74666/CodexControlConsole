@@ -330,6 +330,12 @@ class WorkflowSubscription:
         self._runner = run_response
         self._clock = clock or time.time
         self._lock = threading.RLock()
+        self._token_condition = threading.Condition(self._lock)
+        self._refresh_inflight = None
+        self._connection_epoch = 0
+        self._catalog_busy = None
+        self._catalog_thread = None
+        self._startup_catalog_attempted = False
         self._lifecycle_lock = threading.Lock()
         self._queue_lock = threading.Lock()
         self._queue = queue.Queue(maxsize=64)
@@ -480,7 +486,8 @@ class WorkflowSubscription:
                 status = "closed"
             return {"connected": connected, "connectionId": self._registry["connectionId"] if self._active and self._registry else None,
                     "catalogRevision": self._catalog_revision, "models": [dict(row) for row in self._models],
-                    "status": status, "busy": bool(self._auth_busy or pending_active or self._processing),
+                    "status": status, "busy": bool(self._auth_busy or pending_active or self._processing
+                                                   or self._catalog_busy or self._refresh_inflight),
                     "error": self._last_error, "profileMappings": {profile: {
                         "reasoning": dict(reasoning), "modelSlugs": [row["slug"] for row in self._models
                             if row["slug"] in REASONING_MODELS],
@@ -560,6 +567,9 @@ class WorkflowSubscription:
                 raise _error("subscription_busy")
             if self._stopping.is_set():
                 raise _error("subscription_closed")
+            # A returning catalog/refresh for the prior grant cannot overwrite
+            # this new explicit authorization, even when its callback fails.
+            self._connection_epoch += 1
             try:
                 self._open_callback()
             except OSError:
@@ -656,32 +666,41 @@ class WorkflowSubscription:
                 self._auth_busy = False
                 self._release_if_closed()
 
-    def _token_locked(self, binding=None):
-        if self._stopping.is_set():
-            raise _error("subscription_closed")
-        if not self._store_available:
-            raise _error(self._last_error or "subscription_store_unavailable")
-        if binding is not None:
-            self._check_binding(binding)
-        connection = self._connection
-        if not self._active or not connection or not DIRECT_SCOPES.issubset(set(connection["scope"].split())):
-            raise _error("subscription_not_connected")
-        if connection.get("refreshBlocked"):
-            raise _error("subscription_reauth_required")
-        if connection["expiresAt"] > self._clock() + 60:
-            return connection["accessToken"]
-        if not connection.get("refreshToken"):
-            self._status = "reauth_required"
-            raise _error("subscription_reauth_required")
-        blocked = {**connection, "refreshBlocked": True}
-        try:
-            # Rotation reservation must survive a crash after the remote POST,
-            # including a crash before the new credential can be saved.
-            self._save_connection(blocked)
-        except Exception:
-            self._connection = blocked
-            self._status, self._last_error = "reauth_required", "subscription_refresh_reservation_failed"
-            raise _error(self._last_error) from None
+    def _token_locked(self, binding=None, *, expected_epoch=None):
+        # The condition serializes rotation without keeping status/disconnect
+        # behind the provider request. Its wait releases an enclosing RLock too.
+        with self._token_condition:
+            while self._refresh_inflight is not None and not self._stopping.is_set():
+                self._token_condition.wait()
+            if self._stopping.is_set():
+                raise _error("subscription_closed")
+            if expected_epoch is not None and expected_epoch != self._connection_epoch:
+                raise _error("subscription_connection_changed")
+            if not self._store_available:
+                raise _error(self._last_error or "subscription_store_unavailable")
+            if binding is not None:
+                self._check_binding(binding)
+            connection = self._connection
+            if not self._active or not connection or not DIRECT_SCOPES.issubset(set(connection["scope"].split())):
+                raise _error("subscription_not_connected")
+            if connection.get("refreshBlocked"):
+                raise _error("subscription_reauth_required")
+            if connection["expiresAt"] > self._clock() + 60:
+                return connection["accessToken"]
+            if not connection.get("refreshToken"):
+                self._status = "reauth_required"
+                raise _error("subscription_reauth_required")
+            blocked = {**connection, "refreshBlocked": True}
+            try:
+                # Reserve rotation durably before the one POST; ambiguous
+                # rotation must never reuse the old refresh token after restart.
+                self._save_connection(blocked)
+            except Exception:
+                self._connection = blocked
+                self._status, self._last_error = "reauth_required", "subscription_refresh_reservation_failed"
+                raise _error(self._last_error) from None
+            reservation, epoch = object(), self._connection_epoch
+            self._refresh_inflight = reservation
         try:
             tokens = self._request(TOKEN, form={"grant_type": "refresh_token", "client_id": connection["clientId"],
                 "refresh_token": connection["refreshToken"], "resource": RESOURCE})
@@ -694,34 +713,74 @@ class WorkflowSubscription:
             renewed = {**connection, "accessToken": tokens["access_token"],
                        "refreshToken": tokens.get("refresh_token", connection["refreshToken"]),
                        "scope": scope, "expiresAt": self._clock() + expires, "refreshBlocked": False}
-            self._save_connection(renewed)
-            self._last_error = None
+            with self._lock:
+                if (self._stopping.is_set() or self._connection_epoch != epoch
+                        or not self._active or self._connection is not blocked):
+                    raise _error("subscription_connection_changed")
+                self._save_connection(renewed)
+                self._last_error = None
             return renewed["accessToken"]
         except Exception as error:
-            if getattr(error, "remote_status", None) in {429, 500, 502, 503, 504} and _code(error) != "invalid_grant":
-                # A definite temporary HTTP refusal preserves the still-saved credential.
-                # Only a later explicit catalog refresh/new confirmation can try again.
-                try:
-                    self._save_connection(connection)
-                except Exception:
-                    self._connection = blocked
-                    self._status, self._last_error = "reauth_required", "subscription_refresh_restore_failed"
+            with self._lock:
+                if (self._stopping.is_set() or self._connection_epoch != epoch
+                        or not self._active or self._connection is not blocked):
+                    raise _error("subscription_connection_changed") from None
+                if getattr(error, "remote_status", None) in {429, 500, 502, 503, 504} and _code(error) != "invalid_grant":
+                    # A definite temporary refusal preserves the prior saved
+                    # grant. A later explicit action may try; startup does not.
+                    try:
+                        self._save_connection(connection)
+                    except Exception:
+                        self._connection = blocked
+                        self._status, self._last_error = "reauth_required", "subscription_refresh_restore_failed"
+                    else:
+                        self._status, self._last_error = "refresh_failed", _code(error)
                 else:
-                    self._status, self._last_error = "refresh_failed", _code(error)
+                    self._connection = blocked
+                    self._status, self._last_error = "reauth_required", _code(error, "subscription_refresh_unknown")
                 raise _error(self._last_error) from None
-            # An ambiguous rotation is never retried with the old refresh token.
-            self._connection = blocked
-            self._status, self._last_error = "reauth_required", _code(error, "subscription_refresh_unknown")
-            raise _error(self._last_error) from None
+        finally:
+            with self._token_condition:
+                if self._refresh_inflight is reservation:
+                    self._refresh_inflight = None
+                    self._token_condition.notify_all()
+            self._release_if_closed()
 
     def credential_token(self, binding):
         # Released before ANY service/SQLite callback. No credential->DB lock edge.
+        return self._token_locked(binding)
+
+    def prepare_work_connection(self, binding):
+        """Internal only: return a validated token for the owned child's env.
+
+        Never expose this result through HTTP/status, logs, argv or the job DB.
+        A legacy binding selects the model, not a claim of CLI Pro support.
+        """
+        if not isinstance(binding, dict) or set(binding) != BINDING_KEYS:
+            raise _error("subscription_binding_invalid")
+        checked = subscription_binding(binding)
+        if not isinstance(checked["modelSlug"], str) or checked["modelSlug"] not in REASONING_MODELS:
+            raise _error("subscription_model_unavailable")
+        token = self.credential_token(checked)
         with self._lock:
-            return self._token_locked(binding)
+            self._check_binding(checked)
+            if (self._stopping.is_set() or not self._active or not self._connection
+                    or self._connection["accessToken"] != token
+                    or not DIRECT_SCOPES.issubset(set(self._connection["scope"].split()))):
+                raise _error("subscription_connection_changed")
+            return {"accessToken": token, "subscription": dict(checked)}
 
     def _refresh_catalog_locked(self):
         token = self._token_locked()
         document = self._request(MODELS, bearer=token)
+        models, revision = self._parse_catalog(document, self._registry["connectionId"])
+        if self._stopping.is_set():
+            raise _error("subscription_closed")
+        self._models, self._catalog_revision = models, revision
+        self._status, self._last_error = "connected" if models else "no_models", None
+
+    @staticmethod
+    def _parse_catalog(document, connection_id):
         rows = document.get("models")
         if not isinstance(rows, list) or len(rows) > 1000:
             raise _error("subscription_catalog_invalid")
@@ -738,28 +797,80 @@ class WorkflowSubscription:
                 raise _error("subscription_catalog_invalid")
             models.append({"slug": slug, "displayName": display})
             slugs.add(slug)
-        revision = hashlib.sha256(_json({"connectionId": self._registry["connectionId"], "models": models})).hexdigest()
-        self._models, self._catalog_revision = models, revision
-        self._status, self._last_error = "connected" if models else "no_models", None
+        revision = hashlib.sha256(_json({"connectionId": connection_id, "models": models})).hexdigest()
+        return models, revision
+
+    def _read_catalog(self, operation, epoch):
+        try:
+            token = self._token_locked(expected_epoch=epoch)
+            with self._lock:
+                if self._stopping.is_set() or epoch != self._connection_epoch:
+                    raise _error("subscription_connection_changed")
+                connection = self._connection
+                if connection is None or connection["accessToken"] != token:
+                    raise _error("subscription_connection_changed")
+                connection_id = self._registry["connectionId"]
+            document = self._request(MODELS, bearer=token)
+            models, revision = self._parse_catalog(document, connection_id)
+            with self._lock:
+                if (self._stopping.is_set() or epoch != self._connection_epoch
+                        or not self._active or self._connection is not connection):
+                    raise _error("subscription_connection_changed")
+                self._models, self._catalog_revision = models, revision
+                self._status, self._last_error = "connected" if models else "no_models", None
+        except Exception as error:
+            with self._lock:
+                if not self._stopping.is_set() and epoch == self._connection_epoch and self._active:
+                    self._models, self._catalog_revision = [], None
+                    self._last_error = _code(error)
+                    if self._status not in {"reauth_required", "refresh_failed"}:
+                        self._status = "catalog_failed"
+            raise
+        finally:
+            with self._lock:
+                if self._catalog_busy is operation:
+                    self._catalog_busy = None
+            self._release_if_closed()
+
+    def _restore_startup_catalog(self, operation, epoch):
+        try:
+            self._read_catalog(operation, epoch)
+        except Exception:
+            pass  # One bounded attempt; its actual error is already cached.
+
+    def _start_catalog_restore(self):
+        with self._lock:
+            if self._startup_catalog_attempted:
+                return
+            self._startup_catalog_attempted = True
+            if (self._stopping.is_set() or not self._store_available or not self._active
+                    or not self._connection or self._models or self._catalog_revision):
+                return
+            if not DIRECT_SCOPES.issubset(set(self._connection["scope"].split())):
+                self._status, self._last_error = "catalog_failed", "subscription_direct_scope_missing"
+                return
+            if self._connection.get("refreshBlocked"):
+                self._status, self._last_error = "reauth_required", "subscription_reauth_required"
+                return
+            operation, epoch = object(), self._connection_epoch
+            self._catalog_busy = operation
+            self._status, self._last_error = "catalog_loading", None
+            self._catalog_thread = threading.Thread(target=self._restore_startup_catalog,
+                args=(operation, epoch), name="console-subscription-startup-catalog", daemon=True)
+            self._catalog_thread.start()
 
     def refresh_catalog(self):
         self._initialize()
         with self._lock:
-            if self._auth_busy or (self._pending and time.monotonic() < self._pending["deadline"]) or self._processing:
+            if self._auth_busy or self._catalog_busy or (self._pending and time.monotonic() < self._pending["deadline"]) or self._processing:
                 raise _error("subscription_busy")
-            self._auth_busy = True
-            try:
-                self._refresh_catalog_locked()
-            except Exception as error:
-                self._models, self._catalog_revision = [], None
-                self._last_error = _code(error)
-                if self._status != "reauth_required":
-                    self._status = "catalog_failed"
-                raise _error(self._last_error) from None
-            finally:
-                self._auth_busy = False
-                self._release_if_closed()
-            return self.get_status()
+            operation, epoch = object(), self._connection_epoch
+            self._catalog_busy = operation
+        try:
+            self._read_catalog(operation, epoch)
+        except Exception as error:
+            raise _error(_code(error)) from None
+        return self.get_status()
 
     def disconnect(self):
         self._initialize()
@@ -767,6 +878,7 @@ class WorkflowSubscription:
             if not self._store_available:
                 raise _error(self._last_error or "subscription_store_unavailable")
             connection = self._connection
+            self._connection_epoch += 1
             self._active = False
             self._pending = None
             self._models, self._catalog_revision = [], None
@@ -807,6 +919,7 @@ class WorkflowSubscription:
             with self._queue_lock:
                 self._worker = threading.Thread(target=self._work, name="console-subscription-events", daemon=True)
                 self._worker.start()
+            self._start_catalog_restore()
         return self.get_status()
 
     def notify_committed(self, dispatch_ids):
@@ -906,7 +1019,8 @@ class WorkflowSubscription:
             return
         try:
             worker = self._worker
-            if (not self._auth_busy and not self._processing
+            if (not self._auth_busy and not self._processing and not self._catalog_busy
+                    and self._refresh_inflight is None
                     and (worker is None or not worker.is_alive() or worker is threading.current_thread())
                     and self._process_file is not None and not self._process_file.closed):
                 self._process_file.close()
@@ -917,6 +1031,9 @@ class WorkflowSubscription:
         with self._lifecycle_lock:
             self._stopping.set()
             self.service.unregister_dispatch_notifier(self)
+        with self._token_condition:
+            self._connection_epoch += 1
+            self._token_condition.notify_all()
         with self._queue_lock:
             if not self._queue.full():
                 self._queue.put_nowait(None)
@@ -926,6 +1043,9 @@ class WorkflowSubscription:
         worker = self._worker
         if worker is not None and worker is not threading.current_thread():
             worker.join(timeout=2)
+        catalog = self._catalog_thread
+        if catalog is not None and catalog is not threading.current_thread():
+            catalog.join(timeout=2)
         self._release_if_closed()
 
     stop = close

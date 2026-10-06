@@ -68,6 +68,14 @@ def workflow_upload_dialogue(service, fields, files, *, prefix="/api/workflow", 
 def workflow_get(service, action, query, *, prefix="/api/workflow", authorize=None):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    if action == "codex-work/config":
+        if query:
+            raise WorkflowError("Work 配置地址无效。")
+        if authorize:
+            authorize()
+        return service.codex_work_config()
+    if action == "codex-work/runs":
+        return service.codex_work_runs(query, prefix=prefix, authorize=authorize)
     if action == "subscription/status":
         if query:
             raise WorkflowError("订阅连接请求地址无效。")
@@ -115,6 +123,8 @@ def workflow_get(service, action, query, *, prefix="/api/workflow", authorize=No
 def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=False, authorize=None):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    if action in {"codex-work/setup", "codex-work/workspaces"} and not desktop:
+        raise WorkflowError("请在电脑明确配置 Work 沙箱与工作区权限。", 403, "codex_work_desktop_required")
     if action.startswith("subscription/"):
         if not desktop:
             raise WorkflowError("请在电脑完成订阅连接设置。", 403)
@@ -142,6 +152,8 @@ def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=Fals
                   "incubator/publish": "incubator_publish",
                   "incubator/refinement/pause": "incubator_refinement_pause",
                   "conversations/request": "conversations_request"}
+    operations.update({"codex-work/review": "codex_work_review", "codex-work/submit": "codex_work_submit",
+                       "codex-work/cancel": "codex_work_cancel"})
     operations.update({"mobile/dialogue/open": "mobile_dialogue_open", "mobile/dialogue/draft": "mobile_dialogue_draft",
         "mobile/dialogue/clear": "mobile_dialogue_clear", "mobile/dialogue/send": "mobile_dialogue_send",
         "mobile/dialogue/cancel-pending": "mobile_dialogue_cancel_pending",
@@ -155,6 +167,10 @@ def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=Fals
             raise WorkflowError("电脑端工作组件尚未更新。", 503)
         return operation(body, prefix=prefix, authorize=authorize)
     if desktop:
+        if action == "codex-work/setup":
+            return service.codex_work_setup(body, authorize=authorize)
+        if action == "codex-work/workspaces":
+            return service.configure_codex_work(body, authorize=authorize)
         if action == "app-work/bindings":
             operation = getattr(service, "configure_app_work", None)
             if not callable(operation):

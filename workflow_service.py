@@ -26,6 +26,7 @@ from workflow_native_work import NativeWorkMixin
 from workflow_mobile_dialogue import MobileDialogueMixin
 from workflow_mobile_handoff import MobileHandoffMixin
 from workflow_subscription_delivery import SubscriptionDeliveryMixin
+from workflow_codex_work_service import CodexWorkMixin
 
 MAX_TEXT = 20000
 MAX_UPLOAD = 24 * 1024 * 1024
@@ -76,7 +77,7 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, SubscriptionDeliveryMixin):
+class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, SubscriptionDeliveryMixin):
     def __init__(self, data_dir, models=None, callbacks=None, projects=None, *, computer_id=None, computer_name=None, recover_jobs=True):
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -89,6 +90,7 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, 
         self._thread, self._process = None, None
         self._dispatch_commit_notifier = None
         self.subscription = None
+        self.codex_work = None
         with self._db() as db:
             if self._setting(db, "computer") is None:
                 self._set_setting(db, "computer", {"id": computer_id or uuid.uuid4().hex, "name": computer_name or socket.gethostname()})
@@ -96,6 +98,7 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, 
                 self._set_setting(db, "projects", self._validate_projects(projects))
             recovered = 0
             if recover_jobs:
+                recovered += self._recover_codex_work(db)
                 recovered += self._recover_subscription_pending(db)
                 recovered += db.execute("UPDATE jobs SET status='interrupted',error='电脑进程已中断；请明确重试，新尝试不会自动重复执行。',updated_at=? WHERE status='running'", (_now(),)).rowcount
                 recovered += db.execute("UPDATE idea_dispatches SET status='needs_review',error='发布过程中电脑服务重启；请核对目标聊天，不能自动重发。',updated_at=? WHERE status='claimed'", (_now(),)).rowcount
@@ -355,6 +358,8 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, 
     @staticmethod
     def _public_job(row, app_dispatch=None):
         payload, result = json.loads(row["payload"]), json.loads(row["result"])
+        if payload.get("executionEngine") == "codex_agent":
+            return CodexWorkMixin._public_codex_work_job(row)
         value = {"id": row["id"], "recordId": row["record_id"], "kind": row["kind"], "requestId": row["request_id"],
                 "instruction": payload.get("text", ""), "projectId": payload.get("projectId", ""), "action": payload.get("action", ""),
                 "computerId": payload.get("computerId", ""),
@@ -2207,7 +2212,7 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, 
                     raise WorkflowError("这条记录是实际完成的 ChatGPT 回传导入，不能重试或再次发送。", 409, "chat_capture_not_retryable")
                 if parent["status"] not in {"failed", "waiting", "interrupted"}:
                     raise WorkflowError("仅失败、等待配置或中断的任务可以重试。", 409)
-                if payload.get("executionEngine") == "codex_app":
+                if payload.get("executionEngine") in {"codex_app", "codex_agent"}:
                     raise WorkflowError("请重新审核 Work 并确认新任务；不能自动重发可能已执行的任务。", 409, "verification_required")
                 self._context(db, parent["record_id"], payload.get("context", {}))
                 if payload.get("appScript"):
@@ -2389,7 +2394,7 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, 
         status = self.status()
         with self._db() as db:
             native = db.execute("SELECT 1 FROM idea_dispatches WHERE json_extract(snapshot,'$.origin')='workflow_work' AND status IN ('pending','claimed','waiting') LIMIT 1").fetchone()
-        return bool(status["running"] or status["queued"] or native)
+        return bool(status["running"] or status["queued"] or native or self.codex_work_active())
 
     def start(self):
         with self._lock:
@@ -2401,6 +2406,8 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, 
             self._wake.set()
 
     def shutdown(self, wait=5):
+        if self.codex_work:
+            self.codex_work.close()
         self._stop.set()
         self._wake.set()
         hub = getattr(self, "_mobile_result_hub", None)
@@ -2413,7 +2420,7 @@ class WorkflowService(MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, 
         if thread and thread is not threading.current_thread():
             thread.join(timeout=max(0, min(float(wait), 30)))
         with self._db() as db:
-            db.execute("UPDATE jobs SET status='interrupted',error='电脑任务服务已停止；请明确重试。',updated_at=? WHERE status='running'", (_now(),))
+            db.execute("UPDATE jobs SET status='interrupted',error='电脑任务服务已停止；请明确重试。',updated_at=? WHERE status='running' AND COALESCE(json_extract(payload,'$.executionEngine'),'')<>'codex_agent'", (_now(),))
             self._revision(db, True)
 
     def _worker(self):

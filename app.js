@@ -45,7 +45,7 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.66";
+const consoleUiVersion = "1.0.67";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -56,7 +56,7 @@ function refreshForNewConsoleVersion(version) {
   const next = version.split(".").map(Number);
   const difference = next.findIndex((part, index) => part !== current[index]);
   if (difference < 0 || next[difference] < current[difference]) return;
-  if (desktopTransferPanel?.hasDraft() || desktopWorkflowPanel?.hasDraft() || desktopIncubatorPanel?.hasDraft() || desktopConversationsPanel && !desktopConversationsPanel.canReload()) return;
+  if (desktopCodexWorkPanel?.hasDraft() || desktopCodexWorkPanel && !desktopCodexWorkPanel.canReload() || desktopTransferPanel?.hasDraft() || desktopWorkflowPanel?.hasDraft() || desktopIncubatorPanel?.hasDraft() || desktopConversationsPanel && !desktopConversationsPanel.canReload()) return;
   saveWorkspaceTodoDraft();
   consoleVersionReloadPending = true;
   window.location.reload();
@@ -2364,6 +2364,7 @@ const requestedConsoleView = new URLSearchParams(window.location.search).get("co
 let activeConsoleView = normalizeConsoleWorkspaceView(requestedConsoleView);
 let desktopTransferPanel = null;
 let desktopWorkflowPanel = null;
+let desktopCodexWorkPanel = null;
 let desktopIncubatorPanel = null;
 let desktopConversationsPanel = null;
 let activeWorkView = normalizeConsoleWorkView(new URLSearchParams(window.location.search).get("workView"));
@@ -2689,7 +2690,7 @@ function initialModuleId() {
   const pageName = currentPageName();
   const unavailable = new Set([...allArchivedModuleIds(), ...deletedModuleIds()]);
   if (pageName === "index.html") {
-    if (requestedConsoleView === "work" && activeWorkView === "workflow" && !unavailable.has("workspace")) return "workspace";
+    if (requestedConsoleView === "work" && ["workflow", "agents"].includes(activeWorkView) && !unavailable.has("workspace")) return "workspace";
     const saved = lastModuleId();
     if (saved && !unavailable.has(saved)) {
       return saved;
@@ -3088,7 +3089,7 @@ function appendDocumentImage(parent, label, target) {
 }
 
 function normalizeConsoleWorkView(value) {
-  return ["ideas", "conversations", "workflow"].includes(value) ? value : "ideas";
+  return ["ideas", "conversations", "workflow", "agents"].includes(value) ? value : "ideas";
 }
 
 function setConsoleWorkView(value) {
@@ -3098,6 +3099,7 @@ function setConsoleWorkView(value) {
   const ideas = document.getElementById("desktopWorkIdeas"), conversations = document.getElementById("desktopConversationsPanel"), workflow = document.getElementById("desktopWorkflowDetails");
   if (ideas) ideas.hidden = activeWorkView !== "ideas";
   if (conversations) conversations.hidden = activeWorkView !== "conversations";
+  const agents = document.getElementById("desktopCodexWorkPanel"); if (agents) agents.hidden = activeWorkView !== "agents";
   if (workflow) { workflow.hidden = activeWorkView !== "workflow"; if (activeWorkView === "workflow") workflow.open = true; }
   for (const button of document.querySelectorAll("#consoleWorkView [data-work-view]")) button.setAttribute("aria-pressed", String(button.dataset.workView === activeWorkView));
   syncConsoleTransferActivity();
@@ -3108,6 +3110,7 @@ function syncConsoleTransferActivity() {
   desktopTransferPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "transfer");
   desktopIncubatorPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && activeWorkView === "ideas");
   desktopConversationsPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && activeWorkView === "conversations");
+  desktopCodexWorkPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && activeWorkView === "agents");
   desktopWorkflowPanel?.setActive(runtimeActivityReady && isModuleForeground("workspace") && activeConsoleView === "work" && (activeWorkView === "ideas" && Boolean(desktopIncubatorPanel?.hasOpenTask?.()) || activeWorkView === "workflow" && Boolean(document.getElementById("desktopWorkflowDetails")?.open)));
 }
 
@@ -3115,6 +3118,10 @@ function bindConsoleTransfer() {
   desktopWorkflowPanel = window.CodexWorkflowPanel?.create(document.getElementById("desktopWorkflowPanel"), {
     onConnection: () => document.getElementById("phoneCompanionOpen")?.click(),
     onTaskChange: () => void desktopIncubatorPanel?.refresh?.()
+  }) || null;
+  desktopCodexWorkPanel = window.CodexWorkPanel?.create(document.getElementById("desktopCodexWorkPanel"), {
+    getSource: () => desktopWorkflowPanel?.getWorkSource?.() || null,
+    onBack: () => setConsoleWorkView("workflow")
   }) || null;
   desktopIncubatorPanel = window.CodexIncubatorPanel?.create(document.getElementById("desktopIncubatorPanel"), {
     onTaskOpen: task => desktopWorkflowPanel?.openTask?.(task) || false,

@@ -195,6 +195,18 @@ class MobileDialogueMixin:
         proof = {"clientId": client_id, "sessionId": session_id, "recordId": session["recordId"], "currentSessionId": current,
             "job": {name: job[name] for name in ("id", "status", "updated_at", "error", "result")} if job else None,
             "dispatch": {name: dispatch[name] for name in ("id", "status", "updated_at", "error", "result", "target_thread_id")} if dispatch else None}
+        # Work remains separate from Chat profile evidence. Its scoped commits
+        # still wake this original discussion when progress or Output changes.
+        own_work = []
+        for row in db.execute("SELECT * FROM jobs WHERE record_id=? AND kind='work' AND json_extract(payload,'$.executionEngine')='codex_agent' AND json_extract(payload,'$.mobileDialogue.id')=? AND json_extract(payload,'$.mobileDialogue.clientId')=? ORDER BY created_at DESC,id DESC LIMIT 64", (session["recordId"], session_id, client_id)):
+            payload = json.loads(row["payload"])
+            source = payload.get("codexWork", {}).get("source", {})
+            dialogue = payload.get("mobileDialogue")
+            if (isinstance(dialogue, dict) and dialogue == source.get("mobileDialogue")
+                    and dialogue.get("recordId") == session["recordId"] and source.get("recordId") == session["recordId"]):
+                own_work.append({name: row[name] for name in ("id", "status", "updated_at", "error", "result", "log")})
+        if own_work:
+            proof["work"] = own_work
         cursor = hashlib.sha256(_api()._json(proof).encode("utf-8")).hexdigest()
         return {"clientId": client_id, "sessionId": session_id, "recordId": session["recordId"], "cursor": cursor,
             "jobId": job["id"] if job else None, "status": status}
