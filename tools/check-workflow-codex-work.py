@@ -81,6 +81,35 @@ while True:
             filesystem[str(home.parent)] = "write"
         if mode == "external_tools":
             config["mcp_servers"] = {"unowned": {"command": "other-tool"}}
+        hook_events = ("Interrupt", "PermissionRequest", "PostCompact", "PostToolUse",
+                       "PreCompact", "PreToolUse", "SessionEnd", "SessionStart", "Stop",
+                       "SubagentStart", "SubagentStop", "UserPromptSubmit")
+        if mode == "hooks_defaults":
+            # Actual token-free CLI 0.160.1 config/read returned these twelve
+            # arrays, all empty, despite the explicit hooks={} override.
+            config["hooks"] = {name: [] for name in hook_events}
+        elif mode == "hooks_subset":
+            config["hooks"] = {"SessionStart": [], "Stop": []}
+        invalid_tools = {
+            "hooks_command": ("hooks", {"PreToolUse": [{"hooks": [{"type": "command", "command": "other-tool"}]}]}),
+            "hooks_mcp": ("hooks", {"PreToolUse": [{"hooks": [{"type": "mcp_tool", "server": "other", "tool": "run"}]}]}),
+            "hooks_prompt": ("hooks", {"Stop": [{"hooks": [{"type": "prompt"}]}]}),
+            "hooks_agent": ("hooks", {"Stop": [{"hooks": [{"type": "agent"}]}]}),
+            "hooks_unknown": ("hooks", {"UnknownEvent": []}),
+            "hooks_state": ("hooks", {"state": {}}),
+            "hooks_false": ("hooks", False),
+            "hooks_event_false": ("hooks", {"Stop": False}),
+            "hooks_event_null": ("hooks", {"Stop": None}),
+            "hooks_event_object": ("hooks", {"Stop": {}}),
+            "hooks_empty_matcher": ("hooks", {"Stop": [{"hooks": []}]}),
+            "plugins_named": ("plugins", {"other-plugin": {"enabled": False}}),
+            "plugins_array": ("plugins", []),
+            "mcp_false": ("mcp_servers", False),
+            "mcp_array": ("mcp_servers", []),
+        }
+        if mode in invalid_tools:
+            key, setting = invalid_tools[mode]
+            config[key] = setting
         if mode == "receipt_extra":
             config["fixture_private"] = {"accessToken": os.environ["ACCESS_TOKEN"]}
             config["permissions"]["console-work-scope"]["description"] = os.environ["ACCESS_TOKEN"]
@@ -127,7 +156,7 @@ while True:
             sys.stderr.write(token + "\n")
             sys.stderr.flush()
             terminal(text="说明：" + token + "。")
-        elif mode in {"complete", "mismatch", "receipt_extra"}:
+        elif mode in {"complete", "mismatch", "receipt_extra", "hooks_defaults", "hooks_subset"}:
             event("item/agentMessage/delta", itemId="answer_fixture", delta="修改说明完整。")
             terminal(mismatch=mode == "mismatch")
         elif mode == "approval":
@@ -338,6 +367,41 @@ class Checks(unittest.TestCase):
                 self.assertEqual(f.controller.snapshot(f.run_id)["error"], code)
                 self.assertFalse(any(row.get("method") == "turn/start" for row in f.messages()))
                 self.assertFalse(any(row["type"] == "send_intent" for row in f.events))
+
+    def test_actual_typed_empty_hook_defaults_prepare_and_send_exactly_once(self):
+        for mode in ("hooks_defaults", "hooks_subset"):
+            with self.subTest(mode=mode):
+                f = self.fixture(mode)
+                f.submit()
+                f.done()
+                self.assertEqual(f.controller.snapshot(f.run_id)["state"], "completed")
+                self.assertEqual(sum(event["type"] == "prepared" for event in f.events), 1)
+                self.assertEqual(sum(event["type"] == "send_intent" for event in f.events), 1)
+                self.assertEqual(sum(frame.get("method") == "thread/start" for frame in f.messages()), 1)
+                self.assertEqual(sum(frame.get("method") == "turn/start" for frame in f.messages()), 1)
+                self.assertEqual(len(f.subscription.calls), 1)
+
+    def test_configured_or_unrecognized_hooks_fail_before_thread_and_send_intent(self):
+        for mode in ("hooks_command", "hooks_mcp", "hooks_prompt", "hooks_agent",
+                     "hooks_unknown", "hooks_state", "hooks_false", "hooks_event_false",
+                     "hooks_event_null", "hooks_event_object", "hooks_empty_matcher"):
+            with self.subTest(mode=mode):
+                f = self.fixture(mode)
+                f.submit()
+                f.done()
+                self.assertEqual(f.controller.snapshot(f.run_id)["error"], "codex_work_external_tools_present")
+                self.assertFalse(any(event["type"] in {"prepared", "send_intent"} for event in f.events))
+                self.assertFalse(any(frame.get("method") in {"thread/start", "turn/start"} for frame in f.messages()))
+
+    def test_mcp_and_plugins_still_require_exact_empty_mapping(self):
+        for mode in ("plugins_named", "plugins_array", "mcp_false", "mcp_array"):
+            with self.subTest(mode=mode):
+                f = self.fixture(mode)
+                f.submit()
+                f.done()
+                self.assertEqual(f.controller.snapshot(f.run_id)["error"], "codex_work_external_tools_present")
+                self.assertFalse(any(event["type"] in {"prepared", "send_intent"} for event in f.events))
+                self.assertFalse(any(frame.get("method") in {"thread/start", "turn/start"} for frame in f.messages()))
 
     def test_intent_must_commit_before_sole_turn_start(self):
         f = self.fixture(reject_intent=True)

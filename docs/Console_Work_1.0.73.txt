@@ -1,0 +1,9 @@
+Codex Console 1.0.73：Work 默认配置兼容修复
+
+用户完成 Windows 沙箱授权后，正式 1.0.72 的独立 Work 验收在发送模型请求前失败：codex_work_external_tools_present。该轮未取得 thread/turn 身份，未记录 send intent，也没有实际文件变更。原失败记录和一次提交账本保留，不自动重发。
+
+使用相同正式 CLI 0.160.1 命令、Console 自有运行目录进行无令牌 config/read，确认 mcp_servers、plugins 均为空字典；hooks 返回12个已知事件的空数组。这是默认配置展开，不含实际处理程序。
+
+1.0.73 仅接受这些已观测事件键的空数组。未知键、state、错误型别、非空 hook 处理程序、任何 MCP 或插件条目仍在 thread/start 与发送意图之前拒绝。既有读写范围核对、一次发送、终态回执、原任务 Output 归属和准确取消规则保持。
+
+控制器24项隔离测试通过，包含真实默认形状的正向及15个外部工具／型别负向场景；无令牌真实 CLI 配置检查也已通过。正式发布、原身分更新及新的实际 Workspace 修改需要各自取得证据；这些检查不代表模型执行、双 Agent、手机取消、Pro 或 iPhone 实机验收完成。

@@ -48,6 +48,9 @@ RUN_ID = re.compile(r"[a-f0-9]{32}\Z")
 SHA = re.compile(r"[a-f0-9]{64}\Z")
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
 PROFILE_EFFORT = {"fast": "low", "high": "high"}
+EMPTY_HOOK_EVENTS = frozenset({"Interrupt", "PermissionRequest", "PostCompact", "PostToolUse",
+    "PreCompact", "PreToolUse", "SessionEnd", "SessionStart", "Stop", "SubagentStart",
+    "SubagentStop", "UserPromptSubmit"})
 IMAGE_EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
 SAFE_ENV = {"SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "COMSPEC", "SYSTEMDRIVE"}
 SPEC_KEYS = {"subscription", "requestedProfile", "workspaceRoot", "allowedRoot", "text", "images", "sourceSha256"}
@@ -584,8 +587,17 @@ queue scan, shared App daemon, thread listing/resume, or provider retry occurs.
                 or type(config.get("permissions")) is not dict
                 or not _same_scope(config["permissions"].get(PERMISSION_PROFILE), policy)):
             raise _error("codex_work_read_scope_unsupported", "本机 Codex 未准确确认限定读写范围；未发送执行请求。")
+        # CLI 0.160.1 config/read expands even hooks={} into known empty event
+        # arrays. Accept that observed default only; an unknown key, state or
+        # any configured handler still blocks the inference-starting RPC.
+        hooks = config.get("hooks")
+        empty_hooks = hooks is None or (type(hooks) is dict
+            and not (set(hooks) - EMPTY_HOOK_EVENTS)
+            and all(type(value) is list and not value for value in hooks.values()))
         # Empty own CODEX_HOME cannot silently adopt globally configured tools.
-        if any(config.get(key) not in (None, {}) for key in ("mcp_servers", "plugins", "hooks")):
+        empty_tools = all(config.get(key) is None or
+            (type(config[key]) is dict and not config[key]) for key in ("mcp_servers", "plugins"))
+        if not empty_tools or not empty_hooks:
             raise _error("codex_work_external_tools_present", "检测到额外工具配置；未发送执行请求。")
 
     def _environment(self, run, token):
