@@ -100,7 +100,7 @@ await test("review freezes exact source images workspace authorization model and
   assert.equal(h.byClass("workflow-review").hidden, false); assert.match(h.byClass("codex-work-review-text").textContent, /本轮修改底稿|fixture-project|隔离示例项目/); assert.equal(h.calls.some(call => call.action === "codex-work/submit"), false);
 });
 await test("unverified Console Work Pro stays unavailable while explicit Fast reviews only the supported request", async () => {
-  const h = harness(); await h.panel.setActive(true); const tier = h.byLabel("Work 档位"); assert.equal(tier.children.find(option => option.value === "pro").disabled, true); assert.match(tier.children.find(option => option.value === "pro").textContent, /待核实/); tier.value = "fast"; tier.fire("change"); assert.equal(posts(h).length, 0); h.byText("核对本轮 Work").click(); await flush(); assert.equal(posts(h)[0].body.requestedProfile, "fast"); assert.equal(h.calls.some(call => call.action === "codex-work/submit"), false);
+  const h = harness(); await h.panel.setActive(true); const tier = h.byLabel("Work 档位"); assert.equal(tier.children.find(option => option.value === "pro").disabled, true); assert.match(tier.children.find(option => option.value === "pro").textContent, /Work 暂不可用/); tier.value = "fast"; tier.fire("change"); assert.equal(posts(h).length, 0); h.byText("核对本轮 Work").click(); await flush(); assert.equal(posts(h)[0].body.requestedProfile, "fast"); assert.equal(h.calls.some(call => call.action === "codex-work/submit"), false);
 });
 await test("reopening a saved unsupported Pro never silently changes to Fast or submits", async () => {
   const storage = new Map([["console.codexWork.v1:/api/phone/workflow", JSON.stringify({ profile: "pro" })]]), h = harness({ storage });

@@ -26,12 +26,13 @@
     const header = make("div", "", "workflow-header"); header.append(heading, back, load, refresh);
     const sourceText = make("textarea"); sourceText.readOnly = true; sourceText.rows = 4; sourceText.setAttribute("aria-label", "本轮 Work 底稿");
     const workspace = select(), model = select(), profile = select(); profile.setAttribute("aria-label", "Work 档位");
-    optionsFor(profile, [{ id: "fast", name: "极速 · low" }, { id: "high", name: "高 · high" }, { id: "pro", name: "Pro · 待核实", disabled: true }], saved.profile || "high");
+    optionsFor(profile, [{ id: "fast", name: "极速 · low" }, { id: "high", name: "高 · high" }, { id: "pro", name: "Pro · Work 暂不可用", disabled: true }], saved.profile || "high");
     if (saved.profile === "pro") profile.value = "pro";
+    const profileHelp = make("p", "", "workflow-muted");
     const scope = make("p", "", "workflow-muted"), sourceImages = make("div", "", "workflow-thumbnails"), prepare = button("核对本轮 Work", () => void prepareWork());
     const setupText = make("p", "", "workflow-muted"), setupButton = button("配置 Console Work 沙箱（Windows 授权）", () => void setupWork());
     const setupBox = make("section", "", "codex-work-setup"); setupBox.append(setupText); if (!phone) setupBox.append(setupButton);
-    const form = make("section", "", "codex-work-source"); form.append(field("本轮文字（在对话输入框编辑）", sourceText), sourceImages, field("电脑工作区", workspace), scope, field("已授权模型", model), field("档位", profile), prepare);
+    const form = make("section", "", "codex-work-source"); form.append(field("本轮文字（在对话输入框编辑）", sourceText), sourceImages, field("电脑工作区", workspace), scope, field("已授权模型", model), field("档位", profile), profileHelp, prepare);
     const review = make("section", "", "workflow-review"), reviewText = make("pre", "", "codex-work-review-text"), confirm = button("确认创建 Agent", () => void submitWork()), dismiss = button("返回核对", () => { if (!state.pending && !state.busy) { state.review = null; render(); } });
     review.append(make("h3", "确认这一轮 Work"), reviewText, confirm, dismiss); review.hidden = true;
     const runs = make("section", "", "codex-work-runs"), permissions = make("details", "", "workflow-collapse"); permissions.append(make("summary", "工作区设置"));
@@ -60,9 +61,10 @@
       const validSource = state.source?.recordId === state.recordId && state.source.text === sourceText.value;
       const modelAvailable = state.config?.subscription?.models?.some(item => item.slug === model.value), ready = state.config?.setup?.ready === true && state.config?.setup?.busy !== true;
       const account = state.config?.subscription, recovering = ["catalog_loading", "catalog_required", "catalog_failed"].includes(account?.status);
-      subscriptionLink.hidden = phone || !state.config || Boolean(account?.connected && modelAvailable);
-      subscriptionLink.textContent = account?.connected || recovering ? "查看订阅连接" : "连接 ChatGPT 订阅";
+      subscriptionLink.hidden = phone;
+      subscriptionLink.textContent = account?.connected ? "订阅已连接 · 查看" : recovering ? "查看订阅连接" : "连接 ChatGPT 订阅";
       connectionRow.hidden = !notice.textContent && subscriptionLink.hidden;
+      profileHelp.textContent = profile.value === "pro" ? "已保留你的 Pro 选择。当前 Work 的 Pro 尚未接通，请明确改选极速或高后再核对。" : "当前 Work 的 Pro 尚未接通；本轮请选择极速或高。";
       prepare.disabled = state.busy || state.pending || !validSource || !workspace.value || !modelAvailable || !["fast", "high"].includes(profile.value) || !state.config?.subscription?.connected || !ready || state.composing;
       workspace.disabled = model.disabled = profile.disabled = state.busy || Boolean(state.pending);
       load.disabled = state.busy || Boolean(state.pending); confirm.disabled = state.busy || !state.review || Boolean(state.pending) || !ready || !modelAvailable || !state.config?.subscription?.connected; dismiss.disabled = state.busy || Boolean(state.pending);
