@@ -38,7 +38,7 @@
   function create(root, options = {}) {
     if (!root) return null;
     const phone = Boolean(options.phone), endpoint = phone ? "/api/phone/transfer" : "/api/transfer";
-    let active = false, timer = 0, reading = false, sending = false, pasting = false, mutating = false, mutationSequence = 0, pendingAction = null, historyControls = [], limits = { ...defaults }, revision = "", messages = [], hasMore = false, pendingId = "", files = [], generation = 0, controller = null, uploadController = null, pollError = false;
+    let active = false, timer = 0, reading = false, sending = false, pasting = false, mutating = false, mutationSequence = 0, sendSequence = 0, pendingAction = null, historyControls = [], limits = { ...defaults }, revision = "", messages = [], hasMore = false, pendingId = "", files = [], pendingDropBatch = null, generation = 0, controller = null, uploadController = null, pollError = false;
     const header = make("div", "", "transfer-heading"), title = make("div");
     title.append(make("h2", "手机传话 / 互传"), make("p", phone ? "在下面打字或粘贴文字，点发送，电脑就能收到。" : "这里接收手机发来的文字，也可以互传图片。", "transfer-muted"));
     header.append(title);
@@ -51,6 +51,7 @@
     const steps = make("ol");
     for (const step of ["手机：在下方输入文字，点“发送”。", "电脑：在下方收发记录找到“手机 → 电脑”，点“复制文字”。", "Codex：打开“Codex Console”这条聊天，粘贴到输入框，发送。"]) steps.append(make("li", step));
     guide.append(steps, make("p", "目前需要电脑上最后粘贴一次；“已传到电脑”表示电脑收到，尚未发送给聊天。", "transfer-muted transfer-small"));
+    const dropHint = phone ? null : make("p", "拖入图片，松手即发送到手机。已输入的文字和已选图片会保留。", "transfer-drop-hint");
     const form = make("form", "", "transfer-composer");
     const label = make("label", phone ? "在这里输入：手机 → 电脑" : "电脑 → 手机（手机来信在下方收发记录）"); label.htmlFor = `${phone ? "phone" : "desktop"}TransferText`;
     const text = make("textarea"); text.id = label.htmlFor; text.rows = 4; text.maxLength = limits.maxTextChars;
@@ -67,12 +68,14 @@
     const picked = make("div", "", "transfer-picked"), notice = make("p", "", "transfer-notice"); notice.id = `${text.id}Notice`; notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite");
     const hint = make("p", "", "transfer-muted transfer-small");
     form.append(label, text, photos, attachments, picked, actions, hint, notice);
+    const dropBatch = make("section", "", "transfer-drop-batch"); dropBatch.hidden = true; dropBatch.setAttribute("aria-label", "拖入的图片");
+    let renderedDropBatch = null, dropRenderKey = "";
     const historyHead = make("div", "", "transfer-history-heading"), historyMeta = make("p", "收发记录", "transfer-muted"), refresh = make("button", "刷新", "transfer-button"); refresh.type = "button";
     const historyActions = make("div", "", "transfer-actions"), clearHistory = make("button", "清空记录", "transfer-button"), historyConfirm = make("div", "", "transfer-confirm"); clearHistory.type = "button"; historyConfirm.hidden = true;
     historyHead.tabIndex = -1;
     historyActions.append(refresh, clearHistory); historyHead.append(historyMeta, historyActions);
     const history = make("div", "", "transfer-history"), older = make("button", "较早记录", "transfer-button transfer-older"); older.type = "button"; older.hidden = true;
-    root.classList.add("transfer-panel"); root.replaceChildren(header, guide, form, historyHead, historyConfirm, history, older);
+    root.classList.add("transfer-panel"); root.replaceChildren(header, guide, ...(dropHint ? [dropHint] : []), form, dropBatch, historyHead, historyConfirm, history, older);
     function status(message = "", error = false) { notice.textContent = message; notice.dataset.error = String(error); }
     function update() {
       text.disabled = photos.disabled = attachments.disabled = photoButton.disabled = fileButton.disabled = sending;
@@ -83,6 +86,29 @@
       clearHistory.disabled = sending || pasting || mutating || (!messages.length && !hasMore);
       for (const control of historyControls) control.disabled = sending || pasting || mutating;
       hint.textContent = `每次最多 ${limits.maxFiles} 张图片，单张 ${size(limits.maxFileBytes)}，合计 ${size(totalFileLimit())}。原图保存在电脑，两端可下载。`;
+      renderDropBatch();
+    }
+    function renderDropBatch() {
+      const batch = pendingDropBatch, key = batch ? JSON.stringify([batch.requestId, batch.state, batch.error, sending, pasting, mutating, active, document.hidden]) : "none";
+      if (renderedDropBatch === batch && dropRenderKey === key) return;
+      renderedDropBatch = batch; dropRenderKey = key;
+      dropBatch.replaceChildren(); dropBatch.hidden = !batch;
+      if (!batch) return;
+      dropBatch.dataset.state = batch.state;
+      dropBatch.append(make("strong", batch.state === "sending" ? "正在发送拖入的图片…" : "拖入的图片"));
+      const names = make("ul", "", "transfer-drop-files");
+      for (const file of batch.files) names.append(make("li", `${file.name || "未命名文件"} · ${size(file.size)}`));
+      dropBatch.append(names);
+      if (batch.error) dropBatch.append(make("p", batch.error, "transfer-drop-error"));
+      const controls = make("div", "", "transfer-actions"), retry = make("button", "重试发送", "transfer-button"), remove = make("button", "移除这批图片", "transfer-button"); retry.type = remove.type = "button";
+      retry.disabled = remove.disabled = sending || pasting || mutating;
+      retry.disabled ||= !active || document.hidden;
+      retry.addEventListener("click", () => { if (pendingDropBatch === batch) void sendDroppedImages(batch); });
+      remove.addEventListener("click", () => {
+        if (pendingDropBatch !== batch || sending || pasting || mutating) return;
+        pendingDropBatch = null; status("已移除这批拖入的图片，原草稿仍保留。文件本身没有删除。"); update();
+      });
+      controls.append(retry, remove); dropBatch.append(controls);
     }
     function releaseFiles() { for (const item of files) if (item.preview) URL.revokeObjectURL(item.preview); files = []; }
     function renderPicked() {
@@ -99,19 +125,90 @@
       if (sending) return;
       const additions = Array.from(input.files || []); input.value = "";
       if (!additions.length) return;
-      const all = [...files.map(item => item.file), ...additions];
-      if (all.length > limits.maxFiles) { status(`每次最多上传 ${limits.maxFiles} 张图片。请先移除一些图片。`, true); return; }
-      const unsupported = additions.find(file => !/\.(?:jpe?g|png|gif|webp|heic|heif)$/i.test(file.name));
-      if (unsupported) { status(`${unsupported.name} 不是支持的图片格式。请选 JPEG、PNG、GIF、WebP 或 HEIC 图片。`, true); return; }
-      const empty = additions.find(file => !file.size); if (empty) { status(`${empty.name} 是空文件，请重新选择图片。`, true); return; }
-      const oversized = additions.find(file => file.size > limits.maxFileBytes);
-      if (oversized) { status(`${oversized.name} 超过 ${size(limits.maxFileBytes)}，请选择较小的文件。`, true); return; }
-      if (all.reduce((sum, file) => sum + file.size, 0) > totalFileLimit()) { status(`图片合计不能超过 ${size(totalFileLimit())}。`, true); return; }
+      const all = [...files.map(item => item.file), ...additions], error = imageBatchError(all);
+      if (error) { status(error, true); return; }
       for (const file of additions) files.push({ file, preview: /^image\/(?:jpeg|png|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "" });
       pendingId = ""; status(); renderPicked(); update();
       return true;
     }
     function totalFileLimit() { return Math.max(0, limits.maxRequestBytes - 128 * 1024); }
+    function imageBatchError(batch) {
+      if (!batch.length) return "没有可发送的图片。请把图片文件拖到互传区域。";
+      if (batch.length > limits.maxFiles) return `每次最多上传 ${limits.maxFiles} 张图片。请先移除一些图片。`;
+      const unsupported = batch.find(file => !/\.(?:jpe?g|png|gif|webp|heic|heif)$/i.test(file.name || ""));
+      if (unsupported) return `${unsupported.name} 不是支持的图片格式。请选 JPEG、PNG、GIF、WebP 或 HEIC 图片。`;
+      const empty = batch.find(file => !file.size); if (empty) return `${empty.name} 是空文件，请重新选择图片。`;
+      const oversized = batch.find(file => file.size > limits.maxFileBytes);
+      if (oversized) return `${oversized.name} 超过 ${size(limits.maxFileBytes)}，请选择较小的文件。`;
+      if (batch.reduce((sum, file) => sum + file.size, 0) > totalFileLimit()) return `图片合计不能超过 ${size(totalFileLimit())}。`;
+      return "";
+    }
+    function isFileDrag(event) {
+      const transfer = event.dataTransfer;
+      return Boolean(transfer && (transfer.files?.length || Array.from(transfer.types || []).includes("Files") || Array.from(transfer.items || []).some(item => item.kind === "file")));
+    }
+    function isUriDrag(event) { return Array.from(event.dataTransfer?.types || []).includes("text/uri-list"); }
+    function acceptsDropTarget(event) { return event.target === root || root.contains?.(event.target) || event.composedPath?.().includes(root); }
+    function stopFileNavigation(event) { event.preventDefault(); event.stopPropagation?.(); }
+    if (!phone) {
+      const protectFileDrag = event => {
+        if (!active || document.hidden) return;
+        const fileDrag = isFileDrag(event);
+        if (!fileDrag && !isUriDrag(event)) return;
+        stopFileNavigation(event);
+        if (!fileDrag) { event.dataTransfer.dropEffect = "none"; root.classList.remove("transfer-drop-active"); return; }
+        const available = acceptsDropTarget(event) && !pendingDropBatch && !sending && !pasting && !mutating;
+        if (event.dataTransfer) event.dataTransfer.dropEffect = pendingDropBatch ? "none" : "copy";
+        if (pendingDropBatch) status("上一批拖入的图片还未确认发送。请先重试或移除上一批，再拖入新图片。", true);
+        root.classList.toggle("transfer-drop-active", available);
+      };
+      document.addEventListener("dragenter", protectFileDrag, true); document.addEventListener("dragover", protectFileDrag, true);
+      document.addEventListener("dragleave", event => { if (!event.relatedTarget || !root.contains?.(event.relatedTarget)) root.classList.remove("transfer-drop-active"); }, true);
+      document.addEventListener("drop", event => {
+        if (!active || document.hidden) return;
+        const fileDrag = isFileDrag(event);
+        if (!fileDrag && !isUriDrag(event)) return;
+        stopFileNavigation(event); root.classList.remove("transfer-drop-active");
+        if (!fileDrag) { event.dataTransfer.dropEffect = "none"; status("请从文件夹拖入图片，网页链接不会发送。", true); return; }
+        if (pendingDropBatch) { status("上一批拖入的图片还未确认发送。请先重试或移除上一批，再拖入新图片。", true); return; }
+        const dropped = Array.from(event.dataTransfer.files || []);
+        if (!dropped.length) { status("没有收到图片文件。请从文件夹把图片文件拖到互传区域；链接和文件夹不会发送。", true); return; }
+        const error = imageBatchError(dropped);
+        const outside = !acceptsDropTarget(event), busy = sending || pasting || mutating;
+        const batch = { files: dropped, requestId: error ? "" : requestId(), state: "ready", error: error || (outside ? "请把图片拖到互传区域。此批文件已保留，可点击“重试发送”发送到手机。" : busy ? "正在处理上一项操作。此批图片已保留，请完成后点击“重试发送”。" : "") };
+        pendingDropBatch = batch;
+        if (batch.error) { batch.state = "failed"; status(batch.error, true); update(); return; }
+        update(); void sendDroppedImages(batch);
+      }, true);
+    }
+    async function sendDroppedImages(batch) {
+      if (phone || !active || document.hidden || pendingDropBatch !== batch || sending || pasting || mutating) return;
+      const error = imageBatchError(batch.files);
+      if (error) { batch.state = "failed"; batch.error = error; status(error, true); update(); return; }
+      batch.requestId ||= requestId();
+      const payload = new FormData(); payload.append("requestId", batch.requestId); payload.append("text", "");
+      for (const file of batch.files) payload.append("files", file, file.name);
+      const ticket = generation, operation = ++sendSequence;
+      batch.state = "sending"; batch.error = ""; sending = true; pollError = false; window.clearTimeout(timer); update(); renderPicked(); status("正在发送拖入的图片，请保持页面打开…");
+      try {
+        const result = await request("messages", payload, 90000);
+        if (ticket !== generation || pendingDropBatch !== batch || operation !== sendSequence) return;
+        if (!result.message?.id) throw new Error("未能确认接收结果。这批图片已保留，请点击“重试发送”核对并重试。");
+        generation += 1; pendingDropBatch = null;
+        if (!messages.some(item => item.id === result.message.id)) messages.unshift(result.message);
+        revision = ""; renderHistory(); status("图片已发送，手机打开「互传」即可看到。原草稿仍保留。");
+      } catch (error) {
+        if (ticket !== generation || pendingDropBatch !== batch || operation !== sendSequence) return;
+        batch.state = "unconfirmed"; batch.error = `${error.uploadTimedOut ? "上传超时，接收结果尚未确认。" : error.message || "暂时无法确认发送结果。"} 这批图片已保留，请点击“重试发送”核对接收结果。`; status(batch.error, true);
+      } finally {
+        if (operation === sendSequence) { sending = false; update(); renderPicked(); schedule(); }
+      }
+    }
+    function cancelPendingUpload() {
+      generation += 1; sendSequence += 1; controller?.abort(); uploadController?.abort(); controller = uploadController = null; sending = false;
+      if (pendingDropBatch?.state === "sending") { pendingDropBatch.state = "unconfirmed"; pendingDropBatch.error = "发送结果尚未确认。这批图片已保留，返回互传后请点击“重试发送”。"; }
+      root.classList.remove("transfer-drop-active"); update(); renderPicked();
+    }
     function clipboardImage(file, index) {
       const extensions = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif" };
       const extension = extensions[file.type];
@@ -310,13 +407,13 @@
         try { result = await response.json(); } catch { throw new Error("电脑返回的内容无法读取，请重试。"); }
         if (ticket !== generation) throw Object.assign(new Error("旧连接已取消。"), { cancelled: true });
         if (!response.ok) {
-          if (response.status === 401) { closePreview(false); options.onAuth?.(); }
+          if (response.status === 401) { closePreview(false); if (!phone) { active = false; cancelPendingUpload(); } options.onAuth?.(); }
           throw new Error(result.error || `请求失败（${response.status}）。`);
         }
         return result;
       } catch (error) {
         if (ticket !== generation) throw Object.assign(new Error("旧连接已取消。"), { cancelled: true });
-        if (error.name === "AbortError") { options.onConnectionState?.(false); throw new Error(typeof body === "string" ? "操作超时，请刷新记录确认结果。" : body ? "上传超时。内容已保留，可重新点发送。" : "连接超时，请检查电脑与 Wi-Fi。"); }
+        if (error.name === "AbortError") { options.onConnectionState?.(false); throw Object.assign(new Error(typeof body === "string" ? "操作超时，请刷新记录确认结果。" : body ? "上传超时。内容已保留，可重新点发送。" : "连接超时，请检查电脑与 Wi-Fi。"), { uploadTimedOut: Boolean(body && typeof body !== "string") }); }
         if (error instanceof TypeError) { options.onConnectionState?.(false); throw new Error("暂时连不上电脑。内容已保留，请检查 Wi-Fi 后重试。"); }
         throw error;
       } finally { window.clearTimeout(timeout); if (controller === abort) controller = null; if (uploadController === abort) uploadController = null; }
@@ -345,31 +442,32 @@
     form.addEventListener("submit", async event => {
       event.preventDefault(); if (sending || pasting || mutating || (!text.value.trim() && !files.length)) return;
       if (text.value.length > limits.maxTextChars) { status(`文字最多 ${limits.maxTextChars} 字，请缩短后发送。`, true); return; }
-      if (files.length > limits.maxFiles || files.some(item => item.file.size > limits.maxFileBytes) || files.reduce((sum, item) => sum + item.file.size, 0) > totalFileLimit()) { status("图片超过上传限制，请移除或缩小后重试。", true); return; }
-      pendingId ||= requestId(); const payload = new FormData(); payload.append("requestId", pendingId); payload.append("text", text.value); const ticket = generation;
+      const error = files.length ? imageBatchError(files.map(item => item.file)) : "";
+      if (error) { status(error, true); return; }
+      pendingId ||= requestId(); const payload = new FormData(); payload.append("requestId", pendingId); payload.append("text", text.value); const ticket = generation, operation = ++sendSequence;
       for (const item of files) payload.append("files", item.file, item.file.name);
       sending = true; pollError = false; window.clearTimeout(timer); update(); renderPicked(); status("正在上传，请保持页面打开…");
       try {
         const result = await request("messages", payload, 90000);
-        if (ticket !== generation) return;
+        if (ticket !== generation || operation !== sendSequence) return;
         if (!result.message?.id) throw new Error("未能确认接收结果。内容已保留，可重新点发送。");
         generation += 1;
         if (!messages.some(item => item.id === result.message.id)) messages.unshift(result.message);
         text.value = ""; pendingId = ""; releaseFiles(); renderPicked(); renderHistory(); revision = "";
         status(phone ? "已传到电脑。电脑点“手机传话”查看收发记录，复制后粘贴到 Codex 的“Codex Console”聊天，再发送。" : "已发送，手机打开「互传」即可看到。");
-      } catch (error) { if (!error.cancelled) status(error.message, true); }
-      finally { sending = false; update(); renderPicked(); schedule(); }
+      } catch (error) { if (!error.cancelled && ticket === generation && operation === sendSequence) status(error.message, true); }
+      finally { if (operation === sendSequence) { sending = false; update(); renderPicked(); schedule(); } }
     });
     refresh.addEventListener("click", () => void load(false, true)); older.addEventListener("click", () => void load(true));
     clearHistory.addEventListener("click", () => { if (sending || pasting || mutating || (!messages.length && !hasMore)) return; pendingAction = { type: "clear", mode: "unstarred" }; renderHistory(); });
-    document.addEventListener("visibilitychange", () => { window.clearTimeout(timer); timer = 0; if (!document.hidden && active) void load(); });
-    window.addEventListener?.("pagehide", () => closePreview(false));
+    document.addEventListener("visibilitychange", () => { window.clearTimeout(timer); timer = 0; if (document.hidden && !phone) cancelPendingUpload(); if (!document.hidden && active) void load(); });
+    window.addEventListener?.("pagehide", () => { closePreview(false); if (!phone) { active = false; cancelPendingUpload(); } });
     renderHistory(); update();
     return {
-      hasDraft() { return Boolean(text.value.trim() || files.length || sending || pasting || mutating || imagePreview); },
-      setActive(value) { const changed = active !== Boolean(value); active = Boolean(value); if (!active) closePreview(false); window.clearTimeout(timer); timer = 0; if (active && changed) void load(); },
+      hasDraft() { return Boolean(text.value.trim() || files.length || pendingDropBatch || sending || pasting || mutating || imagePreview); },
+      setActive(value) { const changed = active !== Boolean(value); active = Boolean(value); if (!active) { closePreview(false); if (!phone && (changed || sending)) cancelPendingUpload(); } window.clearTimeout(timer); timer = 0; update(); if (active && changed) void load(); },
       refresh() { return load(false, true); },
-      clear() { closePreview(false); generation += 1; mutationSequence += 1; mutating = false; pendingAction = null; active = false; controller?.abort(); uploadController?.abort(); controller = null; uploadController = null; window.clearTimeout(timer); timer = 0; messages = []; revision = ""; hasMore = false; pollError = false; document.querySelectorAll?.(".transfer-copy-field, .transfer-copy-close").forEach(element => element.remove()); for (const item of files) { if (item.preview) URL.revokeObjectURL(item.preview); item.preview = ""; } renderPicked(); renderHistory(); }
+      clear() { closePreview(false); generation += 1; sendSequence += 1; sending = false; mutationSequence += 1; mutating = false; pendingAction = null; active = false; controller?.abort(); uploadController?.abort(); controller = null; uploadController = null; if (pendingDropBatch?.state === "sending") { pendingDropBatch.state = "unconfirmed"; pendingDropBatch.error = "连接已重置，发送结果尚未确认。这批图片已保留，返回互传后请点击“重试发送”。"; } root.classList.remove("transfer-drop-active"); window.clearTimeout(timer); timer = 0; messages = []; revision = ""; hasMore = false; pollError = false; document.querySelectorAll?.(".transfer-copy-field, .transfer-copy-close").forEach(element => element.remove()); for (const item of files) { if (item.preview) URL.revokeObjectURL(item.preview); item.preview = ""; } renderPicked(); renderHistory(); }
     };
   }
   window.CodexTransferPanel = { create };

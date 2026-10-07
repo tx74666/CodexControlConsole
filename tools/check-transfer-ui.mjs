@@ -6,7 +6,7 @@ import { runInNewContext } from "node:vm";
 import { File } from "node:buffer";
 const script = readFileSync(new URL("../transfer-panel.js", import.meta.url), "utf8");
 const response = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, async json() { return body; } });
-const defer = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const defer = () => { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; };
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const photo = (name = "photo.png", count = 8) => new File([new Uint8Array(count)], name, { type: "image/png" });
 // Validation only reads metadata; avoid allocating megabytes for size boundaries.
@@ -22,7 +22,9 @@ const starFor = (h, id) => h.all("button", cardFor(h, id)).find(button => button
 function harness(phone = true, { nativeDialog = true, authClears = true } = {}) {
   class Element {
     constructor(tag = "div") {
-      this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.hidden = false; this.value = ""; this._text = ""; this.attributes = {}; this.scrollTop = this.scrollLeft = 0; this.classList = { add() {} };
+      this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.listenerRecords = new Map(); this.dataset = {}; this.hidden = false; this.value = ""; this._text = ""; this.attributes = {}; this.scrollTop = this.scrollLeft = 0;
+      const classes = () => new Set((this.className || "").split(/\s+/).filter(Boolean));
+      this.classList = { contains: name => classes().has(name), add: (...names) => { const next = classes(); names.forEach(name => next.add(name)); this.className = [...next].join(" "); }, remove: (...names) => { const next = classes(); names.forEach(name => next.delete(name)); this.className = [...next].join(" "); }, toggle: (name, force) => { const next = classes(), enabled = force ?? !next.has(name); if (enabled) next.add(name); else next.delete(name); this.className = [...next].join(" "); return enabled; } };
       if (tag === "dialog" && nativeDialog) { this.showModal = () => { this.open = true; }; this.close = () => { this.open = false; this.dispatch("close"); }; }
     }
     append(...elements) { this.children.push(...elements); for (const element of elements) element.parentElement = this; }
@@ -33,10 +35,14 @@ function harness(phone = true, { nativeDialog = true, authClears = true } = {}) 
     set innerHTML(_) { throw new Error("No untrusted HTML allowed."); }
     setAttribute(key, value) { this.attributes[key] = String(value); if (key === "open") this.open = true; }
     removeAttribute(key) { delete this.attributes[key]; delete this[key]; }
-    addEventListener(name, handler) { this.listeners.set(name, handler); }
+    contains(element) { return element === this || this.children.some(child => child.contains(element)); }
+    addEventListener(name, handler, options) { this.listeners.set(name, handler); const records = this.listenerRecords.get(name) || []; records.push({ handler, capture: options === true || Boolean(options?.capture) }); this.listenerRecords.set(name, records); }
     dispatch(name, fields = {}) {
-      const event = { target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...fields };
-      for (let element = this; element; element = element.parentElement) { event.currentTarget = element; element.listeners.get(name)?.(event); }
+      const path = []; for (let element = this; element; element = element.parentElement) path.push(element);
+      const event = { target: this, defaultPrevented: false, cancelBubble: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.cancelBubble = true; }, stopImmediatePropagation() { this.cancelBubble = true; this.immediateStopped = true; }, composedPath() { return path; }, ...fields };
+      const invoke = (element, capture) => { event.currentTarget = element; for (const record of element.listenerRecords?.get(name) || []) { if (record.capture === capture) record.handler(event); if (event.immediateStopped) break; } };
+      for (const element of [...path].reverse()) { invoke(element, true); if (event.cancelBubble) break; }
+      if (!event.cancelBubble) for (const element of path) { invoke(element, false); if (event.cancelBubble) break; }
       return event;
     }
     click() { this.clicked = true; return this.listeners.get("click")?.({ target: this, preventDefault() {} }); }
@@ -45,11 +51,12 @@ function harness(phone = true, { nativeDialog = true, authClears = true } = {}) 
     setSelectionRange() { this.selected = true; }
     remove() { this.removed = true; this.parentElement = null; }
   }
-  const calls = [], answers = [], timers = new Map(), events = new Map(), windowEvents = new Map(), previews = [], revoked = [], scrollCalls = []; let nextTimer = 1, authCount = 0;
+  const calls = [], answers = [], timers = new Map(), events = new Map(), windowEvents = new Map(), previews = [], revoked = [], scrollCalls = []; let nextTimer = 1, authCount = 0, uuidCount = 0;
   const root = new Element(), body = new Element("body");
-  const document = { body, hidden: false, createElement: tag => new Element(tag), addEventListener(name, handler) { events.set(name, handler); }, execCommand: () => true };
+  const document = new Element("document"); Object.assign(document, { body, hidden: false, createElement: tag => new Element(tag), execCommand: () => true });
+  const addDocumentListener = document.addEventListener.bind(document); document.addEventListener = (name, handler, options) => { events.set(name, handler); addDocumentListener(name, handler, options); }; root.parentElement = document;
   class BrowserURL extends URL { static createObjectURL(file) { const value = `blob:${previews.length}`; previews.push({ file, value }); return value; } static revokeObjectURL(value) { revoked.push(value); } }
-  const runtime = { document, navigator: {}, URL: BrowserURL, URLSearchParams, AbortController, TypeError, FormData, File, window: { isSecureContext: false, scrollX: 0, scrollY: 0, scrollTo(x, y) { scrollCalls.push([x, y]); this.scrollX = x; this.scrollY = y; }, addEventListener(name, handler) { windowEvents.set(name, handler); }, location: { href: "http://192.168.0.2:8899/?tab=transfer" }, setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); } }, async fetch(url, options) { calls.push({ url, options }); const answer = answers.shift(); assert.ok(answer, `Unexpected request ${url}`); return await answer; } };
+  const runtime = { document, navigator: {}, crypto: { randomUUID() { return `00000000-0000-4000-8000-${String(++uuidCount).padStart(12, "0")}`; } }, URL: BrowserURL, URLSearchParams, AbortController, TypeError, FormData, File, window: { isSecureContext: false, scrollX: 0, scrollY: 0, scrollTo(x, y) { scrollCalls.push([x, y]); this.scrollX = x; this.scrollY = y; }, addEventListener(name, handler) { windowEvents.set(name, handler); }, location: { href: "http://192.168.0.2:8899/?tab=transfer" }, setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); } }, async fetch(url, options) { calls.push({ url, options }); const answer = answers.shift(); assert.ok(answer, `Unexpected request ${url}`); return await answer; } };
   runInNewContext(script, runtime);
   const panel = runtime.window.CodexTransferPanel.create(root, { phone, onAuth() { authCount++; if (authClears) panel.clear(); } });
   const all = (tag, start = root) => {
@@ -61,7 +68,9 @@ function harness(phone = true, { nativeDialog = true, authClears = true } = {}) 
   async function send() { return form.listeners.get("submit")({ preventDefault() {} }); }
   function type(value) { text.value = value; text.listeners.get("input")({}); }
   function paste(clipboardData, target = form) { return target.dispatch("paste", { clipboardData }); }
-  return { root, body, panel, runtime, document, calls, answers, timers, events, windowEvents, scrollCalls, all, button, form, text, photos, select, send, type, paste, previews, revoked, authCount: () => authCount, respond(value, status) { answers.push(response(value, status)); } };
+  function drag(name, files = [], target = form, fields = {}) { return target.dispatch(name, { dataTransfer: { types: ["Files"], files, items: files.map(file => ({ kind: "file", type: file.type, getAsFile: () => file })), dropEffect: "none" }, ...fields }); }
+  const drop = (files, target = form, fields = {}) => drag("drop", files, target, fields);
+  return { root, body, panel, runtime, document, calls, answers, timers, events, windowEvents, scrollCalls, all, button, form, text, photos, select, send, type, paste, drag, drop, previews, revoked, authCount: () => authCount, uuidCount: () => uuidCount, respond(value, status) { answers.push(response(value, status)); } };
 }
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count++; }
@@ -426,5 +435,167 @@ await test("unsafe preview URLs are refused while valid originals retain their d
   }
   const desktop = harness(false); desktop.respond(historyPage([message("one", false)])); desktop.panel.setActive(true); await settle();
   assert.equal(previewTrigger(desktop), undefined); assert.equal(desktop.all("a").find(link => link.children.length).target, "_blank");
+});
+const uploadCalls = h => h.calls.filter(call => call.options.method === "POST" && /\/transfer\/messages$/.test(call.url));
+async function activateTransfer(h, records = [], extra = {}) { h.respond({ ...historyPage(records), ...extra }); h.panel.setActive(true); await settle(); }
+const droppedBatch = h => h.all("section").find(element => element.className?.split(/\s+/).includes("transfer-drop-batch")) || h.all("div").find(element => element.className?.split(/\s+/).includes("transfer-drop-batch"));
+await test("active desktop drag and drop consume native navigation and upload original images once without submit", async () => {
+  const h = harness(false); await activateTransfer(h); const file = new File([Uint8Array.of(2, 41, 128, 255)], "<script>dropped.png", { type: "image/png" });
+  const url = h.runtime.window.location.href;
+  // Browsers expose the Files type before making the original files readable on drop.
+  const enter = h.drag("dragenter", [], h.text), over = h.drag("dragover", [], h.text);
+  assert.equal(enter.defaultPrevented, true); assert.equal(over.defaultPrevented, true); assert.equal(h.root.classList.contains("transfer-drop-active"), true);
+  h.respond({ message: message("dropped", false) }); const event = h.drop([file], h.text); await settle();
+  assert.equal(event.defaultPrevented, true); assert.equal(h.runtime.window.location.href, url); assert.equal(h.root.classList.contains("transfer-drop-active"), false);
+  const [call] = uploadCalls(h); assert.equal(uploadCalls(h).length, 1); assert.equal(call.url, "/api/transfer/messages"); assert.equal(call.options.body.get("text"), "");
+  assert.equal(call.options.body.getAll("files").length, 1); const sent = call.options.body.get("files"); assert.equal(sent.name, file.name); assert.equal(sent.type, file.type);
+  assert.deepEqual(new Uint8Array(await sent.arrayBuffer()), new Uint8Array(await file.arrayBuffer()));
+  assert.match(call.options.body.get("requestId"), /^[0-9a-f-]{36}$/); assert.equal(h.uuidCount(), 1); assert.equal(call.options.headers["Content-Type"], undefined); assert.equal(call.options.credentials, "same-origin");
+  assert.equal(h.all("article").length, 1); assert.equal(h.all("script").length, 0); assert.equal(h.panel.hasDraft(), false);
+});
+await test("drop sends only its images while preserving a failed manual text and photo draft including its retry ID", async () => {
+  const h = harness(false); await activateTransfer(h); const manual = photo("manual.png"), dropped = photo("dropped.png"); h.select(manual); h.type("手动草稿不能跟着发送");
+  h.respond({ error: "manual failed" }, 503); await h.send(); const originalId = uploadCalls(h)[0].options.body.get("requestId");
+  h.respond({ message: message("auto-only", false) }); h.drop([dropped], h.form); await settle();
+  const auto = uploadCalls(h)[1]; assert.equal(auto.options.body.get("text"), ""); assert.deepEqual(auto.options.body.getAll("files").map(file => file.name), ["dropped.png"]);
+  assert.notEqual(auto.options.body.get("requestId"), originalId); assert.equal(h.text.value, "手动草稿不能跟着发送"); assert.equal(h.previews[0].file, manual); assert.equal(h.revoked.includes("blob:0"), false);
+  assert.equal(h.button("上传并发送").disabled, false); assert.equal(h.panel.hasDraft(), true);
+  h.respond({ message: message("manual-retry", false) }); await h.send(); const retry = uploadCalls(h)[2];
+  assert.equal(retry.options.body.get("requestId"), originalId); assert.equal(retry.options.body.get("text"), "手动草稿不能跟着发送"); assert.deepEqual(retry.options.body.getAll("files").map(file => file.name), ["manual.png"]); assert.equal(h.uuidCount(), 2);
+});
+await test("one dropped batch allocates one UUID, blocks duplicate busy drops and retries only by explicit action", async () => {
+  const h = harness(false); await activateTransfer(h); const file = photo("retry-drop.png"), pending = defer(); h.answers.push(pending.promise);
+  h.drop([file]); h.drop([file], h.text); h.drop([photo("later.png")], h.root); assert.equal(uploadCalls(h).length, 1); assert.equal(h.uuidCount(), 1); assert.equal(h.button("重试发送").disabled, true);
+  const first = uploadCalls(h)[0], firstId = first.options.body.get("requestId"); pending.resolve(response({ error: "网络中断" }, 503)); await settle();
+  assert.equal(h.panel.hasDraft(), true); assert.equal(h.button("重试发送").disabled, false); assert.match(h.root.textContent, /网络中断/); assert.match(droppedBatch(h).textContent, /retry-drop\.png/); assert.doesNotMatch(droppedBatch(h).textContent, /later\.png/);
+  const retryButton = h.button("重试发送"); retryButton.focus(); h.respond({ unchanged: true, revision: "r1" }); await h.panel.refresh();
+  assert.equal(h.button("重试发送"), retryButton); assert.equal(h.document.activeElement, retryButton); assert.equal(uploadCalls(h).length, 1);
+  await settle(); assert.equal(uploadCalls(h).length, 1); const laterDrop = h.drop([photo("replacement.png")]); assert.equal(laterDrop.defaultPrevented, true); assert.equal(uploadCalls(h).length, 1); assert.match(h.root.textContent, /这一批|这批|重试|移除/);
+  h.respond({ message: message("confirmed-retry", false), duplicate: true }); h.button("重试发送").click(); await settle();
+  const second = uploadCalls(h)[1]; assert.equal(second.options.body.get("requestId"), firstId); assert.equal(second.options.body.get("text"), ""); assert.equal(second.options.body.get("files").name, file.name);
+  assert.deepEqual(new Uint8Array(await second.options.body.get("files").arrayBuffer()), new Uint8Array(await file.arrayBuffer())); assert.equal(h.uuidCount(), 1); assert.equal(h.all("article").length, 1); assert.equal(h.panel.hasDraft(), false);
+});
+await test("unconfirmed or unreadable drop receipts retain original files and UUID without automatic resend", async () => {
+  for (const unreadable of [false, true]) {
+    const h = harness(false); await activateTransfer(h); const file = photo("uncertain.png");
+    if (unreadable) h.answers.push({ ok: true, status: 200, async json() { throw new Error("broken JSON"); } }); else h.respond({ accepted: true });
+    h.drop([file]); await settle(); assert.equal(uploadCalls(h).length, 1); assert.equal(h.panel.hasDraft(), true); assert.equal(h.button("重试发送").disabled, false); assert.match(h.root.textContent, /未能确认|无法读取/);
+    const firstId = uploadCalls(h)[0].options.body.get("requestId"); await settle(); assert.equal(uploadCalls(h).length, 1);
+    h.respond({ message: message("confirmed", false), duplicate: true }); h.button("重试发送").click(); await settle();
+    assert.equal(uploadCalls(h).length, 2); assert.equal(uploadCalls(h)[1].options.body.get("requestId"), firstId); assert.equal(uploadCalls(h)[1].options.body.get("files").name, file.name); assert.equal(h.uuidCount(), 1);
+  }
+});
+await test("removing an uncertain drop batch affects neither the manual draft nor its selected originals", async () => {
+  const h = harness(false); await activateTransfer(h); h.select(photo("keep.png")); h.type("保留手送草稿"); h.respond({ error: "无法确认" }, 503); h.drop([photo("remove.png")]); await settle();
+  h.button("移除这批图片").click(); assert.equal(h.text.value, "保留手送草稿"); assert.equal(h.revoked.includes("blob:0"), false); assert.equal(h.button("重试发送"), undefined); assert.equal(h.button("上传并发送").disabled, false); assert.equal(uploadCalls(h).length, 1);
+  h.respond({ message: message("new-batch", false) }); h.drop([photo("new.png")]); await settle(); assert.equal(uploadCalls(h).length, 2); assert.equal(h.uuidCount(), 2); assert.equal(uploadCalls(h)[1].options.body.get("files").name, "new.png"); assert.equal(h.text.value, "保留手送草稿");
+});
+await test("all active desktop panel areas accept drops while outside drops are blocked with an actionable hint", async () => {
+  const h = harness(false); await activateTransfer(h); const outside = h.document.createElement("div"); outside.parentElement = h.document;
+  const event = h.drop([photo("outside.png")], outside); assert.equal(event.defaultPrevented, true); assert.equal(uploadCalls(h).length, 0); assert.match(h.root.textContent, /拖.*互传|互传.*拖|区域/); assert.equal(h.uuidCount(), 1); assert.match(droppedBatch(h).textContent, /outside\.png/); h.button("移除这批图片").click();
+  for (const [index, target] of [h.root.children[0], h.root, h.form].entries()) { h.respond({ message: message(`inside-${index}`, false) }); h.drop([photo(`inside-${index}.png`)], target); await settle(); }
+  assert.equal(uploadCalls(h).length, 3); assert.equal(h.uuidCount(), 4);
+  const plainText = h.drag("drop", [], h.text, { dataTransfer: { types: ["text/plain"], files: [], items: [{ kind: "string", type: "text/plain" }] } }); assert.equal(plainText.defaultPrevented, false); assert.equal(uploadCalls(h).length, 3);
+});
+await test("inactive, hidden and phone transfer panels never automatically upload a drop", async () => {
+  const inactive = harness(false); assert.equal(inactive.drop([photo()]).defaultPrevented, false); assert.equal(inactive.calls.length, 0); assert.equal(inactive.uuidCount(), 0);
+  const desktop = harness(false); await activateTransfer(desktop); desktop.panel.setActive(false); desktop.drop([photo()]); assert.equal(uploadCalls(desktop).length, 0); await activateTransfer(desktop);
+  desktop.document.hidden = true; desktop.drop([photo()]); assert.equal(uploadCalls(desktop).length, 0); assert.equal(desktop.uuidCount(), 0);
+  const phone = harness(); await activateTransfer(phone, [message()]); phone.type("手机草稿"); phone.select(photo("phone.png")); previewTrigger(phone).click(); const dialog = phone.all("dialog")[0];
+  phone.drop([photo("external.png")], phone.text); assert.equal(uploadCalls(phone).length, 0); assert.equal(phone.text.value, "手机草稿"); assert.equal(phone.all("dialog")[0], dialog); assert.equal(dialog.open, true); assert.deepEqual(phone.revoked, []); assert.equal(phone.uuidCount(), 0);
+});
+await test("empty, oversized, excessive and mixed invalid drop batches produce no POST and preserve the manual draft", async () => {
+  const invalid = [[], [new File([], "empty.png", { type: "image/png" })], [new File(["plain"], "notes.txt", { type: "text/plain" })], [photo(), new File(["plain"], "notes.txt", { type: "text/plain" })], [new File(["bmp"], "unsupported.bmp", { type: "image/bmp" })], [sizedPhoto("too-large.png", 12 * 1024 ** 2 + 1)], [sizedPhoto("a.png", 12 * 1024 ** 2), sizedPhoto("b.png", 12 * 1024 ** 2)], Array.from({ length: 5 }, (_, index) => photo(`${index}.png`))];
+  for (const files of invalid) {
+    const h = harness(false); await activateTransfer(h); h.type("保留说明"); h.select(photo("keep.png")); const event = h.drop(files); await settle();
+    assert.equal(event.defaultPrevented, true); assert.equal(uploadCalls(h).length, 0); assert.equal(h.uuidCount(), 0); assert.equal(h.text.value, "保留说明"); assert.equal(h.previews[0].file.name, "keep.png"); assert.deepEqual(h.revoked, []); assert.equal(h.button("上传并发送").disabled, false); assert.match(h.root.textContent, /图片|空文件|超过|格式|最多/);
+  }
+});
+await test("valid dropped HEIC and four-image batches keep their names and original bytes", async () => {
+  const h = harness(false); await activateTransfer(h); const heic = new File(["heic-original-bytes"], "iPhone.HEIC", { type: "image/heic" }); h.respond({ message: message("heic", false) }); h.drop([heic]); await settle();
+  const first = uploadCalls(h)[0].options.body.get("files"); assert.equal(first.name, heic.name); assert.equal(first.type, heic.type); assert.equal(await first.text(), "heic-original-bytes"); assert.equal(h.all("dialog").length, 0);
+  const files = Array.from({ length: 4 }, (_, index) => new File([Uint8Array.of(index, 255)], `${index}.png`, { type: "image/png" })); h.respond({ message: message("four", false) }); h.drop(files); await settle();
+  const sent = uploadCalls(h)[1].options.body.getAll("files"); assert.equal(sent.length, 4); assert.deepEqual(sent.map(file => file.name), files.map(file => file.name)); for (let index = 0; index < files.length; index++) assert.deepEqual(new Uint8Array(await sent[index].arrayBuffer()), new Uint8Array(await files[index].arrayBuffer())); assert.equal(h.uuidCount(), 2);
+});
+await test("drop validation uses negotiated byte limits and preserves multipart overhead at exact boundaries", async () => {
+  const h = harness(false); await activateTransfer(h, [], { limits: { maxFileBytes: 12, maxRequestBytes: 128 * 1024 + 23 } });
+  h.drop([photo("one-over.png", 13)]); assert.equal(uploadCalls(h).length, 0); h.button("移除这批图片").click(); h.drop([photo("a.png", 12), photo("b.png", 12)]); assert.equal(uploadCalls(h).length, 0); h.button("移除这批图片").click();
+  h.respond({ message: message("boundary", false) }); h.drop([photo("a.png", 12), photo("b.png", 11)]); await settle(); assert.equal(uploadCalls(h).length, 1); assert.deepEqual(uploadCalls(h)[0].options.body.getAll("files").map(file => file.size), [12, 11]); assert.equal(h.uuidCount(), 1);
+});
+await test("drops during manual upload, clipboard reads or history mutations preserve busy state without extra uploads", async () => {
+  for (const operation of ["upload", "clipboard", "history"]) {
+    const h = harness(false); await activateTransfer(h, [message("existing", false)]); h.type("忙碌时保留"); h.select(photo("keep.png")); const pending = defer();
+    if (operation === "upload") { h.answers.push(pending.promise); void h.send(); }
+    else if (operation === "clipboard") { h.runtime.window.isSecureContext = true; h.runtime.navigator.clipboard = { read: () => pending.promise }; h.button("粘贴图片").click(); }
+    else { h.answers.push(pending.promise); starFor(h, "existing").click(); }
+    const before = uploadCalls(h).length, uuidBefore = h.uuidCount(), event = h.drop([photo("busy.png")]); assert.equal(event.defaultPrevented, true); assert.equal(uploadCalls(h).length, before); assert.equal(h.uuidCount(), uuidBefore + 1); assert.match(h.root.textContent, /正在|完成|稍后|处理|忙/); assert.match(droppedBatch(h).textContent, /busy\.png/);
+    assert.equal(h.text.value, "忙碌时保留"); assert.equal(h.previews[0].file.name, "keep.png"); assert.deepEqual(h.revoked, []);
+    pending.resolve(operation === "clipboard" ? [] : operation === "upload" ? response({ error: "retry" }, 503) : response(historyPage([message("existing", false)], "done"))); await settle(); assert.equal(h.button("上传并发送").disabled, false); assert.equal(h.button("重试发送").disabled, false); assert.equal(uploadCalls(h).length, before);
+  }
+});
+await test("private clear keeps an unconfirmed drop but fences late old success and unauthorized receipts from a retry", async () => {
+  for (const lateUnauthorized of [false, true]) {
+    const h = harness(false); await activateTransfer(h); h.type("仍保留"); h.select(photo("manual.png")); const old = defer(); h.answers.push(old.promise); h.drop([photo("retry-after-clear.png")]); const first = uploadCalls(h)[0];
+    h.panel.clear(); assert.equal(first.options.signal.aborted, true); assert.equal(h.panel.hasDraft(), true); assert.equal(h.text.value, "仍保留"); assert.ok(h.button("重试发送")); assert.equal(uploadCalls(h).length, 1);
+    await activateTransfer(h); const current = defer(); h.answers.push(current.promise); h.button("重试发送").click(); assert.equal(uploadCalls(h).length, 2); assert.equal(h.button("重试发送").disabled, true);
+    old.resolve(lateUnauthorized ? response({ error: "old auth" }, 401) : response({ message: message("stale-success", false) })); await settle(); assert.equal(h.authCount(), 0); assert.equal(h.button("重试发送").disabled, true); assert.equal(cardFor(h, "stale-success"), undefined); assert.equal(h.text.value, "仍保留");
+    current.resolve(response({ message: message("current-success", false) })); await settle(); assert.ok(cardFor(h, "current-success")); assert.equal(h.text.value, "仍保留"); assert.equal(uploadCalls(h)[1].options.body.get("requestId"), first.options.body.get("requestId")); assert.equal(h.uuidCount(), 1); assert.equal(h.button("上传并发送").disabled, false);
+  }
+});
+await test("leaving the Transfer tab cancels automatic upload, keeps its original batch and needs an explicit retry on return", async () => {
+  const h = harness(false); await activateTransfer(h); const pending = defer(); h.answers.push(pending.promise); h.drop([photo("tab-return.png")]); const first = uploadCalls(h)[0];
+  h.panel.setActive(false); assert.equal(first.options.signal.aborted, true); pending.resolve(response({ message: message("late", false) })); await settle(); assert.equal(cardFor(h, "late"), undefined); assert.equal(h.panel.hasDraft(), true);
+  await activateTransfer(h); assert.equal(uploadCalls(h).length, 1); assert.equal(h.button("重试发送").disabled, false); h.respond({ message: message("explicit", false), duplicate: true }); h.button("重试发送").click(); await settle(); assert.equal(uploadCalls(h)[1].options.body.get("requestId"), first.options.body.get("requestId")); assert.equal(h.uuidCount(), 1);
+});
+await test("a genuine unauthorized dropped upload clears private history and retains its original batch for explicit retry", async () => {
+  const h = harness(false); await activateTransfer(h, [message("private", false)]); h.respond({ error: "身份已失效" }, 401); h.drop([photo("auth-retry.png")]); await settle();
+  assert.equal(h.authCount(), 1); assert.equal(h.all("article").length, 0); assert.equal(h.panel.hasDraft(), true); assert.equal(uploadCalls(h).length, 1); const id = uploadCalls(h)[0].options.body.get("requestId");
+  await activateTransfer(h); assert.equal(uploadCalls(h).length, 1); h.respond({ message: message("auth-restored", false) }); h.button("重试发送").click(); await settle(); assert.equal(uploadCalls(h)[1].options.body.get("requestId"), id); assert.equal(uploadCalls(h)[1].options.body.get("files").name, "auth-retry.png"); assert.equal(h.uuidCount(), 1);
+});
+await test("active desktop URI-only drags block navigation without reading links or creating an upload batch", async () => {
+  const h = harness(false); await activateTransfer(h); h.type("保留手送说明"); h.select(photo("keep.png")); const url = h.runtime.window.location.href; let linkReads = 0;
+  for (const name of ["dragenter", "dragover", "drop"]) {
+    const transfer = { types: ["text/uri-list", "text/plain"], files: [], items: [{ kind: "string", type: "text/uri-list" }], dropEffect: "copy", getData() { linkReads++; throw new Error("Links must not be read or fetched."); } };
+    const event = h.drag(name, [], h.text, { dataTransfer: transfer }); assert.equal(event.defaultPrevented, true); assert.equal(event.cancelBubble, true); assert.equal(transfer.dropEffect, "none");
+    assert.equal(h.calls.length, 1); assert.equal(uploadCalls(h).length, 0); assert.equal(h.uuidCount(), 0); assert.equal(droppedBatch(h).hidden, true); assert.equal(h.button("重试发送"), undefined);
+  }
+  assert.equal(linkReads, 0); assert.equal(h.runtime.window.location.href, url); assert.match(h.root.textContent, /文件夹.*图片.*网页链接不会发送/); assert.equal(h.text.value, "保留手送说明"); assert.equal(h.previews[0].file.name, "keep.png"); assert.deepEqual(h.revoked, []);
+});
+await test("plain text drags and URI drags on inactive, hidden or phone panels retain native behavior", async () => {
+  const active = harness(false); await activateTransfer(active); let reads = 0;
+  for (const name of ["dragenter", "dragover", "drop"]) {
+    const event = active.drag(name, [], active.text, { dataTransfer: { types: ["text/plain"], files: [], items: [{ kind: "string", type: "text/plain" }], getData() { reads++; throw new Error("Ordinary text must retain native handling."); } } }); assert.equal(event.defaultPrevented, false);
+  }
+  assert.equal(active.calls.length, 1); assert.equal(active.uuidCount(), 0);
+  for (const mode of ["inactive", "tab-away", "hidden", "phone"]) {
+    const h = harness(mode === "phone"); if (mode !== "inactive") await activateTransfer(h); if (mode === "tab-away") h.panel.setActive(false); if (mode === "hidden") h.document.hidden = true; const before = h.calls.length;
+    for (const name of ["dragenter", "dragover", "drop"]) {
+      const event = h.drag(name, [], h.form, { dataTransfer: { types: ["text/uri-list"], files: [], items: [{ kind: "string", type: "text/uri-list" }], getData() { reads++; throw new Error("Inactive or phone links must not be inspected."); } } }); assert.equal(event.defaultPrevented, false);
+    }
+    assert.equal(h.calls.length, before); assert.equal(uploadCalls(h).length, 0); assert.equal(h.uuidCount(), 0); assert.equal(h.button("重试发送"), undefined);
+  }
+  assert.equal(reads, 0);
+});
+await test("Files plus URI drag data uploads only the original image and never reads or fetches the accompanying link", async () => {
+  const h = harness(false); await activateTransfer(h); const file = new File([Uint8Array.of(7, 22, 129, 255)], "real-file.png", { type: "image/png" }); let reads = 0;
+  const transfer = { types: ["text/uri-list", "Files"], files: [file], items: [{ kind: "string", type: "text/uri-list" }, clipboardEntry(file)], dropEffect: "none", getData() { reads++; throw new Error("The supplied File takes priority over links."); } };
+  const over = h.drag("dragover", [], h.text, { dataTransfer: transfer }); assert.equal(over.defaultPrevented, true); assert.equal(transfer.dropEffect, "copy"); h.respond({ message: message("file-with-uri", false) }); const drop = h.drop([], h.text, { dataTransfer: transfer }); await settle();
+  assert.equal(drop.defaultPrevented, true); assert.equal(reads, 0); assert.equal(h.calls.length, 2); assert.equal(uploadCalls(h).length, 1); assert.equal(uploadCalls(h)[0].url, "/api/transfer/messages"); assert.equal(uploadCalls(h)[0].options.body.get("text"), "");
+  const sent = uploadCalls(h)[0].options.body.getAll("files"); assert.equal(sent.length, 1); assert.equal(sent[0].name, file.name); assert.deepEqual(new Uint8Array(await sent[0].arrayBuffer()), new Uint8Array(await file.arrayBuffer())); assert.equal(h.uuidCount(), 1);
+});
+await test("the actual upload timeout retains an unconfirmed batch and retries its original UUID only on an explicit click", async () => {
+  const h = harness(false); await activateTransfer(h); const file = new File([Uint8Array.of(3, 44, 250)], "timed-out.png", { type: "image/png" }), pending = defer(); h.answers.push(pending.promise); h.drop([file]);
+  const first = uploadCalls(h)[0]; first.options.signal.addEventListener("abort", () => pending.reject(Object.assign(new Error("AbortError"), { name: "AbortError" })), { once: true });
+  const uploadTimeout = [...h.timers.values()].find(timer => timer.delay === 90000); assert.ok(uploadTimeout); uploadTimeout.fn(); await settle();
+  assert.equal(first.options.signal.aborted, true); assert.equal(droppedBatch(h).dataset.state, "unconfirmed"); assert.match(droppedBatch(h).textContent, /上传超时.*尚未确认.*重试发送/); assert.equal(h.button("重试发送").disabled, false); assert.equal(h.uuidCount(), 1);
+  h.respond({ unchanged: true, revision: "r1" }); await h.panel.refresh(); await settle(); assert.equal(uploadCalls(h).length, 1);
+  h.respond({ message: message("timeout-confirmed", false), duplicate: true }); h.button("重试发送").click(); await settle(); const retry = uploadCalls(h)[1]; assert.equal(retry.options.body.get("requestId"), first.options.body.get("requestId")); assert.equal(retry.options.body.get("text"), ""); assert.equal(retry.options.body.get("files").name, file.name);
+  assert.deepEqual(new Uint8Array(await retry.options.body.get("files").arrayBuffer()), new Uint8Array(await file.arrayBuffer())); assert.equal(h.uuidCount(), 1); assert.equal(h.panel.hasDraft(), false);
+});
+await test("folder drag metadata never recurses entries or uploads missing or zero-byte files", async () => {
+  const h = harness(false); await activateTransfer(h); let traversals = 0;
+  const transfer = { types: ["Files"], files: [], items: [{ kind: "file", type: "", getAsFile() { traversals++; throw new Error("Folder metadata must not become a recursive upload."); }, webkitGetAsEntry() { traversals++; throw new Error("Folder entries must never be traversed."); } }], dropEffect: "none" };
+  assert.equal(h.drag("dragover", [], h.text, { dataTransfer: transfer }).defaultPrevented, true); assert.equal(h.drop([], h.text, { dataTransfer: transfer }).defaultPrevented, true); await settle(); assert.equal(traversals, 0); assert.equal(uploadCalls(h).length, 0); assert.equal(h.uuidCount(), 0); assert.equal(droppedBatch(h).hidden, true); assert.match(h.root.textContent, /文件夹不会发送/);
+  h.drop([new File([], "folder.png", { type: "" })]); await settle(); assert.equal(uploadCalls(h).length, 0); assert.equal(h.uuidCount(), 0); assert.match(droppedBatch(h).textContent, /空文件/); assert.equal(h.calls.length, 1);
 });
 console.log(`Transfer UI checks passed (${count} cases).`);
