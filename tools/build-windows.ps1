@@ -276,6 +276,8 @@ if ($BuildApplication) {
   @{ Source = "incubator-panel.css"; Destination = "." },
   @{ Source = "conversations-panel.js"; Destination = "." },
   @{ Source = "conversations-panel.css"; Destination = "." },
+  @{ Source = "console-developer-update.js"; Destination = "." },
+  @{ Source = "console-developer-update.css"; Destination = "." },
   @{ Source = "mobile.webmanifest"; Destination = "." },
   @{ Source = "phone\phone-icon-180.png"; Destination = "phone" },
   @{ Source = "phone\phone-icon-192.png"; Destination = "phone" },

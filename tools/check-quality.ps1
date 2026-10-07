@@ -71,6 +71,7 @@ $PythonSources = @(
   "app_uninstall.py",
   "blender_github_share.py",
   "console_update.py",
+  "console_developer_update.py",
   "console_window_session.py",
   "console_instance.py",
   "console_window_launcher.py",
@@ -125,6 +126,8 @@ $PythonChecks = @(
   "tools/check-console-instance.py",
   "tools/check-console-window-launcher.py",
   "tools/check-console-update.py",
+  "tools/check-console-developer-update.py",
+  "tools/check-console-developer-update-http.py",
   "tools/check-update-manifest.py",
   "tools/check-world-update.py",
   "tools/check-clean-uninstall.py",
@@ -187,6 +190,9 @@ Push-Location $ProjectRoot
 try {
   $RequiredFiles = @($PythonSources + $PythonChecks + @(
     "app.js",
+    "console-developer-update.js",
+    "console-developer-update.css",
+    "tools/check-console-developer-update-ui.mjs",
     "reader.html",
     "document-reader.js",
     "document-reader.css",
@@ -257,6 +263,8 @@ try {
   }
 
   Invoke-QualityStep "Application JavaScript syntax" { & $Node --check app.js }
+  Invoke-QualityStep "Developer Update JavaScript syntax" { & $Node --check console-developer-update.js }
+  Invoke-QualityStep "Developer Update UI behavior" { & $Node tools/check-console-developer-update-ui.mjs }
   Invoke-QualityStep "Phone pairing JavaScript syntax" { & $Node --check phone-pairing.js }
   Invoke-QualityStep "Offline phone export JavaScript syntax" { & $Node --check phone-offline-export.js }
   Invoke-QualityStep "Offline phone JavaScript syntax" { & $Node --check phone/app.js }

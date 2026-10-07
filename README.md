@@ -8,6 +8,10 @@ Ordinary Chat uses the signed-in ChatGPT account rather than a model API key. Th
 
 A Windows control console for music, wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.
 
+## Developer Update
+
+On the desktop Console, open **开发者模式**, bind the existing local Console `main` source folder, then enable the mode. The top **Update · v…** button generates a Summary, commits the current source changes and pushes them to `tx74666/CodexControlConsole`. The local folder is authoritative: remote changes stop the update for review. This action does not pull, overwrite local source, change the version, publish a release or install an application. Private data and local handoffs are excluded. If upload is interrupted, check the original result; **继续上传** reuses the original commit.
+
 ## Dev Room
 
 **RandomRealm → Dev Room** is the Project Nexus document framework. It starts with a blank overview and provides a document list, reading, editing, New and Save. Content stays in the current Document library under `projects/Project Nexus/Dev Room`; reading the blank overview does not create a file. Unfinished edits are kept locally and restored on reopening. Saves verify the selected library and document revision, retain the previous saved file, and offer Save as a copy when another edit conflicts. This first framework does not classify content or synchronize it to Unity.

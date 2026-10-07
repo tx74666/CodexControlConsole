@@ -40,6 +40,7 @@ from blender_github_share import (
     is_blender_discovery_file,
 )
 from console_update import ConsoleUpdateService
+from console_developer_update import ConsoleDeveloperUpdateService, DeveloperUpdateError
 from world_update import WorldUpdateService
 from desktop_layout import DesktopLayoutService
 from feedback_service import FeedbackService, FeedbackServiceError
@@ -708,6 +709,8 @@ def shutdown_active_server():
 
 
 def retire_console_instance(payload):
+    if CONSOLE_DEVELOPER_UPDATE.busy:
+        raise ValueError("本机代码正在保存或上传，请完成后再更新应用。")
     if payload.get("expectedInstanceId") != RUNTIME_INSTANCE_ID:
         raise ValueError("The running Console changed; launch it again.")
     if compare_versions(payload.get("version"), APP_VERSION) <= 0:
@@ -720,7 +723,8 @@ def retire_console_instance(payload):
 
 
 def shutdown_if_no_background_work():
-    if PHONE_COMPANION.enabled or WORKFLOW_SERVICE.background_enabled or WORKFLOW_SERVICE.has_pending_jobs():
+    if (PHONE_COMPANION.enabled or WORKFLOW_SERVICE.background_enabled
+            or WORKFLOW_SERVICE.has_pending_jobs() or CONSOLE_DEVELOPER_UPDATE.busy):
         return
     shutdown_active_server()
 
@@ -734,6 +738,10 @@ CONSOLE_UPDATE = ConsoleUpdateService(
     shutdown_callback=shutdown_active_server,
     publisher_state_file=PUBLISHER_STATE_FILE,
     installation_id=INSTALLATION_STATE.get("installationId", ""),
+)
+CONSOLE_DEVELOPER_UPDATE = ConsoleDeveloperUpdateService(
+    CACHE_DIR / "developer-update-private", runtime_version=APP_VERSION,
+    allowed=current_console_edition() in {"public", "developer"} and APP_INSTALL_MODE != "store",
 )
 WORLD_UPDATE = WorldUpdateService(
     APP_DIR,
@@ -1582,6 +1590,28 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self._private_phone_path():
             self.send_error(404)
             return
+        if (parsed.path == "/api/console/developer-update"
+                or parsed.path.startswith("/api/console/developer-update/")):
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            if current_console_edition() not in {"public", "developer"} or APP_INSTALL_MODE == "store":
+                self.send_json({"allowed": False, "enabled": False})
+                return
+            try:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if parsed.path == "/api/console/developer-update" and not parsed.query:
+                    result = CONSOLE_DEVELOPER_UPDATE.status()
+                elif (parsed.path == "/api/console/developer-update/operation"
+                        and not set(query) - {"requestId"} and all(len(value) == 1 for value in query.values())):
+                    result = CONSOLE_DEVELOPER_UPDATE.operation(query.get("requestId", [None])[0])
+                else:
+                    raise DeveloperUpdateError("开发者更新读取地址无效。")
+                self.send_json(result)
+            except DeveloperUpdateError as error:
+                self.send_json({"error": str(error), "code": "developer_update_invalid"}, status=400)
+            except (OSError, RuntimeError):
+                self.send_json({"error": "本机开发状态暂时无法读取，请稍后重新读取。"}, status=503)
+            return
         if parsed.path.startswith("/api/dev-room/"):
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
@@ -2006,7 +2036,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
     def _private_phone_path(self):
         try:
             target = Path(self.translate_path(self.path)).resolve()
-            return target.is_relative_to(PHONE_DEVICE_STORE.directory) or target.is_relative_to(WORKFLOW_DATA_DIR)
+            return (target.is_relative_to(PHONE_DEVICE_STORE.directory) or target.is_relative_to(WORKFLOW_DATA_DIR)
+                    or target.is_relative_to(CONSOLE_DEVELOPER_UPDATE.state_dir))
         except (OSError, ValueError):
             return True
 
@@ -2020,6 +2051,41 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if not self.require_trusted_post_context():
             return
         parsed = urllib.parse.urlparse(self.path)
+        if (parsed.path == "/api/console/developer-update"
+                or parsed.path.startswith("/api/console/developer-update/")):
+            if not self.require_local_request():
+                return
+            if current_console_edition() not in {"public", "developer"} or APP_INSTALL_MODE == "store":
+                self.send_json({"error": "当前应用不提供本机开发者更新。"}, status=403)
+                return
+            try:
+                if parsed.query:
+                    raise DeveloperUpdateError("开发者更新地址无效。")
+                payload = self.read_json_body(max_bytes=8 * 1024)
+                if not isinstance(payload, dict):
+                    raise DeveloperUpdateError("开发者更新内容无效。")
+                if parsed.path == "/api/console/developer-update/config":
+                    if (set(payload) - {"enabled", "sourceRoot"} or "enabled" not in payload
+                            or not isinstance(payload["enabled"], bool)):
+                        raise DeveloperUpdateError("开发者模式设置无效。")
+                    result = CONSOLE_DEVELOPER_UPDATE.configure(payload["enabled"], payload.get("sourceRoot"))
+                elif parsed.path == "/api/console/developer-update/run":
+                    if (set(payload) - {"requestId", "stateFingerprint", "action", "actionId"}
+                            or not {"requestId", "stateFingerprint"}.issubset(payload)):
+                        raise DeveloperUpdateError("开发者更新请求无效。")
+                    result = CONSOLE_DEVELOPER_UPDATE.update(payload["requestId"], payload["stateFingerprint"],
+                        action=payload.get("action", "update"), action_id=payload.get("actionId"))
+                else:
+                    raise DeveloperUpdateError("开发者更新地址无效。")
+                self.send_json(result)
+            except RequestBodyError as error:
+                self.send_json({"error": str(error), "code": "developer_update_invalid"}, status=error.status)
+            except DeveloperUpdateError as error:
+                self.send_json({"error": str(error), "code": "developer_update_invalid"}, status=400)
+            except (OSError, RuntimeError):
+                self.send_json({"error": "更新请求未取得明确回执，请核对原请求状态。",
+                    "code": "developer_update_unavailable"}, status=503)
+            return
         if parsed.path.startswith("/api/dev-room/"):
             if not self.require_local_request():
                 return
@@ -2460,6 +2526,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/console/update/install":
                 if not self.require_local_request():
+                    return
+                if CONSOLE_DEVELOPER_UPDATE.busy:
+                    self.send_json({"error": "本机代码正在保存或上传，请完成后再更新应用。",
+                        "code": "developer_update_busy"}, status=409)
                     return
                 self.send_json(CONSOLE_UPDATE.install())
                 return

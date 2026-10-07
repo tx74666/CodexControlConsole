@@ -56,6 +56,7 @@
   <link rel="stylesheet" href="codex-work-panel.css?v=console-mobile-refresh-1.0.78-20261007">
   <link rel="stylesheet" href="conversations-panel.css?v=console-mobile-refresh-1.0.78-20261007">
   <link rel="stylesheet" href="incubator-panel.css?v=console-mobile-refresh-1.0.78-20261007">
+  <link rel="stylesheet" href="console-developer-update.css?v=console-developer-update-1.0.78-20261007">
 </head>
 <body>
   <main class="app-shell">
@@ -67,6 +68,8 @@
         </div>
       </div>
       <div class="top-actions" aria-label="Console status">
+        <button id="consoleDeveloperModeTop" class="status-button" type="button" hidden>开发者模式</button>
+        <button id="consoleDeveloperSettingsTop" class="status-button" type="button" aria-label="开发者设置" hidden>⚙</button>
         <button id="consoleUpdateTop" class="status-button console-update-top" type="button" hidden></button>
         <button id="languageToggle" class="status-button" type="button">EN</button>
         <button id="themeToggle" class="status-button" type="button">暗色</button>
@@ -1396,6 +1399,7 @@
   </dialog>
 
   <input id="wallpaperFileInput" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp,image/jpeg,image/png,image/bmp,image/webp" multiple hidden>
+  <dialog id="consoleDeveloperDialog" class="console-developer-dialog" aria-label="开发者更新"></dialog>
   <input id="musicFileInput" type="file" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.lrc,.txt,audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg,audio/opus,text/plain" multiple hidden>
   <input id="musicCookieFileInput" type="file" accept=".txt,text/plain" hidden>
   <input id="workzoneFileInput" type="file" accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp" multiple hidden>
@@ -1415,5 +1419,6 @@
   <script src="app.js?v=console-mobile-refresh-1.0.78-20261007"></script>
 <script src="phone-pairing.js?v=console-connect-1.0.27"></script>
 <script src="phone-offline-export.js?v=console-connect-1.0.27"></script>
+<script src="console-developer-update.js?v=console-developer-update-1.0.78-20261007"></script>
 </body>
 </html>

@@ -116,7 +116,8 @@ def main():
 
     app_dir = args.app_dir.resolve()
     require((app_dir / "Codex Console.exe").is_file(), f"packaged EXE is missing: {app_dir}")
-    for name in ("subscription.html", "subscription.css", "subscription.js", "mobile-dialogue.js", "mobile-dialogue.css"):
+    for name in ("subscription.html", "subscription.css", "subscription.js", "mobile-dialogue.js", "mobile-dialogue.css",
+                 "console-developer-update.js", "console-developer-update.css"):
         require((app_dir / "_internal" / name).is_file(), f"packaged Chat entry is missing: {name}")
     manifests = list(app_dir.rglob("app-manifest.json"))
     require(len(manifests) == 1, "packaged manifest is missing or duplicated")
