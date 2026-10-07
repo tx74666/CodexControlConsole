@@ -896,7 +896,15 @@ await test("Work source is an independent cache snapshot of this discussion and 
   const input = h.byLabel("提问或保存想法"); input.value = "  当前草稿原文\n保留换行  "; input.fire("input"); const before = h.calls.length, source = structuredClone(h.panel.getWorkSource());
   assert.deepEqual(Object.keys(source).sort(), ["attachmentIds", "clientId", "expectedRevision", "recordId", "sessionId", "text"]); assert.equal(source.recordId, h.current().recordId); assert.equal(source.clientId, h.current().clientId); assert.equal(source.sessionId, h.current().id); assert.equal(source.expectedRevision, h.current().revision); assert.equal(source.text, input.value); assert.deepEqual(source.attachmentIds, ["original-image"]);
   source.attachmentIds.push("tampered-copy"); assert.deepEqual(structuredClone(h.panel.getWorkSource()).attachmentIds, ["original-image"]); assert.equal(h.calls.length, before);
-  h.panel.setActive(false); assert.equal(h.panel.getWorkSource().text, input.value); assert.equal(h.calls.length, before); h.panel.clear(); assert.equal(h.panel.getWorkSource(), null);
+  const scope = h.panel.getWorkScope(), tier = h.byLabel("回答档位").value;
+  assert.equal(h.panel.focusComposer({ ...scope, sessionId: "foreign-session" }), false); assert.equal(input.focused, undefined);
+  assert.equal(h.panel.focusComposer(scope), true); assert.equal(h.runtime.document.activeElement, input); assert.equal(input.focusOptions.preventScroll, true);
+  assert.equal(input.value, source.text); assert.equal(h.byLabel("回答档位").value, tier); assert.deepEqual(structuredClone(h.panel.getWorkSource()).attachmentIds, ["original-image"]); assert.equal(h.calls.length, before);
+  h.root.hidden = true; assert.equal(h.panel.focusComposer(scope), false); h.root.hidden = false;
+  h.panel.setActive(false); assert.equal(h.panel.focusComposer(scope), false);
+  const wait = deferred(); h.hook(action => action.startsWith("mobile/dialogue?") ? wait.promise : undefined); h.panel.setActive(true);
+  const reading = h.calls.length; assert.equal(h.panel.focusComposer(scope), true); assert.equal(input.value, source.text); assert.equal(h.calls.length, reading); wait.resolve(h.value()); await flush(); h.hook(null);
+  h.panel.setActive(false); assert.equal(h.panel.getWorkSource().text, input.value); assert.equal(h.calls.length, reading); assert.equal(h.calls.some(item => item.payload), false); h.panel.clear(); assert.equal(h.panel.getWorkSource(), null);
 });
 await test("Work source waits for composition saving and local images rather than silently exporting an incomplete draft", async () => {
   const h = harness(); h.panel.setActive(true); await flush(); const input = h.byLabel("提问或保存想法"); input.value = "不能提前交接的中文草稿"; input.fire("compositionstart"); input.fire("input"); assert.equal(h.panel.getWorkSource(), null); input.fire("compositionend");

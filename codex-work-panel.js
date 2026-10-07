@@ -24,7 +24,15 @@
     subscriptionLink.setAttribute("aria-label", "打开 ChatGPT 订阅连接设置（新标签页）"); subscriptionLink.hidden = true;
     const connectionRow = make("div", "", "codex-work-connection"); connectionRow.append(notice); if (!phone) connectionRow.append(subscriptionLink);
     const header = make("div", "", "workflow-header"); header.append(heading, back, load, refresh);
-    const sourceText = make("textarea"); sourceText.readOnly = true; sourceText.rows = 4; sourceText.setAttribute("aria-label", "本轮 Work 底稿");
+    const sourceText = make(phone ? "pre" : "textarea", "", phone ? "codex-work-source-preview" : ""); sourceText.readOnly = true; sourceText.rows = 4; sourceText.setAttribute("aria-label", "本轮 Work 底稿");
+    const sourceField = phone ? make("section", "", "codex-work-source-field") : field("本轮文字（在对话输入框编辑）", sourceText);
+    if (phone) {
+      const editSource = button("编辑本轮消息", () => options.onEditSource?.()); editSource.classList.add("workflow-primary");
+      const sourceHeading = make("div", "", "codex-work-source-heading"); sourceHeading.append(make("span", "本轮底稿预览"), editSource);
+      sourceField.append(sourceHeading, sourceText, make("p", "编辑后，点“载入当前讨论”更新本轮底稿。", "workflow-muted"));
+    }
+    function sourceValue() { return phone ? sourceText.textContent : sourceText.value; }
+    function showSource(value) { if (phone) sourceText.textContent = value; else sourceText.value = value; }
     const workspace = select(), model = select(), profile = select(); profile.setAttribute("aria-label", "Work 档位");
     optionsFor(profile, [{ id: "fast", name: "极速 · low" }, { id: "high", name: "高 · high" }, { id: "pro", name: "Pro · Work 暂不可用", disabled: true }], saved.profile || "high");
     if (saved.profile === "pro") profile.value = "pro";
@@ -32,7 +40,7 @@
     const scope = make("p", "", "workflow-muted"), sourceImages = make("div", "", "workflow-thumbnails"), prepare = button("核对本轮 Work", () => void prepareWork());
     const setupText = make("p", "", "workflow-muted"), setupButton = button("配置 Console Work 沙箱（Windows 授权）", () => void setupWork());
     const setupBox = make("section", "", "codex-work-setup"); setupBox.append(setupText); if (!phone) setupBox.append(setupButton);
-    const form = make("section", "", "codex-work-source"); form.append(field("本轮文字（在对话输入框编辑）", sourceText), sourceImages, field("电脑工作区", workspace), scope, field("已授权模型", model), field("档位", profile), profileHelp, prepare);
+    const form = make("section", "", "codex-work-source"); form.append(sourceField, sourceImages, field("电脑工作区", workspace), scope, field("已授权模型", model), field("档位", profile), profileHelp, prepare);
     const review = make("section", "", "workflow-review"), reviewText = make("pre", "", "codex-work-review-text"), confirm = button("确认创建 Agent", () => void submitWork()), dismiss = button("返回核对", () => { if (!state.pending && !state.busy) { state.review = null; render(); } });
     review.append(make("h3", "确认这一轮 Work"), reviewText, confirm, dismiss); review.hidden = true;
     const runs = make("section", "", "codex-work-runs"), permissions = make("details", "", "workflow-collapse"); permissions.append(make("summary", "工作区设置"));
@@ -51,14 +59,14 @@
     function sameScope(left, right) { return Boolean(left && right && left.recordId === right.recordId && left.clientId === right.clientId && left.sessionId === right.sessionId); }
     function jobPhoneScope(job) { const value = job.mobileDialogue; return value ? { recordId: value.recordId, clientId: value.clientId, sessionId: value.id } : null; }
     function matchesPhoneJob(job, scope) { return job.mobileDialogue === null || sameScope(scope, jobPhoneScope(job)); }
-    function retirePhoneView() { state.generation++; state.runs = []; state.source = state.review = null; sourceText.value = ""; sourceImages.replaceChildren(); say("当前讨论身份已变化，请重新载入当前讨论；原请求与对话草稿保留。", true); render(); }
+    function retirePhoneView() { state.generation++; state.runs = []; state.source = state.review = null; showSource(""); sourceImages.replaceChildren(); say("当前讨论身份已变化，请重新载入当前讨论；原请求与对话草稿保留。", true); render(); }
     function persist() { try { localStorage.setItem(key, JSON.stringify({ recordId: state.recordId, profile: profile.value, workspaceId: workspace.value, model: model.value, pending: state.pending, setupUnknown: state.setupUnknown })); state.storageFailed = false; return true; } catch { state.storageFailed = true; say("本机请求编号尚未保存；保持当前页，未创建 Agent。", true); return false; } }
     async function call(action, body, query = "") {
       const response = await fetch(`${base}/${action}${query ? "?" + query : ""}`, { method: body ? "POST" : "GET", credentials: "same-origin", mode: "same-origin", redirect: "error", cache: "no-store", headers: { ...(phone ? { "X-Codex-Phone": "1" } : {}), ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
       const data = await response.json(); if (!response.ok || data.error) { if ([401, 403].includes(response.status)) options.onAuth?.(); const error = new Error(data.error || "Work 状态暂不可用，原记录保留。"); error.code = data.code; throw error; } return data;
     }
     function render() {
-      const validSource = state.source?.recordId === state.recordId && state.source.text === sourceText.value;
+      const validSource = state.source?.recordId === state.recordId && state.source.text === sourceValue();
       const modelAvailable = state.config?.subscription?.models?.some(item => item.slug === model.value), ready = state.config?.setup?.ready === true && state.config?.setup?.busy !== true;
       const account = state.config?.subscription, recovering = ["catalog_loading", "catalog_required", "catalog_failed"].includes(account?.status);
       subscriptionLink.hidden = phone;
@@ -118,7 +126,7 @@
       if (state.busy || state.pending) return false;
       const source = options.getSource?.();
       if (!source?.recordId || typeof source.text !== "string" || !Array.isArray(source.attachmentIds)) { say("当前讨论还在保存或图片尚未上传。请返回对话点「只保存」，再载入本轮。", true); return false; }
-      state.generation++; state.source = { ...source, attachmentIds: [...source.attachmentIds] }; state.recordId = source.recordId; sourceText.value = source.text; state.review = null; persist(); sourceImages.replaceChildren();
+      state.generation++; state.source = { ...source, attachmentIds: [...source.attachmentIds] }; state.recordId = source.recordId; showSource(source.text); state.review = null; persist(); sourceImages.replaceChildren();
       sourceImages.append(make("p", source.attachmentIds.length ? `本轮选择 ${source.attachmentIds.length} 张图片；核对页展示冻结内容。` : "本轮没有选图。", "workflow-muted"));
       if (notice.dataset.kind !== "subscription") say("已载入当前底稿，尚未创建 Agent。"); render(); await readRuns(); return true;
     }
@@ -192,7 +200,7 @@
     for (const control of [workspaceId, workspaceName, workspaceRoot, allowedRoot]) { control.addEventListener("compositionstart", () => { state.composing = true; render(); }); control.addEventListener("compositionend", () => { state.composing = false; render(); }); }
     render();
     return { async setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (!changed && state.active) return; window.clearTimeout(state.timer); window.clearTimeout(state.setupTimer); if (state.active && changed) { try { await readConfig(); if (!state.recordId) await loadSource(); else await readRuns(); } catch (error) { say(error.message, true); } } }, loadSource, refresh: refreshAll,
-      canReload() { return !state.busy && !state.composing && !state.storageFailed && !state.pending && state.config?.setup?.busy !== true; }, async prepareReload() { return this.canReload() && persist(); }, hasDraft() { return Boolean(state.review || state.pending); }, clear() { state.generation++; state.active = false; window.clearTimeout(state.timer); window.clearTimeout(state.setupTimer); state.source = state.review = null; state.runs = []; sourceText.value = ""; render(); } };
+      canReload() { return !state.busy && !state.composing && !state.storageFailed && !state.pending && state.config?.setup?.busy !== true; }, async prepareReload() { return this.canReload() && persist(); }, hasDraft() { return Boolean(state.review || state.pending); }, clear() { state.generation++; state.active = false; window.clearTimeout(state.timer); window.clearTimeout(state.setupTimer); state.source = state.review = null; state.runs = []; showSource(""); render(); } };
   }
   window.CodexWorkPanel = Object.freeze({ create });
 })();

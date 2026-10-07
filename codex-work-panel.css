@@ -4,6 +4,9 @@
 .codex-work-subscription-link:focus-visible { outline: 3px solid var(--workflow-accent); outline-offset: 2px; }
 .codex-work-source { display: grid; gap: 12px; }
 .codex-work-source textarea { width: 100%; resize: vertical; box-sizing: border-box; }
+.codex-work-source-field { display: grid; gap: 8px; min-width: 0; }
+.codex-work-source-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.codex-work-source-preview { margin: 0; padding: 12px; min-height: 72px; max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; border: 1px solid var(--border, #34405b); border-radius: 12px; background: var(--surface, #1b2234); }
 .codex-work-agent { border: 1px solid var(--border, #34405b); border-radius: 18px; padding: 16px; margin: 12px 0; background: var(--surface, #1b2234); }
 .codex-work-agent h3 { margin-top: 0; }
 .codex-work-progress, .codex-work-review-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; font: inherit; }

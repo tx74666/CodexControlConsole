@@ -47,6 +47,7 @@
     phone: true, getSource: () => dialoguePanel?.getWorkSource?.() || null,
     getScope: () => dialoguePanel?.getWorkScope?.() || null,
     onBack: () => selectWorkView("dialogue"),
+    onEditSource: () => { const scope = dialoguePanel?.getWorkScope?.(); if (selectWorkView("dialogue")) dialoguePanel?.focusComposer?.(scope); },
     onAuth: () => showPair("配对已过期，请重新连接电脑。")
   }) || null;
   const conversationsPanel = window.CodexConversationsPanel?.create(el("phoneConversationsPanel"), {

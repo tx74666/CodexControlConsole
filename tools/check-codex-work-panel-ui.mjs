@@ -43,7 +43,7 @@ function harness({ storage = new Map(), source = structuredClone(identity), conf
     throw new Error(`Unexpected fixture route ${action}`);
   } };
   runInNewContext(sourceCode, runtime);
-  const panel = runtime.window.CodexWorkPanel.create(root, { phone: true, getSource: () => currentSource && structuredClone(currentSource), getScope: () => currentScope && structuredClone(currentScope), onBack: () => backs.push(true), ...options });
+  const panel = runtime.window.CodexWorkPanel.create(root, { phone: true, getSource: () => currentSource && structuredClone(currentSource), getScope: () => currentScope && structuredClone(currentScope), onBack: () => backs.push(true), onEditSource: () => backs.push("edit"), ...options });
   const all = (node = root) => [node, ...node.children.flatMap(child => all(child))], byText = text => all().find(node => node.tagName === "BUTTON" && node.textContent === text), byClass = cls => all().find(node => node.className.split(" ").includes(cls)), byLabel = label => all().find(node => node.attributes["aria-label"] === label), fieldControl = label => all().find(node => node.tagName === "LABEL" && node.children[0]?.textContent === label)?.children[1];
   return { root, panel, calls, storage, timers, backs, byText, byClass, byLabel, fieldControl, reply, reviewFor, setSource(value) { currentSource = value && structuredClone(value); if (value) currentScope = { recordId: value.recordId, clientId: value.clientId, sessionId: value.sessionId }; }, setScope(value) { currentScope = value && structuredClone(value); }, setConfig(value) { currentConfig = structuredClone(value); }, setJobs(value) { jobs = structuredClone(value); }, hook(value) { hook = value; }, failStorage(value = true) { storageFailure = value; } };
 }
@@ -54,8 +54,8 @@ const savedPending = h => JSON.parse([...h.storage.values()][0] || "{}").pending
 async function reviewCurrent(h) { await h.panel.setActive(true); h.byText("核对本轮 Work").click(); await flush(); }
 
 await test("opening and reading Work stays GET-only and binds the cached original discussion", async () => {
-  const h = harness(); assert.equal(h.calls.length, 0); await h.panel.setActive(true); assert.equal(posts(h).length, 0); assert.deepEqual(h.calls.map(call => call.action), ["codex-work/config", "codex-work/runs"]); assert.deepEqual(Object.fromEntries(h.calls[1].query), scopeFor(identity)); assert.equal(h.byLabel("本轮 Work 底稿").value, identity.text);
-  h.byText("查看进度").click(); await flush(); assert.equal(posts(h).length, 0); assert.equal(h.timers.size, 0); h.byText("返回对话").click(); assert.equal(h.backs.length, 1); assert.equal(posts(h).length, 0); for (const call of h.calls) { assert.equal(call.request.credentials, "same-origin"); assert.equal(call.request.mode, "same-origin"); assert.equal(call.request.redirect, "error"); }
+  const h = harness(); assert.equal(h.calls.length, 0); await h.panel.setActive(true); assert.equal(posts(h).length, 0); assert.deepEqual(h.calls.map(call => call.action), ["codex-work/config", "codex-work/runs"]); assert.deepEqual(Object.fromEntries(h.calls[1].query), scopeFor(identity)); assert.equal(h.byLabel("本轮 Work 底稿").textContent, identity.text);
+  h.byText("查看进度").click(); await flush(); assert.equal(posts(h).length, 0); assert.equal(h.timers.size, 0); h.byText("返回对话").click(); assert.equal(h.backs.length, 1); assert.equal(h.byLabel("本轮 Work 底稿").tagName, "PRE"); h.byText("编辑本轮消息").click(); assert.deepEqual(h.backs, [true, "edit"]); assert.equal(h.byLabel("本轮 Work 底稿").textContent, identity.text); assert.equal(posts(h).length, 0); for (const call of h.calls) { assert.equal(call.request.credentials, "same-origin"); assert.equal(call.request.mode, "same-origin"); assert.equal(call.request.redirect, "error"); }
 });
 await test("desktop sandbox setup requires one explicit click and preserves exact workspace authorization", async () => {
   const initial = configFixture(); initial.setup = { ready: false, busy: false, status: "not_started" };
@@ -120,13 +120,13 @@ await test("a review arriving after the current source changes cannot authorize 
   const h = harness(); await h.panel.setActive(true); const wait = deferred(); let original;
   h.hook((action, body) => { if (action !== "codex-work/review") return undefined; original = body; return wait.promise; }); h.byText("核对本轮 Work").click(); await flush(); assert.ok(original);
   const next = { ...identity, recordId: "6".repeat(32), sessionId: "7".repeat(32), expectedRevision: 21, text: "B：审核期间新讨论", attachmentIds: [] }; h.setSource(next); wait.resolve(h.reply(h.reviewFor(original))); await flush(); assert.equal(h.byText("确认创建 Agent").disabled, true); assert.equal(h.calls.some(call => call.action === "codex-work/submit"), false);
-  h.hook(null); h.byText("载入当前讨论").click(); await flush(); assert.equal(h.byLabel("本轮 Work 底稿").value, next.text); assert.equal(h.byClass("workflow-review").hidden, true);
+  h.hook(null); h.byText("载入当前讨论").click(); await flush(); assert.equal(h.byLabel("本轮 Work 底稿").textContent, next.text); assert.equal(h.byClass("workflow-review").hidden, true);
 });
 await test("a late progress read for A cannot overwrite the newly loaded B record", async () => {
   const h = harness(); await h.panel.setActive(true); const wait = deferred(), oldReadEntered = deferred(); let first = true; h.hook(action => { if (action === "codex-work/runs" && first) { first = false; assert.equal(h.calls.at(-1).query.get("recordId"), identity.recordId); oldReadEntered.resolve(); return wait.promise; } });
   const oldRead = h.panel.refresh(); await oldReadEntered.promise;
   const next = { ...identity, recordId: "6".repeat(32), sessionId: "7".repeat(32), expectedRevision: 21, text: "B：独立的当前底稿", attachmentIds: [] }, b = jobFixture(next.recordId); b.mobileDialogue.id = next.sessionId; b.codexWork.name = "Agent B"; b.codexWork.progress[0].text = "只属于 B 的进度"; h.setSource(next); h.setJobs([b]); await h.panel.loadSource();
-  const a = jobFixture(); a.codexWork.name = "Agent A"; a.codexWork.progress[0].text = "不应进入 B 的旧进度"; wait.resolve(h.reply({ recordId: identity.recordId, scope: scopeFor(identity), runs: [a], revision: 22 })); await oldRead; assert.equal(h.byLabel("本轮 Work 底稿").value, next.text); assert.match(h.byClass("codex-work-runs").textContent, /Agent B|只属于 B/); assert.doesNotMatch(h.byClass("codex-work-runs").textContent, /Agent A|不应进入 B/); assert.equal(posts(h).length, 0);
+  const a = jobFixture(); a.codexWork.name = "Agent A"; a.codexWork.progress[0].text = "不应进入 B 的旧进度"; wait.resolve(h.reply({ recordId: identity.recordId, scope: scopeFor(identity), runs: [a], revision: 22 })); await oldRead; assert.equal(h.byLabel("本轮 Work 底稿").textContent, next.text); assert.match(h.byClass("codex-work-runs").textContent, /Agent B|只属于 B/); assert.doesNotMatch(h.byClass("codex-work-runs").textContent, /Agent A|不应进入 B/); assert.equal(posts(h).length, 0);
   await h.panel.setActive(false); assert.equal(h.timers.size, 0);
 });
 await test("only the explicit confirm creates one Agent and repeated taps cannot duplicate the same request", async () => {
@@ -164,7 +164,7 @@ await test("desktop runs and cancellation retain record-only reads and the origi
 });
 await test("phone identity changes or missing fresh scope cannot reuse old progress or cancellation authority", async () => {
   for (const scope of [null, { ...scopeFor(identity), recordId: "6".repeat(32) }, { ...scopeFor(identity), sessionId: "7".repeat(32) }, { ...scopeFor(identity), clientId: "90909090-9090-4090-8090-909090909090" }]) {
-    const h = harness(), job = jobFixture(); h.setJobs([job]); await h.panel.setActive(true); h.setScope(scope); h.byText("取消这个 Agent").click(); await flush(); assert.equal(posts(h).length, 0); assert.doesNotMatch(h.byClass("codex-work-runs").textContent, /Agent 1|只在内存/); assert.equal(h.byLabel("本轮 Work 底稿").value, ""); assert.match(h.byClass("workflow-notice").textContent, /重新载入当前讨论.*草稿保留/); assert.equal(h.byText("核对本轮 Work").disabled, true); await h.panel.setActive(false);
+    const h = harness(), job = jobFixture(); h.setJobs([job]); await h.panel.setActive(true); h.setScope(scope); h.byText("取消这个 Agent").click(); await flush(); assert.equal(posts(h).length, 0); assert.doesNotMatch(h.byClass("codex-work-runs").textContent, /Agent 1|只在内存/); assert.equal(h.byLabel("本轮 Work 底稿").textContent, ""); assert.match(h.byClass("workflow-notice").textContent, /重新载入当前讨论.*草稿保留/); assert.equal(h.byText("核对本轮 Work").disabled, true); await h.panel.setActive(false);
   }
   const h = harness({ options: { getScope: undefined } }); await h.panel.setActive(true); assert.equal(h.calls.some(call => call.action === "codex-work/runs"), false); assert.equal(posts(h).length, 0);
 });

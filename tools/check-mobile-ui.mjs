@@ -120,7 +120,8 @@ await test("explicit phone workflow URL waits for pairing before activating", ()
 await test("phone Agent entry binds the cached current discussion and returns without starting work", () => {
   const sourceFrame = { recordId: "fixture-record", clientId: "fixture-client", sessionId: "fixture-session", expectedRevision: 7, text: "仍未发送的当前草稿", attachmentIds: ["fixture-image"] };
   let cached = sourceFrame;
-  const dialogue = { setActive(value) { this.active = Boolean(value); }, getWorkSource() { return cached; }, canReload: () => true, hasDraft: () => false, prepareReload: async () => true };
+  const scope = { recordId: sourceFrame.recordId, clientId: sourceFrame.clientId, sessionId: sourceFrame.sessionId }, focusCalls = [];
+  const dialogue = { setActive(value) { this.active = Boolean(value); }, getWorkSource() { return cached; }, getWorkScope() { return scope; }, focusComposer(expected) { assert.equal(this.active, true); assert.equal(h.get("phoneDialoguePanel").hidden, false); focusCalls.push(expected); }, canReload: () => true, hasDraft: () => false, prepareReload: async () => true };
   const h = harness(source, "http://192.0.2.1:8899/mobile.html", { dialogue }); h.ready(); h.api.selectTab("work");
   assert.equal(dialogue.active, true); assert.equal(h.panels.agents.options.phone, true); assert.equal(h.panels.agents.options.getSource(), sourceFrame);
   dialogue.options.onModule("workflow");
@@ -129,6 +130,7 @@ await test("phone Agent entry binds the cached current discussion and returns wi
   assert.equal(h.workTabs.find(tab => tab.dataset.workView === "agents").attributes["aria-pressed"], "true");
   cached = null; assert.equal(h.panels.agents.options.getSource(), null);
   h.panels.agents.options.onBack(); assert.equal(h.get("phoneDialoguePanel").hidden, false); assert.equal(dialogue.active, true); assert.equal(h.panels.agents.active, false);
+  h.api.selectWorkView("agents"); h.panels.agents.options.onEditSource(); assert.deepEqual(focusCalls, [scope]); assert.equal(h.panels.agents.active, false);
   assert.equal(sourceFrame.text, "仍未发送的当前草稿"); assert.deepEqual(sourceFrame.attachmentIds, ["fixture-image"]); assert.equal(h.calls.length, 0);
 });
 await test("phone Agent URL is inactive before pairing and while hidden or outside Work", () => {
