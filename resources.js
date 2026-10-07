@@ -6,6 +6,12 @@
   const storageKey = phone ? "console-resources-phone-view" : "console-resources-view";
   const kindLabels = { model: "模型", vfx: "VFX 特效", texture: "材质 / 贴图", hdri: "HDRI", other: "其他资源" };
   const statusLabels = { saved: "已收藏", planned: "准备使用", candidate: "候选" };
+  const externalSearchTemplates = new Set([
+    "https://itch.io/search?q={query}&facets=c.2",
+    "https://marketplace.unity.com/search?q={query}",
+    "https://www.fab.com/search?q={query}",
+    "https://www.cgtrader.com/search?keywords={query}"
+  ]);
   const errorLabels = {
     revision_conflict: "资源库刚刚有了新变动，请先「查已收集」读取最新记录，再确认保存。",
     resource_root_changed: "资源库位置已经变化，请重新打开此页面。当前卡片和填写内容已保留。",
@@ -23,6 +29,7 @@
   let busy = false;
   let composing = false;
   let providers = [];
+  let preferredProvider = "";
   let currentItems = [];
   let lastSearch = null;
   let preparedUrl = "";
@@ -56,7 +63,7 @@
     return { q: byId("query").value.trim(), kind: byId("kind").value, status: byId("status").value };
   }
   function persistView() {
-    try { sessionStorage.setItem(storageKey, JSON.stringify({ ...getFilters(), provider: byId("provider").value, scroll: window.scrollY })); } catch (_) { /* Session storage is optional. */ }
+    try { sessionStorage.setItem(storageKey, JSON.stringify({ ...getFilters(), provider: byId("provider").value || preferredProvider, scroll: window.scrollY })); } catch (_) { /* Session storage is optional. */ }
   }
   function restoreView() {
     try {
@@ -65,17 +72,19 @@
       byId("query").value = stringValue(value.q).slice(0, 120);
       if (value.kind === "all" || Object.hasOwn(kindLabels, value.kind)) byId("kind").value = value.kind;
       if (value.status === "all" || Object.hasOwn(statusLabels, value.status)) byId("status").value = value.status;
-      if (["sketchfab", "polyhaven"].includes(value.provider)) byId("provider").value = value.provider;
+      preferredProvider = stringValue(value.provider);
       return Number.isFinite(value.scroll) && value.scroll > 0 ? value.scroll : 0;
     } catch (_) { return 0; }
   }
   function updateControls() {
     for (const id of ["query", "kind", "status", "provider", "localSearch", "previewButton", "addSave", "addUrl", "addName", "addKind", "addImage", "addDescription", "addNotes"]) byId(id).disabled = busy;
-    byId("onlineSearch").disabled = busy || root === null;
-    byId("refreshSearch").disabled = busy || root === null;
+    byId("provider").disabled = busy || providers.length === 0;
+    byId("onlineSearch").disabled = busy || root === null || !selectedProvider();
+    byId("refreshSearch").disabled = busy || root === null || !selectedProvider();
     byId("addSave").disabled = busy || root === null;
     for (const button of byId("resourceGrid").querySelectorAll("[data-save]")) button.disabled = busy || root === null || button.dataset.active === "true" || button.dataset.hasIdentity !== "true";
     byId("resourceGrid").setAttribute("aria-busy", String(busy));
+    updateProviderNote();
   }
   async function call(action, payload, params) {
     const headers = {};
@@ -102,12 +111,54 @@
     if (root !== null && root !== value.root) throw new Error(errorLabels.resource_root_changed);
     root = value.root;
     if (value.revision !== undefined) revision = value.revision;
-    if (Array.isArray(value.providers)) providers = value.providers;
+    if (Array.isArray(value.providers)) renderProviders(value.providers);
     updateProviderNote();
   }
+  function selectedProvider() {
+    return providers.find(provider => provider.id === byId("provider").value);
+  }
+  function providerIsExternal(provider = selectedProvider()) {
+    return provider?.mode === "external";
+  }
+  function externalSearchUrl(provider = selectedProvider()) {
+    const q = byId("query").value.trim();
+    const template = stringValue(provider?.searchUrlTemplate);
+    if (!providerIsExternal(provider) || !q || !externalSearchTemplates.has(template) || (template.match(/\{query\}/g) || []).length !== 1) return "";
+    return safeUrl(template.replace("{query}", encodeURIComponent(q)));
+  }
+  function renderProviders(incoming) {
+    const selectedId = byId("provider").value || preferredProvider;
+    const ids = new Set();
+    providers = incoming.filter(provider => {
+      if (!provider || typeof provider.id !== "string" || !provider.id || !Array.isArray(provider.kinds) || ids.has(provider.id) || ![undefined, "api", "external"].includes(provider.mode)) return false;
+      ids.add(provider.id); return true;
+    });
+    const options = providers.map(provider => {
+      const option = node("option", "", `${stringValue(provider.name, provider.id)} · ${providerIsExternal(provider) ? "打开网站" : "可预览"}`);
+      option.value = provider.id;
+      return option;
+    });
+    if (!options.length) { const option = node("option", "", "暂无可用联网来源"); option.value = ""; options.push(option); }
+    byId("provider").replaceChildren(...options);
+    byId("provider").value = providers.some(provider => provider.id === selectedId) ? selectedId : (providers[0]?.id || "");
+    preferredProvider = byId("provider").value;
+  }
   function updateProviderNote() {
-    const selected = providers.find(provider => provider.id === byId("provider").value);
-    byId("providerNote").textContent = selected && stringValue(selected.note) ? selected.note : byId("provider").value === "polyhaven" ? "搜索模型、材质 / 贴图或 HDRI；其他网站可用下方「添加网址」。" : "搜索 Sketchfab 模型；其他网站可用下方「添加网址」。";
+    const selected = selectedProvider();
+    const external = providerIsExternal(selected);
+    byId("onlineSearch").hidden = external;
+    byId("externalSearch").hidden = !external;
+    if (external) {
+      byId("refreshSearch").hidden = true;
+      const url = !busy && root !== null ? externalSearchUrl(selected) : "";
+      if (url) byId("externalSearch").href = url; else byId("externalSearch").removeAttribute("href");
+      byId("externalSearch").setAttribute("aria-disabled", String(!url));
+      byId("externalSearch").tabIndex = url ? 0 : -1;
+      byId("providerNote").textContent = `在来源网站查看结果，不会自动加入这里。${stringValue(selected.note)}`;
+    } else {
+      byId("externalSearch").removeAttribute("href");
+      byId("providerNote").textContent = selected ? stringValue(selected.note) || "直接在这里看搜索图片；其他网站可用下方「添加网址」。" : "尚未读取可用来源；可以查看已有记录或添加资源网址。";
+    }
   }
   async function readState(token) {
     const filters = getFilters();
@@ -136,17 +187,26 @@
   }
   function sourceLabel(providerId) {
     const selected = providers.find(provider => provider.id === providerId);
-    return stringValue(selected?.name, providerId === "polyhaven" ? "Poly Haven" : "Sketchfab");
+    return stringValue(selected?.name, providerId || "所选来源");
+  }
+  function searchWarnings(value) {
+    return Array.isArray(value.warnings) ? value.warnings.slice(0, 3).filter(warning => typeof warning === "string").map(warning => warning.trim().replace(/\s+/g, " ").slice(0, 180)).filter(Boolean) : [];
+  }
+  function skippedNotice(search) {
+    return search?.skippedCount > 0 ? `另有 ${search.skippedCount} 项因资料无效未显示。` : "";
   }
   function onlineKind() {
-    const selected = providers.find(provider => provider.id === byId("provider").value);
-    const supported = selected && Array.isArray(selected.kinds) ? selected.kinds : byId("provider").value === "polyhaven" ? ["model", "texture", "hdri"] : ["model"];
-    const kind = byId("kind").value === "all" ? (byId("provider").value === "polyhaven" ? "hdri" : "model") : byId("kind").value;
+    const selected = selectedProvider();
+    if (!selected) throw new Error("尚未读取可用来源，请先「查已收集」重新读取资源库。");
+    const supported = selected.kinds.filter(kind => Object.hasOwn(kindLabels, kind));
+    const defaultKind = supported.includes(selected.defaultKind) ? selected.defaultKind : supported[0];
+    const kind = byId("kind").value === "all" ? defaultKind : byId("kind").value;
     if (!supported.includes(kind)) throw new Error(`${sourceLabel(byId("provider").value)} 暂不支持「${kindLabels[kind] || "当前分类"}」，请选择该来源支持的分类。`);
     return kind;
   }
   async function searchOnline(refresh = false) {
     if (busy || root === null) return;
+    if (providerIsExternal()) { notice("这个来源请点击「打开网站搜索」，结果在来源网站显示。", true); return; }
     const q = byId("query").value.trim();
     if (!q) { notice("先输入想找的资源，再选择来源联网搜索。", true); byId("query").focus(); return; }
     let kind;
@@ -160,10 +220,11 @@
       if (token !== generation) return;
       acceptIdentity(value);
       if (!Array.isArray(value.items)) throw new Error("搜索结果未完整返回，当前卡片已保留。");
-      lastSearch = { q, provider, kind, searchQuery: stringValue(value.searchQuery, q), cached: value.cached === true };
+      lastSearch = { q, provider, kind, searchQuery: stringValue(value.searchQuery, q), cached: value.cached === true, skippedCount: Number.isSafeInteger(value.skippedCount) && value.skippedCount >= 0 ? value.skippedCount : 0, warnings: searchWarnings(value) };
       renderItems(value.items, "search");
       byId("refreshSearch").hidden = !lastSearch.cached;
-      notice(value.cached === true ? `已复用这次搜索的 ${value.items.length} 项记录；需要新的结果时点击「重新搜索」。` : `已从 ${sourceLabel(provider)} 找到 ${value.items.length} 项，查看图片后再选择。`);
+      const resultMessage = value.cached === true ? `已复用这次搜索找到的 ${value.items.length} 项记录；需要新的结果时点击「重新搜索」。` : `已从 ${sourceLabel(provider)} 找到 ${value.items.length} 项，查看图片后再选择。`;
+      notice(`${resultMessage}${skippedNotice(lastSearch)}`);
     } catch (error) { if (token === generation) notice(error.message, true); }
     finally { if (token === generation) { busy = false; updateControls(); } }
   }
@@ -245,15 +306,22 @@
     byId("resourceGrid").replaceChildren(...currentItems.map(renderCard));
     byId("emptyState").hidden = currentItems.length > 0;
     byId("resultCount").textContent = `${currentItems.length} 项`;
-    byId("resultsTitle").textContent = mode === "search" ? "这次找到的资源" : "已收集的资源";
+    const titles = { saved: "已收藏的资源", planned: "准备使用的资源", candidate: "候选资源", all: "资源库记录" };
+    byId("resultsTitle").textContent = mode === "search" ? "这次找到的资源" : titles[byId("status").value] || "资源库记录";
     if (mode === "search" && lastSearch) {
-      byId("resultNote").textContent = `${sourceLabel(lastSearch.provider)} · ${kindLabels[lastSearch.kind]} · 实际搜索词：${lastSearch.searchQuery}${lastSearch.cached ? " · 已复用搜索记录" : ""}。收藏或准备使用前，请查看来源许可。`;
+      byId("resultNote").textContent = `${sourceLabel(lastSearch.provider)} · ${kindLabels[lastSearch.kind]} · 实际搜索词：${lastSearch.searchQuery}${lastSearch.cached ? " · 已复用搜索记录" : ""}。候选尚未收藏，请核对来源许可再选择。`;
       byId("emptyTitle").textContent = "这个来源暂未找到匹配的资源";
       byId("emptyText").textContent = "换个关键词、分类或来源再搜索；其他网站的网址也可以添加。";
+      const warningText = [skippedNotice(lastSearch), ...lastSearch.warnings].filter(Boolean).join(" ");
+      byId("resultWarnings").textContent = warningText;
+      byId("resultWarnings").hidden = !warningText;
     } else {
-      byId("resultNote").textContent = "收藏和准备使用都会保留在这里，准备使用只是选择，尚未导入项目。";
+      const count = status => currentItems.filter(item => item.status === status).length;
+      byId("resultNote").textContent = `候选 ${count("candidate")} · 已收藏 ${count("saved")} · 准备使用 ${count("planned")}。候选尚未收藏，准备使用尚未导入项目。`;
       byId("emptyTitle").textContent = "这里还没有匹配的资源";
       byId("emptyText").textContent = "换一个关键词或分类，也可以选好来源后「联网找」。";
+      byId("resultWarnings").textContent = "";
+      byId("resultWarnings").hidden = true;
     }
     updateControls();
   }
@@ -357,10 +425,14 @@
   byId("query").addEventListener("compositionend", () => { composing = false; });
   byId("query").addEventListener("keydown", event => { if (event.key === "Enter" && (event.isComposing || composing || event.keyCode === 229)) event.preventDefault(); });
   for (const id of ["kind", "status"]) byId(id).addEventListener("change", () => { persistView(); void loadCollected(); });
-  byId("provider").addEventListener("change", () => { updateProviderNote(); byId("refreshSearch").hidden = true; persistView(); });
-  byId("query").addEventListener("input", () => { byId("refreshSearch").hidden = true; persistView(); });
+  byId("provider").addEventListener("change", () => { preferredProvider = byId("provider").value; updateProviderNote(); byId("refreshSearch").hidden = true; persistView(); });
+  byId("query").addEventListener("input", () => { byId("refreshSearch").hidden = true; updateProviderNote(); persistView(); });
   byId("onlineSearch").addEventListener("click", () => void searchOnline());
   byId("refreshSearch").addEventListener("click", () => void searchOnline(true));
+  byId("externalSearch").addEventListener("click", event => {
+    if (busy || root === null || !externalSearchUrl()) { event.preventDefault(); notice("先输入关键词；这个来源只打开网站搜索，不在这里返回图片。", true); return; }
+    persistView();
+  });
   byId("previewForm").addEventListener("submit", event => { event.preventDefault(); void previewWebsite(); });
   byId("addForm").addEventListener("submit", event => { event.preventDefault(); void saveManual(); });
   byId("addImage").addEventListener("change", updateManualPreview);

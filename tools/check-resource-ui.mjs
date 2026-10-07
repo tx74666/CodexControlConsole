@@ -25,7 +25,7 @@ class Element {
   get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
   set innerHTML(_) { throw new Error("Resource/API values must never become HTML"); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
-  removeAttribute(name) { this.attributes.delete(name); }
+  removeAttribute(name) { this.attributes.delete(name); if (name === "href") this.href = ""; }
   append(...children) { for (const child of children) { child.parent = this; this.children.push(child); } }
   replaceChildren(...children) { this._text = ""; this.children = []; this.append(...children); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
@@ -39,8 +39,8 @@ class Element {
   dispatch(name, event = {}) { if (name === "click" && this.disabled) return; for (const callback of this.listeners.get(name) || []) callback({ target: this, preventDefault() {}, ...event }); }
   focus() {}
 }
-function harness({ phone = false, stored = null } = {}) {
-  const nodes = new Map(), calls = [], replies = new Map([["GET state", state()]]), storage = new Map();
+function harness({ phone = false, stored = null, initial = state() } = {}) {
+  const nodes = new Map(), calls = [], replies = new Map([["GET state", initial]]), storage = new Map();
   for (const match of html.matchAll(/<([a-z][a-z0-9]*)\b[^>]*\bid="([^"]+)"[^>]*>/gi)) nodes.set(match[2], new Element(match[1], attributes(match[0])));
   // Read real select defaults rather than duplicating the script's filter values.
   for (const match of html.matchAll(/<select\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/select>/gi)) {
@@ -69,7 +69,7 @@ function harness({ phone = false, stored = null } = {}) {
       return { ok: reply.httpError !== true, async json() { return structuredClone(reply); } };
     }
   }, { filename: "resources.js" });
-  return { calls, control, respond: (key, value) => replies.set(key, value) };
+  return { calls, control, storage, respond: (key, value) => replies.set(key, value) };
 }
 
 let passed = 0;
@@ -128,6 +128,63 @@ await test("phone mode stays on the phone API with its required same-origin head
   const h = harness({ phone: true }); await flush();
   assert.equal(h.calls[0].options.headers["X-Codex-Phone"], "1");
   assert.equal(h.control("backLink").href, "/mobile.html?tab=documents"); assert.equal(h.calls.length, 1);
+});
+
+await test("a new server catalog renders and restores arbitrary API sources with their supported default kind", async () => {
+  const providers = [{ id: "new-catalog-source", name: "新来源 <span>可预览</span>", mode: "api", kinds: ["model", "texture"], defaultKind: "texture", note: "已接通图片预览" }];
+  const h = harness({ initial: state({ providers }), stored: { provider: "new-catalog-source", q: "石头", kind: "all", status: "all" } }); await flush();
+  assert.equal(h.control("provider").children.length, 1);
+  assert.equal(h.control("provider").children[0].value, "new-catalog-source");
+  assert.equal(h.control("provider").children[0].textContent, "新来源 <span>可预览</span> · 可预览");
+  assert.equal(h.control("provider").value, "new-catalog-source");
+  assert.match(h.control("resultNote").textContent, /候选 1.*已收藏 0.*候选尚未收藏/);
+  h.respond("POST search", { ...state({ providers, revision: 18 }), searchQuery: "rock", cached: false });
+  h.control("onlineSearch").dispatch("click"); await flush();
+  const search = h.calls.find(call => call.action === "search");
+  assert.equal(search.body.provider, "new-catalog-source"); assert.equal(search.body.kind, "texture"); assert.equal(search.body.q, "石头");
+  assert.match(h.control("resultNote").textContent, /实际搜索词：rock/);
+  assert.equal(JSON.parse(h.storage.get("console-resources-view")).provider, "new-catalog-source");
+});
+
+await test("external catalog entries expose an encoded human-operated website link without searching or changing cards", async () => {
+  const providers = [{ id: "external-fixture", name: "itch.io", mode: "external", kinds: ["model", "other"], defaultKind: "model", note: "可把选中的资源网址添加回来。", searchUrlTemplate: "https://itch.io/search?q={query}&facets=c.2" }];
+  const h = harness({ initial: state({ providers }), stored: { provider: "external-fixture", q: "stone & 草地" } }); await flush();
+  const card = h.control("resourceGrid").children[0], link = h.control("externalSearch");
+  assert.equal(h.control("provider").value, "external-fixture"); assert.equal(h.control("onlineSearch").hidden, true); assert.equal(link.hidden, false);
+  assert.equal(link.href, `https://itch.io/search?q=${encodeURIComponent("stone & 草地")}&facets=c.2`);
+  assert.equal(link.attributes.get("target"), "_blank"); assert.match(link.attributes.get("rel"), /noopener/); assert.match(link.attributes.get("rel"), /noreferrer/);
+  assert.match(h.control("providerNote").textContent, /在来源网站查看结果，不会自动加入这里/);
+  link.dispatch("click"); await flush();
+  assert.equal(h.calls.length, 1); assert.equal(h.control("resourceGrid").children[0], card);
+  h.control("query").value = "新词"; h.control("query").dispatch("input");
+  assert.equal(link.href, `https://itch.io/search?q=${encodeURIComponent("新词")}&facets=c.2`);
+  assert.equal(h.calls.length, 1);
+});
+
+await test("unapproved external templates cannot become links or fall through to the local search API", async () => {
+  for (const searchUrlTemplate of ["https://unknown.example/search?q={query}", "javascript:alert('{query}')", "https://itch.io/search?q={query}&next={query}"]) {
+    const providers = [{ id: "external-fixture", name: "外部来源", mode: "external", kinds: ["model"], searchUrlTemplate }];
+    const h = harness({ initial: state({ providers }), stored: { q: "tree" } }); await flush();
+    const link = h.control("externalSearch");
+    assert.equal(link.href, ""); assert.equal(link.attributes.get("aria-disabled"), "true");
+    link.dispatch("click"); await flush();
+    assert.equal(h.calls.length, 1); assert.equal(h.control("operationStatus").dataset.error, "true");
+  }
+});
+
+await test("partial results and cached repeats disclose skipped records, while a full error preserves those cards and notices", async () => {
+  const h = harness(); await flush(); h.control("query").value = "tree";
+  const partial = { ...state({ revision: 18 }), skippedCount: 2, warnings: ["跳过了 <span>无效身份</span>", "提示".repeat(200), "第三条", "第四条不显示"], cached: false };
+  h.respond("POST search", partial); h.control("onlineSearch").dispatch("click"); await flush();
+  assert.match(h.control("operationStatus").textContent, /找到 1 项.*另有 2 项因资料无效未显示/);
+  assert.equal(h.control("resultWarnings").hidden, false); assert.match(h.control("resultWarnings").textContent, /<span>无效身份<\/span>/);
+  assert.doesNotMatch(h.control("resultWarnings").textContent, /第四条/); assert.ok(h.control("resultWarnings").textContent.length < 580);
+  h.respond("POST search", { ...partial, cached: true }); h.control("onlineSearch").dispatch("click"); await flush();
+  assert.match(h.control("operationStatus").textContent, /已复用.*1 项.*另有 2 项因资料无效未显示/);
+  const card = h.control("resourceGrid").children[0], warning = h.control("resultWarnings").textContent;
+  h.respond("POST search", { httpError: true, error: "这次来源全部资料无效，结果未保存。" }); h.control("refreshSearch").dispatch("click"); await flush();
+  assert.equal(h.control("operationStatus").textContent, "这次来源全部资料无效，结果未保存。");
+  assert.equal(h.control("resourceGrid").children[0], card); assert.equal(h.control("resultWarnings").textContent, warning);
 });
 
 console.log(`${passed} resource UI checks passed.`);

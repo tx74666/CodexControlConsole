@@ -18,11 +18,14 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from urllib.request import build_opener, HTTPRedirectHandler, Request
 import uuid
 
+from resource_catalogs import CATALOG_PROVIDERS, search_catalog
+
 
 STORE_RELATIVE = '游戏资源/.console-resources/library.json'
 LOCK_RELATIVE = '游戏资源/.console-resources/library.lock'
 MAX_STORE_BYTES = 4 * 1024 * 1024
 MAX_API_BYTES = 12 * 1024 * 1024
+MAX_HTML_BYTES = 3 * 1024 * 1024
 MAX_ITEMS = 5000
 MAX_SEARCHES = 1000
 MAX_PROVENANCE = 2000
@@ -30,10 +33,23 @@ SEARCH_TIMEOUT = 12
 KINDS = {'model', 'texture', 'hdri', 'vfx', 'other'}
 STATUSES = {'candidate', 'saved', 'planned'}
 PROVIDERS = [
-    {'id': 'sketchfab', 'name': 'Sketchfab', 'kinds': ['model'],
+    {'id': 'sketchfab', 'name': 'Sketchfab', 'kinds': ['model'], 'mode': 'api', 'defaultKind': 'model',
      'note': '公開可下載模型；逐項核對許可，下載仍需帳戶。'},
-    {'id': 'polyhaven', 'name': 'Poly Haven', 'kinds': ['model', 'texture', 'hdri'],
+    {'id': 'polyhaven', 'name': 'Poly Haven', 'kinds': ['model', 'texture', 'hdri'], 'mode': 'api', 'defaultKind': 'model',
      'note': '官方資源列表與縮圖，CC0。'},
+] + CATALOG_PROVIDERS + [
+    {'id': 'itchio', 'name': 'itch.io', 'kinds': ['model', 'texture', 'vfx', 'other'],
+     'mode': 'external', 'defaultKind': 'other', 'searchUrlTemplate': 'https://itch.io/search?q={query}&facets=c.2',
+     'note': '開啟來源搜尋頁；選中公開資源網址後可預覽並保存。'},
+    {'id': 'unity', 'name': 'Unity Asset Store', 'kinds': ['model', 'texture', 'vfx', 'other'],
+     'mode': 'external', 'defaultKind': 'vfx', 'searchUrlTemplate': 'https://marketplace.unity.com/search?q={query}',
+     'note': '開啟來源搜尋頁；選中公開資源網址後可預覽並保存。'},
+    {'id': 'fab', 'name': 'Fab', 'kinds': ['model', 'texture', 'hdri', 'vfx', 'other'],
+     'mode': 'external', 'defaultKind': 'model', 'searchUrlTemplate': 'https://www.fab.com/search?q={query}',
+     'note': '開啟來源搜尋頁；選中公開資源網址後可預覽並保存。'},
+    {'id': 'cgtrader', 'name': 'CGTrader', 'kinds': ['model'],
+     'mode': 'external', 'defaultKind': 'model', 'searchUrlTemplate': 'https://www.cgtrader.com/search?keywords={query}',
+     'note': '開啟來源搜尋頁；選中公開資源網址後可預覽並保存。'},
 ]
 QUERY_WORDS = {'地球': 'earth', '角色': 'character', '人物': 'character',
                '房屋': 'house', '房子': 'house', '椅子': 'chair',
@@ -103,6 +119,27 @@ def public_https_url(value, *, required=True):
     return urlunsplit(('https', netloc, parts.path or '/', urlencode(sorted(query)), ''))
 
 
+def _sketchfab_uid(value):
+    # The official API returns both 32-hex UIDs and case-sensitive, alphanumeric
+    # legacy UIDs (e.g. Future Car has a 27-character UID). UIDs are opaque tokens.
+    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9]{1,64}', value):
+        return None
+    return value.lower() if re.fullmatch(r'[a-fA-F0-9]{32}', value) else value
+
+
+def _sketchfab_path_uid(path):
+    if path.startswith('/models/') and '/' not in path[len('/models/'):]:
+        return _sketchfab_uid(path[len('/models/'):])
+    if path.startswith('/3d-models/') and '/' not in path[len('/3d-models/'):]:
+        slug = path[len('/3d-models/'):]
+        return _sketchfab_uid(slug.rsplit('-', 1)[-1]) if '-' in slug else None
+    return None
+
+
+def _api_provider_ids():
+    return {p['id'] for p in PROVIDERS if p.get('mode', 'api') == 'api'}
+
+
 def canonical_resource(value):
     """Return stable source identity and its canonical, human-openable URL."""
     url = public_https_url(value)
@@ -113,9 +150,8 @@ def canonical_resource(value):
         if match:
             return 'unity:' + match.group(1), urlunsplit(('https', 'marketplace.unity.com', path, '', ''))
     if host in {'sketchfab.com', 'www.sketchfab.com'}:
-        match = re.search(r'/(?:3d-models/[^/]*-|models/)([a-f0-9]{32})$', path, re.I)
-        if match:
-            uid = match.group(1).lower()
+        uid = _sketchfab_path_uid(path)
+        if uid:
             return 'sketchfab:' + uid, 'https://sketchfab.com/models/' + uid
     if host in {'polyhaven.com', 'www.polyhaven.com'}:
         match = re.fullmatch(r'/a/([a-zA-Z0-9_-]+)', path)
@@ -124,6 +160,18 @@ def canonical_resource(value):
             return 'polyhaven:' + slug, 'https://polyhaven.com/a/' + slug
     url = urlunsplit((parts.scheme, parts.netloc, path or '/', parts.query, ''))
     return 'url:' + url, url
+
+
+def _legacy_sketchfab_identity(value):
+    """Read an old manually saved legacy-UID URL without changing its stored ID."""
+    url = public_https_url(value)
+    parts = urlsplit(url)
+    if parts.hostname not in {'sketchfab.com', 'www.sketchfab.com'}:
+        return None
+    uid = _sketchfab_path_uid(parts.path.rstrip('/'))
+    if uid and not re.fullmatch(r'[a-fA-F0-9]{32}', uid):
+        return 'url:' + urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip('/') or '/', parts.query, ''))
+    return None
 
 
 def _identifier(identity):
@@ -193,8 +241,10 @@ class _NoRedirect(HTTPRedirectHandler):
 
 def _fetch_json(url):
     # Only callers below construct URLs, always at these fixed official APIs.
-    if not (url.startswith('https://api.sketchfab.com/v3/search?') or
-            url.startswith('https://api.polyhaven.com/assets?')):
+    parts = urlsplit(url)
+    allowed = {('api.sketchfab.com', '/v3/search'), ('api.polyhaven.com', '/assets'),
+               ('ambientcg.com', '/api/v3/assets')}
+    if parts.scheme != 'https' or (parts.netloc, parts.path) not in allowed or parts.fragment:
         raise ResourceLibraryError('不支援的資源服務。')
     request = Request(url, headers={'Accept': 'application/json', 'User-Agent': 'CodexConsole/ResourceLibrary'})
     try:
@@ -208,6 +258,29 @@ def _fetch_json(url):
         raise ResourceLibraryError(f'資源服務搜尋失敗（{reason}），本次結果未保存。', status=502) from exc
     except (URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ResourceLibraryError('資源服務連線或回應失敗，本次搜尋未保存；請稍後重試。', status=502) from exc
+
+
+def _fetch_text(url):
+    """Fetch fixed catalogue listing routes; never a supplied resource URL."""
+    parts = urlsplit(url)
+    allowed = {('kenney.nl', '/assets'), ('kenney.nl', '/assets/category:3D'),
+               ('kenney.nl', '/assets/category:2D'), ('kenney.nl', '/assets/category:Textures'),
+               ('kenney.nl', '/assets/series:VFX'), ('opengameart.org', '/art-search-advanced')}
+    if parts.scheme != 'https' or (parts.netloc, parts.path) not in allowed or parts.fragment:
+        raise ResourceLibraryError('不支援的資源目錄。')
+    request = Request(url, headers={'Accept': 'text/html,application/xhtml+xml;q=0.9',
+                                   'User-Agent': 'CodexConsole/ResourceLibrary'})
+    try:
+        with build_opener(_NoRedirect()).open(request, timeout=SEARCH_TIMEOUT) as response:
+            raw = response.read(MAX_HTML_BYTES + 1)
+        if len(raw) > MAX_HTML_BYTES:
+            raise ResourceLibraryError('資源目錄回應超過讀取上限，本次搜尋未保存。', status=502)
+        return raw.decode('utf-8-sig')
+    except HTTPError as exc:
+        reason = '請求過於頻繁，請稍後重試' if exc.code == 429 else f'HTTP {exc.code}'
+        raise ResourceLibraryError(f'資源目錄搜尋失敗（{reason}），本次結果未保存。', status=502) from exc
+    except (URLError, TimeoutError, OSError, UnicodeError) as exc:
+        raise ResourceLibraryError('資源目錄連線或回應失敗，本次搜尋未保存；請稍後重試。', status=502) from exc
 
 
 class ResourceLibraryService:
@@ -266,14 +339,16 @@ class ResourceLibraryService:
         if not isinstance(data.get('items'), list) or len(data['items']) > MAX_ITEMS or not isinstance(data.get('searches'), list) or len(data['searches']) > MAX_SEARCHES:
             raise ResourceLibraryError('資源索引項目格式或數量無效。')
         seen = set()
+        api_providers = _api_provider_ids()
         for item in data['items']:
             if not isinstance(item, dict):
                 raise ResourceLibraryError('資源項目格式無效。')
             identity, url = canonical_resource(item.get('url', ''))
-            if item.get('identity') != identity or item.get('id') != _identifier(identity) or identity in seen:
+            stored_identity = item.get('identity')
+            if stored_identity not in (identity, _legacy_sketchfab_identity(item.get('url', ''))) or not isinstance(stored_identity, str) or item.get('id') != _identifier(stored_identity) or stored_identity in seen:
                 raise ResourceLibraryError('資源身份重複或無效。')
-            seen.add(identity)
-            if not all(isinstance(item.get(key), str) for key in ('status', 'kind', 'provider')) or item['status'] not in STATUSES or item['kind'] not in KINDS or item['provider'] not in {'manual', 'sketchfab', 'polyhaven'}:
+            seen.add(stored_identity)
+            if not all(isinstance(item.get(key), str) for key in ('status', 'kind', 'provider')) or item['status'] not in STATUSES or item['kind'] not in KINDS or item['provider'] not in api_providers | {'manual'}:
                 raise ResourceLibraryError('資源分類或狀態無效。')
             _text(item.get('name'), '資源名稱', 240, required=True)
             for key, limit in [('description', 4000), ('license', 1000), ('price', 1000), ('notes', 4000)]:
@@ -287,14 +362,14 @@ class ResourceLibraryService:
             if not isinstance(item.get('queries'), list) or len(item['queries']) > 1000:
                 raise ResourceLibraryError('搜尋來源記錄無效。')
             for query in item['queries']:
-                if not isinstance(query, dict) or not isinstance(query.get('provider'), str) or not isinstance(query.get('kind'), str) or query['provider'] not in {'sketchfab', 'polyhaven'} or query['kind'] not in KINDS:
+                if not isinstance(query, dict) or not isinstance(query.get('provider'), str) or not isinstance(query.get('kind'), str) or query['provider'] not in api_providers or query['kind'] not in KINDS:
                     raise ResourceLibraryError('搜尋來源記錄無效。')
                 _query(query.get('query'))
                 _text(query.get('searchQuery'), '實際搜尋詞', 240, required=True)
         ids = {_identifier(identity) for identity in seen}
         search_keys = set()
         for search in data['searches']:
-            if not isinstance(search, dict) or not isinstance(search.get('provider'), str) or not isinstance(search.get('kind'), str) or search['provider'] not in {'sketchfab', 'polyhaven'} or search['kind'] not in KINDS:
+            if not isinstance(search, dict) or not isinstance(search.get('provider'), str) or not isinstance(search.get('kind'), str) or search['provider'] not in api_providers or search['kind'] not in KINDS:
                 raise ResourceLibraryError('搜尋快取格式無效。')
             query, normalized = _query(search.get('query'))
             key = (search['provider'], search['kind'], normalized)
@@ -305,6 +380,13 @@ class ResourceLibraryService:
             _text(search.get('searchTime'), '搜尋時間', 100, required=True)
             if not isinstance(search.get('itemIds'), list) or len(search['itemIds']) > 24 or any(not isinstance(i, str) or i not in ids for i in search['itemIds']):
                 raise ResourceLibraryError('搜尋快取引用無效。')
+            if type(search.get('skippedCount', 0)) is not int or not 0 <= search.get('skippedCount', 0) <= 24:
+                raise ResourceLibraryError('搜尋略過數量無效。')
+            warnings = search.get('warnings', [])
+            if not isinstance(warnings, list) or len(warnings) > 24:
+                raise ResourceLibraryError('搜尋警告格式無效。')
+            for warning in warnings:
+                _text(warning, '搜尋警告', 400, required=True)
 
     @contextmanager
     def _write_lock(self):
@@ -402,7 +484,8 @@ class ResourceLibraryService:
 
     @staticmethod
     def _merge(data, incoming, *, manual=False):
-        existing = next((i for i in data['items'] if i['identity'] == incoming['identity']), None)
+        existing = next((i for i in data['items'] if i['identity'] == incoming['identity'] or
+                         canonical_resource(i['url'])[0] == incoming['identity']), None)
         if existing is None:
             if len(data['items']) >= MAX_ITEMS:
                 raise ResourceLibraryError('資源清單已達數量上限，原資料已保留。')
@@ -473,7 +556,8 @@ class ResourceLibraryService:
     def _search_result(self, root, data, search, cached):
         by_id = {i['id']: i for i in data['items']}
         return {**self._result(root, data, [by_id[i] for i in search['itemIds']]),
-                **{key: search[key] for key in ('query', 'searchQuery', 'provider', 'kind', 'searchTime')}, 'cached': cached}
+                **{key: search[key] for key in ('query', 'searchQuery', 'provider', 'kind', 'searchTime')},
+                'cached': cached, 'skippedCount': search.get('skippedCount', 0), 'warnings': search.get('warnings', [])}
 
     def search(self, payload, authorize=None):
         if authorize is not None:
@@ -482,7 +566,7 @@ class ResourceLibraryService:
             raise ResourceLibraryError('搜尋內容無效。')
         query, normalized = _query(payload.get('q', ''))
         provider, kind = payload.get('provider', 'sketchfab'), payload.get('kind', 'model')
-        if not any(p['id'] == provider and kind in p['kinds'] for p in PROVIDERS):
+        if not any(p['id'] == provider and p.get('mode', 'api') == 'api' and kind in p['kinds'] for p in PROVIDERS):
             raise ResourceLibraryError('此來源不支援所選資源類型。')
         refresh = payload.get('refresh', False)
         count = payload.get('count', 12)
@@ -495,7 +579,12 @@ class ResourceLibraryService:
             if cached is not None and not refresh:
                 return self._search_result(root, data, cached, True)
         actual_query = _search_query(query)
-        candidates = self._provider_search(provider, kind, actual_query, count)
+        provider_result = self._provider_search(provider, kind, actual_query, count)
+        if isinstance(provider_result, list):
+            candidates, skipped_count, warnings = provider_result, 0, []
+        else:
+            candidates = provider_result['items']
+            skipped_count, warnings = provider_result['skippedCount'], provider_result['warnings']
         search_time = _now()
         if authorize is not None:
             authorize()
@@ -516,7 +605,8 @@ class ResourceLibraryService:
                 if item['id'] not in item_ids:
                     item_ids.append(item['id'])
             search = {'query': query, 'searchQuery': actual_query, 'provider': provider,
-                      'kind': kind, 'searchTime': search_time, 'itemIds': item_ids}
+                      'kind': kind, 'searchTime': search_time, 'itemIds': item_ids,
+                      'skippedCount': skipped_count, 'warnings': warnings}
             if cached:
                 data['searches'].remove(cached)
             elif len(data['searches']) >= MAX_SEARCHES:
@@ -528,26 +618,55 @@ class ResourceLibraryService:
         return self._search_result(root, data, search, False)
 
     def _provider_search(self, provider, kind, query, count):
+        if provider in {p['id'] for p in CATALOG_PROVIDERS}:
+            try:
+                rows = search_catalog(provider, kind, query, count, fetch_json=_fetch_json, fetch_text=_fetch_text)
+            except ResourceLibraryError:
+                raise
+            except ValueError as exc:
+                raise ResourceLibraryError(f'資源目錄格式無效，本次結果未保存：{exc}', status=502) from exc
+            if not isinstance(rows, list):
+                raise ResourceLibraryError('資源目錄格式無效，本次結果未保存。', status=502)
+            candidates, warnings = [], []
+            for index, row in enumerate(rows[:count], 1):
+                try:
+                    if not isinstance(row, dict):
+                        raise ResourceLibraryError('資源資料格式無效。')
+                    candidates.append(self._candidate(row, provider))
+                except ResourceLibraryError as exc:
+                    warnings.append(f'第 {index} 個結果略過：{exc}')
+            if warnings and not candidates:
+                raise ResourceLibraryError(f'資源目錄返回的 {len(warnings)} 項資源均無法安全讀取，本次結果未保存。', status=502)
+            return {'items': candidates, 'skippedCount': len(warnings), 'warnings': warnings}
         if provider == 'sketchfab':
             url = 'https://api.sketchfab.com/v3/search?' + urlencode({'type': 'models', 'q': query, 'downloadable': 'true', 'count': count})
             response = _fetch_json(url)
             if not isinstance(response, dict) or not isinstance(response.get('results'), list):
                 raise ResourceLibraryError('Sketchfab 搜尋回應格式無效，本次結果未保存。')
-            candidates = []
-            for raw in response['results'][:count]:
-                if not isinstance(raw, dict) or not re.fullmatch(r'[a-f0-9]{32}', str(raw.get('uid', '')), re.I):
-                    raise ResourceLibraryError('Sketchfab 資源身份無效，本次結果未保存。')
-                images = raw.get('thumbnails', {}).get('images', []) if isinstance(raw.get('thumbnails'), dict) else []
-                images = [i for i in images if isinstance(i, dict) and isinstance(i.get('url'), str) and type(i.get('width')) is int]
-                preview = min(images, key=lambda i: abs(i['width'] - 720))['url'] if images else ''
-                license_info = raw.get('license') if isinstance(raw.get('license'), dict) else {}
-                owner = raw.get('user') if isinstance(raw.get('user'), dict) else {}
-                candidates.append(self._candidate({'name': raw.get('name', ''), 'url': 'https://sketchfab.com/models/' + raw['uid'],
-                    'kind': kind, 'previewUrl': preview, 'description': '公開可下載模型；使用前核對作者與許可。',
-                    'license': license_info.get('label') or '未標明，使用前需核對',
-                    'price': '免費可下載；下載需登入來源帳戶',
-                    'provenance': [{'source': 'Sketchfab official public API', 'author': str(owner.get('displayName') or owner.get('username') or '')[:240]}]}, provider))
-            return candidates
+            candidates, warnings = [], []
+            for index, raw in enumerate(response['results'][:count], 1):
+                try:
+                    if not isinstance(raw, dict):
+                        raise ResourceLibraryError('資源資料格式無效。')
+                    uid = _sketchfab_uid(raw.get('uid'))
+                    if uid is None:
+                        raise ResourceLibraryError('來源 UID 格式無效。')
+                    images = raw.get('thumbnails', {}).get('images', []) if isinstance(raw.get('thumbnails'), dict) else []
+                    images = images if isinstance(images, list) else []
+                    images = [i for i in images if isinstance(i, dict) and isinstance(i.get('url'), str) and type(i.get('width')) is int]
+                    preview = min(images, key=lambda i: abs(i['width'] - 720))['url'] if images else ''
+                    license_info = raw.get('license') if isinstance(raw.get('license'), dict) else {}
+                    owner = raw.get('user') if isinstance(raw.get('user'), dict) else {}
+                    candidates.append(self._candidate({'name': raw.get('name', ''), 'url': 'https://sketchfab.com/models/' + uid,
+                        'kind': kind, 'previewUrl': preview, 'description': '公開可下載模型；使用前核對作者與許可。',
+                        'license': license_info.get('label') or '未標明，使用前需核對',
+                        'price': '免費可下載；下載需登入來源帳戶',
+                        'provenance': [{'source': 'Sketchfab official public API', 'author': str(owner.get('displayName') or owner.get('username') or '')[:240]}]}, provider))
+                except ResourceLibraryError as exc:
+                    warnings.append(f'第 {index} 個結果略過：{exc}')
+            if warnings and not candidates:
+                raise ResourceLibraryError(f'Sketchfab 返回的 {len(warnings)} 項資源均無法安全讀取，本次結果未保存。', status=502)
+            return {'items': candidates, 'skippedCount': len(warnings), 'warnings': warnings}
         response = _fetch_json('https://api.polyhaven.com/assets?' + urlencode({'type': {'model': 'models', 'texture': 'textures', 'hdri': 'hdris'}[kind]}))
         if not isinstance(response, dict):
             raise ResourceLibraryError('Poly Haven 搜尋回應格式無效，本次結果未保存。')

@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#111a27">
   <title>Console · 资源库</title>
   <link rel="icon" href="favicon.ico">
-  <link rel="stylesheet" href="resources.css?v=1.0.79">
-  <script src="resources.js?v=1.0.79" defer></script>
+  <link rel="stylesheet" href="resources.css?v=resource-sources-20261007">
+  <script src="resources.js?v=resource-sources-20261007" defer></script>
 </head>
 <body>
   <main class="resource-shell">
@@ -31,8 +31,9 @@
         </div>
       </form>
       <div class="online-row">
-        <label class="select-field source-field"><span>联网来源</span><select id="provider"><option value="sketchfab">Sketchfab · 模型</option><option value="polyhaven">Poly Haven · 素材</option></select></label>
+        <label class="select-field source-field"><span>资源来源</span><select id="provider" disabled><option value="">正在读取来源…</option></select></label>
         <button id="onlineSearch" class="secondary-button" type="button">联网找</button>
+        <a id="externalSearch" class="secondary-button" target="_blank" rel="noopener noreferrer" hidden>打开网站搜索 ↗</a>
         <button id="refreshSearch" class="text-button" type="button" hidden>重新搜索</button>
         <p id="providerNote" class="source-note">选定来源后才联网搜索。</p>
       </div>
@@ -40,8 +41,9 @@
     </section>
 
     <section class="collection-section" aria-labelledby="resultsTitle">
-      <div class="collection-heading"><div><p class="eyebrow">PREVIEW & CHOOSE</p><h2 id="resultsTitle">已收集的资源</h2></div><span id="resultCount" class="result-count">—</span></div>
-      <p id="resultNote" class="result-note">收藏和准备使用都会保留在这里，准备使用只是选择，尚未导入项目。</p>
+      <div class="collection-heading"><div><p class="eyebrow">PREVIEW & CHOOSE</p><h2 id="resultsTitle">资源库记录</h2></div><span id="resultCount" class="result-count">—</span></div>
+      <p id="resultNote" class="result-note">搜索候选与已收藏分别标记；准备使用只是选择，尚未导入项目。</p>
+      <p id="resultWarnings" class="result-warnings" hidden></p>
       <div id="resourceGrid" class="resource-grid" aria-busy="true"></div>
       <div id="emptyState" class="empty-state" hidden><span class="empty-symbol" aria-hidden="true">◇</span><h3 id="emptyTitle">这里还没有匹配的资源</h3><p id="emptyText">换一个关键词或分类，也可以选好来源后「联网找」。</p></div>
     </section>

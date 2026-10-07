@@ -16,11 +16,17 @@ import resource_library as resources
 
 
 UID = '1234567890abcdef1234567890abcdef'
+# Actual shape returned by the official read-only Car search on 2026-10-07.
+LEGACY_UID = 'hliAt7xc6YU2XjXh5G4lzmQwFmR'
 SKETCHFAB = {'results': [{'uid': UID, 'name': 'Earth model',
     'viewerUrl': 'https://sketchfab.com/3d-models/earth-' + UID,
     'thumbnails': {'images': [{'width': 1920, 'url': 'https://media.sketchfab.com/earth-large.jpg'},
                                {'width': 720, 'url': 'https://media.sketchfab.com/earth.jpg'}]},
     'license': {'label': 'CC Attribution'}, 'user': {'displayName': 'Artist'}}]}
+LEGACY_SKETCHFAB = json.loads(json.dumps(SKETCHFAB))
+LEGACY_SKETCHFAB['results'][0].update({'uid': LEGACY_UID, 'name': 'Future Car',
+    'viewerUrl': 'https://sketchfab.com/3d-models/none-' + LEGACY_UID,
+    'uri': 'https://api.sketchfab.com/v3/models/' + LEGACY_UID})
 POLYHAVEN = {'stone_chair': {'name': 'Stone Chair', 'tags': ['chair', 'stone'],
     'categories': ['furniture'], 'authors': {'Author': 'https://example.com/'},
     'thumbnail_url': 'https://cdn.polyhaven.com/asset_img/stone_chair.png'},
@@ -110,6 +116,116 @@ class CatalogueChecks(unittest.TestCase):
             with patch.object(resources, '_fetch_json', side_effect=AssertionError('unexpected network')):
                 cached = self.search(q='planet earth')
                 self.assertTrue(cached['cached'])
+
+    def test_real_car_legacy_uid_shape_is_kept_with_hex_results(self):
+        mixed = {'results': LEGACY_SKETCHFAB['results'] + SKETCHFAB['results']}
+        with patch.object(resources, '_fetch_json', return_value=mixed):
+            result = self.search(q='Car')
+        self.assertEqual(len(result['items']), 2)
+        self.assertEqual(result['skippedCount'], 0)
+        self.assertEqual(result['warnings'], [])
+        self.assertEqual(result['items'][0]['identity'], 'sketchfab:' + LEGACY_UID)
+        self.assertEqual(result['items'][0]['url'], 'https://sketchfab.com/models/' + LEGACY_UID)
+        self.assertEqual(result['items'][1]['identity'], 'sketchfab:' + UID)
+        for route in ('https://sketchfab.com/models/' + LEGACY_UID,
+                      'https://www.sketchfab.com/3d-models/none-' + LEGACY_UID):
+            self.assertEqual(resources.canonical_resource(route)[0], 'sketchfab:' + LEGACY_UID)
+        self.assertNotEqual(resources.canonical_resource('https://sketchfab.com/models/' + LEGACY_UID)[0],
+                            resources.canonical_resource('https://sketchfab.com/models/' + LEGACY_UID.lower())[0])
+        self.assertEqual(resources.canonical_resource('https://sketchfab.com/models/' + UID.upper())[0], 'sketchfab:' + UID)
+        with patch.object(resources, '_fetch_json', side_effect=AssertionError('cached query must not fetch')):
+            cached = self.search(q='car')
+        self.assertTrue(cached['cached'])
+        self.assertEqual(cached['items'], result['items'])
+
+    def test_previously_saved_legacy_url_identity_id_and_selection_survive(self):
+        old_url = 'https://www.sketchfab.com/3d-models/future-car-' + LEGACY_UID
+        old_identity = 'url:' + old_url
+        old_item = self.service._candidate({'name': 'My selected car', 'url': old_url, 'kind': 'model'})
+        old_item.update({'identity': old_identity, 'id': resources._identifier(old_identity),
+                         'url': old_url, 'status': 'planned', 'notes': 'Keep for the Unity scene',
+                         'license': 'Checked license', 'provenance': ['Previously collected link']})
+        old_id = old_item['id']
+        data = {'version': 1, 'revision': 1, 'items': [old_item], 'searches': []}
+        self.store.parent.mkdir(parents=True)
+        self.store.write_text(json.dumps(data), encoding='utf-8')
+        initial = self.service.state()['items'][0]
+        self.assertEqual((initial['id'], initial['identity'], initial['url']), (old_id, old_identity, old_url))
+        with patch.object(resources, '_fetch_json', return_value=LEGACY_SKETCHFAB):
+            result = self.search(q='Car')
+        self.assertEqual(len(result['items']), 1)
+        item = result['items'][0]
+        self.assertEqual((item['id'], item['identity'], item['url']), (old_id, old_identity, old_url))
+        self.assertEqual((item['name'], item['status'], item['notes'], item['license']),
+                         ('My selected car', 'planned', 'Keep for the Unity scene', 'Checked license'))
+        self.assertIn('Previously collected link', item['provenance'])
+        self.assertEqual(item['queries'][0]['query'], 'Car')
+        duplicate = self.save(name='Incoming API title', url='https://sketchfab.com/models/' + LEGACY_UID)
+        self.assertEqual(len(duplicate['items']), 1)
+        self.assertEqual(duplicate['item']['id'], old_id)
+        reopened = resources.ResourceLibraryService(DocumentLibraryService(self.settings)).state()
+        self.assertEqual(reopened['items'][0]['id'], old_id)
+
+    def test_bad_result_is_visible_partial_warning_and_all_bad_is_error(self):
+        mixed = {'results': [None, {'uid': 'bad/token', 'name': 'Unsafe token'}, *LEGACY_SKETCHFAB['results']]}
+        with patch.object(resources, '_fetch_json', return_value=mixed):
+            result = self.search(q='Car')
+        self.assertEqual(len(result['items']), 1)
+        self.assertEqual(result['items'][0]['identity'], 'sketchfab:' + LEGACY_UID)
+        self.assertEqual(result['skippedCount'], 2)
+        self.assertEqual(len(result['warnings']), 2)
+        self.assertIn('UID', result['warnings'][1])
+        with patch.object(resources, '_fetch_json', side_effect=AssertionError('cached query must not fetch')):
+            cached = self.search(q='Car')
+        self.assertEqual((cached['skippedCount'], cached['warnings']), (2, result['warnings']))
+        before = self.store.read_bytes()
+        with patch.object(resources, '_fetch_json', return_value={'results': [{'uid': 'bad/token'}]}):
+            with self.assertRaises(resources.ResourceLibraryError) as failed:
+                self.search(q='All invalid')
+        self.assertEqual(failed.exception.status, 502)
+        self.assertEqual(self.store.read_bytes(), before)
+
+    def test_old_search_cache_defaults_warning_fields_without_rewrite(self):
+        with patch.object(resources, '_fetch_json', return_value=SKETCHFAB):
+            self.search()
+        data = json.loads(self.store.read_text(encoding='utf-8'))
+        data['searches'][0].pop('skippedCount')
+        data['searches'][0].pop('warnings')
+        raw = json.dumps(data).encode('utf-8')
+        self.store.write_bytes(raw)
+        with patch.object(resources, '_fetch_json', side_effect=AssertionError('cached query must not fetch')):
+            result = self.search()
+        self.assertEqual((result['skippedCount'], result['warnings']), (0, []))
+        self.assertEqual(self.store.read_bytes(), raw)
+
+    def test_external_sources_cannot_be_posted_as_direct_searches(self):
+        external = [p for p in resources.PROVIDERS if p['mode'] == 'external']
+        self.assertEqual({p['id'] for p in external}, {'itchio', 'unity', 'fab', 'cgtrader'})
+        with patch.object(resources, '_fetch_json', side_effect=AssertionError('external source must not fetch')), \
+             patch.object(resources, '_fetch_text', side_effect=AssertionError('external source must not fetch')):
+            for source in external:
+                with self.subTest(source=source['id']), self.assertRaises(resources.ResourceLibraryError):
+                    self.search(provider=source['id'], kind=source['defaultKind'])
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_catalog_results_use_shared_candidate_validation_and_preserve_choices(self):
+        row = {'name': 'A catalogue model', 'url': 'https://kenney.nl/assets/car-kit',
+               'kind': 'model', 'previewUrl': 'https://kenney.nl/media/car-kit.png',
+               'license': 'CC0', 'price': '免費', 'provenance': ['Official catalogue']}
+        with patch.object(resources, 'search_catalog', return_value=[row, {**row, 'url': 'https://127.0.0.1/private'}]):
+            result = self.search(provider='kenney', q='car', kind='model')
+        self.assertEqual((len(result['items']), result['skippedCount']), (1, 1))
+        self.assertEqual(result['items'][0]['provider'], 'kenney')
+        selected = self.save(id=result['items'][0]['id'], status='saved', notes='My choice')
+        with patch.object(resources, 'search_catalog', return_value=[{**row, 'license': 'Changed', 'name': 'Changed'}]):
+            refreshed = self.search(provider='kenney', q='car', kind='model', refresh=True)
+        self.assertEqual((refreshed['items'][0]['name'], refreshed['items'][0]['license'], refreshed['items'][0]['notes']),
+                         ('A catalogue model', 'CC0', 'My choice'))
+        self.assertEqual(refreshed['items'][0]['id'], selected['item']['id'])
+        with patch.object(resources, 'search_catalog', side_effect=ValueError('Catalogue structure changed')):
+            with self.assertRaises(resources.ResourceLibraryError) as failed:
+                self.search(provider='kenney', q='new query', kind='model')
+        self.assertEqual(failed.exception.status, 502)
 
     def test_manual_duplicate_import_preserves_confirmed_choice(self):
         first = self.save(name='Slash', kind='vfx',
@@ -382,6 +498,41 @@ f.close()
         with patch.object(resources, 'MAX_API_BYTES', 16), patch.object(resources, 'build_opener', return_value=opener):
             with self.assertRaises(resources.ResourceLibraryError):
                 resources._fetch_json('https://api.sketchfab.com/v3/search?q=test')
+
+    def test_catalog_network_helpers_restrict_routes_and_bound_html(self):
+        class Opener:
+            def open(self, request, timeout):
+                self.request, self.timeout = request, timeout
+                return io.BytesIO(b'<html><body>Official listing</body></html>')
+        opener = Opener()
+        with patch.object(resources, 'build_opener', return_value=opener):
+            for url in ('https://kenney.nl/assets?search=car',
+                        'https://kenney.nl/assets/category:3D?search=car',
+                        'https://kenney.nl/assets/series:VFX?search=smoke',
+                        'https://kenney.nl/assets/category:2D?search=smoke',
+                        'https://kenney.nl/assets/category:Textures?search=wood',
+                        'https://opengameart.org/art-search-advanced?keys=car'):
+                self.assertIn('Official listing', resources._fetch_text(url))
+                self.assertEqual(opener.timeout, resources.SEARCH_TIMEOUT)
+            for url in ('https://kenney.nl/assets/car-kit', 'https://kenney.nl/redirect?url=https://example.com',
+                        'https://kenney.nl.evil.example/assets?search=car',
+                        'https://name:secret@kenney.nl/assets?search=car',
+                        'https://kenney.nl:443/assets?search=car',
+                        'https://opengameart.org/content/car', 'http://kenney.nl/assets?search=car'):
+                with self.subTest(url=url), self.assertRaises(resources.ResourceLibraryError):
+                    resources._fetch_text(url)
+            with patch.object(resources, 'MAX_HTML_BYTES', 8):
+                with self.assertRaises(resources.ResourceLibraryError) as failed:
+                    resources._fetch_text('https://kenney.nl/assets?search=car')
+                self.assertEqual(failed.exception.status, 502)
+        with patch.object(resources, 'build_opener') as make:
+            make.return_value.open.side_effect = HTTPError('https://kenney.nl/assets?', 429, 'Rate limited', {}, None)
+            with self.assertRaises(resources.ResourceLibraryError) as failed:
+                resources._fetch_text('https://kenney.nl/assets?search=car')
+            self.assertIn('頻繁', str(failed.exception))
+        with self.assertRaises(resources.ResourceLibraryError) as failed:
+            resources._NoRedirect().redirect_request(None, None, 302, 'Moved', {}, 'https://example.com/')
+        self.assertEqual(failed.exception.status, 502)
 
 
 if __name__ == '__main__':
