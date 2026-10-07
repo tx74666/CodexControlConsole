@@ -5,6 +5,21 @@
   const label = (text, input) => { const el = node("label", "", "workflow-field"); el.append(node("span", text), input); return el; };
   const button = (text, action, className = "") => { const el = node("button", text, `workflow-button ${className}`.trim()); el.type = "button"; el.addEventListener("click", action); return el; };
   const input = (type = "text") => { const el = node("input"); el.type = type; return el; };
+  const canonicalUuid = value => typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+  const sha256Text = text => {
+    const bytes = new TextEncoder().encode(text), padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64); padded.set(bytes); padded[bytes.length] = 128;
+    const view = new DataView(padded.buffer); view.setUint32(padded.length - 8, Math.floor(bytes.length / 0x20000000)); view.setUint32(padded.length - 4, bytes.length * 8);
+    const k = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    const hash = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19], words = new Uint32Array(64), rotate = (value, n) => value >>> n | value << 32 - n;
+    for (let offset = 0; offset < padded.length; offset += 64) {
+      for (let n = 0; n < 16; n++) words[n] = view.getUint32(offset + n * 4);
+      for (let n = 16; n < 64; n++) { const a = words[n - 15], b = words[n - 2]; words[n] = words[n - 16] + (rotate(a,7) ^ rotate(a,18) ^ a >>> 3) + words[n - 7] + (rotate(b,17) ^ rotate(b,19) ^ b >>> 10); }
+      let [a,b,c,d,e,f,g,h] = hash;
+      for (let n = 0; n < 64; n++) { const t1 = (h + (rotate(e,6) ^ rotate(e,11) ^ rotate(e,25)) + (e & f ^ ~e & g) + k[n] + words[n]) >>> 0, t2 = ((rotate(a,2) ^ rotate(a,13) ^ rotate(a,22)) + (a & b ^ a & c ^ b & c)) >>> 0; h=g; g=f; f=e; e=d+t1>>>0; d=c; c=b; b=a; a=t1+t2>>>0; }
+      [a,b,c,d,e,f,g,h].forEach((value, n) => { hash[n] = hash[n] + value >>> 0; });
+    }
+    return hash.map(value => value.toString(16).padStart(8, "0")).join("");
+  };
   const textLength = value => Array.from(value).length;
   function select(items) { const el = node("select"); setOptions(el, items); return el; }
   function setOptions(el, items, value = el.value) { el.replaceChildren(); for (const item of items) { const option = node("option", item.name || item.label || item.id); option.value = item.id; el.append(option); } el.value = items.some(item => item.id === value) ? value : items[0]?.id || ""; }
@@ -563,12 +578,55 @@
       if (state.layout === "image-only") { state.layout = layout.value = "image-first"; save(); }
       conversation.open = true; if (unread) unreadTaskOutput = null; update(); cards[0].scrollIntoView?.({ block: "start", behavior: "smooth" });
     }
+    function desktopGuideSource(message) {
+      const source = message.guideSource;
+      return message.role === "assistant" && source && Object.keys(source).sort().join(",") === "author,clientId,kind,messageId,recordId,requestId,sessionId,sourceGuideChatId,sourceUserMessageId,textSha256"
+        && source.kind === "codex_guide" && source.author === "Codex Guide" && source.messageId === message.id && source.recordId === state.recordId && state.detail?.record?.id === state.recordId
+        && [source.messageId, source.sessionId, source.recordId, source.sourceUserMessageId].every(value => typeof value === "string" && /^[a-f0-9]{32}$/.test(value))
+        && [source.requestId, source.clientId, source.sourceGuideChatId].every(canonicalUuid) && source.textSha256 === sha256Text(message.text || "")
+        && (state.detail?.messages || []).filter(item => item.role === "user" && item.id === source.sourceUserMessageId).length === 1
+        && (state.detail?.messages || []).filter(item => item.id === message.id).length === 1 ? source : null;
+    }
+    function answerSource(message) {
+      if (desktopGuideSource(message)) return "电脑 · Codex Guide";
+      if (message.role !== "assistant" || !message.text?.trim() || state.detail?.record?.id !== state.recordId
+          || (state.detail.messages || []).filter(item => item.id === message.id).length !== 1) return "来源未确认";
+      const matches = (state.detail.jobs || []).filter(job => job.recordId === state.recordId && job.kind === "discuss"
+        && job.status === "succeeded" && job.result?.messageId === message.id && job.result.text === message.text);
+      const labels = new Set();
+      for (const job of matches) {
+        const result = job.result, app = job.appDispatch, completed = app?.status === "completed" && app.id && result.dispatchId === app.id;
+        if (completed && result.source === "chatgpt_subscription" && result.terminalEventObserved === true
+            && result.terminalStatus === "completed" && result.completionEvidence === "response.completed"
+            && result.providerErrorObserved === false && /^resp_[A-Za-z0-9_-]{1,190}$/.test(result.responseId || "")) labels.add("API · ChatGPT");
+        const evidence = result.browserEvidence, completion = evidence?.completion;
+        const sourceUnit = /^fallback-turn-(\d+):(\d+):user$/.exec(evidence?.sourceUnitKey || ""), answerUnit = /^fallback-turn-(\d+):(\d+):assistant$/.exec(evidence?.assistantUnitKey || "");
+        if (completed && result.sourceKind === "browser_dom" && evidence?.source === "browser_dom"
+            && Object.keys(evidence).filter(key => key !== "images").sort().join(",") === "answerText,assistantMessageId,assistantUnitKey,completion,conversationUrl,observedAt,profile,promptText,source,sourceUnitKey,sourceUserMessageId"
+            && sourceUnit && answerUnit && sourceUnit[1] === answerUnit[1] && Number(answerUnit[2]) > Number(sourceUnit[2])
+            && evidence.answerText === message.text && evidence.promptText?.trim()
+            && evidence.conversationUrl === `https://chatgpt.com/c/${encodeURIComponent(result.targetThreadId || "")}`
+            && result.targetThreadId === app.targetThreadId && canonicalUuid(result.targetThreadId)
+            && canonicalUuid(evidence.sourceUserMessageId) && canonicalUuid(evidence.assistantMessageId) && evidence.sourceUserMessageId !== evidence.assistantMessageId
+            && typeof evidence.observedAt === "string" && /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(evidence.observedAt) && !Number.isNaN(Date.parse(evidence.observedAt))
+            && Object.keys(evidence.profile || {}).sort().join(",") === "observedAfter,observedBefore,requestedProfile" && ["fast", "high", "pro"].includes(evidence.profile.requestedProfile)
+            && typeof evidence.profile.observedBefore === "string" && Boolean(evidence.profile.observedBefore) && evidence.profile.observedBefore === evidence.profile.observedAfter
+            && Object.keys(completion || {}).sort().join(",") === "observedAfterCommit,stopPresent,text"
+            && completion?.observedAfterCommit === true && ["Response complete", "回答已完成"].includes(completion.text)
+            && [false, null].includes(completion.stopPresent)) labels.add("电脑 · ChatGPT");
+        if (capturedTaskChat(job, state.detail)) labels.add("电脑 · ChatGPT");
+        if (completed && app.sourceType === "workflow_discussion" && !result.source && !result.sourceKind && !result.browserEvidence
+            && ["sourceMessageId", "turnId", "targetThreadId"].every(key => typeof result[key] === "string" && result[key])
+            && result.targetThreadId === app.targetThreadId) labels.add("电脑 · 已登录 App");
+      }
+      return labels.size === 1 ? [...labels][0] : "来源未确认";
+    }
     function renderDetail() { image.hidden = !state.detail; thumbnails.replaceChildren(); logText.textContent = ""; explanationText.textContent = state.task?.body || state.detail?.record.description || state.detail?.record.title || ""; title.textContent = phone ? "工作记录" : state.detail?.record.title || "工作记录"; title.hidden = Boolean(state.task); conversationSummary.textContent = state.task ? "Output · 讨论与修改" : "评价与讨论";
       const attachments = state.detail?.attachments || [], main = attachments.find(item => item.id === state.primaryId), url = safeAsset(main?.previewUrl || main?.url); image.src = url; image.hidden = !url; enlarge.hidden = !url; imageEmpty.hidden = Boolean(url);
       for (const asset of attachments.filter(item => /^image\//.test(item.mimeType || item.mime || item.type || ""))) { const url = safeAsset(asset.previewUrl || asset.url); if (!url) continue; const thumb = node("img"); thumb.src = url; thumb.alt = asset.name || "工作图片"; const pick = button("", () => { state.primaryId = asset.id; state.selectedAttachments = [asset.id]; save(); renderDetail(); update(); }, "workflow-thumbnail"); pick.setAttribute("aria-label", `查看并引用 ${asset.name || "图片"}`); pick.setAttribute("aria-pressed", String(asset.id === state.primaryId)); pick.append(thumb); thumbnails.append(pick); }
       const messageNodes = [], currentCards = new Set(), sourceCounts = new Map(), workOutputs = new Map(), capturedOutputs = new Map(); for (const message of state.detail?.messages || []) sourceCounts.set(message.id, (sourceCounts.get(message.id) || 0) + 1); for (const job of state.detail?.jobs || []) { if (job.action === "native_work" && (job.resultMessageId || job.result?.messageId)) workOutputs.set(job.resultMessageId || job.result.messageId, job); const captured = capturedTaskChat(job, state.detail); if (captured) capturedOutputs.set(captured.id, captured.capture); }
       for (const asset of attachments.filter(item => /^audio\//.test(item.mimeType || item.mime || item.type || ""))) messageNodes.push(button(`转写录音：${asset.name || "录音"}`, () => void transcribeAttachment(asset.id)));
-      for (const [position, message] of (state.detail?.messages || []).entries()) { const cacheKey = `${state.recordId}:${message.id}${sourceCounts.get(message.id) > 1 ? `:duplicate:${position}` : ""}`, workOutput = workOutputs.get(message.id), capture = capturedOutputs.get(message.id), fingerprint = JSON.stringify([message, sourceCounts.get(message.id), Boolean(state.task), workOutput ? workOutput.result?.executionVerified === true : null, capture || null]), cached = messageCards.get(cacheKey); currentCards.add(cacheKey); if (cached?.fingerprint === fingerprint) { messageNodes.push(cached.card); continue; } const guide = message.role === "assistant" && message.guideSource?.kind === "codex_guide" && message.guideSource.author === "Codex Guide" && message.guideSource.messageId === message.id && message.guideSource.recordId === state.recordId, card = node("article", "", "workflow-message"), display = messageDisplay(message); card.dataset.messageId = message.id; if (guide) card.dataset.author = "codex_guide"; card.append(node("strong", guide ? "Codex Guide · 回复" : workOutput ? workOutput.result?.executionVerified === true ? "Work · 修改结果" : "Work · App 报告（待核验）" : capture ? "ChatGPT · 回复" : { user: "你", assistant: state.task ? "Chat · 讨论回复" : "讨论回复", transcript: "语音文字", result: "执行结果" }[message.role] || message.role || "记录"), node("p", display.text)); if (display.folded) { const original = node("details", "", "workflow-original-answer"); original.append(node("summary", "查看完整 App 回答"), node("p", message.text || message.content || "")); card.append(original); }
+      for (const [position, message] of (state.detail?.messages || []).entries()) { const cacheKey = `${state.recordId}:${message.id}${sourceCounts.get(message.id) > 1 ? `:duplicate:${position}` : ""}`, workOutput = workOutputs.get(message.id), capture = capturedOutputs.get(message.id), sourceLabel = answerSource(message), fingerprint = JSON.stringify([message, sourceCounts.get(message.id), Boolean(state.task), workOutput ? workOutput.result?.executionVerified === true : null, capture || null, sourceLabel]), cached = messageCards.get(cacheKey); currentCards.add(cacheKey); if (cached?.fingerprint === fingerprint) { messageNodes.push(cached.card); continue; } const guide = desktopGuideSource(message), card = node("article", "", "workflow-message"), display = messageDisplay(message); card.dataset.messageId = message.id; if (guide) card.dataset.author = "codex_guide"; card.append(node("strong", guide ? "电脑 · Codex Guide · 回复" : workOutput ? workOutput.result?.executionVerified === true ? "Work · 修改结果" : "Work · App 报告（待核验）" : message.role === "assistant" ? `${sourceLabel} · 回复` : { user: message.guideInput?.target === "codex_guide" && message.guideInput.recordId === state.recordId && message.guideInput.sourceUserMessageId === message.id ? "你 · 目标：Codex Guide" : "你", transcript: "语音文字", result: "执行结果" }[message.role] || message.role || "记录"), node("p", display.text)); if (display.folded) { const original = node("details", "", "workflow-original-answer"); original.append(node("summary", "查看完整 App 回答"), node("p", message.text || message.content || "")); card.append(original); }
         if (capture) { const origin = node("a", "查看 ChatGPT 原对话", "workflow-muted"); origin.href = capture.sourceUrl; origin.target = "_blank"; origin.rel = "noopener noreferrer"; card.append(origin); }
         if (["assistant", "result"].includes(message.role)) { card.append(button(state.task ? "整条交 Work 审核" : "整条交给电脑", () => prepareDispatch(message.text || message.content || "", { sourceMessageId: message.id }))); for (const option of message.options || []) card.append(button(`执行方案：${option.label || option.title || option.id}`, () => prepareDispatch(option.instruction || option.text || option.description || option.label || option.title || "", { sourceMessageId: message.id, optionId: option.id, projectId: option.projectId, action: option.action, commandId: option.commandId }), "workflow-option")); }
         if (message.role === "assistant") for (const value of message.scriptProposals || []) {

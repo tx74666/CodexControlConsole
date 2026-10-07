@@ -220,6 +220,9 @@ class MobileDialogueMixin:
         guide = self._guide_event_proof(db, session)
         if guide:
             proof["guide"] = guide
+        guide_inputs = self._guide_input_event_proof(db, session)
+        if guide_inputs:
+            proof["guideInputs"] = guide_inputs
         cursor = hashlib.sha256(_api()._json(proof).encode("utf-8")).hexdigest()
         return {"clientId": client_id, "sessionId": session_id, "recordId": session["recordId"], "cursor": cursor,
             "jobId": job["id"] if job else None, "status": status}
@@ -551,13 +554,15 @@ class MobileDialogueMixin:
             result_state = self._mobile_event_state(db, (client_id, identifier), require_current=False) if session else None
             observation = self._mobile_profile_observation(db, session) if session else None
             clear_receipts = self._mobile_clear_receipts(db, session)
+            guide = self._guide_input_state(db, session)
             revision = self._revision(db)
         profile = session["requestedProfile"] if session else client["requestedProfile"]
         detail = self.detail(session["recordId"], prefix) if session else None
         if detail:
-            detail["messages"] = [message for message in detail["messages"] if "guideSource" not in message or
-                all(message["guideSource"].get(key) == value for key, value in
-                    (("clientId", client_id), ("sessionId", session["id"]), ("recordId", session["recordId"])))]
+            detail["messages"] = [message for message in detail["messages"] if all(
+                metadata not in message or all(message[metadata].get(key) == value for key, value in
+                    (("clientId", client_id), ("sessionId", session["id"]), ("recordId", session["recordId"])))
+                for metadata in ("guideSource", "guideInput"))]
         cancellation_receipts = []
         if detail:
             with self._db() as db:
@@ -578,6 +583,7 @@ class MobileDialogueMixin:
             "resultStatus": result_state["status"] if result_state else "idle",
             "cancellationReceipts": cancellation_receipts,
             "clearReceipts": clear_receipts,
+            "guide": guide,
             "revision": revision, **extra}
 
     def _mobile_clear_receipts(self, db, session):

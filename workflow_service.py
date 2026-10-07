@@ -25,6 +25,7 @@ from workflow_script_proposals import script_blocks, action_blocks
 from workflow_native_work import NativeWorkMixin
 from workflow_mobile_dialogue import MobileDialogueMixin
 from workflow_guide_reply import GuideReplyMixin
+from workflow_guide_input import GuideInputMixin
 from workflow_mobile_handoff import MobileHandoffMixin
 from workflow_subscription_delivery import SubscriptionDeliveryMixin
 from workflow_codex_work_service import CodexWorkMixin
@@ -78,7 +79,7 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, GuideReplyMixin, NativeWorkMixin, SubscriptionDeliveryMixin):
+class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, GuideReplyMixin, GuideInputMixin, NativeWorkMixin, SubscriptionDeliveryMixin):
     def __init__(self, data_dir, models=None, callbacks=None, projects=None, *, computer_id=None, computer_name=None, recover_jobs=True):
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -140,6 +141,13 @@ class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, G
                         source_guide_chat_id TEXT NOT NULL,text_sha256 TEXT NOT NULL,created_at TEXT NOT NULL);
                     CREATE INDEX IF NOT EXISTS guide_reply_scope ON guide_replies(client_id,session_id,record_id);
                     CREATE INDEX IF NOT EXISTS guide_reply_record ON guide_replies(record_id);
+                    CREATE TABLE IF NOT EXISTS guide_inputs (seq INTEGER PRIMARY KEY AUTOINCREMENT,request_id TEXT NOT NULL UNIQUE,
+                        message_id TEXT NOT NULL UNIQUE,client_id TEXT NOT NULL,session_id TEXT NOT NULL,record_id TEXT NOT NULL,
+                        source_guide_chat_id TEXT NOT NULL,expected_revision INTEGER NOT NULL,text_sha256 TEXT NOT NULL,
+                        attachment_ids TEXT NOT NULL,attachment_proofs TEXT NOT NULL,source_snapshot TEXT NOT NULL,
+                        request_body TEXT NOT NULL,created_at TEXT NOT NULL);
+                    CREATE INDEX IF NOT EXISTS guide_input_scope ON guide_inputs(client_id,session_id,record_id,seq);
+                    CREATE INDEX IF NOT EXISTS guide_input_inbox ON guide_inputs(source_guide_chat_id,client_id,seq);
                     CREATE TABLE IF NOT EXISTS ideas (id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,
                         stage TEXT NOT NULL,priority TEXT NOT NULL,parent_id TEXT,target_kind TEXT NOT NULL,
                         target_thread_id TEXT NOT NULL,target_name TEXT NOT NULL,revision INTEGER NOT NULL,
@@ -429,9 +437,12 @@ class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, G
                          "attachmentIds": json.loads(item["attachment_ids"]), "options": json.loads(item["options"])}
                         for item in db.execute("SELECT * FROM messages WHERE record_id=? ORDER BY rowid", (identifier,))]
             guide_sources = self._guide_message_sources(db, identifier)
+            guide_inputs = self._guide_input_message_sources(db, identifier)
             for message in messages:
                 if message["id"] in guide_sources:
                     message["guideSource"] = guide_sources[message["id"]]
+                if message["id"] in guide_inputs:
+                    message["guideInput"] = guide_inputs[message["id"]]
                 if message["role"] == "assistant":
                     message["scriptProposals"] = self._script_proposals(db, identifier, message["id"])
                     message["actionProposals"] = self._action_proposals(db, identifier, message["id"])

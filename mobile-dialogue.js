@@ -6,6 +6,21 @@
   const field = (tag, label, className = "") => { const node = make(tag, "", className); node.setAttribute("aria-label", label); return node; };
   const tiers = [{ id: "fast", label: "极速" }, { id: "high", label: "高" }, { id: "pro", label: "Pro" }];
   const profileReasoning = { fast: { mode: "standard", effort: "low" }, high: { mode: "standard", effort: "high" }, pro: { mode: "pro", effort: "high" } };
+  const canonicalUuid = value => typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+  const sha256Text = text => {
+    const bytes = new TextEncoder().encode(text), padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64); padded.set(bytes); padded[bytes.length] = 128;
+    const view = new DataView(padded.buffer); view.setUint32(padded.length - 8, Math.floor(bytes.length / 0x20000000)); view.setUint32(padded.length - 4, bytes.length * 8);
+    const k = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    const hash = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19], words = new Uint32Array(64), rotate = (value, n) => value >>> n | value << 32 - n;
+    for (let offset = 0; offset < padded.length; offset += 64) {
+      for (let n = 0; n < 16; n++) words[n] = view.getUint32(offset + n * 4);
+      for (let n = 16; n < 64; n++) { const a = words[n - 15], b = words[n - 2]; words[n] = words[n - 16] + (rotate(a,7) ^ rotate(a,18) ^ a >>> 3) + words[n - 7] + (rotate(b,17) ^ rotate(b,19) ^ b >>> 10); }
+      let [a,b,c,d,e,f,g,h] = hash;
+      for (let n = 0; n < 64; n++) { const t1 = (h + (rotate(e,6) ^ rotate(e,11) ^ rotate(e,25)) + (e & f ^ ~e & g) + k[n] + words[n]) >>> 0, t2 = ((rotate(a,2) ^ rotate(a,13) ^ rotate(a,22)) + (a & b ^ a & c ^ b & c)) >>> 0; h=g; g=f; f=e; e=d+t1>>>0; d=c; c=b; b=a; a=t1+t2>>>0; }
+      [a,b,c,d,e,f,g,h].forEach((value, n) => { hash[n] = hash[n] + value >>> 0; });
+    }
+    return hash.map(value => value.toString(16).padStart(8, "0")).join("");
+  };
   const when = value => { const date = new Date(value || ""); return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }); };
   const savedTime = value => {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return "时间未记录";
@@ -29,7 +44,9 @@
     if (!saved || typeof saved !== "object") saved = {};
     const pointDrafts = Object.fromEntries(Object.entries(saved.pointDrafts || {}).filter(([id, value]) => value && value.ideaId === id && typeof value.pointId === "string" && Number.isSafeInteger(value.sourceRevision) && value.sourceRevision > 0 && ["sourceText", "text"].every(key => typeof value[key] === "string") && ["sourceKind", "kind"].every(key => ["suggestion", "decision"].includes(value[key]))));
     const state = { active: false, generation: 0, reading: false, busy: false, clientId: typeof saved.clientId === "string" ? saved.clientId : uuid(), session: null, detail: null, execution: null, tier: tiers.some(item => item.id === saved.tier) ? saved.tier : "high", chatTransport: saved.chatTransport === "chatgpt_subscription" ? "chatgpt_subscription" : "browser_chat", subscription: subscriptionChoice(saved.subscription), subscriptionStatus: null, subscriptionReading: false, drafts: saved.drafts && typeof saved.drafts === "object" ? saved.drafts : {}, editDrafts: saved.editDrafts && typeof saved.editDrafts === "object" ? saved.editDrafts : {}, pending: saved.pending || null, management: null, manageDirty: false, view: "chat", ideas: [], projects: [], idea: null, ideaDetail: null, search: saved.search || "", project: saved.project || "", archived: false, listScroll: Number(saved.listScroll) || 0, chatScroll: 0, messageIds: new Set(), storageFailed: false, composing: false, dirty: false, editorDirty: false, newResults: false, requestSequence: 0 };
+    state.replyTarget = saved.replyTarget === "codex_guide" ? "codex_guide" : "chat"; state.guide = null;
     const controllers = new Set();
+    let queuedReplyTarget = null, modelSettingsOpen = false;
     let eligibleAttachments = [], cancelPendingButton = null;
     state.pointDrafts = pointDrafts;
     let pointEditor = null;
@@ -65,10 +82,13 @@
     const packInput = field("input", "导入手机想法包"); packInput.type = "file"; packInput.accept = ".console-idea,application/json"; packInput.hidden = true;
     if (!offline && options.onImportPack) { menu.insertBefore(button("导入手机想法包", () => packInput.click()), menuMeta); menu.append(packInput); }
     const notice = make("p", "", "dialogue-notice"); notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite");
+    const replyTabs = make("div", "", "dialogue-reply-tabs"), chatTab = button("Chat", () => selectReplyTarget("chat")), guideTab = button("Codex Guide", () => selectReplyTarget("codex_guide"));
+    replyTabs.setAttribute("role", "group"); replyTabs.setAttribute("aria-label", "下一条消息发给谁"); replyTabs.append(chatTab, guideTab);
+    for (const tab of [chatTab, guideTab]) tab.addEventListener("pointerdown", event => event.preventDefault());
     const content = make("main", "", "dialogue-content"), context = make("div", "", "dialogue-context"), contextText = make("span"), contextOpen = button("查看想法", () => void openIdea(state.session?.ideaId)); context.append(contextText, contextOpen);
     const welcome = make("div", "", "dialogue-welcome"); welcome.append(make("div", "✧", "dialogue-welcome-mark"), make("h2", "脑子里的想法，\n从这里开始。"), make("p", "直接问一句，或先记下来。\n还没想清楚，也可以慢慢聊。"));
     const suggestions = make("div", "", "dialogue-suggestions"); suggestions.append(button("先记一个念头", () => { composerInput.placeholder = "记下这个念头，以后接着想…"; composerInput.focus(); }), button("找以前的想法", () => void showIdeas())); welcome.append(suggestions);
-    const messages = make("div", "", "dialogue-messages"), pending = make("div", "", "dialogue-pending"), pendingText = make("span"); pending.setAttribute("role", "status"); pending.setAttribute("aria-live", "polite"); pending.append(pendingText);
+    const messages = make("div", "", "dialogue-messages"), pending = make("div", "", "dialogue-pending"), pendingText = make("span"), guidePending = make("p", "", "dialogue-guide-pending"); pending.setAttribute("role", "status"); pending.setAttribute("aria-live", "polite"); pending.append(pendingText); guidePending.setAttribute("role", "status"); guidePending.setAttribute("aria-live", "polite"); guidePending.hidden = true;
     const listView = make("section", "", "dialogue-list-view"), listTools = make("div", "", "dialogue-list-tools"), search = field("input", "搜索想法"), project = field("select", "按项目筛选"), ideaList = make("div", "", "dialogue-ideas-list"), listFooter = make("div", "", "dialogue-list-footer"), archiveToggle = button("查看归档", () => { state.archived = !state.archived; void loadIdeas(); });
     search.type = "search"; search.placeholder = "搜索想法"; search.value = state.search; listTools.append(search, project); listFooter.append(archiveToggle); listView.append(listTools, ideaList, listFooter);
     const detailView = make("section", "", "dialogue-detail-view"), detailHeading = make("div", "", "dialogue-detail-heading"), ideaTitle = field("input", "想法标题", "dialogue-detail-title"), detailMeta = make("p", "", "dialogue-detail-meta"), ideaBody = field("textarea", "想法内容", "dialogue-detail-body"); ideaTitle.maxLength = 240; ideaBody.rows = 5; detailHeading.append(ideaTitle, detailMeta);
@@ -80,15 +100,17 @@
     const bodyDraftReview = make("section", "", "dialogue-detail-section"), executionDraftReview = make("section", "", "dialogue-detail-section"); bodyDraftReview.hidden = executionDraftReview.hidden = true;
     const detailAttachments = make("div", "", "dialogue-attachment-grid"), points = make("section", "", "dialogue-detail-section"), pointsTitle = make("h3", "长期要点"), pointsList = make("div"); points.append(pointsTitle, pointsList); detailView.append(detailHeading, ideaBody, bodyDraftReview, detailAttachments, detailActions, managementView, points);
     const executionView = make("section", "", "dialogue-execution-view"), executionText = field("textarea", "执行稿", "dialogue-keypoint-editor"), saveExecution = button("保存执行稿", () => void updateIdea({ executionDraft: executionText.value }), "dialogue-primary"), handover = button("交给 Codex", () => void handToCodex(), "dialogue-primary"), executionActions = make("div", "", "dialogue-detail-actions"); executionText.rows = 12; executionActions.append(saveExecution, handover); executionView.append(make("h3", "准备好以后再执行"), make("p", "整理本轮想改什么、预期结果与范围。下一步集中核对 Codex 工作区后再确认执行。", "dialogue-source-note"), executionText, executionDraftReview, executionActions);
-    content.append(context, welcome, messages, pending, listView, detailView, executionView);
+    content.append(context, welcome, messages, pending, guidePending, listView, detailView, executionView);
     const newResult = button("有新回复 ↓", () => { state.newResults = false; newResult.hidden = true; window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" }); }, "dialogue-new-result");
     const composer = make("form", "", "dialogue-composer"), shell = make("div", "", "dialogue-composer-shell"), composerInput = field("textarea", "提问或保存想法"), composeActions = make("div", "", "dialogue-compose-actions"), composeLeft = make("div", "", "dialogue-compose-left"), composeRight = make("div", "", "dialogue-compose-right"), tier = field("select", "回答档位", "dialogue-tier");
     composerInput.placeholder = "想问什么，或先记下来…"; composerInput.rows = 1; composerInput.maxLength = 20000;
     for (const choice of tiers) { const option = make("option", choice.label); option.value = choice.id; tier.append(option); } tier.value = state.tier;
     const saveOnly = button("只保存", () => void saveIdea()), send = button("发送 ↑", () => void sendMessage(), "dialogue-send"), attach = button("＋", () => imageInput.click()), imageInput = field("input", "选择图片文件"), pendingImages = make("div", "", "dialogue-attachment-grid"); attach.setAttribute("aria-label", "添加图片"); imageInput.type = "file"; imageInput.accept = "image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"; imageInput.multiple = true; imageInput.hidden = true;
-    const status = make("div", "", "dialogue-status"), draftStatus = make("p"), capabilityStatus = make("p"); status.setAttribute("role", "status"); status.append(draftStatus, capabilityStatus); composeLeft.append(attach, tier); composeRight.append(saveOnly, send); composeActions.append(composeLeft, composeRight); shell.append(pendingImages, composerInput, composeActions, imageInput); composer.append(shell, status); root.classList.add("mobile-dialogue"); root.replaceChildren(top, notice, content, newResult, composer, sidebar);
+    const tierSummary = button("高", () => toggleModelSettings(), "dialogue-tier-summary"), modelSettings = make("section", "", "dialogue-model-settings"), modelSettingsId = `dialogue-model-settings-${uuid()}`, closeModelSettings = button("收起设置", () => toggleModelSettings(false)), tierLabel = make("label", "回答档位");
+    modelSettings.id = modelSettingsId; modelSettings.hidden = true; modelSettings.setAttribute("aria-label", "模型与回答档位设置"); tierSummary.setAttribute("aria-controls", modelSettingsId); tierSummary.setAttribute("aria-expanded", "false"); tierLabel.append(tier); modelSettings.append(closeModelSettings, tierLabel);
+    const status = make("div", "", "dialogue-status"), draftStatus = make("p"), capabilityStatus = make("p", "", "dialogue-capability-status"); status.setAttribute("role", "status"); status.append(draftStatus, capabilityStatus); composeLeft.append(attach, tierSummary); composeRight.append(saveOnly, send); composeActions.append(composeLeft, composeRight); shell.append(pendingImages, composerInput, modelSettings, composeActions, imageInput); composer.append(shell, status); root.classList.add("mobile-dialogue"); root.replaceChildren(top, replyTabs, notice, content, newResult, composer, sidebar);
     const savedImagePicker = make("details", "", "dialogue-saved-image-picker"), savedImageChoices = make("div", "", "dialogue-attachment-grid"); savedImagePicker.append(make("summary", "已保存图片"), make("p", "选择本次引用的图片；未选择的图片不会发送。", "dialogue-source-note"), savedImageChoices); savedImagePicker.hidden = true; shell.insertBefore(savedImagePicker, composerInput);
-    const modelRow = make("div", "", "dialogue-model-row"), modelLabel = make("label", "模型"), subscriptionModel = field("select", "ChatGPT 订阅实际模型", "dialogue-model"), modelFeedback = make("p", "", "dialogue-model-feedback"), modelCheck = button("查看模型状态", () => void readSubscriptionStatus(true), "dialogue-model-check"); modelFeedback.setAttribute("role", "status"); modelFeedback.setAttribute("aria-live", "polite"); modelRow.append(modelLabel, subscriptionModel, modelFeedback, modelCheck); shell.insertBefore(modelRow, composeActions);
+    const modelRow = make("div", "", "dialogue-model-row"), modelLabel = make("label", "模型"), subscriptionModel = field("select", "ChatGPT 订阅实际模型", "dialogue-model"), modelFeedback = make("p", "", "dialogue-model-feedback"), modelCheck = button("查看模型状态", () => void readSubscriptionStatus(true), "dialogue-model-check"); modelFeedback.setAttribute("role", "status"); modelFeedback.setAttribute("aria-live", "polite"); modelRow.append(modelLabel, subscriptionModel, modelFeedback, modelCheck); modelSettings.append(modelRow);
     document.addEventListener("pointerdown", event => { if (!state.active) return; for (const popup of [more, ideaMore, savedImagePicker]) if (popup.open && !popup.contains(event.target)) popup.open = false; }, { capture: true });
     sidebar.addEventListener("cancel", event => { event.preventDefault(); closeSidebar(); });
     sidebar.addEventListener("close", () => { if (!sidebar.open) finishSidebarClose(); });
@@ -156,7 +178,7 @@
     const acceptedSendNotices = ["请求已接收，等待原聊天的实际回答。", "请求已保存；普通 Chat 自动转发尚未接通。", "请求已接收，等待本轮真实回答；接收不等于完成。"];
     function persist() {
       const recovering = state.storageFailed;
-      try { localStorage.setItem(storageKey, JSON.stringify({ clientId: state.clientId, tier: state.tier, chatTransport: state.chatTransport, subscription: state.subscription, drafts: state.drafts, editDrafts: state.editDrafts, pointDrafts: state.pointDrafts, pending: state.pending, search: state.search, project: state.project, listScroll: state.listScroll })); state.storageFailed = false; if (recovering && notice.textContent === storageFailureNotice) say(); renderDraftStatus(); return true; }
+      try { localStorage.setItem(storageKey, JSON.stringify({ clientId: state.clientId, replyTarget: state.replyTarget, tier: state.tier, chatTransport: state.chatTransport, subscription: state.subscription, drafts: state.drafts, editDrafts: state.editDrafts, pointDrafts: state.pointDrafts, pending: state.pending, search: state.search, project: state.project, listScroll: state.listScroll })); state.storageFailed = false; if (recovering && notice.textContent === storageFailureNotice) say(); renderDraftStatus(); return true; }
       catch { state.storageFailed = true; renderDraftStatus(); say(storageFailureNotice, true); return false; }
     }
     function say(text = "", error = false) { notice.textContent = text; notice.dataset.error = String(error); }
@@ -172,6 +194,44 @@
       state.drafts[draftKey()] = { text: composerInput.value, tier: state.tier, chatTransport: state.chatTransport, subscription: state.subscription, updatedAt: new Date().toISOString(), unsynced: true, ...(!state.session ? { waitingForSession: true, ...(userEdited || local?.userEdited === true ? { userEdited: true } : {}) } : {}) }; state.dirty = true; const stored = persist(); autosize(composerInput); updateControls(); return stored;
     }
     function restoreDraft() { const local = state.drafts[draftKey()], localDirty = Boolean(local?.unsynced && (state.session || local.userEdited === true || local.text)); composerInput.value = localDirty ? local.text || "" : state.session?.draft?.text ?? local?.text ?? ""; state.dirty = localDirty; autosize(composerInput); renderDraftStatus(); }
+    function selectReplyTarget(value) {
+      if (!["chat", "codex_guide"].includes(value) || state.busy) return;
+      if (state.composing) { queuedReplyTarget = value; return; }
+      queuedReplyTarget = null; if (value === state.replyTarget || !saveLocalDraft()) return;
+      const previous = state.replyTarget; state.replyTarget = value;
+      if (!persist()) { state.replyTarget = previous; return; }
+      saved.replyTarget = value; modelSettingsOpen = false; renderCapability(); updateControls(); renderGuidePending();
+    }
+    function toggleModelSettings(value = !modelSettingsOpen) {
+      if (state.replyTarget !== "chat" || state.composing) return;
+      modelSettingsOpen = Boolean(value); renderSubscription();
+      if (!modelSettingsOpen && modelSettings.contains(document.activeElement)) tierSummary.focus({ preventScroll: true });
+    }
+    function guideRequestFor(value, session = state.session) {
+      const fields = "acceptedAt,clientId,recordId,replyMessageId,requestId,sessionId,sourceUserMessageId,status,target";
+      return value && Object.keys(value).sort().join(",") === fields && value.target === "codex_guide"
+        && canonicalUuid(value.requestId) && value.clientId === state.clientId && value.clientId === session?.clientId
+        && value.sessionId === session?.id && value.recordId === session?.recordId
+        && [value.sessionId, value.recordId, value.sourceUserMessageId].every(id => typeof id === "string" && /^[a-f0-9]{32}$/.test(id))
+        && ["waiting", "replied"].includes(value.status) && (value.status === "waiting" ? value.replyMessageId === null : /^[a-f0-9]{32}$/.test(value.replyMessageId || ""))
+        && typeof value.acceptedAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value.acceptedAt) && !Number.isNaN(Date.parse(value.acceptedAt)) ? value : null;
+    }
+    function safeGuide(value) {
+      if (!value || typeof value.available !== "boolean" || value.target !== "codex_guide" || value.author !== "Codex Guide"
+          || !Number.isSafeInteger(value.coordinationIntervalSeconds) || value.coordinationIntervalSeconds < 1 || value.coordinationIntervalSeconds > 3600
+          || !Array.isArray(value.requests) || value.requests.length > 100) return null;
+      return { available: value.available, coordinationIntervalSeconds: value.coordinationIntervalSeconds, requests: value.requests.map(item => guideRequestFor(item)).filter(Boolean) };
+    }
+    function guideInputFor(message) {
+      const input = message.role === "user" && guideRequestFor(message.guideInput);
+      return input && input.sourceUserMessageId === message.id ? input : null;
+    }
+    function renderGuidePending() {
+      const unknown = state.pending?.action === "mobile/dialogue/guide-send", waiting = state.guide?.requests.some(item => item.status === "waiting");
+      guidePending.hidden = state.view !== "chat" || !unknown && !waiting;
+      guidePending.textContent = unknown ? "这条 Codex Guide 请求是否接收还需要核对；原文字、选图与请求编号保留，未重复发送。"
+        : waiting ? `已接收，等待 Codex Guide。协调约 ${state.guide.coordinationIntervalSeconds} 秒检查一次，回复会留在同一讨论。` : "";
+    }
     function subscriptionChoice(value) {
       const keys = ["provider", "connectionId", "catalogRevision", "modelSlug"];
       const explicit = value && Object.keys(value).sort().join(",") === [...keys, "requestedProfile", "reasoning"].sort().join(",");
@@ -224,7 +284,15 @@
     }
     function renderSubscription() {
       const selected = state.chatTransport === "chatgpt_subscription", catalog = state.subscriptionStatus;
-      chatTransport.value = state.chatTransport; tier.hidden = false; modelRow.hidden = !selected;
+      const guideSelected = state.replyTarget === "codex_guide";
+      chatTransport.value = state.chatTransport; tier.hidden = false; modelRow.hidden = !selected || guideSelected;
+      chatTransport.hidden = checkConnection.hidden = connectionNote.hidden = guideSelected;
+      modelSettings.hidden = guideSelected || !modelSettingsOpen; tierSummary.hidden = guideSelected;
+      tierSummary.textContent = tiers.find(item => item.id === state.tier).label; tierSummary.setAttribute("aria-expanded", String(!modelSettings.hidden));
+      tierSummary.setAttribute("aria-label", `回答档位 ${tierSummary.textContent}，打开模型与档位设置`);
+      chatTab.setAttribute("aria-pressed", String(!guideSelected)); guideTab.setAttribute("aria-pressed", String(guideSelected));
+      replyTabs.hidden = state.view !== "chat";
+      send.textContent = guideSelected ? state.pending?.action === "mobile/dialogue/guide-send" ? "核对原请求" : "发给 Codex Guide" : "发送 ↑";
       subscriptionModel.replaceChildren();
       const empty = make("option", state.subscriptionReading ? "正在读取模型状态…" : catalog?.connected ? "请选择实际模型" : catalog?.status === "catalog_required" ? "模型目录尚未准备好" : "模型暂不可选，请查看下方状态"); empty.value = ""; subscriptionModel.append(empty);
       const valid = state.subscription && catalog?.connected && state.subscription.connectionId === catalog.connectionId && state.subscription.catalogRevision === catalog.catalogRevision && catalog.models.some(item => item.slug === state.subscription.modelSlug);
@@ -264,6 +332,7 @@
       const cancellationRecovered = readCancellation && recoverCancellationReceipt(data);
       const previousSession = state.session?.id;
       state.session = data.session || null; state.detail = data.detail || null; state.execution = data.execution || null;
+      state.guide = safeGuide(data.guide);
       eligibleAttachments = Array.isArray(data.eligibleAttachments) ? data.eligibleAttachments : [];
       if (!previousSession && state.session?.id && state.drafts.unopened) {
         const original = state.drafts.unopened, knownSessions = Object.keys(state.drafts).filter(id => id !== "unopened");
@@ -277,7 +346,7 @@
       const key = currentResultKey();
       if (key !== resultKey) { closeResultStream(); resultKey = key; resultCursor = ""; resultPending = null; resultStopped = false; }
       if (/^[a-f0-9]{64}$/.test(data.resultCursor || "")) { if (!resultCursor || !resultStream && !resultPending) resultCursor = data.resultCursor; if (resultPending?.cursor === data.resultCursor) resultPending = null; }
-      tier.value = state.tier; renderConversation(); renderCapability(); renderFiles(); updateControls(); syncResultStream(); if (cancellationRecovered) say("这条未发送请求已结束，原内容与当前草稿保留。"); return true;
+      tier.value = state.tier; renderConversation(); renderCapability(); renderFiles(); renderGuidePending(); updateControls(); syncResultStream(); if (cancellationRecovered) say("这条未发送请求已结束，原内容与当前草稿保留。"); return true;
     }
     function currentResultKey() { return state.session ? `${state.clientId}:${state.session.id}:${state.session.recordId}` : ""; }
     function canReadResults() { return !offline && !adapter && state.active && state.view === "chat" && !pageClosed && !document.hidden && navigator.onLine !== false && !resultTransition && /^[a-f0-9]{32}$/.test(state.session?.id || "") && /^[a-f0-9]{32}$/.test(state.session?.recordId || ""); }
@@ -332,6 +401,12 @@
     }
     function renderCapability() {
       renderSubscription();
+      if (state.replyTarget === "codex_guide") {
+        capabilityStatus.textContent = offline ? "连接电脑后可发给 Codex Guide" : state.guide?.available ? "目标：电脑上的 Codex Guide" : "Codex Guide 暂未就绪，原草稿保留";
+        capabilityStatus.title = "只在明确发送后交给 Codex Guide；保存与切换标签不会发送，也不会启动工作区修改。";
+        menuMeta.textContent = offline ? "文字与选图保存在此手机；连接电脑后再明确发送给 Codex Guide。" : `${options.getVersion?.() || "Codex Console"}\nCodex Guide 回复留在同一讨论。实际工作区修改仍需另行明确确认。`;
+        return;
+      }
       if (state.chatTransport === "chatgpt_subscription") {
         const issue = subscriptionProfileIssue(), actual = state.execution?.actualReceipt, verified = actual?.verified === true && actual.status === "completed" && actual.source === "chatgpt_subscription" && actual.actualProfile === state.tier && actual.actualModel === state.subscription?.modelSlug && reasoningMatches(actual.actualReasoning, state.tier) && (state.detail?.jobs || []).some(job => sameSubscription(verifiedSubscriptionSelection(job), state.subscription));
         const label = tiers.find(item => item.id === state.tier).label;
@@ -354,26 +429,67 @@
     }
     function guideSourceFor(message) {
       const source = message?.guideSource;
-      if (!source || message.role !== "assistant" || source.kind !== "codex_guide" || source.author !== "Codex Guide"
-          || source.messageId !== message.id || source.clientId !== state.session?.clientId || source.sessionId !== state.session?.id || source.recordId !== state.session?.recordId
-          || !/^[a-f0-9]{32}$/.test(source.sourceUserMessageId || "") || !/^[a-f0-9]{64}$/.test(source.textSha256 || "")
-          || ![source.requestId, source.sourceGuideChatId].every(value => typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value))
-          || !(state.detail?.messages || []).some(item => item.id === source.sourceUserMessageId && item.role === "user")) return null;
+      if (!source || Object.keys(source).sort().join(",") !== "author,clientId,kind,messageId,recordId,requestId,sessionId,sourceGuideChatId,sourceUserMessageId,textSha256" || message.role !== "assistant" || source.kind !== "codex_guide" || source.author !== "Codex Guide"
+          || state.detail?.record?.id !== state.session?.recordId || source.messageId !== message.id || source.clientId !== state.session?.clientId || source.sessionId !== state.session?.id || source.recordId !== state.session?.recordId
+          || ![source.messageId, source.sessionId, source.recordId].every(value => typeof value === "string" && /^[a-f0-9]{32}$/.test(value))
+          || !/^[a-f0-9]{32}$/.test(source.sourceUserMessageId || "") || !/^[a-f0-9]{64}$/.test(source.textSha256 || "") || source.textSha256 !== sha256Text(message.text || "")
+          || ![source.requestId, source.clientId, source.sourceGuideChatId].every(canonicalUuid)
+          || (state.detail?.messages || []).filter(item => item.id === source.sourceUserMessageId && item.role === "user").length !== 1
+          || (state.detail?.messages || []).filter(item => item.id === message.id).length !== 1) return null;
       return source;
+    }
+    function answerSource(message) {
+      if (guideSourceFor(message)) return "电脑 · Codex Guide";
+      if (message.role !== "assistant" || !message.text?.trim() || state.detail?.record?.id !== state.session?.recordId
+          || (state.detail.messages || []).filter(item => item.id === message.id).length !== 1) return "来源未确认";
+      const matches = (state.detail.jobs || []).filter(job => job.recordId === state.session.recordId && job.kind === "discuss"
+        && job.status === "succeeded" && job.result?.messageId === message.id && job.result.text === message.text);
+      const labels = new Set();
+      for (const job of matches) {
+        const result = job.result, app = job.appDispatch, completed = app?.status === "completed" && app.id && result.dispatchId === app.id;
+        if (completed && result.source === "chatgpt_subscription" && result.terminalEventObserved === true
+            && result.terminalStatus === "completed" && result.completionEvidence === "response.completed"
+            && result.providerErrorObserved === false && /^resp_[A-Za-z0-9_-]{1,190}$/.test(result.responseId || "")) labels.add("API · ChatGPT");
+        const evidence = result.browserEvidence, completion = evidence?.completion;
+        const sourceUnit = /^fallback-turn-(\d+):(\d+):user$/.exec(evidence?.sourceUnitKey || ""), answerUnit = /^fallback-turn-(\d+):(\d+):assistant$/.exec(evidence?.assistantUnitKey || "");
+        if (completed && result.sourceKind === "browser_dom" && evidence?.source === "browser_dom"
+            && Object.keys(evidence).filter(key => key !== "images").sort().join(",") === "answerText,assistantMessageId,assistantUnitKey,completion,conversationUrl,observedAt,profile,promptText,source,sourceUnitKey,sourceUserMessageId"
+            && sourceUnit && answerUnit && sourceUnit[1] === answerUnit[1] && Number(answerUnit[2]) > Number(sourceUnit[2])
+            && evidence.answerText === message.text && evidence.promptText?.trim()
+            && evidence.conversationUrl === `https://chatgpt.com/c/${encodeURIComponent(result.targetThreadId || "")}`
+            && result.targetThreadId === app.targetThreadId && canonicalUuid(result.targetThreadId)
+            && canonicalUuid(evidence.sourceUserMessageId) && canonicalUuid(evidence.assistantMessageId) && evidence.sourceUserMessageId !== evidence.assistantMessageId
+            && typeof evidence.observedAt === "string" && /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(evidence.observedAt) && !Number.isNaN(Date.parse(evidence.observedAt))
+            && Object.keys(evidence.profile || {}).sort().join(",") === "observedAfter,observedBefore,requestedProfile" && tiers.some(item => item.id === evidence.profile.requestedProfile)
+            && typeof evidence.profile.observedBefore === "string" && Boolean(evidence.profile.observedBefore) && evidence.profile.observedBefore === evidence.profile.observedAfter
+            && Object.keys(completion || {}).sort().join(",") === "observedAfterCommit,stopPresent,text"
+            && completion?.observedAfterCommit === true && ["Response complete", "回答已完成"].includes(completion.text)
+            && [false, null].includes(completion.stopPresent)) labels.add("电脑 · ChatGPT");
+        const capture = job.chatCapture;
+        if (!app && capture?.sourceType === "chatgpt_browser_capture" && capture.evidenceSource === "read_thread" && capture.status === "completed"
+            && capture.targetKind === "chatgpt" && /^[a-f0-9]{64}$/.test(capture.sourceSha256 || "")
+            && ["sourceType", "evidenceSource", "targetThreadId", "sourceUrl", "turnId", "sourceMessageId", "agentMessageId", "sourceSha256"].every(key => typeof capture[key] === "string" && capture[key] && result[key] === capture[key])
+            && capture.sourceUrl === `https://chatgpt.com/c/${encodeURIComponent(capture.targetThreadId)}`) labels.add("电脑 · ChatGPT");
+        if (completed && app.sourceType === "workflow_discussion" && !result.source && !result.sourceKind && !result.browserEvidence
+            && ["sourceMessageId", "turnId", "targetThreadId"].every(key => typeof result[key] === "string" && result[key])
+            && result.targetThreadId === app.targetThreadId) labels.add("电脑 · 已登录 App");
+      }
+      return labels.size === 1 ? [...labels][0] : "来源未确认";
     }
     function renderConversation() {
       if (state.view === "chat") title.textContent = currentDiscussionTitle();
-      if (state.view !== "chat") { for (const node of [context, welcome, messages, pending]) node.hidden = true; return; }
+      if (state.view !== "chat") { for (const node of [context, welcome, messages, pending, guidePending]) node.hidden = true; return; }
       const atBottom = window.innerHeight + (sidebar.open ? sidebarScroll : window.scrollY) >= document.documentElement.scrollHeight - 150;
-      const values = (Array.isArray(state.detail?.messages) ? state.detail.messages : []).filter(item => !item.guideSource || guideSourceFor(item));
+      const values = (Array.isArray(state.detail?.messages) ? state.detail.messages : []).filter(item => (!item.guideSource || guideSourceFor(item)) && (!item.guideInput || guideInputFor(item)));
       const fresh = values.some(item => item.role === "assistant" && !state.messageIds.has(item.id));
       state.messageIds = new Set(values.map(item => item.id)); messages.replaceChildren();
       for (const message of values.filter(item => ["user", "assistant"].includes(item.role))) {
-        const guide = guideSourceFor(message), row = make("article", "", "dialogue-message"); row.dataset.role = message.role; if (guide) row.dataset.author = "codex_guide";
+        const guide = guideSourceFor(message), input = guideInputFor(message), row = make("article", "", "dialogue-message"); row.dataset.role = message.role; if (guide) row.dataset.author = "codex_guide"; if (input) row.dataset.target = "codex_guide";
         const meta = make("div", "", "dialogue-message-meta"), time = make("time", savedTime(message.createdAt), "dialogue-message-time");
         time.title = "记录保存时间 · Asia/Shanghai（UTC+08:00）";
         if (time.textContent !== "时间未记录") time.setAttribute("datetime", message.createdAt);
-        meta.append(make("p", guide ? "Codex Guide" : message.role === "assistant" ? "ChatGPT" : "你", "dialogue-message-label"), time);
+        meta.append(make("p", message.role === "assistant" ? answerSource(message) : input ? "你 · 目标：Codex Guide" : "你", "dialogue-message-label"), time);
+        if (input) meta.append(make("span", input.status === "replied" ? "已回复" : "已接收，等待 Codex Guide", "dialogue-guide-message-status"));
         const body = make("div", "", "dialogue-message-text"), original = message.text || "";
         if (message.role === "assistant" && typeof options.renderMessage === "function") {
           try { options.renderMessage(original, body); body.dataset.formatted = "true"; }
@@ -397,6 +513,7 @@
         if (message.truncated) row.append(make("p", "此回答来源已截断，全文请到原 Chat 查看。", "dialogue-message-note")); messages.append(row);
       }
       const jobs = Array.isArray(state.detail?.jobs) ? state.detail.jobs : [], inFlight = jobs.filter(item => ["queued", "running", "pending", "claimed", "waiting", "needs_review"].includes(item.status) || ["pending", "claimed", "waiting", "needs_review"].includes(item.appDispatch?.status)).at(-1), failure = latestDialogueFailure();
+      renderGuidePending();
       pending.replaceChildren(pendingText); pending.hidden = !inFlight && !failure; pending.dataset.status = inFlight ? inFlight.appDispatch?.status || inFlight.status : failure ? "failed" : ""; cancelPendingButton = null;
       if (inFlight) {
         const dispatchStatus = inFlight.appDispatch?.status || inFlight.status;
@@ -440,14 +557,19 @@
     }
     function currentDialogueJob(job) { const session = state.session; return Boolean(session?.isCurrent === true && session.clientId === state.clientId && state.detail?.record?.id === session.recordId && job?.recordId === session.recordId && job.kind === "discuss" && job.purpose === "discussion" && job.mobileDialogue?.id === session.id && job.mobileDialogue.clientId === state.clientId && job.mobileDialogue.recordId === session.recordId && typeof job.id === "string" && job.id && typeof job.appDispatch?.id === "string" && job.appDispatch.id); }
     function renderView() {
+      modelSettingsOpen = false;
       root.dataset.view = state.view; back.hidden = state.view === "chat"; ideasButton.hidden = state.view !== "chat"; clearMenuAction.hidden = state.view !== "chat";
       title.textContent = ({ chat: "当前对话", ideas: state.archived ? "归档想法" : "想法", detail: state.idea?.title || "想法", execution: "执行稿" })[state.view];
       listView.hidden = state.view !== "ideas"; detailView.hidden = state.view !== "detail"; executionView.hidden = state.view !== "execution"; composer.hidden = state.view !== "chat";
-      for (const node of [context, welcome, messages, pending]) if (state.view !== "chat") node.hidden = true;
+      for (const node of [context, welcome, messages, pending, guidePending]) if (state.view !== "chat") node.hidden = true;
       if (state.view === "chat") renderConversation(); newResult.hidden = state.view !== "chat" || !state.newResults; renderEditReviews(); updateControls(); syncResultStream(); options.onViewChange?.(state.view);
     }
     function currentFiles() { return !fileOwner || fileOwner === state.session?.id ? files : []; }
-    function updateControls() { const clearing = state.pending?.action === "mobile/dialogue/clear"; clearMenuAction.disabled = state.busy || state.composing; const empty = !composerInput.value.trim(), hasImages = currentFiles().length > 0 || (state.session?.draft?.attachmentIds || []).length > 0; send.disabled = state.busy || clearing || empty && !hasImages || state.composing || state.chatTransport === "chatgpt_subscription" && !subscriptionReady(); saveOnly.disabled = state.busy || clearing || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy || state.chatTransport === "chatgpt_subscription" && Boolean(state.pending); chatTransport.disabled = state.busy || Boolean(state.pending) || offline; subscriptionModel.disabled = state.busy || Boolean(state.pending) || state.subscriptionReading || !state.subscriptionStatus?.connected; if (cancelPendingButton) cancelPendingButton.disabled = state.busy || state.composing || Boolean(state.pending && state.pending.action !== "mobile/dialogue/cancel-pending"); ideaTitle.disabled = ideaBody.disabled = executionText.disabled = !state.idea; copyIdea.disabled = archiveIdea.disabled = !state.idea || state.busy; saveEdit.hidden = !state.editorDirty; saveEdit.disabled = !state.idea || state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = !state.idea || state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = !state.idea || state.busy || state.editorDirty; executionDraft.disabled = !state.idea || state.busy || state.editorDirty; carryIdea.disabled = !state.idea || state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy || !state.idea; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } const imageLocked = state.busy || Boolean(state.pending) || Boolean(uploadRequest); for (const remove of imageRemovalButtons) remove.disabled = imageLocked; for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = imageLocked; void drainResults(); }
+    function updateControls() { const clearing = state.pending?.action === "mobile/dialogue/clear"; clearMenuAction.disabled = state.busy || state.composing; const empty = !composerInput.value.trim(), hasImages = currentFiles().length > 0 || (state.session?.draft?.attachmentIds || []).length > 0; send.disabled = state.busy || clearing || empty && !hasImages || state.composing || state.chatTransport === "chatgpt_subscription" && !subscriptionReady(); saveOnly.disabled = state.busy || clearing || empty && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length || state.composing; attach.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); tier.disabled = state.busy || state.chatTransport === "chatgpt_subscription" && Boolean(state.pending); chatTransport.disabled = state.busy || Boolean(state.pending) || offline; subscriptionModel.disabled = state.busy || Boolean(state.pending) || state.subscriptionReading || !state.subscriptionStatus?.connected; if (cancelPendingButton) cancelPendingButton.disabled = state.busy || state.composing || Boolean(state.pending && state.pending.action !== "mobile/dialogue/cancel-pending"); ideaTitle.disabled = ideaBody.disabled = executionText.disabled = !state.idea; copyIdea.disabled = archiveIdea.disabled = !state.idea || state.busy; saveEdit.hidden = !state.editorDirty; saveEdit.disabled = !state.idea || state.busy || editComposing.body || state.editorDirty && !editSourceMatches("body"); handover.disabled = !state.idea || state.busy || editComposing.execution || !executionText.value.trim() || !editSourceMatches("execution"); saveExecution.disabled = handover.disabled; discussIdea.disabled = !state.idea || state.busy || state.editorDirty; executionDraft.disabled = !state.idea || state.busy || state.editorDirty; carryIdea.disabled = !state.idea || state.busy || state.editorDirty; managementSubmit.disabled = state.busy || !state.management?.ready; managementCancel.disabled = state.busy; retryManagement.hidden = !state.pending?.management; retryManagement.disabled = state.busy || !state.idea; if (pointEditor) { pointEditor.save.disabled = state.busy || pointEditor.composing || !pointSourceMatches(pointEditor.draft) || !pointTextForSave(pointEditor.input.value); pointEditor.cancel.disabled = state.busy; if (pointEditor.rebase) pointEditor.rebase.disabled = state.busy; } const imageLocked = state.busy || Boolean(state.pending) || Boolean(uploadRequest); for (const remove of imageRemovalButtons) remove.disabled = imageLocked; for (const label of savedImageChoices.children) for (const node of label.children) if (node.type === "checkbox") node.disabled = imageLocked; const guideMode = state.replyTarget === "codex_guide", guideUnknown = state.pending?.action === "mobile/dialogue/guide-send";
+      if (guideMode) send.disabled = state.busy || state.composing || clearing || Boolean(state.pending && !guideUnknown) || !guideUnknown && (empty && !hasImages || !offline && !state.guide?.available);
+      else if (guideUnknown) send.disabled = true;
+      tierSummary.disabled = state.busy || state.composing; chatTab.disabled = guideTab.disabled = state.busy;
+      renderGuidePending(); void drainResults(); }
     async function writeFiles(value) { fileWriting++; try { await blobs.put(value); } catch (error) { fileError = true; throw error; } finally { fileWriting--; } }
     async function saveFiles() { try { await writeFiles({ id: filesKey, files, fileOwner, uploadRequest }); fileError = false; } catch (error) { fileError = true; fail(error); throw error; } }
     async function restoreSessionFiles(id) {
@@ -514,13 +636,51 @@
       if (state.session) return state.session;
       const data = await call("mobile/dialogue/open", { requestId: uuid(), clientId: state.clientId }); applyDialogue(data); restoreDraft(); return state.session;
     }
-    function composeIntent() { return { sessionId: state.session?.id || "", text: composerInput.value, attachmentIds: [...(state.session?.draft?.attachmentIds || [])], requestedProfile: state.tier, chatTransport: state.chatTransport, subscription: subscriptionChoice(state.subscription), files: [...currentFiles()] }; }
+    function composeIntent() { return { replyTarget: state.replyTarget, sessionId: state.session?.id || "", text: composerInput.value, attachmentIds: [...(state.session?.draft?.attachmentIds || [])], requestedProfile: state.tier, chatTransport: state.chatTransport, subscription: subscriptionChoice(state.subscription), files: [...currentFiles()] }; }
+    function guideSubmission(intent, uploadedIds = []) {
+      if (intent.sessionId && intent.sessionId !== state.session?.id) throw new Error("讨论已切换；原输入保留，未交给其它讨论。");
+      return { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, recordId: state.session.recordId,
+        expectedRevision: state.session.revision, text: intent.text, attachmentIds: [...new Set([...intent.attachmentIds, ...uploadedIds])] };
+    }
+    function matchingGuideReceipt(data, payload) {
+      const receipt = data?.guideSendReceipt;
+      if (!receipt || Object.keys(receipt).sort().join(",") !== "acceptedAt,acceptedSessionRevision,attachmentIds,clientId,expectedRevision,recordId,requestId,sessionId,sourceGuideChatId,sourceSha256,sourceUserMessageId,target,textSha256"
+          || Object.keys(payload || {}).sort().join(",") !== "attachmentIds,clientId,expectedRevision,recordId,requestId,sessionId,text"
+          || receipt.target !== "codex_guide" || !canonicalUuid(receipt.requestId) || !canonicalUuid(receipt.sourceGuideChatId)
+          || !["requestId", "clientId", "sessionId", "recordId", "expectedRevision"].every(key => receipt[key] === payload[key])
+          || !/^[a-f0-9]{32}$/.test(receipt.sourceUserMessageId || "") || !/^[a-f0-9]{64}$/.test(receipt.sourceSha256 || "") || receipt.textSha256 !== sha256Text(payload.text)
+          || !Array.isArray(receipt.attachmentIds) || JSON.stringify(receipt.attachmentIds) !== JSON.stringify(payload.attachmentIds)
+          || !Number.isSafeInteger(receipt.expectedRevision) || receipt.expectedRevision < 1 || receipt.acceptedSessionRevision !== receipt.expectedRevision + 1
+          || typeof receipt.acceptedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(receipt.acceptedAt) || Number.isNaN(Date.parse(receipt.acceptedAt))) return null;
+      return receipt;
+    }
+    function finishGuideReceipt(data, payload) {
+      if (!matchingGuideReceipt(data, payload) || state.pending?.action !== "mobile/dialogue/guide-send" || state.pending.payload.requestId !== payload.requestId) return false;
+      const operation = state.pending; state.pending = null;
+      if (!persist()) { state.pending = operation; return false; }
+      if (state.session?.id === payload.sessionId && state.session.recordId === payload.recordId && composerInput.value === payload.text && !state.composing) {
+        composerInput.value = ""; state.drafts[payload.sessionId] = { text: "", tier: state.tier, unsynced: false }; state.dirty = false; autosize(composerInput); persist();
+      }
+      return true;
+    }
+    async function recoverGuideReceipt() {
+      const operation = state.pending;
+      if (operation?.action !== "mobile/dialogue/guide-send") return false;
+      const payload = operation.payload;
+      if (!payload || !canonicalUuid(payload.requestId) || payload.clientId !== state.clientId) return false;
+      try {
+        const query = new URLSearchParams(Object.fromEntries(["requestId", "clientId", "sessionId", "recordId"].map(key => [key, payload[key]])));
+        const data = await call(`mobile/dialogue/guide-send-receipt?${query}`);
+        if (state.pending !== operation || typeof data?.isCurrent !== "boolean" || !finishGuideReceipt(data, payload)) return false;
+        say("Codex Guide 请求已接收；回复留在原讨论，当前草稿保留。"); renderGuidePending(); return true;
+      } catch (error) { if (!error.auth && !error.cancelled) say("Codex Guide 接收情况尚待核对；原内容与请求编号保留，未重复发送。", true); return false; }
+    }
     function submission(intent = composeIntent(), uploadedIds = []) { if (intent.sessionId && intent.sessionId !== state.session?.id) throw new Error("讨论已切换，原输入保留，未发送到其它讨论。"); return { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision, text: intent.text, attachmentIds: [...new Set([...intent.attachmentIds, ...uploadedIds])], requestedProfile: intent.requestedProfile, ...(!offline ? { chatTransport: intent.chatTransport, ...(intent.chatTransport === "chatgpt_subscription" ? { subscription: intent.subscription } : {}) } : {}) }; }
     function durablePayload(action, candidate, identity) {
       if (state.pending) { if (state.pending.action !== action || identity.some(key => JSON.stringify(state.pending.payload[key]) !== JSON.stringify(candidate[key]))) throw new Error("上一项操作结果尚未核对。先刷新核对，原请求不会重复创建。"); return state.pending.payload; }
       state.pending = { action, payload: candidate }; if (!persist()) { state.pending = null; throw new Error("操作凭据无法保存在手机，请保留或复制原内容。"); } return candidate;
     }
-    function writeRejected(error) { return error.status >= 400 && error.status < 500 && error.status !== 409 || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch", "dispatch_in_progress", "subscription_not_connected", "subscription_selection_stale", "subscription_model_unavailable", "subscription_profile_unavailable", "subscription_profile_mismatch", "subscription_reasoning_mismatch", "subscription_binding_invalid"].includes(error.data?.code || error.code); }
+    function writeRejected(error) { return error.status >= 400 && error.status < 500 && error.status !== 409 || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch", "dispatch_in_progress", "subscription_not_connected", "subscription_selection_stale", "subscription_model_unavailable", "subscription_profile_unavailable", "subscription_profile_mismatch", "subscription_reasoning_mismatch", "subscription_binding_invalid", "guide_not_connected", "guide_source_not_matching"].includes(error.data?.code || error.code); }
     function recoverCancellationReceipt(data) {
       const operation = state.pending, payload = operation?.payload;
       if (operation?.action !== "mobile/dialogue/cancel-pending" || !payload
@@ -581,6 +741,8 @@
       try { await draftSync; } finally { draftSync = null; }
     }
     async function sendMessage() {
+      if (state.replyTarget === "codex_guide") { await sendGuideMessage(); return; }
+      if (state.pending?.action === "mobile/dialogue/guide-send") { say("先核对原 Codex Guide 请求；它不会改发给 Chat。", true); return; }
       if (state.busy || state.composing || !composerInput.value.trim() && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length) return;
       if (offline) { if (!saveLocalDraft()) return; say("请连接电脑后发送；这段草稿已保存在此手机。"); options.onConnect?.(); return; }
       if (state.chatTransport === "chatgpt_subscription" && !subscriptionReady()) { say(subscriptionProfileIssue() || "请先核对订阅连接与当前请求；原文字和图片保留。", true); return; }
@@ -591,6 +753,25 @@
         const result = data.job?.result, savedAnswer = payload.chatTransport === "chatgpt_subscription" && data.job?.status === "succeeded" && result?.source === "chatgpt_subscription" && result.terminalEventObserved === true && result.terminalStatus === "completed" && result.completionEvidence === "response.completed" && result.text?.trim() && data.detail?.messages?.some(message => message.role === "assistant" && message.id === result.messageId && message.text === result.text);
         persist(); if (!latestDialogueFailure()) say(savedAnswer ? "本轮回答已保存。" : payload.chatTransport === "chatgpt_subscription" ? acceptedSendNotices[2] : acceptedSendNotices[data.execution?.relayStatus === "connected" ? 0 : 1]);
       } catch (error) { if (writeRejected(error)) { state.pending = null; persist(); if (intent.chatTransport === "chatgpt_subscription" && ["subscription_not_connected", "subscription_selection_stale", "subscription_model_unavailable", "subscription_profile_unavailable", "subscription_profile_mismatch", "subscription_reasoning_mismatch", "subscription_binding_invalid"].includes(error.data?.code || error.code)) await readSubscriptionStatus(); } fail(error); }
+      finally { state.busy = false; updateControls(); }
+    }
+    async function sendGuideMessage() {
+      if (state.busy || state.composing) return;
+      if (state.pending?.action === "mobile/dialogue/guide-send") { await recoverGuideReceipt(); await refresh(); return; }
+      if (state.pending) { say("上一项请求还需要核对，原目标与内容保留；未交给 Codex Guide。", true); return; }
+      if (!composerInput.value.trim() && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length) return;
+      if (offline) { if (!saveLocalDraft()) return; say("这段 Codex Guide 草稿留在此手机；连接电脑后再明确发送。"); options.onConnect?.(); return; }
+      if (!state.guide?.available) { say("Codex Guide 暂未就绪，原文字与选图保留。", true); return; }
+      const intent = composeIntent(); state.busy = true; updateControls(); say("");
+      try {
+        if (draftSync) await draftSync; await ensureSession(); const uploadedIds = await uploadFiles(intent);
+        const payload = durablePayload("mobile/dialogue/guide-send", guideSubmission(intent, uploadedIds), ["clientId", "sessionId", "recordId", "text", "attachmentIds"]);
+        const data = await call("mobile/dialogue/guide-send", payload);
+        if (!matchingGuideReceipt(data, payload)) throw new Error("Codex Guide 接收回执还需要核对；原请求保留，未重复发送。");
+        applyDialogue(data, payload.sessionId);
+        if (!finishGuideReceipt(data, payload)) throw new Error("原接收凭据尚未可靠保存，请保留页面与草稿。");
+        renderGuidePending(); say("已接收，等待 Codex Guide；回复留在同一讨论。");
+      } catch (error) { if (writeRejected(error)) { state.pending = null; persist(); } fail(error); }
       finally { state.busy = false; updateControls(); }
     }
     async function saveIdea() {
@@ -635,7 +816,7 @@
     }
     async function refresh(recoverEvents = true) {
       if (!state.active || state.reading || state.composing && state.view === "chat" || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return false; if (recoverEvents && !resultStream) resultStopped = false; capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
-      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (state.pending?.action === "mobile/dialogue/clear") { if (finishClear(data)) return true; if (data.session?.id === state.pending.payload.sessionId && data.session?.clientId === state.clientId && applyDialogue(data, sessionId, true) && !sessionId) restoreDraft(); say("清空结果尚待核对；原草稿与请求编号保留，可再次点清空核对同一次请求。", true); return false; } if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); if (applied && state.chatTransport === "chatgpt_subscription") await readSubscriptionStatus(); return applied; } }
+      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (state.pending?.action === "mobile/dialogue/clear") { if (finishClear(data)) return true; if (data.session?.id === state.pending.payload.sessionId && data.session?.clientId === state.clientId && applyDialogue(data, sessionId, true) && !sessionId) restoreDraft(); say("清空结果尚待核对；原草稿与请求编号保留，可再次点清空核对同一次请求。", true); return false; } if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); if (applied && state.pending?.action === "mobile/dialogue/guide-send") await recoverGuideReceipt(); if (applied && state.replyTarget === "chat" && state.chatTransport === "chatgpt_subscription") await readSubscriptionStatus(); return applied; } }
       catch (error) { fail(error); } finally { state.reading = false; updateControls(); syncResultStream(); }
     }
     async function showIdeas() { if (state.busy) return; const generation = state.generation, scroll = state.listScroll; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } detailReturn = null; state.view = "ideas"; say(""); renderView(); await loadIdeas(); restoreListPosition(generation, scroll); }
@@ -940,7 +1121,7 @@
       try { if (draftSync) await draftSync; if (fileReading) await fileReading; await ensureSession(); if (fileOwner && fileOwner !== state.session?.id && files.length) { await writeFiles({ id: `${filesKey}:${fileOwner}`, files, uploadRequest, fileOwner }); files = []; uploadRequest = null; } fileOwner = state.session.id; files.push(...chosen); renderFiles(); await saveFiles(); say("图片草稿已保存在此手机；只保存不会发送。"); }
       catch (error) { fileError = true; fail(error); } finally { state.busy = false; updateControls(); }
     });
-    composerInput.addEventListener("input", () => { saveLocalDraft(true); window.clearTimeout(draftTimer); draftTimer = window.setTimeout(() => void syncDraft(), 800); }); composerInput.addEventListener("compositionstart", () => { state.composing = true; updateControls(); }); composerInput.addEventListener("compositionend", () => { state.composing = false; saveLocalDraft(true); });
+    composerInput.addEventListener("input", () => { saveLocalDraft(true); window.clearTimeout(draftTimer); draftTimer = window.setTimeout(() => void syncDraft(), 800); }); composerInput.addEventListener("compositionstart", () => { state.composing = true; updateControls(); }); composerInput.addEventListener("compositionend", () => { state.composing = false; saveLocalDraft(true); if (queuedReplyTarget) selectReplyTarget(queuedReplyTarget); });
     composerInput.addEventListener("keydown", event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing && !state.composing) { event.preventDefault(); void sendMessage(); } });
     tier.addEventListener("change", () => { if (state.busy || state.chatTransport === "chatgpt_subscription" && state.pending || !tiers.some(item => item.id === tier.value)) { tier.value = state.tier; return; } state.tier = tier.value; saved.tier = state.tier; if (state.chatTransport === "chatgpt_subscription" && state.subscription) state.subscription = chooseSubscriptionModel(state.subscription.modelSlug) || state.subscription; persist(); saveLocalDraft(); renderCapability(); updateControls(); void syncDraft(); });
     chatTransport.addEventListener("change", () => { if (state.busy || state.pending || offline || !["browser_chat", "chatgpt_subscription"].includes(chatTransport.value)) { chatTransport.value = state.chatTransport; return; } state.chatTransport = chatTransport.value; saved.chatTransport = state.chatTransport; persist(); saveLocalDraft(); renderCapability(); updateControls(); void syncDraft(); if (state.chatTransport === "chatgpt_subscription") void readSubscriptionStatus(); });
@@ -957,7 +1138,7 @@
     window.addEventListener("codex:dialogue-result", event => { if (state.active && event.detail?.clientId === state.clientId && event.detail?.sessionId === state.session?.id && event.detail?.recordId === state.session?.recordId) void refresh(); });
     persist(); restoreDraft(); renderCapability(); renderView();
     fileReading = blobs.get(filesKey).then(value => { if (value?.files) { files = value.files; fileOwner = value.fileOwner || null; uploadRequest = value.uploadRequest || null; renderFiles(); } }).catch(() => { /* No claim of file recovery is made without a readable store. */ }).finally(() => { fileReading = null; });
-    return { setConnectionStatus, focusComposer, setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { closeSidebar(false); closeResultStream(); capturePointEditor(); saveLocalDraft(); more.open = false; } }, refresh, getWorkSource, getWorkScope, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { closeSidebar(false); closeResultStream(); resultKey = resultCursor = ""; resultPending = null; capturePointEditor(); pointEditor = null; state.generation += 1; state.subscriptionReading = false; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.idea = state.ideaDetail = state.management = null; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; loadedIdeaList = detailReturn = null; renderSidebarIdeas(); state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
+    return { setConnectionStatus, focusComposer, setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { closeSidebar(false); closeResultStream(); capturePointEditor(); saveLocalDraft(); more.open = false; modelSettingsOpen = false; renderSubscription(); } }, refresh, getWorkSource, getWorkScope, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { closeSidebar(false); closeResultStream(); resultKey = resultCursor = ""; resultPending = null; capturePointEditor(); pointEditor = null; state.generation += 1; state.subscriptionReading = false; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.guide = state.idea = state.ideaDetail = state.management = null; queuedReplyTarget = null; modelSettingsOpen = false; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; loadedIdeaList = detailReturn = null; renderSidebarIdeas(); state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
   }
   window.CodexMobileDialogue = Object.freeze({ create });
 })();

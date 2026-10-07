@@ -69,9 +69,12 @@ def workflow_get(service, action, query, *, prefix="/api/workflow", desktop=Fals
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
     guide = {"mobile/dialogue/guide-source": "mobile_dialogue_guide_source_get",
-             "mobile/dialogue/guide-reply": "mobile_dialogue_guide_reply_get"}
+             "mobile/dialogue/guide-reply": "mobile_dialogue_guide_reply_get",
+             "mobile/dialogue/guide-inbox": "mobile_dialogue_guide_inbox"}
     if action in guide:
         return getattr(service, guide[action])(query, prefix=prefix, desktop=desktop, authorize=authorize)
+    if action == "mobile/dialogue/guide-send-receipt":
+        return service.mobile_dialogue_guide_send_receipt(query, prefix=prefix, authorize=authorize)
     if action == "codex-work/config":
         if query:
             raise WorkflowError("Work 配置地址无效。")
@@ -165,6 +168,7 @@ def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=Fals
     operations.update({"mobile/dialogue/open": "mobile_dialogue_open", "mobile/dialogue/draft": "mobile_dialogue_draft",
         "mobile/dialogue/clear": "mobile_dialogue_clear", "mobile/dialogue/send": "mobile_dialogue_send",
         "mobile/dialogue/cancel-pending": "mobile_dialogue_cancel_pending",
+        "mobile/dialogue/guide-send": "mobile_dialogue_guide_send",
         "mobile/dialogue/save": "mobile_dialogue_save", "mobile/dialogue/remember": "mobile_dialogue_remember",
         "mobile/idea/update": "mobile_idea_update", "mobile/idea/archive": "mobile_idea_archive",
         "mobile/idea/split": "mobile_idea_split", "mobile/idea/merge": "mobile_idea_merge",

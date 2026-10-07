@@ -123,7 +123,10 @@ class GuideReplyMixin:
         return db.execute("SELECT m.rowid,m.* FROM messages m WHERE m.record_id=? AND (NOT EXISTS "
             "(SELECT 1 FROM guide_replies g WHERE g.message_id=m.id) OR EXISTS "
             "(SELECT 1 FROM guide_replies g WHERE g.message_id=m.id AND g.client_id=? AND g.session_id=? AND g.record_id=?)) "
-            "ORDER BY m.rowid DESC LIMIT 12", (record_id, dialogue["clientId"], dialogue["id"], record_id)).fetchall()
+            "AND (NOT EXISTS (SELECT 1 FROM guide_inputs i WHERE i.message_id=m.id) OR EXISTS "
+            "(SELECT 1 FROM guide_inputs i WHERE i.message_id=m.id AND i.client_id=? AND i.session_id=? AND i.record_id=?)) "
+            "ORDER BY m.rowid DESC LIMIT 12", (record_id, dialogue["clientId"], dialogue["id"], record_id,
+                dialogue["clientId"], dialogue["id"], record_id)).fetchall()
 
     def _guide_bind_user_message(self, db, message_id, session, job_id, request_id):
         row = db.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
@@ -213,6 +216,10 @@ class GuideReplyMixin:
         user = db.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
         if user is None or user["role"] != "user" or user["record_id"] != session["recordId"]:
             raise _api().WorkflowError("Guide 原问题不属于指定讨论。", 409, "guide_source_not_matching")
+        direct = db.execute("SELECT * FROM guide_inputs WHERE message_id=?", (message_id,)).fetchone()
+        if direct is not None:
+            self._guide_input_validate(db, direct, session, verify_files=True)
+            return
         source = db.execute("SELECT * FROM mobile_message_sources WHERE message_id=?", (message_id,)).fetchone()
         if source is None:
             job_id, request_id = self._guide_original_send(db, user, session)

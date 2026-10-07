@@ -366,7 +366,7 @@ class GuideReplyChecks(unittest.TestCase):
             db.execute("UPDATE jobs SET status='succeeded' WHERE id=?", (sent["job"]["id"],))
             db.execute("UPDATE idea_dispatches SET status='completed' WHERE id=?", (sent["job"]["appDispatch"]["id"],))
         current = self.fixture.open(ideaId=saved["idea"]["id"], expectedIdeaRevision=saved["idea"]["revision"])
-        workspace = self.fixture.root / "workspace"
+        workspace = (self.fixture.root / "workspace").resolve()
         allowed = workspace / "owned"
         allowed.mkdir(parents=True)
         (allowed / "fixture.txt").write_text("unchanged", encoding="utf-8")
