@@ -29,6 +29,9 @@ def git(root, *args, data=None):
 
 class Fixture:
     def __init__(self, base):
+        # Windows runners may give TEMP an 8.3 alias; match the service's
+        # canonical paths so index-failure injection reaches the real rename.
+        base = base.resolve()
         self.root = base / "source"
         self.root.mkdir()
         self.remote = base / "remote.git"
