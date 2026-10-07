@@ -10,7 +10,7 @@
   strings.zh.retry = "继续上传"; strings.en.retry = "Continue upload";
   strings.zh.indexPending = "源码已推送；本机暂存区仍待核对。"; strings.en.indexPending = "Source was pushed; the local index still needs checking.";
   strings.zh.finishCheck = "完成核对"; strings.en.finishCheck = "Finish checking";
-  strings.zh.settingsEntry = "开发设置"; strings.en.settingsEntry = "Developer settings";
+  strings.zh.toolsEntry = "开发者工具"; strings.en.toolsEntry = "Developer tools";
   strings.zh.outgoing = count => `本机已提交待上传 · ${count} 条（本机缓存）`; strings.en.outgoing = count => `${count} local commits waiting to upload (local cache)`;
   strings.zh.committed = "已提交"; strings.en.committed = "Committed";
   const words = () => strings[String(document.documentElement?.lang || "zh").startsWith("zh") ? "zh" : "en"];
@@ -21,10 +21,10 @@
     try { const url = new URL(value); return url.protocol === "https:" && url.hostname === "github.com" && !url.username && !url.password && !url.search && !url.hash && (!url.port || url.port === "443") && /^\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+\/?$/.test(url.pathname) ? url.href : ""; } catch { return ""; }
   }
   function mount(options = {}) {
-    const button = options.button || document.getElementById("consoleDeveloperModeTop"), settingsButton = options.settingsButton || document.getElementById("consoleDeveloperSettingsTop"), dialog = options.dialog || document.getElementById("consoleDeveloperDialog");
+    const button = options.button || document.getElementById("consoleDeveloperTools"), dialog = options.dialog || document.getElementById("consoleDeveloperDialog");
     if (!button || !dialog) return null;
     if (mounted.has(dialog)) return mounted.get(dialog);
-    button.hidden = true; if (settingsButton) settingsButton.hidden = true;
+    button.hidden = true;
     dialog.classList.add("console-developer-dialog");
     dialog.setAttribute("aria-labelledby", "consoleDeveloperHeading");
     const state = { snapshot: null, operation: null, pendingId: "", pendingActionId: "", requireRefresh: false, epoch: 0, readSequence: 0, postBusy: false, configBusy: false, readBusy: false, pollTimer: 0, notice: "", destroyed: false, returnFocus: null };
@@ -67,10 +67,8 @@
     }
     function render() {
       const copy = words(), snapshot = state.snapshot || {}, op = state.operation;
-      const source = safeText(snapshot.sourceVersion), updateEntry = snapshot.enabled === true && Boolean(snapshot.sourceRoot);
-      heading.textContent = copy.title; button.textContent = updateEntry ? copy.update + (source ? " · v" + source.replace(/^v/i, "") : "") : copy.title; button.setAttribute("aria-expanded", String(Boolean(dialog.open))); button.setAttribute("aria-controls", dialog.id || "consoleDeveloperDialog"); closeButton.setAttribute("aria-label", copy.close);
+      heading.textContent = copy.title; button.textContent = copy.toolsEntry; button.setAttribute("aria-expanded", String(Boolean(dialog.open))); button.setAttribute("aria-controls", dialog.id || "consoleDeveloperDialog"); closeButton.setAttribute("aria-label", copy.close);
       button.disabled = state.postBusy || state.configBusy || state.readBusy || dialog.open && working();
-      if (settingsButton) { settingsButton.hidden = snapshot.allowed !== true || snapshot.enabled !== true; settingsButton.disabled = state.postBusy || state.configBusy || state.readBusy || dialog.open && working(); settingsButton.textContent = "⚙"; settingsButton.setAttribute("aria-label", copy.settingsEntry); settingsButton.title = copy.settingsEntry; settingsButton.setAttribute("aria-controls", dialog.id || "consoleDeveloperDialog"); }
       intro.textContent = copy.intro; modeLabel.textContent = copy.enabled; enabled.checked = snapshot.enabled === true;
       sourceVersion.textContent = `${copy.source} · ${safeText(snapshot.sourceVersion) || "—"}`; runtimeVersion.textContent = `${copy.running} · ${safeText(snapshot.runtimeVersion) || "—"}`;
       const link = githubLink(snapshot.repositoryWebUrl); repository.textContent = `${copy.repository} · ${safeText(snapshot.repoName) || "—"}`; if (link) repository.href = link; else repository.removeAttribute("href");
@@ -173,7 +171,7 @@
       const target = state.returnFocus; state.returnFocus = null; if (!state.destroyed && !button.hidden && target?.isConnected !== false) (target || button).focus({ preventScroll: true });
     }
     function close() { if (dialog.open) dialog.close(); else stopPolling(); }
-    button.addEventListener("click", () => void open({ autoUpdate: state.snapshot?.enabled === true && Boolean(state.snapshot?.sourceRoot) && !working() && !uncertain() && !state.pendingId && !state.pendingActionId && state.operation?.status !== "push_failed" })); settingsButton?.addEventListener("click", () => void open({ showSettings: true })); closeButton.addEventListener("click", close); dialog.addEventListener("close", finishClose);
+    button.addEventListener("click", () => void open({ autoUpdate: false })); closeButton.addEventListener("click", close); dialog.addEventListener("close", finishClose);
     dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
     dialog.addEventListener("click", event => { if (event.target !== dialog) return; const box = dialog.getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) close(); });
     enabled.addEventListener("change", () => void configure()); savePath.addEventListener("click", () => void configure(true)); refreshButton.addEventListener("click", () => { if (!state.postBusy && !state.configBusy && !state.readBusy) void readStatus(); }); updateButton.addEventListener("click", () => void run()); retryButton.addEventListener("click", () => void run()); checkButton.addEventListener("click", () => void checkReceipt());

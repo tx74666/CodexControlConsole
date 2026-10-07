@@ -2134,7 +2134,6 @@ const els = {
   consoleUpdateInstall: document.getElementById("consoleUpdateInstall"),
   consoleUninstall: document.getElementById("consoleUninstall"),
   consoleUpdateError: document.getElementById("consoleUpdateError"),
-  consoleUpdateTop: document.getElementById("consoleUpdateTop"),
   workspaceTodoCategory: document.getElementById("workspaceTodoCategory"),
   workspaceTodoInput: document.getElementById("workspaceTodoInput"),
   addWorkspaceTodo: document.getElementById("addWorkspaceTodo"),
@@ -13545,26 +13544,6 @@ function renderConsoleUpdate() {
     els.consoleUpdateRelease.hidden = true;
   }
 
-  if (els.consoleUpdateTop) {
-    const updates = availableProductUpdates();
-    els.consoleUpdateTop.hidden = updates.length === 0;
-    els.consoleUpdateTop.disabled = productUpdateBusy;
-    els.consoleUpdateTop.dataset.product = updates.length === 1 ? updates[0] : "";
-    if (updates.length === 1) {
-      const update = productUpdateStates[updates[0]];
-      els.consoleUpdateTop.textContent = text(
-        "consoleUpdateTop",
-        updateProductName(updates[0]),
-        String(update.latestVersion || "").replace(/^v/i, "")
-      );
-    } else {
-      els.consoleUpdateTop.textContent = updates.length ? text("consoleUpdateTopCount", updates.length) : "";
-    }
-    els.consoleUpdateTop.title = updates.map(id => {
-      const update = productUpdateStates[id];
-      return `${updateProductName(id)} v${String(update.latestVersion || "").replace(/^v/i, "")}`;
-    }).join(" / ");
-  }
   if (els.consoleUpdateError) {
     const message = String(state.updateError || state.error || "").trim();
     els.consoleUpdateError.textContent = message
@@ -13789,17 +13768,6 @@ async function uninstallSelectedProduct(product = selectedUpdateProduct) {
     productUpdateBusy = false;
     renderConsoleUpdate();
   }
-}
-
-async function handleProductUpdateTop() {
-  const updates = availableProductUpdates();
-  if (!updates.length) return;
-  if (updates.length === 1) {
-    await installSelectedProductUpdate(updates[0]);
-    return;
-  }
-  selectUpdateProduct(updates[0]);
-  activateModule("workspace", true);
 }
 
 function renderBuiltinMedia() {
@@ -21314,9 +21282,6 @@ if (els.consoleUpdateInstall) {
 }
 if (els.consoleUninstall) {
   els.consoleUninstall.addEventListener("click", () => uninstallSelectedProduct());
-}
-if (els.consoleUpdateTop) {
-  els.consoleUpdateTop.addEventListener("click", handleProductUpdateTop);
 }
 if (els.consolePhoneMessages) {
   els.consolePhoneMessages.addEventListener("click", openConsolePhoneMessages);

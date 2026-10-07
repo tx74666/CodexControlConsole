@@ -42,7 +42,23 @@ def main():
     if subprocess.run(["git", "lfs", "version"], capture_output=True).returncode != 0:
         raise AssertionError("Git LFS is required")
 
-    with tempfile.TemporaryDirectory(prefix="codex-blender-share-") as temporary:
+    fixture_tools = {
+        "gitAvailable": True,
+        "gitVersion": "git fixture",
+        "lfsAvailable": True,
+        "lfsVersion": "git-lfs fixture",
+        "ghAvailable": False,
+        "ghAuthenticated": False,
+        "githubDesktopAvailable": False,
+    }
+    with (
+        tempfile.TemporaryDirectory(prefix="codex-blender-share-") as temporary,
+        patch.object(
+            BlenderGithubShareService,
+            "_tool_state",
+            side_effect=lambda: dict(fixture_tools),
+        ) as tool_state_probe,
+    ):
         temp_root = Path(temporary)
         project = temp_root / "Project One"
         project.mkdir()
@@ -79,7 +95,12 @@ def main():
             [temp_root],
             catalog_file=catalog_file,
         )
+        probe_calls = tool_state_probe.call_count
         cloud_status = cloud_service.status()
+        require(
+            tool_state_probe.called and tool_state_probe.call_count > probe_calls,
+            "cloud status bypassed the fixture tool probe",
+        )
         require(cloud_status["project"]["name"] == "Cloud Project", "catalog repository was not selected")
         require(not cloud_status["project"]["downloaded"], "cloud repository was marked as downloaded")
         require(cloud_status["git"]["state"] == "cloud", "cloud repository has the wrong state")
@@ -114,7 +135,12 @@ def main():
         require(filter_blender_discovery_directories(["Project", "assets", "UnityExports"]) == ["Project"], "generated directories were not pruned")
         require(Path(service._discover_latest_project()) == blend, "generated blend replaced the latest real project")
         require(service._blend_files(project) == [blend.resolve()], "generated blends appeared as project cards")
+        probe_calls = tool_state_probe.call_count
         status = service.status(str(blend))
+        require(
+            tool_state_probe.called and tool_state_probe.call_count > probe_calls,
+            "local status bypassed the fixture tool probe",
+        )
         require(status["git"]["state"] == "uninitialized", "new project should be uninitialized")
         require(not status["collection"]["projects"], "an unpublished local project entered GitHub Coop")
 

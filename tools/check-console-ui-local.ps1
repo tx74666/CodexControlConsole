@@ -156,5 +156,11 @@ try {
   else { $env:CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT = $previousDesktopLayoutScript }
   if ($null -eq $previousDesktopLayoutStartup) { Remove-Item Env:CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE -ErrorAction SilentlyContinue }
   else { $env:CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE = $previousDesktopLayoutStartup }
-  Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
+  $resolvedTemporary = [System.IO.Path]::GetFullPath($temporary)
+  $resolvedTempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')
+  if ([System.IO.Path]::GetDirectoryName($resolvedTemporary) -ne $resolvedTempRoot -or
+      [System.IO.Path]::GetFileName($resolvedTemporary) -notmatch '^codex-console-ui-[a-f0-9]{32}$') {
+    throw "The isolated UI cleanup target escaped its temporary directory."
+  }
+  Remove-Item -LiteralPath $resolvedTemporary -Recurse -Force -ErrorAction SilentlyContinue
 }

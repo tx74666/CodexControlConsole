@@ -1034,9 +1034,7 @@ async function runBrowserChecks(client) {
       && updateState.worldDownload.includes('/tx74666/CodexWorldConsole/releases/'),
     `update controls are incomplete: ${JSON.stringify(updateState)}`
   );
-  if (!allowAvailableUpdates) {
-    assert(!updateState.topVisible, `inactive update control still occupies the top bar: ${JSON.stringify(updateState)}`);
-  }
+  assert(!updateState.topVisible, `update shortcut still occupies the top bar: ${JSON.stringify(updateState)}`);
 
   const updateBannerState = await evaluate(client, `(() => {
     const originalStates = productUpdateStates;
@@ -1064,32 +1062,31 @@ async function runBrowserChecks(client) {
     };
     productUpdateStates.world = { ...productUpdateStates.world, latestVersion: '0.1.6', available: false };
     renderConsoleUpdate();
-    const oneAvailable = { text: button?.textContent?.trim() || '', product: button?.dataset.product || '' };
+    const oneAvailable = { visible: Boolean(button && !button.hidden), availableBadges: document.querySelectorAll('.update-product-badge.available').length };
     productUpdateStates.console = {
       ...productUpdateStates.console,
       selfPublished: true,
       notifyAvailable: false
     };
     renderConsoleUpdate();
-    const hiddenWhenSelfPublished = Boolean(button?.hidden);
+    const hiddenWhenSelfPublished = !button || button.hidden;
     productUpdateStates.console = { ...productUpdateStates.console, latestVersion: '0.3.4', available: false };
     renderConsoleUpdate();
-    const hiddenWhenCurrent = Boolean(button?.hidden);
+    const hiddenWhenCurrent = !button || button.hidden;
     productUpdateStates = originalStates;
     selectedUpdateProduct = originalProduct;
     renderConsoleUpdate();
     return { bothAvailable, oneAvailable, hiddenWhenSelfPublished, hiddenWhenCurrent };
   })()`);
   assert(
-    updateBannerState.bothAvailable.visible
-      && updateBannerState.bothAvailable.text.startsWith('2 ')
-      && updateBannerState.bothAvailable.width >= 120
+    !updateBannerState.bothAvailable.visible
+      && updateBannerState.bothAvailable.width === 0
       && updateBannerState.bothAvailable.availableBadges === 2
-      && updateBannerState.oneAvailable.text.endsWith('Codex Console v0.3.5')
-      && updateBannerState.oneAvailable.product === 'console'
+      && !updateBannerState.oneAvailable.visible
+      && updateBannerState.oneAvailable.availableBadges === 1
       && updateBannerState.hiddenWhenSelfPublished
       && updateBannerState.hiddenWhenCurrent,
-    `top update area does not reflect version availability: ${JSON.stringify(updateBannerState)}`
+    `folded update controls do not preserve version availability: ${JSON.stringify(updateBannerState)}`
   );
 
   const oneClickUpdate = await evaluate(client, `(async () => {
@@ -1119,9 +1116,9 @@ async function runBrowserChecks(client) {
       return originalFetch(input, init);
     };
     try {
-      selectUpdateProduct('console', { persist: false });
+      selectUpdateProduct('world', { persist: false });
       renderConsoleUpdate();
-      document.querySelector('#consoleUpdateTop')?.click();
+      document.querySelector('#consoleUpdateInstall')?.click();
       for (let attempt = 0; attempt < 20 && !request; attempt += 1) {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
@@ -1137,7 +1134,7 @@ async function runBrowserChecks(client) {
   })()`, true);
   assert(
     oneClickUpdate?.url.endsWith('/api/world/update/install') && oneClickUpdate.method === 'POST',
-    `top update action targeted the wrong product: ${JSON.stringify(oneClickUpdate)}`
+    `existing update action targeted the wrong product: ${JSON.stringify(oneClickUpdate)}`
   );
 
   const updateCompletionState = await evaluate(client, `(async () => {
@@ -1172,7 +1169,7 @@ async function runBrowserChecks(client) {
         busy: productUpdateBusy,
         current: productUpdateStates.world?.currentVersion,
         available: productUpdateStates.world?.available,
-        topHidden: Boolean(button?.hidden)
+        topHidden: !button || button.hidden
       };
     } finally {
       waitForUpdatePoll = originalPoll;
@@ -1241,6 +1238,22 @@ async function runBrowserChecks(client) {
   );
 
   await clickModule(client, "workspace");
+  const consoleWorkEntryState = await evaluate(client, `({
+    active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
+    workVisible: !document.querySelector('#consoleWorkView')?.hidden,
+    documentHidden: Boolean(document.querySelector('#consoleDocumentView')?.hidden),
+    commonHidden: Boolean(document.querySelector('#consoleCommonView')?.hidden),
+    collaborationHidden: Boolean(document.querySelector('#consoleCollaborationView')?.hidden)
+  })`);
+  assert(
+    consoleWorkEntryState.active === "work"
+      && consoleWorkEntryState.workVisible
+      && consoleWorkEntryState.documentHidden
+      && consoleWorkEntryState.commonHidden
+      && consoleWorkEntryState.collaborationHidden,
+    `Console task workspace is not the default entry: ${JSON.stringify(consoleWorkEntryState)}`
+  );
+  await evaluate(client, `document.querySelector('[data-console-view-target="document"]')?.click()`);
   const consoleCommonState = await evaluate(client, `({
     active: document.querySelector('.console-subtab.active')?.dataset.consoleViewTarget || '',
     documentVisible: !document.querySelector('#consoleDocumentView')?.hidden,
@@ -1256,7 +1269,7 @@ async function runBrowserChecks(client) {
       && consoleCommonState.collaborationHidden
       && consoleCommonState.tabs === 5
       && consoleCommonState.collaborationTabs === 0,
-    `Console device overview is not the stable default: ${JSON.stringify(consoleCommonState)}`
+    `Console device overview did not open from its tab: ${JSON.stringify(consoleCommonState)}`
   );
   await evaluate(client, `document.querySelector('[data-console-view-target="collaboration"]')?.click()`);
   await waitForValue(
@@ -2925,7 +2938,9 @@ async function main() {
     ).catch(() => {});
     await delay(1500);
     try {
-      rmSync(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 120 });
+      const resolvedProfile = resolve(profileDir);
+      assert(dirname(resolvedProfile) === resolve(tmpdir()) && /^codex-console-check-[A-Za-z0-9_-]+$/.test(resolvedProfile.slice(dirname(resolvedProfile).length + 1)), "browser cleanup target escaped its temporary directory");
+      rmSync(resolvedProfile, { recursive: true, force: true, maxRetries: 10, retryDelay: 120 });
     } catch (error) {
       console.warn(`WARN temporary browser profile cleanup was deferred: ${error.message}`);
     }
