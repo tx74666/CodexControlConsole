@@ -297,42 +297,42 @@ const i18n = {
   referenceViewConfirmClear: name => `\u6e05\u7a7a\u201c${name}\u201d\u7ba1\u7406\u7684\u53c2\u8003\u56fe\u548c manifest\uff1f\u5176\u4ed6\u6587\u4ef6\u4e0d\u4f1a\u5220\u9664\u3002`,
   referenceViewCleared: "\u5df2\u6e05\u7a7a\u5f53\u524d\u53c2\u8003\u89c6\u56fe\u96c6",
   referenceViewFailed: message => `\u53c2\u8003\u89c6\u56fe\u5931\u8d25\uff1a${message}`,
-    appTitle: "ç”µè„‘æ€»æŽ§å°",
-    managerPageTitle: "ç®¡ç†",
+    appTitle: "电脑总控台",
+    managerPageTitle: "管理",
     workspacePageTitle: "Console",
     blenderPageTitle: "Blender",
     unityPageTitle: "Unity",
     steamworkPageTitle: "Steamwork",
-    randomRealmPageTitle: "éšæœºé¢†åŸŸ",
-    wallpaperPageTitle: "æ¡Œå¸ƒ",
-    managerNav: "ç®¡ç†",
-    managerSectionLabel: "ç®¡ç†",
+    randomRealmPageTitle: "随机领域",
+    wallpaperPageTitle: "桌布",
+    managerNav: "管理",
+    managerSectionLabel: "管理",
     workspaceNav: "Console",
     blenderNav: "Blender",
     unityNav: "Unity",
     steamworkNav: "Steamwork",
-    randomRealmNav: "éšæœºé¢†åŸŸ",
-    musicPageTitle: "éŸ³ä¹",
-    wallpaperNav: "æ¡Œå¸ƒ",
-    musicNav: "éŸ³ä¹",
+    randomRealmNav: "随机领域",
+    musicPageTitle: "音乐",
+    wallpaperNav: "桌布",
+    musicNav: "音乐",
     archiveToggleTitle: "Archive",
     archiveTitle: "Archive",
-    archiveEmpty: "è¿™é‡Œå…ˆç©ºç€",
-    archiveRestoreTitle: name => `æ‰“å¼€ ${name}ï¼ŒåŒå‡»æ¢å¤`,
-    managerTitle: "å¸ƒå±€ç®¡ç†",
-    managerStatus: "è®°å¿†ä¸­",
-    managerTabOrderLabel: "Tab é¡ºåº",
+    archiveEmpty: "这里先空着",
+    archiveRestoreTitle: name => `打开 ${name}，双击恢复`,
+    managerTitle: "布局管理",
+    managerStatus: "记忆中",
+    managerTabOrderLabel: "Tab 顺序",
     managerArchiveLabel: "Archive",
-    managerDesktopLayoutLabel: "Windows å¸ƒå±€",
-    managerDesktopLayoutValue: "å¾…æŽ¥å…¥æ¡Œé¢å›¾æ ‡å¿«ç…§",
-    managerCurrentLayoutTitle: "å½“å‰æŽ§åˆ¶å°å¸ƒå±€",
-    managerLayoutSlotOne: "å½“å‰ Tab æŽ’åˆ—",
-    managerLayoutSlotTwo: "æ”¶çº³ç®±",
-    managerLayoutSlotThree: "æ¡Œé¢å¿«ç…§",
-    managerLayoutHint: "æ‹–åŠ¨ tab æ”¹å˜é¡ºåºï¼Œæ‹–åˆ° Archive åªä¼šæ”¶çº³ï¼Œä¸ä¼šåˆ é™¤ã€‚",
-    tutorialModeToggle: "æ•™ç¨‹æ¨¡å¼",
-    tutorialModeOn: "æ•™ç¨‹æ¨¡å¼å·²æ‰“å¼€ï¼šæ˜¾ç¤ºè¯´æ˜Žå’Œè¾…åŠ©å…¥å£",
-    tutorialModeOff: "æ•™ç¨‹æ¨¡å¼å·²å…³é—­ï¼šåªä¿ç•™å…³é”®å…¥å£",
+    managerDesktopLayoutLabel: "Windows 布局",
+    managerDesktopLayoutValue: "待接入桌面图标快照",
+    managerCurrentLayoutTitle: "当前控制台布局",
+    managerLayoutSlotOne: "当前 Tab 排列",
+    managerLayoutSlotTwo: "收纳箱",
+    managerLayoutSlotThree: "桌面快照",
+    managerLayoutHint: "拖动 tab 改变顺序，拖到 Archive 只会收纳，不会删除。",
+    tutorialModeToggle: "教程模式",
+    tutorialModeOn: "教程模式已打开：显示说明和辅助入口",
+    tutorialModeOff: "教程模式已关闭：只保留关键入口",
     consoleCommonTab: "工具",
     consoleCollaborationTab: "\u534f\u4f5c",
     documentTitle: "本地资料库",
@@ -434,43 +434,43 @@ const i18n = {
     builtinMediaFailed: message => `\u540c\u6b65\u5931\u8d25\uff1a${message}`,
     feedbackPanelTitle: "\u53cd\u9988",
     feedbackViewLabel: "\u53cd\u9988\u89c6\u56fe",
-    feedbackTitle: "é—®é¢˜å›žæŠ¥",
-    feedbackCategoryLabel: "é—®é¢˜ç±»åž‹",
-    feedbackCategoryBug: "é”™è¯¯",
-    feedbackCategoryLayout: "æŽ’ç‰ˆ",
-    feedbackCategoryMusic: "éŸ³ä¹",
-    feedbackCategoryUpdate: "æ›´æ–°",
-    feedbackCategoryOther: "å…¶ä»–",
-    feedbackDescriptionPlaceholder: "æè¿°ä½ é‡åˆ°çš„é—®é¢˜",
-    feedbackScreenshot: "æˆªå›¾",
-    feedbackRemoveImage: "ç§»é™¤æˆªå›¾",
-    feedbackSend: "å‘é€",
+    feedbackTitle: "问题回报",
+    feedbackCategoryLabel: "问题类型",
+    feedbackCategoryBug: "错误",
+    feedbackCategoryLayout: "排版",
+    feedbackCategoryMusic: "音乐",
+    feedbackCategoryUpdate: "更新",
+    feedbackCategoryOther: "其他",
+    feedbackDescriptionPlaceholder: "描述你遇到的问题",
+    feedbackScreenshot: "截图",
+    feedbackRemoveImage: "移除截图",
+    feedbackSend: "发送",
     feedbackHitLimit: "Hit Limit",
-    feedbackConnecting: "æ­£åœ¨è¿žæŽ¥",
-    feedbackReady: "å¯ä»¥å‘é€",
-    feedbackNotConfigured: "å›žæŠ¥æœåŠ¡å°šæœªè¿žæŽ¥",
-    feedbackSending: "æ­£åœ¨å‘é€",
-    feedbackSent: remaining => `å·²å‘é€ \u00b7 ä»Šå¤©è¿˜å¯å‘é€ ${remaining} æ¡`,
-    feedbackFailed: message => `å‘é€å¤±è´¥ï¼š${message}`,
-    feedbackDescriptionShort: "è¯·è‡³å°‘å†™ 10 ä¸ªå­—ã€‚",
-    feedbackImageTooLarge: "æˆªå›¾ä¸èƒ½è¶…è¿‡ 5 MBã€‚",
-    feedbackImageType: "æˆªå›¾åªæ”¯æŒ PNGã€JPEG æˆ– WebPã€‚",
-    feedbackImageReadFailed: "æ— æ³•è¯»å–è¿™å¼ æˆªå›¾ã€‚",
+    feedbackConnecting: "正在连接",
+    feedbackReady: "可以发送",
+    feedbackNotConfigured: "回报服务尚未连接",
+    feedbackSending: "正在发送",
+    feedbackSent: remaining => `已发送 \u00b7 今天还可发送 ${remaining} 条`,
+    feedbackFailed: message => `发送失败：${message}`,
+    feedbackDescriptionShort: "请至少写 10 个字。",
+    feedbackImageTooLarge: "截图不能超过 5 MB。",
+    feedbackImageType: "截图只支持 PNG、JPEG 或 WebP。",
+    feedbackImageReadFailed: "无法读取这张截图。",
     feedbackScreenshotCount: (count, maximum) => `${count} / ${maximum}`,
-    feedbackImageCount: maximum => `æœ€å¤šé€‰æ‹© ${maximum} å¼ æˆªå›¾ã€‚`,
-    feedbackImagesTotalTooLarge: megabytes => `æˆªå›¾åˆè®¡ä¸èƒ½è¶…è¿‡ ${megabytes} MBã€‚`,
-    feedbackInboxTitle: "æ”¶ä»¶ç®±",
-    feedbackInboxRefresh: "åˆ·æ–°æ”¶ä»¶ç®±",
-    feedbackInboxEmpty: "æ²¡æœ‰æ–°å›žæŠ¥",
-    feedbackInboxResolve: "å®Œæˆ",
-    feedbackInboxResolved: "å·²å®Œæˆ",
-    feedbackOpenImage: (index, total) => `æŸ¥çœ‹æˆªå›¾ ${index}/${total}`,
+    feedbackImageCount: maximum => `最多选择 ${maximum} 张截图。`,
+    feedbackImagesTotalTooLarge: megabytes => `截图合计不能超过 ${megabytes} MB。`,
+    feedbackInboxTitle: "收件箱",
+    feedbackInboxRefresh: "刷新收件箱",
+    feedbackInboxEmpty: "没有新回报",
+    feedbackInboxResolve: "完成",
+    feedbackInboxResolved: "已完成",
+    feedbackOpenImage: (index, total) => `查看截图 ${index}/${total}`,
     feedbackInboxMeta: (category, version, date) => `${category} \u00b7 ${version || "--"} \u00b7 ${date}`,
-    feedbackAdminSetup: "æ”¶ä»¶ç®±è¿žæŽ¥",
+    feedbackAdminSetup: "收件箱连接",
     feedbackAdminEndpoint: "Cloudflare Worker URL",
     feedbackAdminToken: "Admin token",
-    feedbackAdminSave: "è¿žæŽ¥",
-    feedbackAdminSaved: "æ”¶ä»¶ç®±å·²è¿žæŽ¥",
+    feedbackAdminSave: "连接",
+    feedbackAdminSaved: "收件箱已连接",
     blenderSectionLabel: "Blender",
     blenderBuilderTab: "Builder",
     blenderCharacterTab: "Common",
@@ -495,12 +495,12 @@ const i18n = {
     blenderHubBridgeTitle: "Unity Bridge",
     blenderHubBridgeBody: "\u5bfc\u51fa\u3001Temp\u3001\u5bfc\u5165\u68c0\u67e5",
     blenderGithubHubTitle: "GitHub Coop",
-    blenderGithubHubBody: "Blender é¡¹ç›®å…¥å£",
+    blenderGithubHubBody: "Blender 项目入口",
     blenderGithubTitle: "GitHub Coop",
-    blenderGithubToggleTitle: "åŒå‡»æ”¶èµ·æˆ–å±•å¼€ GitHub Coop",
-    blenderGithubAddTitle: "æ·»åŠ å·²å‘å¸ƒçš„ Blender GitHub é¡¹ç›®",
-    blenderGithubBlendFilesLabel: "GitHub ä»“åº“",
-    blenderGithubLinksLabel: "é¡¹ç›®å…¥å£",
+    blenderGithubToggleTitle: "双击收起或展开 GitHub Coop",
+    blenderGithubAddTitle: "添加已发布的 Blender GitHub 项目",
+    blenderGithubBlendFilesLabel: "GitHub 仓库",
+    blenderGithubLinksLabel: "项目入口",
     blenderGithubDesktop: "GitHub Desktop",
     blenderGithubCloud: "\u4e91\u7aef",
     blenderGithubCardLocalTitle: name => `\u5355\u51fb\u9009\u62e9\uff0c\u53cc\u51fb\u5728 GitHub Desktop \u6253\u5f00\uff1a${name}`,
@@ -519,83 +519,83 @@ const i18n = {
     blenderGithubWorkflowSynced: "\u5df2\u4e0e GitHub \u540c\u6b65",
     blenderGithubWorkflowOffline: "\u6682\u65f6\u65e0\u6cd5\u68c0\u67e5\u4e91\u7aef \u00b7 \u5f53\u524d\u663e\u793a\u672c\u673a\u72b6\u6001",
     blenderGithubStateCloud: "\u4e91\u7aef\uff0c\u5c1a\u672a\u4e0b\u8f7d",
-    blenderGithubFolder: "æ–‡ä»¶",
+    blenderGithubFolder: "文件",
     blenderGithubOpenShort: "GitHub",
-    blenderGithubNoBlendFiles: "è¿˜æ²¡æœ‰åŠ å…¥å·²å‘å¸ƒçš„ GitHub ä»“åº“",
-    blenderGithubCardTitle: name => `å•å‡»é€‰æ‹©ï¼ŒåŒå‡»æ‰“å¼€ GitHubï¼š${name}`,
-    blenderGithubRename: "é‡å‘½å",
-    blenderGithubRenamePrompt: name => `é‡å‘½åæ˜¾ç¤ºåï¼ˆå½“å‰ï¼š${name}ï¼‰`,
-    blenderGithubRenaming: "æ­£åœ¨æ›´æ–°æ˜¾ç¤ºå",
-    blenderGithubRenameDone: "æ˜¾ç¤ºåå·²æ›´æ–°",
-    blenderGithubLoading: "è¯»å–ä¸­",
-    blenderGithubReady: "å°±ç»ª",
-    blenderGithubProjectLabel: "GitHub ä»“åº“",
-    blenderGithubRefreshTitle: "åˆ·æ–° Git çŠ¶æ€",
-    blenderGithubBlendFileLabel: "Blend æ–‡ä»¶",
-    blenderGithubBranchLabel: "åˆ†æ”¯",
+    blenderGithubNoBlendFiles: "还没有加入已发布的 GitHub 仓库",
+    blenderGithubCardTitle: name => `单击选择，双击打开 GitHub：${name}`,
+    blenderGithubRename: "重命名",
+    blenderGithubRenamePrompt: name => `重命名显示名（当前：${name}）`,
+    blenderGithubRenaming: "正在更新显示名",
+    blenderGithubRenameDone: "显示名已更新",
+    blenderGithubLoading: "读取中",
+    blenderGithubReady: "就绪",
+    blenderGithubProjectLabel: "GitHub 仓库",
+    blenderGithubRefreshTitle: "刷新 Git 状态",
+    blenderGithubBlendFileLabel: "Blend 文件",
+    blenderGithubBranchLabel: "分支",
     blenderGithubRemoteLabel: "Remote",
-    blenderGithubLastVersionLabel: "æœ€è¿‘ç‰ˆæœ¬",
-    blenderGithubRepositoryLabel: "GitHub ä»“åº“",
+    blenderGithubLastVersionLabel: "最近版本",
+    blenderGithubRepositoryLabel: "GitHub 仓库",
     blenderGithubRepositoryPlaceholder: "https://github.com/owner/repository.git",
-    blenderGithubVisibilityLabel: "å¯è§æ€§",
+    blenderGithubVisibilityLabel: "可见性",
     blenderGithubPrivate: "Private",
     blenderGithubPublic: "Public",
-    blenderGithubVersionLabel: "ç‰ˆæœ¬å·",
-    blenderGithubMessageLabel: "æœ¬æ¬¡ç‰ˆæœ¬è¯´æ˜Ž",
-    blenderGithubMessagePlaceholder: "è¿™ä¸ªç‰ˆæœ¬æ”¹äº†ä»€ä¹ˆ",
-    blenderGithubScopeLabel: "å…±äº«èŒƒå›´",
-    blenderGithubScopeCurrent: "ä»…å½“å‰ .blend",
-    blenderGithubScopeProject: "æ•´ä¸ªé¡¹ç›®ç›®å½•",
-    blenderGithubScopeCustom: "è‡ªå®šä¹‰",
-    blenderGithubIncludeLabel: "åŒ…å«æ–‡ä»¶",
-    blenderGithubExcludeLabel: "æŽ’é™¤æ–‡ä»¶",
-    blenderGithubChangesLabel: "Git å˜æ›´",
-    blenderGithubInitialize: "åˆå§‹åŒ–ä»“åº“",
-    blenderGithubCommit: "æäº¤ç‰ˆæœ¬",
-    blenderGithubPush: "æŽ¨é€",
-    blenderGithubOpen: "æ‰“å¼€ GitHub",
-    blenderGithubStateUninitialized: "æœªåˆå§‹åŒ–",
-    blenderGithubStateInitialized: "å·²åˆå§‹åŒ–",
-    blenderGithubStateDirty: "å­˜åœ¨æœªæäº¤ä¿®æ”¹",
-    blenderGithubStateCommitted: "å·²æäº¤",
-    blenderGithubStatePendingPush: "å¾…æŽ¨é€",
-    blenderGithubStateBehind: "è¿œç«¯æœ‰æ›´æ–°",
-    blenderGithubStateSynced: "å·²åŒæ­¥",
-    blenderGithubStateGitUnavailable: "Git ä¸å¯ç”¨",
-    blenderGithubToolsReady: "Git \u00b7 LFS å·²å°±ç»ª",
-    blenderGithubLfsMissing: "éœ€è¦å®‰è£… Git LFS",
-    blenderGithubGhReady: "GitHub CLI å·²ç™»å½•",
-    blenderGithubGhFallback: "GitHub CLI æœªå®‰è£…æˆ–æœªç™»å½•ï¼›å¯å¡«å†™ç©ºä»“åº“ URL",
-    blenderGithubWorkingTreeClean: "å·¥ä½œåŒºå¹²å‡€",
-    blenderGithubMoreChanges: count => `è¿˜æœ‰ ${count} é¡¹å˜æ›´`,
+    blenderGithubVersionLabel: "版本号",
+    blenderGithubMessageLabel: "本次版本说明",
+    blenderGithubMessagePlaceholder: "这个版本改了什么",
+    blenderGithubScopeLabel: "共享范围",
+    blenderGithubScopeCurrent: "仅当前 .blend",
+    blenderGithubScopeProject: "整个项目目录",
+    blenderGithubScopeCustom: "自定义",
+    blenderGithubIncludeLabel: "包含文件",
+    blenderGithubExcludeLabel: "排除文件",
+    blenderGithubChangesLabel: "Git 变更",
+    blenderGithubInitialize: "初始化仓库",
+    blenderGithubCommit: "提交版本",
+    blenderGithubPush: "推送",
+    blenderGithubOpen: "打开 GitHub",
+    blenderGithubStateUninitialized: "未初始化",
+    blenderGithubStateInitialized: "已初始化",
+    blenderGithubStateDirty: "存在未提交修改",
+    blenderGithubStateCommitted: "已提交",
+    blenderGithubStatePendingPush: "待推送",
+    blenderGithubStateBehind: "远端有更新",
+    blenderGithubStateSynced: "已同步",
+    blenderGithubStateGitUnavailable: "Git 不可用",
+    blenderGithubToolsReady: "Git \u00b7 LFS 已就绪",
+    blenderGithubLfsMissing: "需要安装 Git LFS",
+    blenderGithubGhReady: "GitHub CLI 已登录",
+    blenderGithubGhFallback: "GitHub CLI 未安装或未登录；可填写空仓库 URL",
+    blenderGithubWorkingTreeClean: "工作区干净",
+    blenderGithubMoreChanges: count => `还有 ${count} 项变更`,
     blenderGithubLastCommit: (hash, subject) => `${hash} \u00b7 ${subject}`,
-    blenderGithubNoCommit: "è¿˜æ²¡æœ‰æäº¤",
-    blenderGithubSaving: "æ­£åœ¨ä¿å­˜é¡¹ç›®é…ç½®",
-    blenderGithubSaved: "é¡¹ç›®é…ç½®å·²ä¿å­˜",
-    blenderGithubInitializedReady: "ä»“åº“å’Œ Git LFS å·²å°±ç»ª",
-    blenderGithubInitializedNoRemote: "æœ¬åœ°ä»“åº“å·²å°±ç»ªï¼›å¡«å†™ç©º GitHub ä»“åº“ URL åŽå³å¯æŽ¨é€",
-    blenderGithubCommitComplete: version => `ç‰ˆæœ¬ ${version} å·²æäº¤`,
-    blenderGithubPushComplete: "å·²æŽ¨é€åˆ° GitHub",
-    blenderGithubOpenComplete: "å·²æ‰“å¼€ GitHub ä»“åº“",
-    blenderGithubInitializing: "æ­£åœ¨åˆå§‹åŒ– Git å’Œ Git LFS",
-    blenderGithubCommitting: "æ­£åœ¨æäº¤ç‰ˆæœ¬",
-    blenderGithubPushing: "æ­£åœ¨æŽ¨é€åˆ° GitHub",
-    blenderGithubOpening: "æ­£åœ¨æ‰“å¼€ GitHub ä»“åº“",
-    blenderGithubFailed: message => `å¤„ç†å¤±è´¥ï¼š${message}`,
-    blenderGithubPublicConfirm: "Public ä»“åº“æ‰€æœ‰äººéƒ½å¯ä»¥è®¿é—®ã€‚ç¡®è®¤åˆ‡æ¢ä¸º Publicï¼Ÿ",
-    blenderGithubCreateConfirm: name => `æ²¡æœ‰å¡«å†™ä»“åº“ URLã€‚è¦ä½¿ç”¨ GitHub CLI åˆ›å»º ${name} å—ï¼Ÿ`,
-    blenderGithubReplaceRemoteConfirm: "å½“å‰ origin æŒ‡å‘å¦ä¸€ä¸ªä»“åº“ã€‚ç¡®è®¤æ›¿æ¢å®ƒï¼Ÿ",
-    blenderGithubSelectProject: "é€‰æ‹© Blender é¡¹ç›®",
-    blenderGithubAddingProject: "æ­£åœ¨é€‰æ‹© GitHub é¡¹ç›®",
-    blenderGithubProjectAdded: "GitHub ä»“åº“å·²åŠ å…¥",
-    blenderGithubOrderFailed: message => `æŽ’åºä¿å­˜å¤±è´¥ï¼š${message}`,
+    blenderGithubNoCommit: "还没有提交",
+    blenderGithubSaving: "正在保存项目配置",
+    blenderGithubSaved: "项目配置已保存",
+    blenderGithubInitializedReady: "仓库和 Git LFS 已就绪",
+    blenderGithubInitializedNoRemote: "本地仓库已就绪；填写空 GitHub 仓库 URL 后即可推送",
+    blenderGithubCommitComplete: version => `版本 ${version} 已提交`,
+    blenderGithubPushComplete: "已推送到 GitHub",
+    blenderGithubOpenComplete: "已打开 GitHub 仓库",
+    blenderGithubInitializing: "正在初始化 Git 和 Git LFS",
+    blenderGithubCommitting: "正在提交版本",
+    blenderGithubPushing: "正在推送到 GitHub",
+    blenderGithubOpening: "正在打开 GitHub 仓库",
+    blenderGithubFailed: message => `处理失败：${message}`,
+    blenderGithubPublicConfirm: "Public 仓库所有人都可以访问。确认切换为 Public？",
+    blenderGithubCreateConfirm: name => `没有填写仓库 URL。要使用 GitHub CLI 创建 ${name} 吗？`,
+    blenderGithubReplaceRemoteConfirm: "当前 origin 指向另一个仓库。确认替换它？",
+    blenderGithubSelectProject: "选择 Blender 项目",
+    blenderGithubAddingProject: "正在选择 GitHub 项目",
+    blenderGithubProjectAdded: "GitHub 仓库已加入",
+    blenderGithubOrderFailed: message => `排序保存失败：${message}`,
     unitySectionLabel: "Unity",
     unityControlTitle: "Unity Control",
-    unityControlBody: "RandomRealm2 å·¥ç¨‹å…¥å£ã€ç´ æå…¥å£å’Œ Unity ä¾§å‘å¸ƒå‰æ£€æŸ¥ã€‚",
-    unityBridgeLabel: "æ¡¥æŽ¥çŠ¶æ€",
-    unityBridgeTempLabel: "ä¸´æ—¶å¯¼å…¥",
-    unityBridgeReady: "ç­‰å¾… Blender å‘é€",
-    unityBridgeBody: "Blender å¯¼å‡ºåˆ° Unity temp åŽï¼ŒRandomRealm å¯¼å…¥å™¨å†æŠŠ temp å†…å®¹å½’ç±»åˆ° Builder ç”Ÿæˆèµ„äº§ã€Prefab å’Œæ¸…å•é‡Œã€‚",
+    unityControlBody: "RandomRealm2 工程入口、素材入口和 Unity 侧发布前检查。",
+    unityBridgeLabel: "桥接状态",
+    unityBridgeTempLabel: "临时导入",
+    unityBridgeReady: "等待 Blender 发送",
+    unityBridgeBody: "Blender 导出到 Unity temp 后，RandomRealm 导入器再把 temp 内容归类到 Builder 生成资产、Prefab 和清单里。",
     steamworkTitle: "Steamwork",
     steamworkReady: "\u5c31\u7eea",
     steamworkBody: "\u7ba1\u7406 Steamworks\u3001SteamPipe GUI\u3001ContentBuilder/content \u548c\u5ba3\u4f20\u66f4\u65b0\u7d20\u6750\u3002",
@@ -730,206 +730,206 @@ const i18n = {
     steamworkTargetCommunityIcons: "\u5546\u5e97\u9875 > \u793e\u533a\u4e0e\u5ba2\u6237\u7aef\u56fe\u6807",
     steamworkTargetLibraryAssets: "Steamworks > \u8d44\u6599\u5e93\u7d20\u6750",
     steamworkTargetTrailers: "\u5546\u5e97\u9875 > \u9884\u544a\u7247",
-    activeProjectValue: "éšæœºé¢†åŸŸ / Blender Assets",
+    activeProjectValue: "随机领域 / Blender Assets",
     timeLabel: "Time",
-    wallpaperSectionLabel: "é¢„è§ˆ",
-    wallpaperTitle: "é¢„è§ˆ",
-    add: "+ åŠ å…¥",
-    emptyTitle: "ç­‰å¾…å€™é€‰å›¾ç‰‡",
-    emptyBody: "æ”¯æŒ jpgã€pngã€bmpã€webpã€‚",
-    selectedLabel: "å½“å‰å€™é€‰",
-    sizeLabel: "å¤§å°",
-    themeDark: "æš—è‰²",
-    themeLight: "äº®è‰²",
-    readyStatus: "å°±ç»ª",
-    candidatesSectionLabel: "å›¾åº“",
-    candidatesTitle: "å€™é€‰",
-    notSelected: "æœªé€‰æ‹©",
+    wallpaperSectionLabel: "预览",
+    wallpaperTitle: "预览",
+    add: "+ 加入",
+    emptyTitle: "等待候选图片",
+    emptyBody: "支持 jpg、png、bmp、webp。",
+    selectedLabel: "当前候选",
+    sizeLabel: "大小",
+    themeDark: "暗色",
+    themeLight: "亮色",
+    readyStatus: "就绪",
+    candidatesSectionLabel: "图库",
+    candidatesTitle: "候选",
+    notSelected: "未选择",
     noSize: "--",
-    count: count => `${count} å¼ `,
-    noCandidates: "è¿˜æ²¡æœ‰å€™é€‰",
-    addHint: "æ”¯æŒ jpg / png / bmp / webpã€‚",
-    cardTitle: name => `${name}\nå•å‡»é€‰æ‹©ï¼ŒåŒå‡»åº”ç”¨`,
-    deleteButtonLabel: name => `åˆ é™¤ ${name}`,
-    deletePrompt: "åˆ é™¤ï¼Ÿ",
-    confirmDeleteAction: "åˆ é™¤",
-    cancelDeleteAction: "å–æ¶ˆ",
-    added: count => `å·²åŠ å…¥ ${count} å¼ æ¡Œå¸ƒã€‚`,
-    applied: name => `å·²åº”ç”¨ï¼š${name}`,
-    deleted: name => `å·²åˆ é™¤ï¼š${name}`,
-    loadFailed: message => `è¯»å–æ¡Œå¸ƒå¤±è´¥ï¼š${message}`,
-    uploadFailed: message => `åŠ å…¥å¤±è´¥ï¼š${message}`,
-    applyFailed: message => `åº”ç”¨å¤±è´¥ï¼š${message}`,
-    deleteFailed: message => `åˆ é™¤å¤±è´¥ï¼š${message}`,
-    musicTitle: "éŸ³ä¹æ’­æ”¾å™¨",
-    nowPlayingLabel: "å½“å‰æ’­æ”¾",
-    musicEmptyBody: "åŠ å…¥ mp3ã€wavã€m4aã€flacã€oggã€opusã€‚",
+    count: count => `${count} 张`,
+    noCandidates: "还没有候选",
+    addHint: "支持 jpg / png / bmp / webp。",
+    cardTitle: name => `${name}\n单击选择，双击应用`,
+    deleteButtonLabel: name => `删除 ${name}`,
+    deletePrompt: "删除？",
+    confirmDeleteAction: "删除",
+    cancelDeleteAction: "取消",
+    added: count => `已加入 ${count} 张桌布。`,
+    applied: name => `已应用：${name}`,
+    deleted: name => `已删除：${name}`,
+    loadFailed: message => `读取桌布失败：${message}`,
+    uploadFailed: message => `加入失败：${message}`,
+    applyFailed: message => `应用失败：${message}`,
+    deleteFailed: message => `删除失败：${message}`,
+    musicTitle: "音乐播放器",
+    nowPlayingLabel: "当前播放",
+    musicEmptyBody: "加入 mp3、wav、m4a、flac、ogg、opus。",
     lyricsSectionLabel: "Lyrics",
-    lyricsTitle: "æ­Œè¯",
-    lyricsHide: "æ”¶èµ·",
-    lyricsShow: "å±•å¼€æ­Œè¯",
-    lyricsEmpty: "è¿™é¦–æ­Œè¿˜æ²¡æœ‰æ­Œè¯æ–‡ä»¶ã€‚",
-    lyricsLoading: "æ­£åœ¨è¯»å–æ­Œè¯ã€‚",
-    lyricsInstrumental: "æ²¡æœ‰å¯æ˜¾ç¤ºçš„æ­Œè¯ã€‚",
-    lyricsUnsynced: "æ­Œè¯æ²¡æœ‰æ—¶é—´è½´ï¼Œä½œä¸ºå…¨æ–‡æ˜¾ç¤ºã€‚",
-    lyricsLoadFailed: message => `æ­Œè¯è¯»å–å¤±è´¥ï¼š${message}`,
-    lyricsButtonLabel: name => `æ­Œè¯ï¼š${name}`,
-    lyricsFindLabel: name => `æŸ¥æ‰¾æ­Œè¯ï¼š${name}`,
-    lyricsSeekLabel: line => `è·³åˆ°æ­Œè¯ï¼š${line}`,
-    lyricsMarkArmed: "å·²é€‰ä¸­ï¼Œç›´æŽ¥å¡«å¼€å§‹/ç»“æŸæ—¶é—´",
-    lyricsMarkSaved: time => `å·²æ ‡è®° ${time}`,
-    lyricsEndMarkSaved: time => `ç»“æŸç‚¹ ${time}`,
-    lyricsStartMarkSaved: time => `å¼€å§‹ç‚¹ ${time}`,
-    lyricsMarkCancelled: "å·²æ’¤é”€è¿™ä¸ªè¯ç¼æœ¬æ¬¡æ ‡è®°",
-    lyricsMarkFailed: message => `æ ‡è®°å¤±è´¥ï¼š${message}`,
-    lyricsTimingPick: "åŒä¸€å¥æ­Œè¯å³é”®ä¸‰ä¸‹æ‰æ‰“å¼€æ—¶é—´ç¼–è¾‘ï¼ˆæ–½å·¥ä¸­ï¼‰ã€‚",
-    lyricsTimingClose: "å…³é—­æ—¶é—´è®¾ç½®",
-    lyricsTimingStartLabel: "å¼€å§‹å˜ç™½",
-    lyricsTimingEndLabel: "å®Œå…¨å˜ç™½",
-    lyricsTimingTimePlaceholder: "åˆ†:ç§’.æ¯«ç§’",
-    lyricsTimingUseNowStart: "å½“å‰ä½œå¼€å§‹",
-    lyricsTimingUseNowEnd: "å½“å‰ä½œç»“æŸ",
-    lyricsTimingSave: "ä¿å­˜",
-    lyricsTimingClear: "æ’¤é”€æœ¬æ¬¡",
-    lyricsTimingTarget: (word, line) => `æ­£åœ¨è°ƒï¼š${word || "è¿™ä¸€æ ¼"} \u00b7 ç¬¬ ${line} è¡Œ`,
-    lyricsTimingLineTitle: (line, count) => `ç¬¬ ${line} è¡Œ \u00b7 ${count} ä¸ªå­—/è¯`,
-    lyricsTimingPreviewLabel: "åŽŸå¥",
-    lyricsTimingRowsLabel: "é€å­—æ—¶é—´",
-    lyricsTimingTokenHeader: "å­—/è¯",
-    lyricsTimingStartHeader: "å¼€å§‹",
-    lyricsTimingEndHeader: "ç»“æŸ",
-    lyricsTimingDurationHeader: "æ—¶é•¿",
-    lyricsTimingDetailTitle: word => `ç²¾è°ƒï¼š${word || "è¿™ä¸€æ ¼"}`,
-    lyricsTimingRangeTitle: (start, end) => start === end ? `ç²¾è°ƒï¼š${start}` : `ç²¾è°ƒï¼š${start} åˆ° ${end}`,
-    lyricsTimingWaveLabel: "å£°éŸ³æ³¢å½¢",
-    lyricsTimingSelectLine: "é€‰æ•´å¥",
-    lyricsTimingRangeDuration: duration => `é€‰åŒº ${duration}`,
-    lyricsTimingSaveSelected: "ä¿å­˜é€‰ä¸­",
-    lyricsTimingSaveLine: "ä¿å­˜æœ¬å¥",
-    lyricsTimingClearLine: "æ’¤é”€æœ¬å¥æœ¬æ¬¡",
-    lyricsTimingSaved: (start, end) => `å·²æš‚å­˜ï¼š${start} åˆ° ${end}`,
-    lyricsTimingRangeSaved: count => `å·²æš‚å­˜é€‰ä¸­çš„ ${count} ä¸ªå­—/è¯`,
-    lyricsTimingLineSaved: count => `å·²æš‚å­˜ ${count} ä¸ªå­—/è¯`,
-    lyricsTimingCleared: "å·²æ’¤é”€è¿™ä¸ªå­—/è¯æœ¬æ¬¡è®¾ç½®",
-    lyricsTimingLineCleared: "å·²æ’¤é”€è¿™ä¸€å¥æœ¬æ¬¡è®¾ç½®",
-    lyricsTimingLineEmpty: "è¿™ä¸€å¥è¿˜æ²¡æœ‰å¡«å®Œæ•´çš„æ—¶é—´",
-    lyricsTimingIncomplete: "å¼€å§‹å’Œç»“æŸéƒ½è¦å¡«",
-    lyricsTimingInvalid: "æ—¶é—´æ ¼å¼ä¸å¯¹ï¼Œç”¨ 1:23.450 æˆ– 83.45",
-    lyricsTimingRangeInvalid: "ç»“æŸæ—¶é—´è¦æ™šäºŽå¼€å§‹æ—¶é—´",
-    lyricsTimingOrderInvalid: "åŽä¸€ä¸ªè¯ä¸èƒ½åŽ‹åˆ°å‰ä¸€ä¸ªè¯é‡Œ",
-    lyricsTimingOrderCorrected: count => `å·²æŒ‰é¡ºåºçº æ­£ ${count} ä¸ªè¯`,
-    lyricsTimingWordMoved: word => `å·²ç§»åŠ¨ ${word}`,
-    lyricsTimingHoldLabel: "é™æ­¢åŒº",
-    lyricsTimingHoldHint: "Alt æ‹–åŠ¨ä¼šä¿ç•™ç©ºéš™ï¼Œç©ºéš™ä¸è¯»æ¡ã€‚",
-    lyricsTimingHoldInserted: "å·²åŠ é™æ­¢åŒº",
-    lyricsTimingHoldRemoved: "å·²åˆ é™¤é™æ­¢åŒº",
-    lyricsTimingHoldInsertedBetween: (previous, next) => `å·²åœ¨ ${previous} / ${next} ä¹‹é—´åŠ é™æ­¢åŒº`,
-    lyricsTimingHoldRemovedBetween: (previous, next) => `å·²åˆ é™¤ ${previous} / ${next} ä¹‹é—´çš„é™æ­¢åŒº`,
-    lyricsTimingHoldTooShort: "è¿™é‡Œç©ºé—´å¤ªçŸ­ï¼Œæ¢ä¸ªä½ç½®",
-    lyricsNotFound: name => `æ²¡æ‰¾åˆ°æ­Œè¯ï¼š${name}`,
-    lyricsSearchFailed: message => `æ­Œè¯æŸ¥æ‰¾å¤±è´¥ï¼š${message}`,
-    previousTrack: "ä¸Šä¸€é¦–",
-    playTrack: "æ’­æ”¾",
-    pauseTrack: "æš‚åœ",
-    nextTrack: "ä¸‹ä¸€é¦–",
-    playbackModeSequential: "é¡ºåº",
-    playbackModeRepeatAll: "å¾ªçŽ¯",
-    playbackModeRepeatOne: "å•æ›²",
-    playbackModePlayOnce: "ä¸€æ¬¡",
-    playbackModeTitle: label => `æ’­æ”¾æ¨¡å¼ï¼š${label}`,
-    volumeLabel: "éŸ³é‡",
-    musicListTitle: "æœ¬åœ°éŸ³ä¹",
-    musicNotSelected: "æœªé€‰æ‹©",
-    trackCount: count => `${count} é¦–`,
-    noTracks: "è¿˜æ²¡æœ‰éŸ³ä¹",
-    musicLocalEmpty: "ä»Ž Library æ‹–å…¥éŸ³ä¹",
-    musicLocalDropActive: "æ¾å¼€åŠ å…¥æœ¬åœ°éŸ³ä¹",
+    lyricsTitle: "歌词",
+    lyricsHide: "收起",
+    lyricsShow: "展开歌词",
+    lyricsEmpty: "这首歌还没有歌词文件。",
+    lyricsLoading: "正在读取歌词。",
+    lyricsInstrumental: "没有可显示的歌词。",
+    lyricsUnsynced: "歌词没有时间轴，作为全文显示。",
+    lyricsLoadFailed: message => `歌词读取失败：${message}`,
+    lyricsButtonLabel: name => `歌词：${name}`,
+    lyricsFindLabel: name => `查找歌词：${name}`,
+    lyricsSeekLabel: line => `跳到歌词：${line}`,
+    lyricsMarkArmed: "已选中，直接填开始/结束时间",
+    lyricsMarkSaved: time => `已标记 ${time}`,
+    lyricsEndMarkSaved: time => `结束点 ${time}`,
+    lyricsStartMarkSaved: time => `开始点 ${time}`,
+    lyricsMarkCancelled: "已撤销这个词缝本次标记",
+    lyricsMarkFailed: message => `标记失败：${message}`,
+    lyricsTimingPick: "同一句歌词右键三下才打开时间编辑（施工中）。",
+    lyricsTimingClose: "关闭时间设置",
+    lyricsTimingStartLabel: "开始变白",
+    lyricsTimingEndLabel: "完全变白",
+    lyricsTimingTimePlaceholder: "分:秒.毫秒",
+    lyricsTimingUseNowStart: "当前作开始",
+    lyricsTimingUseNowEnd: "当前作结束",
+    lyricsTimingSave: "保存",
+    lyricsTimingClear: "撤销本次",
+    lyricsTimingTarget: (word, line) => `正在调：${word || "这一格"} \u00b7 第 ${line} 行`,
+    lyricsTimingLineTitle: (line, count) => `第 ${line} 行 \u00b7 ${count} 个字/词`,
+    lyricsTimingPreviewLabel: "原句",
+    lyricsTimingRowsLabel: "逐字时间",
+    lyricsTimingTokenHeader: "字/词",
+    lyricsTimingStartHeader: "开始",
+    lyricsTimingEndHeader: "结束",
+    lyricsTimingDurationHeader: "时长",
+    lyricsTimingDetailTitle: word => `精调：${word || "这一格"}`,
+    lyricsTimingRangeTitle: (start, end) => start === end ? `精调：${start}` : `精调：${start} 到 ${end}`,
+    lyricsTimingWaveLabel: "声音波形",
+    lyricsTimingSelectLine: "选整句",
+    lyricsTimingRangeDuration: duration => `选区 ${duration}`,
+    lyricsTimingSaveSelected: "保存选中",
+    lyricsTimingSaveLine: "保存本句",
+    lyricsTimingClearLine: "撤销本句本次",
+    lyricsTimingSaved: (start, end) => `已暂存：${start} 到 ${end}`,
+    lyricsTimingRangeSaved: count => `已暂存选中的 ${count} 个字/词`,
+    lyricsTimingLineSaved: count => `已暂存 ${count} 个字/词`,
+    lyricsTimingCleared: "已撤销这个字/词本次设置",
+    lyricsTimingLineCleared: "已撤销这一句本次设置",
+    lyricsTimingLineEmpty: "这一句还没有填完整的时间",
+    lyricsTimingIncomplete: "开始和结束都要填",
+    lyricsTimingInvalid: "时间格式不对，用 1:23.450 或 83.45",
+    lyricsTimingRangeInvalid: "结束时间要晚于开始时间",
+    lyricsTimingOrderInvalid: "后一个词不能压到前一个词里",
+    lyricsTimingOrderCorrected: count => `已按顺序纠正 ${count} 个词`,
+    lyricsTimingWordMoved: word => `已移动 ${word}`,
+    lyricsTimingHoldLabel: "静止区",
+    lyricsTimingHoldHint: "Alt 拖动会保留空隙，空隙不读条。",
+    lyricsTimingHoldInserted: "已加静止区",
+    lyricsTimingHoldRemoved: "已删除静止区",
+    lyricsTimingHoldInsertedBetween: (previous, next) => `已在 ${previous} / ${next} 之间加静止区`,
+    lyricsTimingHoldRemovedBetween: (previous, next) => `已删除 ${previous} / ${next} 之间的静止区`,
+    lyricsTimingHoldTooShort: "这里空间太短，换个位置",
+    lyricsNotFound: name => `没找到歌词：${name}`,
+    lyricsSearchFailed: message => `歌词查找失败：${message}`,
+    previousTrack: "上一首",
+    playTrack: "播放",
+    pauseTrack: "暂停",
+    nextTrack: "下一首",
+    playbackModeSequential: "顺序",
+    playbackModeRepeatAll: "循环",
+    playbackModeRepeatOne: "单曲",
+    playbackModePlayOnce: "一次",
+    playbackModeTitle: label => `播放模式：${label}`,
+    volumeLabel: "音量",
+    musicListTitle: "本地音乐",
+    musicNotSelected: "未选择",
+    trackCount: count => `${count} 首`,
+    noTracks: "还没有音乐",
+    musicLocalEmpty: "从 Library 拖入音乐",
+    musicLocalDropActive: "松开加入本地音乐",
     musicTierFirst: "1st",
     musicTierSecond: "2nd",
     musicTierThird: "3rd",
-    musicTierDropHint: "æ‹–åˆ°è¿™é‡Œåˆ†çº§",
-    musicAddHint: "æ”¯æŒ mp3 / wav / m4a / flac / ogg / opusã€‚",
-    musicAddDropTitle: "åŠ å…¥éŸ³ä¹",
-    musicAddDropBody: "ç²˜è´´é“¾æŽ¥",
-    musicPickLocal: "æœ¬åœ°æ–‡ä»¶",
-    musicAddMenuQuestion: "åŠ å…¥éŸ³ä¹",
-    musicAddViaUrl: "YouTube é“¾æŽ¥",
-    musicAddViaFile: "MP3 æ–‡ä»¶",
-    musicAddViaLibrary: "Playlist / å…¶ä»–",
-    musicPlaylistPlaceholder: "Playlist é“¾æŽ¥",
-    musicLinkPlaceholder: "YouTube é“¾æŽ¥",
-    musicLinkDownload: "ä¸‹è½½",
-    musicUseBrowserCookies: "ä½¿ç”¨ Edge ç™»å½•çŠ¶æ€",
+    musicTierDropHint: "拖到这里分级",
+    musicAddHint: "支持 mp3 / wav / m4a / flac / ogg / opus。",
+    musicAddDropTitle: "加入音乐",
+    musicAddDropBody: "粘贴链接",
+    musicPickLocal: "本地文件",
+    musicAddMenuQuestion: "加入音乐",
+    musicAddViaUrl: "YouTube 链接",
+    musicAddViaFile: "MP3 文件",
+    musicAddViaLibrary: "Playlist / 其他",
+    musicPlaylistPlaceholder: "Playlist 链接",
+    musicLinkPlaceholder: "YouTube 链接",
+    musicLinkDownload: "下载",
+    musicUseBrowserCookies: "使用 Edge 登录状态",
     musicCookieFile: "cookies.txt",
     musicCookieReady: "cookies OK",
-    musicCookieUploaded: "å·²å¯¼å…¥ YouTube cookies.txtã€‚",
-    musicCookieUploadFailed: message => `å¯¼å…¥ cookies å¤±è´¥ï¼š${message}`,
+    musicCookieUploaded: "已导入 YouTube cookies.txt。",
+    musicCookieUploadFailed: message => `导入 cookies 失败：${message}`,
     musicLibraryTitle: "Library",
     musicLibraryDropTitle: "Add playlist",
-    musicLibraryDropBody: "æ‹–å…¥ YouTube playlistã€‚",
-    musicLibraryReady: "ç­‰å¾… playlist é“¾æŽ¥ã€‚",
-    musicLibraryEmpty: "Library è¿˜æ²¡æœ‰éŸ³ä¹",
-    musicLibraryImporting: provider => `æ­£åœ¨å‡†å¤‡ ${provider} playlistã€‚`,
-    musicLibraryStarted: name => `å·²å¼€å§‹æŠ“å–ï¼š${name}`,
-    musicLibraryFailed: message => `Library å¯¼å…¥å¤±è´¥ï¼š${message}`,
-    musicLibraryStatusQueued: "ç­‰å¾…ä¸­",
-    musicLibraryStatusGrabbing: "æŠ“å–ä¸­",
-    musicLibraryStatusReady: "å·²å®Œæˆ",
-    musicLibraryStatusFailed: "å¤±è´¥",
+    musicLibraryDropBody: "拖入 YouTube playlist。",
+    musicLibraryReady: "等待 playlist 链接。",
+    musicLibraryEmpty: "Library 还没有音乐",
+    musicLibraryImporting: provider => `正在准备 ${provider} playlist。`,
+    musicLibraryStarted: name => `已开始抓取：${name}`,
+    musicLibraryFailed: message => `Library 导入失败：${message}`,
+    musicLibraryStatusQueued: "等待中",
+    musicLibraryStatusGrabbing: "抓取中",
+    musicLibraryStatusReady: "已完成",
+    musicLibraryStatusFailed: "失败",
     musicLibraryMeta: (count, expected) => expected ? `${count}/${expected} é¦–` : `${count} é¦–`,
-    trackTitle: name => `${name}\nç‚¹å‡»æ’­æ”¾ï¼Œå³é”®å”¤å‡ºåˆ é™¤`,
-    deleteTrackLabel: name => `åˆ é™¤ ${name}`,
+    trackTitle: name => `${name}\n点击播放，右键唤出删除`,
+    deleteTrackLabel: name => `删除 ${name}`,
     trackMeta: (type, size) => `${type.toUpperCase()} \u00b7 ${size}`,
-    musicAdded: count => `å·²åŠ å…¥ ${count} é¦–éŸ³ä¹ã€‚`,
-    musicLyricsAdded: count => `å·²åŠ å…¥ ${count} ä¸ªæ­Œè¯æ–‡ä»¶ã€‚`,
-    musicDeleted: name => `å·²åˆ é™¤ï¼š${name}`,
-    musicLoadFailed: message => `è¯»å–éŸ³ä¹å¤±è´¥ï¼š${message}`,
-    musicUploadFailed: message => `åŠ å…¥éŸ³ä¹å¤±è´¥ï¼š${message}`,
-    musicPlayFailed: message => `æ’­æ”¾å¤±è´¥ï¼š${message}`,
-    musicLinkEmpty: "æ²¡æœ‰è¯»åˆ° URLã€‚",
-    musicLinkChecking: provider => `ä¸‹è½½ä¸­ï¼š${provider}`,
-    musicLinkPrepared: provider => `å·²è¯†åˆ«ï¼š${provider}`,
-    musicLinkImported: name => `å®Œæˆï¼š${name}`,
-    musicPromoted: name => `å·²åŠ å…¥æœ¬åœ°ï¼š${name}`,
-    musicPromoteFailed: message => `åŠ å…¥æœ¬åœ°å¤±è´¥ï¼š${message}`,
-    musicLinkFailed: message => `é“¾æŽ¥å¯¼å…¥å¤±è´¥ï¼š${message}`,
-    workspaceTitle: "å½“å‰å·¥ä½œ",
-    workspaceStatus: "å‡†å¤‡ä¸­",
-    randomRealmSectionLabel: "éšæœºé¢†åŸŸ",
-    randomRealmTitle: "éšæœºé¢†åŸŸç®¡ç†",
-    randomRealmStatus: "é¡¹ç›®ä¸­",
-    randomRealmProjectLabel: "é¡¹ç›®",
-    randomRealmUnityLabel: "Unity å·¥ç¨‹",
-    randomRealmBuilderLabel: "Builder ç³»ç»Ÿ",
-    randomRealmGroundLabel: "åœ°é¢é¡µé¢",
-    randomRealmPipelineLabel: "èµ„äº§æµç¨‹",
-    randomRealmCommunityLabel: "ç¤¾ç¾¤",
-    randomRealmSurfaceTitle: "åœ°é¢ä¸Žåœºæ™¯",
-    randomRealmSurfaceStatus: "é¢„ç•™ä¸­",
-    randomRealmSurfaceBody: "è¿™é‡Œå…ˆç»™åœ°é¢é¡µé¢ã€å»ºç­‘æ”¾ç½®ã€åœºæ™¯æ£€æŸ¥å’Œå¯¼å‡ºå…¥å£ç•™ä½ç½®ã€‚",
-    randomRealmReleaseTitle: "å‘å¸ƒæŽ§åˆ¶",
-    randomRealmReleaseBody: "Steamworksã€å‘å¸ƒåŒ…ã€å®£ä¼ ç´ æå’Œå·¥ç¨‹å…¥å£ã€‚",
-    randomRealmOpenReady: "å°±ç»ª",
-    randomRealmSteamworks: "Steamworks åŽå°",
-    randomRealmPublishFolder: "Publish æ–‡ä»¶å¤¹",
-    randomRealmProjectFolder: "Unity å·¥ç¨‹",
-    randomRealmPromoFolder: "å®£ä¼ ç´ æ",
-    randomRealmOpening: name => `æ­£åœ¨æ‰“å¼€ï¼š${name}`,
-    randomRealmOpened: name => `å·²æ‰“å¼€ï¼š${name}`,
+    musicAdded: count => `已加入 ${count} 首音乐。`,
+    musicLyricsAdded: count => `已加入 ${count} 个歌词文件。`,
+    musicDeleted: name => `已删除：${name}`,
+    musicLoadFailed: message => `读取音乐失败：${message}`,
+    musicUploadFailed: message => `加入音乐失败：${message}`,
+    musicPlayFailed: message => `播放失败：${message}`,
+    musicLinkEmpty: "没有读到 URL。",
+    musicLinkChecking: provider => `下载中：${provider}`,
+    musicLinkPrepared: provider => `已识别：${provider}`,
+    musicLinkImported: name => `完成：${name}`,
+    musicPromoted: name => `已加入本地：${name}`,
+    musicPromoteFailed: message => `加入本地失败：${message}`,
+    musicLinkFailed: message => `链接导入失败：${message}`,
+    workspaceTitle: "当前工作",
+    workspaceStatus: "准备中",
+    randomRealmSectionLabel: "随机领域",
+    randomRealmTitle: "随机领域管理",
+    randomRealmStatus: "项目中",
+    randomRealmProjectLabel: "项目",
+    randomRealmUnityLabel: "Unity 工程",
+    randomRealmBuilderLabel: "Builder 系统",
+    randomRealmGroundLabel: "地面页面",
+    randomRealmPipelineLabel: "资产流程",
+    randomRealmCommunityLabel: "社群",
+    randomRealmSurfaceTitle: "地面与场景",
+    randomRealmSurfaceStatus: "预留中",
+    randomRealmSurfaceBody: "这里先给地面页面、建筑放置、场景检查和导出入口留位置。",
+    randomRealmReleaseTitle: "发布控制",
+    randomRealmReleaseBody: "Steamworks、发布包、宣传素材和工程入口。",
+    randomRealmOpenReady: "就绪",
+    randomRealmSteamworks: "Steamworks 后台",
+    randomRealmPublishFolder: "Publish 文件夹",
+    randomRealmProjectFolder: "Unity 工程",
+    randomRealmPromoFolder: "宣传素材",
+    randomRealmOpening: name => `正在打开：${name}`,
+    randomRealmOpened: name => `已打开：${name}`,
     randomRealmFocused: name => `\u5df2\u524d\u7f6e：${name}`,
-    randomRealmOpenFailed: message => `æ‰“å¼€å¤±è´¥ï¼š${message}`,
+    randomRealmOpenFailed: message => `打开失败：${message}`,
     randomRealmArtTitle: "Art Supporter",
     randomRealmBlenderProjectLabel: "Blender \u9879\u76ee",
-    randomRealmProjectSearchLabel: "é¡¹ç›®æœç´¢",
-    randomRealmProjectSearchPlaceholder: "è¾“å…¥é¡¹ç›®åæˆ–è·¯å¾„åŽæœç´¢",
-    randomRealmArtTypeLabel: "å¯¹è±¡ç±»åž‹",
-    randomRealmObjectSearchPlaceholder: "æœç´¢ç‰©ä½“",
-    randomRealmSyncLiveSelection: "åŒæ­¥é€‰ä¸­",
-    randomRealmLiveSynced: name => `å·²åŒæ­¥ Blender é€‰ä¸­ç‰©ä½“ï¼š${name}`,
-    randomRealmLiveUnavailable: "æ²¡æœ‰æ£€æµ‹åˆ°å®žæ—¶ Blender é€‰ä¸­çŠ¶æ€",
-    randomRealmLiveProjectMismatch: "å½“å‰ Blender æ‰“å¼€çš„ä¸æ˜¯è¿™ä¸ªé¡¹ç›®",
-    randomRealmLiveObjectMissing: name => `Blender é€‰ä¸­çš„ç‰©ä½“ä¸åœ¨å½“å‰åˆ—è¡¨ï¼š${name}`,
-    randomRealmUsedTexturesLabel: "ç”¨åˆ°çš„è´´å›¾",
+    randomRealmProjectSearchLabel: "项目搜索",
+    randomRealmProjectSearchPlaceholder: "输入项目名或路径后搜索",
+    randomRealmArtTypeLabel: "对象类型",
+    randomRealmObjectSearchPlaceholder: "搜索物体",
+    randomRealmSyncLiveSelection: "同步选中",
+    randomRealmLiveSynced: name => `已同步 Blender 选中物体：${name}`,
+    randomRealmLiveUnavailable: "没有检测到实时 Blender 选中状态",
+    randomRealmLiveProjectMismatch: "当前 Blender 打开的不是这个项目",
+    randomRealmLiveObjectMissing: name => `Blender 选中的物体不在当前列表：${name}`,
+    randomRealmUsedTexturesLabel: "用到的贴图",
     randomRealmTextureManagerTitle: "\u8d34\u56fe\u7ba1\u7406\u5668",
     randomRealmTextureManagerCount: (visible, total) => `${visible}/${total} \u5f20`,
     randomRealmTextureInspectorLabel: "\u9009\u4e2d\u8d34\u56fe",
@@ -942,63 +942,63 @@ const i18n = {
     randomRealmTextureStateReady: "\u53ef\u7528",
     randomRealmTextureStateMissing: "\u7f3a\u5931",
     randomRealmTextureStatePending: "\u5f85\u5e94\u7528",
-    randomRealmTexturesRefreshed: (name, count) => `å·²åˆ·æ–° ${name}ï¼š${count} å¼ è´´å›¾`,
+    randomRealmTexturesRefreshed: (name, count) => `已刷新 ${name}：${count} 张贴图`,
     randomRealmAllMaterials: "All",
     randomRealmOldTextureLabel: "Old",
     randomRealmNewTextureLabel: "New",
-    randomRealmTextureNotSelected: "æœªé€‰æ‹©",
-    randomRealmNewTextureSlot: "æ–° Map æ§½",
-    randomRealmDropNewTexture: "æŠŠæ–°è´´å›¾æˆ–ä¸€ç»„ PBR æ‹–åˆ°è¿™é‡Œ",
-    randomRealmTexturePreviewEmpty: "æš‚æ— é¢„è§ˆ",
-    randomRealmTexturePreviewUnsupported: "æ— æ³•é¢„è§ˆ",
-    randomRealmTextureDragHint: "åŒå‡»æ‰“å¼€åŽŸæ–‡ä»¶ï¼›æ‹–åˆ° Photoshop æ—¶ä¼šå°½é‡æŒ‰æ–‡ä»¶æŠ•é€’ã€‚è·¯å¾„ï¼š",
-    randomRealmNativeDragStarted: "æ­£åœ¨ç”¨ Windows åŽŸç”Ÿæ–‡ä»¶æ‹–æ‹½",
-    randomRealmTextureOpened: (name, app) => `å·²æ‰“å¼€è´´å›¾ï¼š${name}${app ? `ï¼ˆ${app}ï¼‰` : ""}`,
-    randomRealmTextureOpenFailed: message => `æ‰“å¼€è´´å›¾å¤±è´¥ï¼š${message}`,
-    randomRealmTexturePacked: (name, location) => `å·²è£…å…¥ ${location || "textures"}ï¼š${name}`,
-    randomRealmTexturePackedMany: (count, location) => `å·²è£…ç®± ${count} ä¸ªè´´å›¾åŒ…åˆ° ${location || "textures"}ã€‚`,
-    randomRealmTextureAutoPackedMany: (count, location) => `å·²è‡ªåŠ¨è£…ç®± ${count} ä¸ªè´´å›¾åŒ…åˆ° ${location || "textures"}ï¼Œç­‰ Blender Apply åŽä¼šæ¸…ç©º Newã€‚`,
-    randomRealmTextureAppliedCleared: count => `Blender å·² Applyï¼Œå·²æ¸…ç©º ${count} ä¸ª New è´´å›¾ã€‚`,
+    randomRealmTextureNotSelected: "未选择",
+    randomRealmNewTextureSlot: "新 Map 槽",
+    randomRealmDropNewTexture: "把新贴图或一组 PBR 拖到这里",
+    randomRealmTexturePreviewEmpty: "暂无预览",
+    randomRealmTexturePreviewUnsupported: "无法预览",
+    randomRealmTextureDragHint: "双击打开原文件；拖到 Photoshop 时会尽量按文件投递。路径：",
+    randomRealmNativeDragStarted: "正在用 Windows 原生文件拖拽",
+    randomRealmTextureOpened: (name, app) => `已打开贴图：${name}${app ? `（${app}）` : ""}`,
+    randomRealmTextureOpenFailed: message => `打开贴图失败：${message}`,
+    randomRealmTexturePacked: (name, location) => `已装入 ${location || "textures"}：${name}`,
+    randomRealmTexturePackedMany: (count, location) => `已装箱 ${count} 个贴图包到 ${location || "textures"}。`,
+    randomRealmTextureAutoPackedMany: (count, location) => `已自动装箱 ${count} 个贴图包到 ${location || "textures"}，等 Blender Apply 后会清空 New。`,
+    randomRealmTextureAppliedCleared: count => `Blender 已 Apply，已清空 ${count} 个 New 贴图。`,
     randomRealmStageBlankTexture: "+ Map",
-    randomRealmBlankTextureStaged: name => `å·²åŠ å…¥ç©ºè´´å›¾æ§½ï¼š${name}`,
-    randomRealmTextureStagedRemoved: name => `å·²ç§»å‡ºå¾…è£…ç®±è´´å›¾ï¼š${name}`,
-    randomRealmTextureRemovalPackaged: (name, packageName) => `å·²è£…ç®±åˆ é™¤æŒ‡ä»¤ï¼š${name}${packageName ? `ï¼ˆ${packageName}ï¼‰` : ""}`,
-    randomRealmTexturePackReady: "æŠŠæ–°è´´å›¾æ‹–è¿›æ¥åŽä¼šè‡ªåŠ¨è£…å…¥ Blender texturesï¼›Apply å‰ä¸ä¼šç›´æŽ¥ä¿®æ”¹ Blenderã€‚",
-    randomRealmTextureDimensionsUnknown: "å°ºå¯¸æœªçŸ¥",
-    randomRealmTextureDimensionCancelled: "å·²å–æ¶ˆï¼šè´´å›¾å°ºå¯¸æ²¡æœ‰é€šè¿‡ç¡®è®¤",
-    randomRealmTextureSizeMismatchConfirm: (oldSize, newSize) => `è´´å›¾å°ºå¯¸ä¸ä¸€è‡´ã€‚\n\nOld: ${oldSize}\nNew: ${newSize}\n\nä»ç„¶è¦è‡ªåŠ¨è£…ç®±å—ï¼Ÿ`,
-    randomRealmTextureSizeUnknownConfirm: (oldSize, newSize) => `æœ‰è´´å›¾å°ºå¯¸æ— æ³•ç¡®è®¤ã€‚\n\nOld: ${oldSize}\nNew: ${newSize}\n\nä»ç„¶è¦è‡ªåŠ¨è£…ç®±å—ï¼Ÿ`,
-    randomRealmArtReady: "å°±ç»ª",
-    randomRealmBlenderLoading: "æ­£åœ¨è¯»å– Blender é¡¹ç›®",
-    randomRealmBlenderProjectLoaded: count => `å·²æ‰¾åˆ° ${count} ä¸ª Blender é¡¹ç›®`,
-    randomRealmBlenderNoProject: "æ²¡æœ‰æ‰¾åˆ° Blender é¡¹ç›®",
-    randomRealmBlenderNoObject: "æ²¡æœ‰æ‰¾åˆ°ç‰©ä½“",
-    randomRealmBlenderNoTexture: "è¿™ä¸ªç‰©ä½“è¿˜æ²¡æœ‰è´´å›¾",
-    randomRealmMaterialNoTexture: "è¿™ä¸ªæè´¨æ²¡æœ‰ image texture",
-    randomRealmMaterialNoTextureHint: "åˆ‡åˆ° All æˆ–å…¶ä»–æè´¨å¯ä»¥æŸ¥çœ‹å·²æœ‰è´´å›¾",
-    randomRealmBlenderObjectLoaded: count => `å·²è¯»å– ${count} ä¸ªç‰©ä½“`,
-    randomRealmTextureUploaded: name => `æ–°è´´å›¾å·²é¢„è§ˆï¼š${name}`,
-    randomRealmTextureUploadedMany: (count, kinds) => `å·²å¯¼å…¥ ${count} å¼ è´´å›¾ï¼š${kinds}`,
-    randomRealmBlenderActionFailed: message => `å¤„ç†å¤±è´¥ï¼š${message}`,
-    randomRealmCodexObjectLabel: "å½“å‰ç‰©ä½“",
-    randomRealmSlotsTitle: "éšæœºé¢†åŸŸåŒºå—",
-    randomRealmSlotBuilder: "Builder / å»ºç­‘",
-    randomRealmSlotGround: "Ground / åœ°é¢",
-    randomRealmSlotAssets: "Assets / æè´¨",
-    randomRealmSlotCommunity: "Community / ç¤¾ç¾¤",
-    randomRealmSlotBuilderBody: "å»ºç­‘ã€éƒ¨ä»¶ã€æ”¾ç½®è§„åˆ™",
-    randomRealmSlotGroundBody: "åœ°é¢é¡µé¢ã€åœºæ™¯å±‚çº§",
-    randomRealmSlotAssetsBody: "Blenderã€Texturesã€Unity",
-    randomRealmSlotCommunityBody: "å‘å±•ç¤¾ç¾¤ã€å‘å¸ƒèŠ‚å¥",
-    activeProjectLabel: "é¡¹ç›®",
-    nextToolLabel: "ä¸‹ä¸€å·¥å…·",
-    blenderExportTitle: "Blender å¯¼å‡ºå·¥å…·",
-    reservedStatus: "å·²é¢„ç•™",
-    sourceFolderLabel: "æ¥æº",
-    targetFolderLabel: "ç›®æ ‡",
-    ruleLabel: "è§„åˆ™",
-    pendingRule: "å¾…é…ç½®",
-    quickSlotsTitle: "å¿«æ·åŒº",
+    randomRealmBlankTextureStaged: name => `已加入空贴图槽：${name}`,
+    randomRealmTextureStagedRemoved: name => `已移出待装箱贴图：${name}`,
+    randomRealmTextureRemovalPackaged: (name, packageName) => `已装箱删除指令：${name}${packageName ? `（${packageName}）` : ""}`,
+    randomRealmTexturePackReady: "把新贴图拖进来后会自动装入 Blender textures；Apply 前不会直接修改 Blender。",
+    randomRealmTextureDimensionsUnknown: "尺寸未知",
+    randomRealmTextureDimensionCancelled: "已取消：贴图尺寸没有通过确认",
+    randomRealmTextureSizeMismatchConfirm: (oldSize, newSize) => `贴图尺寸不一致。\n\nOld: ${oldSize}\nNew: ${newSize}\n\n仍然要自动装箱吗？`,
+    randomRealmTextureSizeUnknownConfirm: (oldSize, newSize) => `有贴图尺寸无法确认。\n\nOld: ${oldSize}\nNew: ${newSize}\n\n仍然要自动装箱吗？`,
+    randomRealmArtReady: "就绪",
+    randomRealmBlenderLoading: "正在读取 Blender 项目",
+    randomRealmBlenderProjectLoaded: count => `已找到 ${count} 个 Blender 项目`,
+    randomRealmBlenderNoProject: "没有找到 Blender 项目",
+    randomRealmBlenderNoObject: "没有找到物体",
+    randomRealmBlenderNoTexture: "这个物体还没有贴图",
+    randomRealmMaterialNoTexture: "这个材质没有 image texture",
+    randomRealmMaterialNoTextureHint: "切到 All 或其他材质可以查看已有贴图",
+    randomRealmBlenderObjectLoaded: count => `已读取 ${count} 个物体`,
+    randomRealmTextureUploaded: name => `新贴图已预览：${name}`,
+    randomRealmTextureUploadedMany: (count, kinds) => `已导入 ${count} 张贴图：${kinds}`,
+    randomRealmBlenderActionFailed: message => `处理失败：${message}`,
+    randomRealmCodexObjectLabel: "当前物体",
+    randomRealmSlotsTitle: "随机领域区块",
+    randomRealmSlotBuilder: "Builder / 建筑",
+    randomRealmSlotGround: "Ground / 地面",
+    randomRealmSlotAssets: "Assets / 材质",
+    randomRealmSlotCommunity: "Community / 社群",
+    randomRealmSlotBuilderBody: "建筑、部件、放置规则",
+    randomRealmSlotGroundBody: "地面页面、场景层级",
+    randomRealmSlotAssetsBody: "Blender、Textures、Unity",
+    randomRealmSlotCommunityBody: "发展社群、发布节奏",
+    activeProjectLabel: "项目",
+    nextToolLabel: "下一工具",
+    blenderExportTitle: "Blender 导出工具",
+    reservedStatus: "已预留",
+    sourceFolderLabel: "来源",
+    targetFolderLabel: "目标",
+    ruleLabel: "规则",
+    pendingRule: "待配置",
+    quickSlotsTitle: "快捷区",
     workspaceTodoSaveFailed: "清单未能保存，请检查浏览器存储空间后重试。",
     workspacePlanLoadFailed: "本地计划未能应用，已保留原清单。",
     workspacePlanCacheMissing: "本地计划暂不可用，已保留现有任务。",
@@ -1012,87 +1012,87 @@ const i18n = {
     workspaceTodoCategoryLabel: "任务类别",
     addWorkspaceTodo: "加入",
     resetWorkspaceTodo: "恢复本地计划",
-    githubDownloadsTitle: "GitHub ä¸‹è½½",
-    storeUpdatesTitle: "Microsoft Store æ›´æ–°",
-    githubDownloadsStatus: "å¾…è¿žæŽ¥",
-    githubDownloadsReady: "å·²å®šä½",
-    githubDownloadsMissing: "æœªè¿žæŽ¥",
-    githubDownloadsResolving: "æ­£åœ¨å®šä½ GitHub Releases...",
-    githubDownloadsBody: "æ‰“å¼€ Codex World çš„ GitHub Releases ä¸‹è½½é¡µã€‚",
-    githubDownloadsLink: "Release é¡µé¢",
-    openGithubDownloads: "æ‰“å¼€ä¸‹è½½é¡µ",
-    githubDownloadsFound: url => `ä¸‹è½½é¡µï¼š${url}`,
-    githubDownloadsNotConfigured: "è¿˜æ²¡æœ‰è¿žæŽ¥ GitHub ä»“åº“ã€‚ç»™ Codex World æ·»åŠ  origin ä»¥åŽï¼Œè¿™é‡Œä¼šè‡ªåŠ¨å®šä½åˆ° Releasesã€‚",
-    githubDownloadsOpenFailed: message => `æ‰“å¼€ GitHub ä¸‹è½½é¡µå¤±è´¥ï¼š${message}`,
-    consoleUpdateChecking: "æ­£åœ¨æ£€æŸ¥",
-    consoleUpdateLatest: "å·²æ˜¯æœ€æ–°ç‰ˆ",
-    consoleUpdateManagedByStore: "ç”± Microsoft Store ç®¡ç†",
-    consoleUpdateAvailable: version => `å¯æ›´æ–°åˆ° v${version}`,
-    consoleUpdateNoRelease: "å°šæœªæ‰¾åˆ°å‘å¸ƒç‰ˆ",
-    consoleUpdateAuto: "è‡ªåŠ¨",
-    consoleUpdateRefresh: "æ£€æŸ¥æ›´æ–°",
-    consoleUpdateInstall: "æ›´æ–°",
-    consoleUpdateDownload: "ä¸‹è½½",
-    consoleUpdateInstallProduct: "å®‰è£…",
-    consoleUpdateOpen: "æ‰“å¼€",
+    githubDownloadsTitle: "GitHub 下载",
+    storeUpdatesTitle: "Microsoft Store 更新",
+    githubDownloadsStatus: "待连接",
+    githubDownloadsReady: "已定位",
+    githubDownloadsMissing: "未连接",
+    githubDownloadsResolving: "正在定位 GitHub Releases...",
+    githubDownloadsBody: "打开 Codex World 的 GitHub Releases 下载页。",
+    githubDownloadsLink: "Release 页面",
+    openGithubDownloads: "打开下载页",
+    githubDownloadsFound: url => `下载页：${url}`,
+    githubDownloadsNotConfigured: "还没有连接 GitHub 仓库。给 Codex World 添加 origin 以后，这里会自动定位到 Releases。",
+    githubDownloadsOpenFailed: message => `打开 GitHub 下载页失败：${message}`,
+    consoleUpdateChecking: "正在检查",
+    consoleUpdateLatest: "已是最新版",
+    consoleUpdateManagedByStore: "由 Microsoft Store 管理",
+    consoleUpdateAvailable: version => `可更新到 v${version}`,
+    consoleUpdateNoRelease: "尚未找到发布版",
+    consoleUpdateAuto: "自动",
+    consoleUpdateRefresh: "检查更新",
+    consoleUpdateInstall: "更新",
+    consoleUpdateDownload: "下载",
+    consoleUpdateInstallProduct: "安装",
+    consoleUpdateOpen: "打开",
     consoleUpdateRelease: "Release",
-    consoleUpdateTop: (name, version) => `æ›´æ–° ${name} v${version}`,
-    consoleUpdateTopCount: count => `${count} é¡¹æ›´æ–°`,
-    consoleUpdateNotInstalled: "å°šæœªå®‰è£…",
-    consoleUpdateSource: "æºç ç›®å½•ç”± GitHub Desktop ç®¡ç†",
-    consoleUpdateInstalling: "æ­£åœ¨å®‰è£…æ›´æ–°",
-    consoleUpdateRestarting: "æ­£åœ¨é‡å¯ Codex Console",
-    consoleUpdateConfirm: version => `å°†è‡ªåŠ¨æŠŠ Codex Console æ›´æ–°åˆ° v${version} å¹¶é‡æ–°å¯åŠ¨ã€‚çŽ°åœ¨ç»§ç»­ï¼Ÿ`,
-    worldUpdateConfirm: (version, installed) => `å°†è‡ªåŠ¨${installed ? "æ›´æ–°" : "å®‰è£…"} Codex World v${version}ã€‚çŽ°åœ¨ç»§ç»­ï¼Ÿ`,
-    consoleUpdateTimedOut: "æ›´æ–°æœªèƒ½åœ¨è§„å®šæ—¶é—´å†…å®Œæˆã€‚",
-    consoleUninstall: "å¸è½½",
-    consoleUninstallConfirm: name => `å°†å¸è½½ ${name}ï¼Œå¹¶æ°¸ä¹…åˆ é™¤å®ƒåœ¨è¿™å°ç”µè„‘ä¸Šçš„è®¾ç½®ã€ç¼“å­˜å’Œæœ¬åœ°èµ„æºã€‚Blender é¡¹ç›®ã€GitHub ä»“åº“å’Œå¤–éƒ¨æ¡Œé¢å¸ƒå±€ä¸ä¼šè¢«åˆ é™¤ã€‚ç»§ç»­ï¼Ÿ`,
-    consoleUninstalling: "å¸è½½ç¨‹åºå·²æ‰“å¼€",
-    consoleUninstallFailed: message => `æ— æ³•æ‰“å¼€å¸è½½ç¨‹åºï¼š${message}`,
-    consoleUpdateFailed: message => `æ›´æ–°å¤±è´¥ï¼š${message}`,
-    todoGroupPieces: "Pieces / éƒ¨ä»¶",
-    todoGroupTextures: "Blend -> Unity è´´å›¾",
-    todoGroupStory: "Story / æ•…äº‹",
+    consoleUpdateTop: (name, version) => `更新 ${name} v${version}`,
+    consoleUpdateTopCount: count => `${count} 项更新`,
+    consoleUpdateNotInstalled: "尚未安装",
+    consoleUpdateSource: "源码目录由 GitHub Desktop 管理",
+    consoleUpdateInstalling: "正在安装更新",
+    consoleUpdateRestarting: "正在重启 Codex Console",
+    consoleUpdateConfirm: version => `将自动把 Codex Console 更新到 v${version} 并重新启动。现在继续？`,
+    worldUpdateConfirm: (version, installed) => `将自动${installed ? "更新" : "安装"} Codex World v${version}。现在继续？`,
+    consoleUpdateTimedOut: "更新未能在规定时间内完成。",
+    consoleUninstall: "卸载",
+    consoleUninstallConfirm: name => `将卸载 ${name}，并永久删除它在这台电脑上的设置、缓存和本地资源。Blender 项目、GitHub 仓库和外部桌面布局不会被删除。继续？`,
+    consoleUninstalling: "卸载程序已打开",
+    consoleUninstallFailed: message => `无法打开卸载程序：${message}`,
+    consoleUpdateFailed: message => `更新失败：${message}`,
+    todoGroupPieces: "Pieces / 部件",
+    todoGroupTextures: "Blend -> Unity 贴图",
+    todoGroupStory: "Story / 故事",
     todoGroupLevel: "LevelMaker / LevelDesigner",
     todoGroupMiniGame: "MiniGame",
-    todoGroupCommunity: "Community / ç¤¾ç¾¤",
-    todoPieceStairs: "æ¥¼æ¢¯ / Stairs",
-    todoPieceKit: "æ•´ç†å¯å¤ç”¨éƒ¨ä»¶æ¸…å•",
-    todoTexturePipeline: "Downloads æè´¨å…ˆè¿› Blenderï¼Œå†è¿› Unity Textures",
-    todoTextureFolder: "æ¯å¥—è´´å›¾ç”¨è‹±æ–‡æ–‡ä»¶å¤¹åŒ…è£…",
-    todoStorySynopsis: "å†™æ•…äº‹ç®€ä»‹ / æ¢—æ¦‚",
-    todoStoryBeats: "æ•´ç†ä¸»çº¿èŠ‚ç‚¹",
-    todoLevelBlockout: "åšå…³å¡ç™½ç›’å’ŒèŠ‚å¥",
-    todoLevelDesigner: "æ•´ç† LevelDesigner å·¥ä½œé¡¹",
-    todoMiniGameSandbox: "ä¿ç•™è‡ªç”±å®žéªŒä½",
-    todoCommunityDevelop: "å‘å±•ç¤¾ç¾¤",
-    todoEmptyGroup: "è¿™ä¸€ç»„å…ˆç©ºç€",
+    todoGroupCommunity: "Community / 社群",
+    todoPieceStairs: "楼梯 / Stairs",
+    todoPieceKit: "整理可复用部件清单",
+    todoTexturePipeline: "Downloads 材质先进 Blender，再进 Unity Textures",
+    todoTextureFolder: "每套贴图用英文文件夹包装",
+    todoStorySynopsis: "写故事简介 / 梗概",
+    todoStoryBeats: "整理主线节点",
+    todoLevelBlockout: "做关卡白盒和节奏",
+    todoLevelDesigner: "整理 LevelDesigner 工作项",
+    todoMiniGameSandbox: "保留自由实验位",
+    todoCommunityDevelop: "发展社群",
+    todoEmptyGroup: "这一组先空着",
     todoDeleteLabel: name => `删除 ${name}`,
     todoExpandHint: "单击展开／收起；Ctrl、Shift 或 Alt + 单击展开全部",
-    downloadIntakeLabel: "è¯»å– Downloads",
-    openDownloads: "æ‰“å¼€ Downloads",
-    downloadsOpened: "å·²æ‰“å¼€ Downloadsã€‚",
-    openDownloadsFailed: message => `æ‰“å¼€ Downloads å¤±è´¥ï¼š${message}`,
-    scanDownloads: "æ‰«æä¸‹è½½",
-    importMaterial: "å¯¼å…¥æè´¨",
+    downloadIntakeLabel: "读取 Downloads",
+    openDownloads: "打开 Downloads",
+    downloadsOpened: "已打开 Downloads。",
+    openDownloadsFailed: message => `打开 Downloads 失败：${message}`,
+    scanDownloads: "扫描下载",
+    importMaterial: "导入材质",
     renderTextureZoneTitle: "Render Textures",
-    renderTextureZoneBody: "æŠŠå¯¼å‡ºçš„è´´å›¾ã€æˆªå›¾æˆ– zip æ‹–åˆ°è¿™é‡Œï¼Œä¼šè‡ªåŠ¨è£…è¿›è‹±æ–‡æ–‡ä»¶å¤¹ã€‚",
-    renderTextureReady: "ç­‰å¾…æ‹–å…¥æ–‡ä»¶ã€‚",
-    renderTextureDisabled: "å…ˆæ‰“å¼€è¯»å– Downloadsã€‚",
-    renderTextureDragging: "æ¾æ‰‹åŽå¯¼å…¥åˆ° Texture æ–‡ä»¶å¤¹ã€‚",
-    renderTextureImporting: count => `æ­£åœ¨æ•´ç† ${count} ä¸ªæ–‡ä»¶ã€‚`,
-    renderTextureImported: (folder, count) => `å·²å¯¼å…¥ ${count} ä¸ªè´´å›¾ï¼š${folder}`,
-    renderTextureFailed: message => `Workzone å¯¼å…¥å¤±è´¥ï¼š${message}`,
-    latestMaterialLabel: "æœ€æ–°å€™é€‰",
-    noMaterialCandidate: "æœªå‘çŽ°",
-    materialReady: "å‡†å¤‡å¯¼å…¥",
-    materialEmpty: "ä¸‹è½½æ–‡ä»¶å¤¹é‡Œæ²¡æœ‰å¯å¯¼å…¥çš„æè´¨",
-    materialCandidateTitle: name => `${name}\nç‚¹å‡»é€‰æ‹©ï¼ŒåŒå‡»å¯¼å…¥`,
-    materialCandidateMeta: (type, size) => `${type === "package" ? "åŽ‹ç¼©åŒ…" : "è´´å›¾"} \u00b7 ${size}`,
-    materialLoadFailed: message => `æ‰«æå¤±è´¥ï¼š${message}`,
-    materialImporting: name => `æ­£åœ¨å¯¼å…¥ï¼š${name}`,
-    materialImported: (name, count) => `å·²å¯¼å…¥ ${name}ï¼Œå…± ${count} ä¸ªè´´å›¾ã€‚`,
-    materialImportFailed: message => `å¯¼å…¥å¤±è´¥ï¼š${message}`
+    renderTextureZoneBody: "把导出的贴图、截图或 zip 拖到这里，会自动装进英文文件夹。",
+    renderTextureReady: "等待拖入文件。",
+    renderTextureDisabled: "先打开读取 Downloads。",
+    renderTextureDragging: "松手后导入到 Texture 文件夹。",
+    renderTextureImporting: count => `正在整理 ${count} 个文件。`,
+    renderTextureImported: (folder, count) => `已导入 ${count} 个贴图：${folder}`,
+    renderTextureFailed: message => `Workzone 导入失败：${message}`,
+    latestMaterialLabel: "最新候选",
+    noMaterialCandidate: "未发现",
+    materialReady: "准备导入",
+    materialEmpty: "下载文件夹里没有可导入的材质",
+    materialCandidateTitle: name => `${name}\n点击选择，双击导入`,
+    materialCandidateMeta: (type, size) => `${type === "package" ? "压缩包" : "贴图"} \u00b7 ${size}`,
+    materialLoadFailed: message => `扫描失败：${message}`,
+    materialImporting: name => `正在导入：${name}`,
+    materialImported: (name, count) => `已导入 ${name}，共 ${count} 个贴图。`,
+    materialImportFailed: message => `导入失败：${message}`
   },
   en: {
     consolePhoneMessages: "Phone relay",
@@ -3185,7 +3185,7 @@ function appendDocumentInline(parent, source, depth = 0) {
   parent.appendChild(document.createTextNode(value.slice(offset)));
 }
 
-function renderDocumentMarkdown(source, container) {
+function renderDocumentMarkdown(source, container, inline = appendDocumentInline) {
   container.replaceChildren();
   const lines = String(source).replace(/\r\n?/g, "\n").split("\n");
   const isTableRule = line => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line || "");
@@ -3204,19 +3204,19 @@ function renderDocumentMarkdown(source, container) {
     }
     const heading = line.match(/^(#{1,6})\s+(.+)/);
     if (heading) {
-      const node = document.createElement(`h${heading[1].length}`); appendDocumentInline(node, heading[2]);
+      const node = document.createElement(`h${heading[1].length}`); inline(node, heading[2]);
       container.appendChild(node); index += 1; continue;
     }
     if (index + 1 < lines.length && line.includes("|") && isTableRule(lines[index + 1])) {
       const wrap = document.createElement("div"); wrap.className = "document-table-scroll";
       const table = document.createElement("table"); const head = document.createElement("thead");
       const tr = document.createElement("tr");
-      for (const cell of tableCells(line)) { const th = document.createElement("th"); appendDocumentInline(th, cell); tr.appendChild(th); }
+      for (const cell of tableCells(line)) { const th = document.createElement("th"); inline(th, cell); tr.appendChild(th); }
       head.appendChild(tr); table.appendChild(head); index += 2;
       const body = document.createElement("tbody");
       while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
         const row = document.createElement("tr");
-        for (const cell of tableCells(lines[index++])) { const td = document.createElement("td"); appendDocumentInline(td, cell); row.appendChild(td); }
+        for (const cell of tableCells(lines[index++])) { const td = document.createElement("td"); inline(td, cell); row.appendChild(td); }
         body.appendChild(row);
       }
       table.appendChild(body); wrap.appendChild(table); container.appendChild(wrap); continue;
@@ -3227,14 +3227,14 @@ function renderDocumentMarkdown(source, container) {
       while (index < lines.length) {
         const item = lines[index].match(ordered ? /^\s*\d+[.)]\s+(.+)/ : /^\s*[-*+]\s+(.+)/);
         if (!item) break;
-        const li = document.createElement("li"); appendDocumentInline(li, item[1]); node.appendChild(li); index += 1;
+        const li = document.createElement("li"); inline(li, item[1]); node.appendChild(li); index += 1;
       }
       container.appendChild(node); continue;
     }
     if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) { container.appendChild(document.createElement("hr")); index += 1; continue; }
     const quote = line.match(/^>\s?(.*)/);
     const paragraph = document.createElement(quote ? "blockquote" : "p");
-    appendDocumentInline(paragraph, quote ? quote[1] : line);
+    inline(paragraph, quote ? quote[1] : line);
     container.appendChild(paragraph); index += 1;
   }
 }
@@ -17061,7 +17061,7 @@ function randomRealmStagedDraftForTexture(drafts, texture) {
 }
 
 function randomRealmStagedTextureKindLabel(texture) {
-  return texture?.inferredKind ? randomRealmTextureKindLabel(texture.inferredKind) : (language === "zh" ? "æœªè¯†åˆ«" : "Unknown");
+  return texture?.inferredKind ? randomRealmTextureKindLabel(texture.inferredKind) : (language === "zh" ? "未识别" : "Unknown");
 }
 
 function randomRealmStagedKindSummary(textures) {
@@ -21463,13 +21463,66 @@ scheduleClockTick();
   if (!panel) return;
   const modulePanel = panel.closest("[data-module-panel]");
   const byId = id => document.getElementById(`devRoom${id}`);
-  const ui = Object.fromEntries(["List", "Title", "SavedAt", "Read", "Editor", "TitleInput", "BodyInput", "Edit", "Save", "Copy", "New", "Reload", "Status"].map(id => [id, byId(id)]));
+  const ui = Object.fromEntries(["List", "Title", "SavedAt", "Read", "Editor", "TitleInput", "BodyInput", "BodyLabel", "Fields", "Agent", "AgentContent", "Edit", "Save", "Copy", "New", "Reload", "Status"].map(id => [id, byId(id)]));
   const copy = {
     zh: { badge: "文档", intro: "给 Dev 的文档，在这里查看和修改。", documents: "全部文档", newDocument: "＋ 新建", edit: "编辑", preview: "查看", save: "保存", titleLabel: "文档名称", bodyLabel: "正文", reload: "重新读取", placeholder: "在这里写下文档内容……", empty: "文档，从这里开始。", emptyBody: "这份总案先留空。点「编辑」写下内容，也可以新建其他文档。", loading: "正在读取文档……", ready: "保存在当前资料库 · Project Nexus / Dev Room", draft: "草稿已保留，点击保存后更新文档。", draftError: "草稿暂时无法保留，请先复制正文。", saved: "已保存到资料库。", saving: "正在保存……", conflict: "文档或资料库已改变，当前草稿已保留。可以保存为副本，保留两份内容。", failed: "文档暂时无法读取，请重试。", saveFailed: "保存失败，草稿已保留。", untitled: "未命名文档", overview: "总案", pending: "尚未填写", recovered: "已恢复未保存的草稿。", updated: "最后保存", dirty: " · 草稿" },
     en: { badge: "Documents", intro: "Documents for Dev. Read and edit them here.", documents: "All documents", newDocument: "+ New", edit: "Edit", preview: "View", save: "Save", titleLabel: "Document name", bodyLabel: "Content", reload: "Reload", placeholder: "Write your document here…", empty: "Start your document here.", emptyBody: "The overview is blank for now. Choose Edit to write, or create another document.", loading: "Loading documents…", ready: "Saved in the selected library · Project Nexus / Dev Room", draft: "Draft kept. Choose Save to update the document.", draftError: "The draft could not be kept. Copy your text before leaving.", saved: "Saved to the document library.", saving: "Saving…", conflict: "The document or library changed. Your draft is kept. Save as a copy to keep both versions.", failed: "Documents could not be loaded. Please retry.", saveFailed: "Save failed. Your draft is kept.", untitled: "Untitled document", overview: "Overview", pending: "Not yet written", recovered: "Unsaved draft restored.", updated: "Last saved", dirty: " · Draft" }
   };
   const words = () => copy[document.documentElement.lang.startsWith("zh") ? "zh" : "en"];
+  copy.zh.fieldError = "内容暂时不能保存，请保留当前页面并检查标题和正文。";
+  copy.en.fieldError = "The text cannot be saved yet. Keep this page open and check the title and content.";
+  copy.zh.structureReview = "这份文档的结构需要核对，原文和已有草稿已保留。";
+  copy.en.structureReview = "The document structure needs review. The original and any existing draft are kept.";
   let root = "", documents = [], current = null, editing = false, busy = false, sequence = 0;
+  let catalog = [], fieldModel = null, fieldSource = "", canonicalBody = "", fieldInvalid = false, listedSelection = null;
+  const bodyValue = () => fieldModel ? canonicalBody : ui.BodyInput.value;
+  const text = (zh, en) => document.documentElement.lang.startsWith("zh") ? zh : en;
+  const imported = () => /^<!-- rr-dev-room:/.test(ui.BodyInput.value);
+  function updateFields() {
+    if (!fieldModel) return true;
+    fieldModel.title = ui.TitleInput.value;
+    try {
+      canonicalBody = window.CodexDevRoomEditor.serialize(fieldSource, fieldModel);
+      ui.BodyInput.value = canonicalBody;
+      fieldInvalid = false; return true;
+    } catch { fieldInvalid = true; setStatus("fieldError"); return false; }
+  }
+  function prepareFields(source = ui.BodyInput.value) {
+    fieldModel = null; fieldSource = ""; fieldInvalid = false;
+    ui.Fields.replaceChildren();
+    if (imported() && window.CodexDevRoomEditor) {
+      try {
+        fieldSource = source; canonicalBody = source;
+        fieldModel = window.CodexDevRoomEditor.parse(fieldSource);
+        const field = (parent, id, label, value, multiline, changed) => {
+          const title = document.createElement("label"); title.htmlFor = id; title.textContent = label;
+          title.dataset.devRoomFieldLabel = id;
+          const input = document.createElement(multiline ? "textarea" : "input"); input.id = id;
+          input.value = value; input.spellcheck = false;
+          if (!multiline) input.maxLength = 200;
+          input.addEventListener("input", () => {
+            changed(input.value);
+            if (updateFields() && keepDraft()) setStatus("draft");
+            ui.Title.textContent = ui.TitleInput.value || words().untitled; renderList();
+          });
+          parent.append(title, input);
+        };
+        field(ui.Fields, "devRoomSummary", text("摘要", "Summary"), fieldModel.summary, true, value => { fieldModel.summary = value; });
+        const technical = document.createElement("details"); technical.className = "dev-room-agent-edit";
+        const label = document.createElement("summary"); label.textContent = text("Agent 资料", "Agent details"); technical.append(label);
+        const technicalIndexes = new Set(window.CodexDevRoomEditor.present(fieldSource).technical.map(section => section.index));
+        for (const section of fieldModel.sections) {
+          const group = document.createElement("section"); group.className = "dev-room-section-edit";
+          field(group, `devRoomSectionTitle${section.index}`, text(`第 ${section.index + 1} 节标题`, `Section ${section.index + 1} title`), section.title, false, value => { section.title = value; });
+          field(group, `devRoomSectionBody${section.index}`, text("正文", "Content"), section.body, true, value => { section.body = value; });
+          (technicalIndexes.has(section.index) ? technical : ui.Fields).appendChild(group);
+        }
+        if (technical.childElementCount > 1) ui.Fields.appendChild(technical);
+      } catch { fieldModel = null; ui.Fields.replaceChildren(); }
+    }
+    ui.Fields.hidden = !fieldModel;
+    ui.BodyInput.hidden = Boolean(fieldModel) || imported(); ui.BodyLabel.hidden = ui.BodyInput.hidden;
+  }
   let statusKey = "loading";
   const draftKey = () => `codex-console-dev-room-drafts-v1:${root}`;
   function drafts() {
@@ -21480,11 +21533,77 @@ scheduleClockTick();
     catch { return {}; }
   }
   function setStatus(key) { statusKey = key; ui.Status.textContent = words()[key]; }
+  function appendDevRoomInline(parent, source, depth = 0) {
+    const value = String(source);
+    if (depth > 4) { parent.appendChild(document.createTextNode(value)); return; }
+    const tokens = /(`[^`]+`|\*\*[^*]+\*\*|!?\[[^\]]*\]\((?:<[^>]+>|[^)]+)\))/g;
+    let offset = 0;
+    for (const match of value.matchAll(tokens)) {
+      parent.appendChild(document.createTextNode(value.slice(offset, match.index)));
+      const token = match[0];
+      if (token.startsWith("`") || token.startsWith("**")) {
+        const code = token.startsWith("`");
+        const node = document.createElement(code ? "code" : "strong");
+        if (code) node.textContent = token.slice(1, -1);
+        else appendDevRoomInline(node, token.slice(2, -2), depth + 1);
+        parent.appendChild(node);
+      } else {
+        const separator = token.indexOf("]("), image = token.startsWith("!");
+        const label = token.slice(image ? 2 : 1, separator);
+        const target = token.slice(separator + 2, -1).trim().replace(/^<|>$/g, "");
+        const linkedId = target.match(/^(?:#dev-room-([0-9a-f-]{36}|overview)|([0-9a-f-]{36})\.md)$/)?.slice(1).find(Boolean);
+        if (!image && linkedId && documents.some(item => item.id === linkedId)) {
+          const button = document.createElement("button"); button.type = "button";
+          button.className = "document-inline-link"; button.textContent = label;
+          button.addEventListener("click", () => void load(linkedId)); parent.appendChild(button);
+        } else if (!image && /^https?:\/\//i.test(target)) {
+          const link = document.createElement("a"); link.href = target; link.textContent = label;
+          link.target = "_blank"; link.rel = "noopener noreferrer"; parent.appendChild(link);
+        } else parent.appendChild(document.createTextNode(label));
+      }
+      offset = match.index + token.length;
+    }
+    parent.appendChild(document.createTextNode(value.slice(offset)));
+  }
+  function renderReading() {
+    let view;
+    try { view = window.CodexDevRoomEditor.present(bodyValue()); }
+    catch { view = { body: text("这份文档暂时无法排版。可以展开 Agent 资料查看原文。", "This document could not be formatted. Open Agent details to read the original."), technical: [], source: null }; }
+    let body = view.body;
+    const title = body.match(/^\s*# ([^\r\n]+)\r?\n/);
+    if (title?.[1] === ui.TitleInput.value) body = body.slice(title[0].length);
+    renderDocumentMarkdown(body, ui.Read, appendDevRoomInline);
+    ui.AgentContent.replaceChildren();
+    const note = document.createElement("p");
+    note.textContent = text("来源、文件位置和技术参考保存在这里，供查证和协作使用。", "Source information, file locations and technical references are kept here for review and collaboration.");
+    ui.AgentContent.appendChild(note);
+    const info = document.createElement("dl");
+    const item = (name, value) => {
+      const label = document.createElement("dt"); label.textContent = name;
+      const content = document.createElement("dd"); content.textContent = value; info.append(label, content);
+    };
+    item(text("保存位置", "Saved file"), `${root}/projects/Project Nexus/Dev Room/${current.id}.md`);
+    if (view.source) {
+      item(text("Unity 文档标识", "Unity document ID"), view.source.id);
+      item(text("Unity 资产标识", "Unity asset GUID"), view.source.guid);
+    }
+    ui.AgentContent.append(info);
+    for (const section of view.technical) {
+      const heading = document.createElement("h4"); heading.textContent = section.title;
+      const content = document.createElement("div"); renderDocumentMarkdown(section.body, content, appendDevRoomInline);
+      ui.AgentContent.append(heading, content);
+    }
+    const raw = document.createElement("details"); const label = document.createElement("summary");
+    label.textContent = text("原始格式（只读）", "Raw format (read only)");
+    const original = document.createElement("pre"); original.textContent = bodyValue();
+    raw.append(label, original); ui.AgentContent.append(raw);
+  }
   function keepDraft() {
     if (!current || !root || !editing) return true;
+    if (fieldInvalid) { setStatus("fieldError"); return false; }
     const saved = drafts();
-    const changed = current.restored || ui.TitleInput.value !== current.title || ui.BodyInput.value !== current.body || !current.revision && current.id !== "overview";
-    if (changed) saved[current.id] = { id: current.id, title: ui.TitleInput.value, body: ui.BodyInput.value, expectedRevision: current.revision, savedAt: new Date().toISOString() };
+    const changed = current.restored || ui.TitleInput.value !== current.title || bodyValue() !== current.body || !current.revision && current.id !== "overview";
+    if (changed) saved[current.id] = { id: current.id, title: ui.TitleInput.value, body: bodyValue(), expectedRevision: current.revision, savedAt: new Date().toISOString() };
     else delete saved[current.id];
     try { localStorage.setItem(draftKey(), JSON.stringify(saved)); return true; }
     catch { setStatus("draftError"); return false; }
@@ -21499,12 +21618,23 @@ scheduleClockTick();
     return { ...document, title: draft.title, body: draft.body, revision: draft.expectedRevision, restored: true };
   }
   function renderList() {
+    const scrollTop = ui.List.scrollTop;
     ui.List.replaceChildren();
     const all = new Map(documents.map(item => [item.id, item]));
     for (const item of Object.values(drafts())) {
       if (item && typeof item.id === "string" && typeof item.title === "string") all.set(item.id, { ...all.get(item.id), ...item, draft: true });
     }
-    for (const item of all.values()) {
+    const indexed = new Map(catalog.map((item, order) => [item.id, { ...item, order }]));
+    const ordered = [...all.values()].sort((a, b) => a.id === "overview" ? -1 : b.id === "overview" ? 1 : (indexed.get(a.id)?.order ?? 999) - (indexed.get(b.id)?.order ?? 999));
+    let previousGroup = null;
+    for (const item of ordered) {
+      const group = item.id === "overview" ? null : indexed.get(item.id)?.group || text("其他文档", "Other documents");
+      if (group && group !== previousGroup && indexed.size) {
+        const label = document.createElement("p"); label.className = "dev-room-group";
+        const names = { "Project Overview": "项目概览", Gameplay: "玩法", Systems: "系统", Content: "内容", Technical: "技术" };
+        label.textContent = text(names[group] || group, group); ui.List.appendChild(label);
+      }
+      previousGroup = group;
       const button = document.createElement("button");
       button.type = "button"; button.className = "dev-room-item";
       button.textContent = (item.id === "overview" && !item.updatedAt && !item.draft ? words().overview : item.title || words().untitled) + (item.draft ? words().dirty : "");
@@ -21512,6 +21642,16 @@ scheduleClockTick();
       button.disabled = busy;
       button.addEventListener("click", () => void load(item.id));
       ui.List.appendChild(button);
+    }
+    ui.List.scrollTop = scrollTop;
+    if (current?.id !== listedSelection) {
+      const active = ui.List.querySelector('[aria-current="true"]');
+      if (active) {
+        const item = active.getBoundingClientRect(), list = ui.List.getBoundingClientRect();
+        if (item.top < list.top) ui.List.scrollTop += item.top - list.top;
+        else if (item.bottom > list.bottom) ui.List.scrollTop += item.bottom - list.bottom;
+      }
+      listedSelection = current?.id;
     }
   }
   function render() {
@@ -21521,19 +21661,31 @@ scheduleClockTick();
     ui.Copy.hidden = statusKey !== "conflict";
     ui.BodyInput.placeholder = words().placeholder;
     ui.Editor.hidden = !editing; ui.Read.hidden = editing; ui.Save.hidden = !editing;
+    ui.Agent.hidden = editing || !current;
+    ui.Agent.querySelector("summary").textContent = text("Agent 资料", "Agent details");
+    for (const label of ui.Fields.querySelectorAll("[data-dev-room-field-label]")) {
+      const id = label.dataset.devRoomFieldLabel, index = Number(id.match(/Title(\d+)$/)?.[1]);
+      label.textContent = id === "devRoomSummary" ? text("摘要", "Summary") : id.includes("SectionTitle") ? text(`第 ${index + 1} 节标题`, `Section ${index + 1} title`) : words().bodyLabel;
+    }
+    const technicalLabel = ui.Fields.querySelector(".dev-room-agent-edit > summary");
+    if (technicalLabel) technicalLabel.textContent = text("Agent 资料", "Agent details");
     for (const element of [ui.Edit, ui.Save, ui.Copy, ui.New, ui.Reload, ui.TitleInput, ui.BodyInput]) element.disabled = busy || !current;
     ui.New.disabled = busy || !root;
     ui.Reload.disabled = busy;
+    ui.Edit.disabled = busy || !current || imported() && !fieldModel;
+    ui.Save.disabled = busy || !current || imported() && !fieldModel;
+    ui.Edit.title = imported() && !fieldModel ? text("文档结构需要核对，原文已保留。", "The document structure needs review. The original is kept.") : "";
+    for (const input of ui.Fields.querySelectorAll("input, textarea")) input.disabled = busy;
     if (current) {
       ui.Title.textContent = ui.TitleInput.value || words().untitled;
       ui.SavedAt.textContent = current.updatedAt ? `${words().updated} ${new Date(current.updatedAt).toLocaleString(document.documentElement.lang)}` : words().pending;
       if (!editing) {
-        if (ui.BodyInput.value.trim()) ui.Read.textContent = ui.BodyInput.value;
+        if (ui.BodyInput.value.trim()) renderReading();
         else {
           const empty = document.createElement("div"); empty.className = "dev-room-empty";
           const heading = document.createElement("strong"); heading.textContent = words().empty;
           const note = document.createElement("p"); note.textContent = words().emptyBody;
-          empty.append(heading, note); ui.Read.replaceChildren(empty);
+          empty.append(heading, note); ui.Read.replaceChildren(empty); ui.Agent.hidden = true;
         }
       }
     }
@@ -21543,6 +21695,8 @@ scheduleClockTick();
     editing = false;
     current = applyDraft(document);
     ui.TitleInput.value = current.title; ui.BodyInput.value = current.body;
+    ui.Agent.open = false; prepareFields(current.body);
+    if (imported() && !fieldModel) { editing = false; setStatus("structureReview"); }
     render();
   }
   async function request(url, options) {
@@ -21560,9 +21714,15 @@ scheduleClockTick();
       if (!library.root) throw new Error("No selected library");
       const sameRoot = !root || root === library.root;
       const query = new URLSearchParams({ expectedRoot: library.root, id: sameRoot ? id : "overview" });
-      const payload = await request(`/api/dev-room/state?${query}`);
+      const [payload, overview] = await Promise.all([
+        request(`/api/dev-room/state?${query}`),
+        query.get("id") === "overview" ? Promise.resolve(null) : request(`/api/dev-room/state?${new URLSearchParams({ expectedRoot: library.root, id: "overview" })}`)
+      ]);
       if (requestId !== sequence) return;
+      if (payload.root !== library.root || overview && overview.root !== library.root) throw new Error("Library changed");
       root = payload.root; documents = payload.documents;
+      try { catalog = window.CodexDevRoomEditor.catalog((overview || payload).document?.body || "", documents.map(item => item.id)); }
+      catch { catalog = []; }
       setStatus("ready");
       const draft = drafts()[sameRoot ? id : "overview"];
       select(payload.document || (draft ? { id: draft.id, title: "", body: "", revision: "", updatedAt: "" } : { id: "overview", title: words().overview, body: "", revision: "", updatedAt: "" }));
@@ -21575,10 +21735,12 @@ scheduleClockTick();
     select(document); editing = true; keepDraft(); setStatus("draft"); render(); ui.TitleInput.focus(); ui.TitleInput.select();
   });
   ui.Edit.addEventListener("click", () => {
+    if (busy || !current) return;
     if (editing && !keepDraft()) return;
-    editing = !editing; render(); if (editing) ui.BodyInput.focus();
+    editing = !editing; render(); if (editing) (fieldModel ? ui.TitleInput : ui.BodyInput).focus();
   });
   for (const input of [ui.TitleInput, ui.BodyInput]) input.addEventListener("input", () => {
+    if (fieldModel && !updateFields()) return;
     if (keepDraft()) setStatus("draft");
     ui.Title.textContent = ui.TitleInput.value || words().untitled; renderList();
   });
@@ -21586,21 +21748,23 @@ scheduleClockTick();
     if (busy || !current || !keepDraft()) return;
     busy = true; setStatus("saving"); render();
     try {
-      const payload = await request("/api/dev-room/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRoot: root, id: current.id, title: ui.TitleInput.value, body: ui.BodyInput.value, expectedRevision: current.revision }) });
+      const payload = await request("/api/dev-room/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRoot: root, id: current.id, title: ui.TitleInput.value, body: bodyValue(), expectedRevision: current.revision }) });
       const kept = drafts(); delete kept[current.id];
       try { localStorage.setItem(draftKey(), JSON.stringify(kept)); } catch { /* The saved library remains authoritative. */ }
       documents = payload.documents; current = payload.document;
       ui.TitleInput.value = current.title; ui.BodyInput.value = current.body;
+      prepareFields(current.body);
       editing = false; setStatus("saved");
     } catch (error) { setStatus(error.status === 409 ? "conflict" : "saveFailed"); }
     finally { busy = false; render(); }
   });
   ui.Copy.addEventListener("click", () => {
     if (busy || !current || !keepDraft()) return;
-    const title = ui.TitleInput.value.slice(0, 190) + (document.documentElement.lang.startsWith("zh") ? "（副本）" : " (copy)");
-    const body = ui.BodyInput.value;
+    const title = [...ui.TitleInput.value].slice(0, 190).join("") + (document.documentElement.lang.startsWith("zh") ? "（副本）" : " (copy)");
+    const body = fieldModel ? `# ${title}\n\n${fieldModel.summary}\n\n${fieldModel.sections.map(section => `## ${section.title}\n${section.body}`).join("\n\n")}\n` : ui.BodyInput.value;
     current = { id: crypto.randomUUID(), title: "", body: "", revision: "", updatedAt: "" };
     ui.TitleInput.value = title; ui.BodyInput.value = body;
+    prepareFields();
     editing = true; keepDraft(); setStatus("draft"); render();
     ui.Save.click();
   });

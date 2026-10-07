@@ -14,7 +14,7 @@ On the desktop Console, open **开发者模式**, bind the existing local Consol
 
 ## Dev Room
 
-**RandomRealm → Dev Room** is the Project Nexus document framework. It starts with a blank overview and provides a document list, reading, editing, New and Save. Content stays in the current Document library under `projects/Project Nexus/Dev Room`; reading the blank overview does not create a file. Unfinished edits are kept locally and restored on reopening. Saves verify the selected library and document revision, retain the previous saved file, and offer Save as a copy when another edit conflicts. This first framework does not classify content or synchronize it to Unity.
+**RandomRealm → Dev Room** provides readable documents and an overview in the current Document library under `projects/Project Nexus/Dev Room`. Existing overview links retain their original groups and open the matching document. Titles, paragraphs, lists and tables render as Markdown; source identifiers and technical references are kept in collapsed **Agent details**, with the original document available read only. Imported Unity documents expose editable title, summary and section text fields while preserving their internal source and section markers. Existing local drafts, revision checks, previous saved files and Save as a copy remain in place. Reading never rewrites stored documents. This reading update does not install a Unity bridge or enable unverified Unity writeback.
 
 ## ChatGPT subscription connection
 

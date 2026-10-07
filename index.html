@@ -595,11 +595,16 @@
               </div>
             </div>
             <div id="devRoomRead" class="document-content dev-room-read"></div>
+            <details id="devRoomAgent" class="dev-room-agent" hidden>
+              <summary>Agent 资料</summary>
+              <div id="devRoomAgentContent" class="document-content dev-room-agent-content"></div>
+            </details>
             <div id="devRoomEditor" class="dev-room-editor" hidden>
               <label for="devRoomTitleInput" data-dev-room-text="titleLabel">文档名称</label>
               <input id="devRoomTitleInput" type="text" maxlength="200" autocomplete="off">
-              <label for="devRoomBodyInput" data-dev-room-text="bodyLabel">正文</label>
+              <label id="devRoomBodyLabel" for="devRoomBodyInput" data-dev-room-text="bodyLabel">正文</label>
               <textarea id="devRoomBodyInput" spellcheck="false" placeholder="在这里写下文档内容……"></textarea>
+              <div id="devRoomFields" class="dev-room-fields" hidden></div>
             </div>
           </section>
         </div>
@@ -1416,6 +1421,7 @@
 <script src="codex-work-panel.js?v=console-mobile-refresh-1.0.78-20261007"></script>
 <script src="conversations-panel.js?v=console-mobile-refresh-1.0.78-20261007"></script>
 <script src="incubator-panel.js?v=console-mobile-refresh-1.0.78-20261007"></script>
+<script src="dev-room-editor.js?v=dev-room-readable-1"></script>
   <script src="app.js?v=console-mobile-refresh-1.0.78-20261007"></script>
 <script src="phone-pairing.js?v=console-connect-1.0.27"></script>
 <script src="phone-offline-export.js?v=console-connect-1.0.27"></script>

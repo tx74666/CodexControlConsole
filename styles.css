@@ -1190,7 +1190,8 @@ h2 {
 .dev-room-sidebar { padding: 16px 12px; border-right: 1px solid var(--line); background: var(--card-bg); }
 .dev-room-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 16px; font-size: 13px; }
 .dev-room-list-head .ghost-button { padding: 6px 9px; min-height: 30px; font-size: 12px; }
-.dev-room-list { display: grid; gap: 6px; }
+.dev-room-list { display: grid; gap: 6px; max-height: 600px; overflow-y: auto; align-content: start; }
+.dev-room-group { margin: 18px 12px 4px; font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--muted); }
 .dev-room-item { width: 100%; text-align: left; padding: 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--soft); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
 .dev-room-item[aria-current="true"] { background: var(--panel); border-color: var(--line-strong); color: var(--green); font-weight: 700; }
 .dev-room-item:hover { background: var(--panel); }
@@ -1201,7 +1202,25 @@ h2 {
 .dev-room-meta { color: var(--muted); font-size: 12px; }
 .dev-room-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .dev-room-actions .ghost-button { min-height: 34px; padding: 7px 18px; }
-.dev-room-read { margin-top: 0; font-size: 15px; white-space: pre-wrap; }
+.dev-room-read { margin-top: 0; font-size: 15px; white-space: normal; }
+.dev-room-read h1 { margin: 0 0 18px; font-size: 26px; }
+.dev-room-read h2 { margin: 28px 0 10px; font-size: 19px; }
+.dev-room-read h3 { margin: 24px 0 10px; font-size: 16px; }
+.dev-room-read p, .dev-room-read li { line-height: 1.85; }
+.dev-room-read pre, .dev-room-agent pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dev-room-agent { margin-top: 28px; border-top: 1px solid var(--line); }
+.dev-room-agent > summary, .dev-room-agent-edit > summary { cursor: pointer; padding: 14px 0; color: var(--muted); font-size: 13px; }
+.dev-room-agent-content { font-size: 13px; }
+.dev-room-agent-content dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 18px; }
+.dev-room-agent-content dt { color: var(--muted); }
+.dev-room-agent-content dd { margin: 0; overflow-wrap: anywhere; }
+.dev-room-agent-content details > summary { cursor: pointer; padding: 12px 0; color: var(--muted); }
+.dev-room-fields, .dev-room-section-edit { display: grid; gap: 9px; }
+.dev-room-fields { gap: 18px; }
+.dev-room-section-edit { border-top: 1px solid var(--line); padding-top: 18px; }
+.dev-room-editor .dev-room-fields textarea { min-height: 110px; }
+.dev-room-fields #devRoomSummary { min-height: 90px; }
+.dev-room-agent-edit .dev-room-section-edit { margin-bottom: 18px; }
 .dev-room-empty { padding: 36px 0; }
 .dev-room-empty strong { display: block; margin-bottom: 10px; font-size: 20px; font-weight: 500; }
 .dev-room-empty p { color: var(--muted); font-size: 14px; }
@@ -1219,8 +1238,7 @@ h2 {
   .dev-room-panel { padding: 18px; }
   .dev-room-layout { grid-template-columns: minmax(0, 1fr); }
   .dev-room-sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
-  .dev-room-list { display: flex; overflow-x: auto; }
-  .dev-room-item { width: auto; min-width: 120px; }
+  .dev-room-list { max-height: 230px; }
   .dev-room-document { padding: 22px 18px; }
 }
 
