@@ -145,6 +145,7 @@ $PythonChecks = @(
   "tools/check-desktop-layout.py",
   "tools/check-document-library.py",
   "tools/check-dev-room.py",
+  "tools/check-dev-room-locales.py",
   "tools/check-resource-library.py",
   "tools/check-resource-catalogs.py",
   "tools/check-resource-http.py",
@@ -202,6 +203,11 @@ Push-Location $ProjectRoot
 try {
   $RequiredFiles = @($PythonSources + $PythonChecks + @(
     "app.js",
+    "dev-room-editor.js",
+    "dev-room-translations.json",
+    "tools/check-dev-room-editor.mjs",
+    "tools/check-dev-room-translations.mjs",
+    "tools/check-dev-room-language-ui.mjs",
     "console-developer-update.js",
     "console-developer-update.css",
     "tools/check-console-developer-update-ui.mjs",
@@ -280,6 +286,8 @@ try {
   Invoke-QualityStep "Developer Update UI behavior" { & $Node tools/check-console-developer-update-ui.mjs }
   Invoke-QualityStep "Dev Room text fields syntax" { & $Node --check dev-room-editor.js }
   Invoke-QualityStep "Dev Room text preservation and presentation" { & $Node tools/check-dev-room-editor.mjs }
+  Invoke-QualityStep "Dev Room bilingual document coverage" { & $Node tools/check-dev-room-translations.mjs }
+  Invoke-QualityStep "Dev Room language switching and draft isolation" { & $Node tools/check-dev-room-language-ui.mjs }
   Invoke-QualityStep "Readable display copy and interpolation" { & $Node tools/check-readable-copy.mjs }
   Invoke-QualityStep "Phone pairing JavaScript syntax" { & $Node --check phone-pairing.js }
   Invoke-QualityStep "Offline phone export JavaScript syntax" { & $Node --check phone-offline-export.js }

@@ -1,0 +1,260 @@
+{
+  "version": 1,
+  "documents": [
+    {
+      "id": "05107322-018a-57df-ac6e-0b51d4e097d8",
+      "sourceTitle": "Vision & Direction",
+      "sourceBodySha256": "1472bcb6f39df4ec4977f9d5de830fdd9cdc399a07ea049778d3c625954b3e05",
+      "variants": {
+        "zh": {
+          "title": "愿景与方向",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"project-vision-direction\",\"guid\":\"c8fa1f6f4522b054da9f76f8978042c4\"} -->\n# 愿景与方向\n\n<!-- rr-dev-room:summary -->\n开发者空间的长期目标，以及尚未确定的空间方向。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n概念\n\n开发者空间应让人们在一个融入游戏世界的场所中创作、专注、了解项目状态并与他人建立联系。目前探索的两个方向都尚未确定；它们都不是当前已实现的内容，也不是最终承诺。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n当前场景承担实用的项目枢纽功能。基础方向是一个温暖、容易亲近的工作室园区，用于创作、专注和交流。进阶方向则是更有辨识度的环形 Project Nexus 空间体验。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n选择一种空间身份，让协作、实验、专注工作和项目导航一目了然。可能的空间包括用于共同工作和讨论的协作区、用于视觉实验的特效实验室，以及用于不受打扰地专注工作的静谧花园或私人工作区。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n最终方向尚未选定。概念图绝不能被呈现为当前已有或已经发布的功能。视觉上的追求不应掩盖导航的清晰度，也不应产生缺乏实际工作流程用途、成本却很高的空间；共同目标始终是帮助人们创作、专注和建立联系的场所。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scenes/Main/DevsRealm.unity\nAssets/Resources/UI/DevsRealm/Documents/DevRealmProjectNexusVision.png\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Vision & Direction",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"project-vision-direction\",\"guid\":\"c8fa1f6f4522b054da9f76f8978042c4\"} -->\n# Vision & Direction\n\n<!-- rr-dev-room:summary -->\nThe long-term purpose and still-open spatial direction of Dev's Realm.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nCONCEPT\n\nDev's Realm should help people create, focus, understand project state, and connect through a place that feels part of the game. Two directions remain undecided; neither is the current implementation or a final commitment.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nThe current scene acts as a functional project hub. The basic direction is a warm, approachable studio campus for creating, focusing, and connecting. The advanced direction is a more distinctive ring-shaped Project Nexus spatial journey.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nChoose a spatial identity that makes collaboration, experimentation, focused work, and project navigation immediately understandable. Possible spaces include a Collaboration Deck for shared work and discussion, an FX Lab for visual experiments, and a Quiet Garden or private-work area for uninterrupted focus.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nThe final direction has not been selected. Concept imagery must never be presented as current or shipped functionality. Visual ambition should not obscure navigation clarity or create expensive spaces without a real workflow purpose; the shared outcome remains a place that helps people create, focus, and connect.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scenes/Main/DevsRealm.unity\nAssets/Resources/UI/DevsRealm/Documents/DevRealmProjectNexusVision.png\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "210e611a-6140-5179-b657-c73326123ede",
+      "sourceTitle": "Multiplayer",
+      "sourceBodySha256": "ccc832f1a809e16f86daf130653d849f2cf9ad725caa4db7254faf26bd82f4a7",
+      "variants": {
+        "zh": {
+          "title": "多人联机",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"systems-multiplayer\",\"guid\":\"1f82c204173b1304987501f78944cf48\"} -->\n# 多人联机\n\n<!-- rr-dev-room:summary -->\n具备权威控制的连接、会话、场景交接和玩法同步基础。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n多人联机协调身份验证、会话、网络传输启动、房主权威、玩家生命周期、场景交接、同步、拒绝处理和清理。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n创建房间、加入房间、玩家生成、同步、队伍计分、会话管理和共用任务归属的基础已以原型形式存在。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n每条连接路径都应立即给出真实反馈，使用连接状态机，妥善处理超时和迟到结果，并让房主和客户端保持一致、可恢复的状态。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n重复点击、服务调用顺序错乱、把网络延迟与本地卡顿混为一谈、游玩期间重新加载脚本、断开连接后清理不完整，以及界面绕过权威控制，都是高风险故障。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scripts/ConnectionManagement\nAssets/Scripts/UnityServices\nAssets/Scenes/Multiplayer/Multiplayer.unity\nMULTIPLAYER_TEST_MATRIX.md\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Multiplayer",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"systems-multiplayer\",\"guid\":\"1f82c204173b1304987501f78944cf48\"} -->\n# Multiplayer\n\n<!-- rr-dev-room:summary -->\nThe authoritative connection, session, scene handoff, and synchronized gameplay foundation.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nMultiplayer coordinates authentication, sessions, transport startup, Host authority, player lifecycle, scene handoff, synchronization, rejection, and cleanup.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nHosting, joining, player spawning, synchronization, team scoring, session management, and shared task ownership foundations exist in prototype form.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nEvery connection path gives immediate truthful feedback, uses the connection state machine, survives timeouts and late results, and leaves Host and clients in a consistent recoverable state.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nDuplicate clicks, out-of-order service calls, network latency confused with local stalls, Play-time script reload, partial disconnect cleanup, and UI bypassing authority are high-risk failure modes.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scripts/ConnectionManagement\nAssets/Scripts/UnityServices\nAssets/Scenes/Multiplayer/Multiplayer.unity\nMULTIPLAYER_TEST_MATRIX.md\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "21db724d-5152-532f-882b-bd930125fb28",
+      "sourceTitle": "Audio",
+      "sourceBodySha256": "835f1105d9205e49be220058de6251faea14ba8d19301045e3c11ef8390e5f4c",
+      "variants": {
+        "zh": {
+          "title": "音频",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"content-audio\",\"guid\":\"0f3ac82d370a9974b8e2de38ca2ad4d1\"} -->\n# 音频\n\n<!-- rr-dev-room:summary -->\n用于确认、危险、撞击、技能、结果、环境氛围和音乐的声音语言。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n音频应快速传达重要的状态变化，呼应世界的基调，并在反复游玩时仍让人听得舒适。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n音乐、界面点击、战斗与交互音效、小游戏音频，以及开发者空间的桌面音乐，混合使用共用资源和模式专用资源。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n优先处理能传达重要信息的事件，一致地应用全局音量控制，为频繁出现的声音使用对象池，提供有用的变化版本，并在暂停或退出场景时清理循环音效。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n硬编码音量、相同声音重复叠加、削波失真、听觉疲劳、未使用对象池的一次性音效，以及在所属对象或场景结束后仍继续播放的循环音效，都可能削弱原本良好的反馈。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Art/Audio\nAssets/Resources/Audio/DevsRealm\nAssets/Resources/MiniGames\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Audio",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"content-audio\",\"guid\":\"0f3ac82d370a9974b8e2de38ca2ad4d1\"} -->\n# Audio\n\n<!-- rr-dev-room:summary -->\nThe sound language for confirmation, danger, impact, skills, results, ambience, and music.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nAudio should communicate important state changes quickly, support the world's tone, and remain comfortable during repeated play.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nMusic, UI clicks, combat and interaction effects, mini-game audio, and Dev's Realm desk music use a mix of shared and mode-specific resources.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nPrioritize high-information events, route global volume consistently, pool frequent sounds, provide useful variants, and clean up loops on pause and scene exit.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nHard-coded volumes, overlapping duplicates, clipping, fatigue, unpooled one-shots, and loops that survive their owner or scene can undermine otherwise strong feedback.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Art/Audio\nAssets/Resources/Audio/DevsRealm\nAssets/Resources/MiniGames\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "352c027b-1baa-5528-bb22-e41816d1ae19",
+      "sourceTitle": "Art Direction",
+      "sourceBodySha256": "cca5301483425a528bcbe152a085d058f478fa1b6759349d91c7ef300bf05d45",
+      "variants": {
+        "zh": {
+          "title": "美术方向",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"content-art-direction\",\"guid\":\"4b48479a36f4c714898cec889f6ac45e\"} -->\n# 美术方向\n\n<!-- rr-dev-room:summary -->\n让 Random Realm 清楚易读、风格统一，并建立在可靠技术基础上的视觉原则。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n美术方向应先重视轮廓、辨识度、层级、一致的比例和清楚的玩法含义，再考虑装饰。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n项目结合了自行生成的内容、人工制作的场景美术、界面图像、材质、着色器、特效，以及使用范围明确的授权或第三方资产。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n建立有辨识度的视觉语言，通过色彩、光照、形状、运动和特效，让导航与玩法状态更容易理解。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n只修改生成结果而不修改生成器、猜测着色器的行为、过度使用缺乏有效信息的特效、比例不一致，以及随意移动授权资产，都可能造成技术和法律方面的负担。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Art\nAssets/Art/Generated\nAssets/Prefabs\nTools/AssetPipeline\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Art Direction",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"content-art-direction\",\"guid\":\"4b48479a36f4c714898cec889f6ac45e\"} -->\n# Art Direction\n\n<!-- rr-dev-room:summary -->\nThe visual principles that keep Random Realm readable, coherent, and technically grounded.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nArt direction prioritizes silhouette, readability, hierarchy, consistent scale, and clear gameplay meaning before ornament.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nThe project combines first-party generated content, authored scene art, UI imagery, materials, shaders, effects, and carefully scoped licensed or third-party assets.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nBuild a recognizable visual language whose color, lighting, shape, motion, and effects make navigation and gameplay state easier to understand.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nChanging generated outputs instead of their generators, guessing shaders, overusing low-information effects, inconsistent scale, and casually moving licensed assets can create technical and legal debt.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Art\nAssets/Art/Generated\nAssets/Prefabs\nTools/AssetPipeline\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "400d6ffa-dc2c-5fab-b263-1575dd9ccf79",
+      "sourceTitle": "Building",
+      "sourceBodySha256": "12e6b3da2c4f856d8498a13f6eb0c159487c85d6b8521b19b9d6fc766e658d58",
+      "variants": {
+        "zh": {
+          "title": "建造系统",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"systems-building\",\"guid\":\"83b60b176680be243bd367698a34a60a\"} -->\n# 建造系统\n\n<!-- rr-dev-room:summary -->\n用于快速创建一致、适合实际游玩空间的模块化建造系统。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n目标\n\n建造系统应从早期原型发展成快速、灵活的建造工具，搭建真正适合游玩的空间。这是预期成果，并不表示建造系统已经完成。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n地板、墙体、转角、平台、道具、吸附、放置、删除、撤销、存档记录、编辑器目录和多人联机桥接已经存在，但仍未完成，彼此之间也高度耦合。放置和吸附仍在开发中。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n模块库\n建立可靠的模块库，让各个部件保持一致。\n\n放置\n支持清楚的吸附和快速放置。\n\n可复用的组合\n把部件重新组合成可复用的结构，而不只是一次性的摆放。\n\n适合游玩的空间\n创建宽敞、适合实际游玩的内部空间，为移动、战斗、交互、镜头和未来的多人联机用途留出余地。\n\n成功标准\n创作者能快速从一个想法搭建出清楚易读、可以游玩的空间，同时让模块保持一致、可复用。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n放置计算、锚点、组合标识、撤销、存档与读取、网络同步、生成资产，以及结构中的阴影接缝，构成了一个需要共同保持兼容的整体。大范围重写可能破坏旧成果，或导致视觉表现退步。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scripts/Gameplay/Builds/Builder\nAssets/GameData/Builds\nAssets/Prefabs/Buildings/Builder\nAssets/Scenes/Main/Building.unity\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Building",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"systems-building\",\"guid\":\"83b60b176680be243bd367698a34a60a\"} -->\n# Building\n\n<!-- rr-dev-room:summary -->\nThe modular construction system for rapidly creating consistent, gameplay-ready spaces.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nTARGET\n\nBuilding should grow from its early prototype into a fast, flexible construction tool for spaces that are genuinely ready to play in. This is an intended outcome, not a claim that Building is complete.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nFloors, walls, corners, platforms, Props, snapping, placement, deletion, Undo, save records, editor catalogs, and multiplayer bridges exist but remain unfinished and highly coupled. Placement and snapping are still in development.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nMODULAR LIBRARY\nBuild a dependable modular library with consistent pieces.\n\nPLACEMENT\nSupport clear snapping and rapid placement.\n\nREUSABLE COMBINATIONS\nRecombine pieces into reusable structures rather than one-off arrangements.\n\nGAMEPLAY-READY SPACE\nCreate spacious, gameplay-ready interiors with room for movement, combat, interaction, cameras, and future multiplayer use.\n\nSUCCESS\nCreators can move quickly from an idea to a readable playable space while modules remain consistent and reusable.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nPlacement math, anchors, grouped identity, Undo, save/load, networking, generated assets, and structural shadow seams form one compatibility surface. Broad rewrites can corrupt old work or create visual regressions.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scripts/Gameplay/Builds/Builder\nAssets/GameData/Builds\nAssets/Prefabs/Buildings/Builder\nAssets/Scenes/Main/Building.unity\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "46fd3ac4-ed17-5b3f-8fec-6ccfcc99dff9",
+      "sourceTitle": "建造系统",
+      "sourceBodySha256": "00ea0f2066abd73efe9b5f4d4aee33d0ae643bdad5deb068ce19dba7ea866d06",
+      "variants": {
+        "zh": {
+          "title": "建造系统",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"systems-building-introduction\",\"guid\":\"708783b64723e0c4e9c43769097f7920\"} -->\n# 建造系统\n\n<!-- rr-dev-room:summary -->\n通过一致的模块快速搭建、修改和复用可游玩的空间。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 模块化搭建\n建造系统已有地板、墙体、转角、平台和道具等可放置模块，以及放置、删除、撤销、存档和编辑器目录基础。\n\n吸附与放置仍在开发中。这个系统还没有完成，已有基础不等于每种组合都已验证可靠。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 从想法到可玩空间\n目标是清楚的吸附、快速放置，以及可以反复组合使用的模块库。\n\n空间需要为移动、战斗、交互和镜头留出足够余地。易用、速度和可靠性是持续改进的方向。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 修改时保留可靠性\n建造操作会连接吸附锚点、组合关系、撤销、存档、多人同步和外观。\n\n改进应让这些关系一起保持一致，并保护已有建筑。接下来的完善会围绕明确的操作体验逐步验证。\n<!-- rr-dev-room:section-end 2 -->\n\n"
+        },
+        "en": {
+          "title": "Building System",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"systems-building-introduction\",\"guid\":\"708783b64723e0c4e9c43769097f7920\"} -->\n# Building System\n\n<!-- rr-dev-room:summary -->\nQuickly build, modify, and reuse playable spaces with consistent modules.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Modular Construction\nBuilding already has placeable modules such as floors, walls, corners, platforms, and Props, together with foundations for placement, deletion, Undo, save records, and an editor catalog.\n\nSnapping and placement are still in development. The system is not complete, and having these foundations does not mean every combination has been verified as reliable.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## From an Idea to a Playable Space\nThe goal is clear snapping, rapid placement, and a module library whose pieces can be combined and reused.\n\nSpaces need enough room for movement, combat, interaction, and cameras. Ease of use, speed, and reliability remain areas for ongoing improvement.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Preserving Reliability When Making Changes\nBuilding operations connect snapping anchors, grouping relationships, Undo, save records, multiplayer synchronization, and appearance.\n\nImprovements should keep these relationships consistent and protect existing buildings. Further work will be verified step by step around a clear interaction experience.\n<!-- rr-dev-room:section-end 2 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "4cd87dfd-0918-51d3-9150-75eee2b6662a",
+      "sourceTitle": "Tools",
+      "sourceBodySha256": "c6d92192c91eb1d29bdd8c19403ce9e68f358ce7bdf7688a9bc8f6ef3ba501a2",
+      "variants": {
+        "zh": {
+          "title": "工具",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"technical-tools\",\"guid\":\"117f8341130869f479f6cbfa675dc9c0\"} -->\n# 工具\n\n<!-- rr-dev-room:summary -->\n用于维护项目的编辑器工具、诊断工具、验证器、烘焙工具和隔离工作流程。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n工具应让有风险或重复性的工作可观察、可撤销且保持一致，并避免在不知情的情况下修改正式场景。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n自定义菜单、资产工厂、场景烘焙工具、隔离验证器、诊断工具和维护脚本，支持冒险模式、建造系统、开发者空间、界面、小游戏和资产制作。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n每个工具都应在写入前验证输入，在适合的地方支持撤销，优先通过 `PreviewScene` 隔离操作，恢复编辑器状态，并在失败后清理未完成的输出。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n静默保存场景、对当前活动场景做未经确认的假设、清理不完整、手动修改生成资产，以及大范围的破坏性维护，都可能删除或污染用户的工作成果。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scripts/Editor\nAssets/Scripts/Gameplay/Builds/Editor\nTools/ProjectMaintenance\nTools/TextureGenerators\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Tools",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"technical-tools\",\"guid\":\"117f8341130869f479f6cbfa675dc9c0\"} -->\n# Tools\n\n<!-- rr-dev-room:summary -->\nThe editor utilities, diagnostics, validators, bakers, and isolated workflows used to maintain the project.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nTools exist to make risky or repetitive work observable, reversible, and consistent without silently mutating production scenes.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nCustom menus, asset factories, scene bakers, isolated validators, diagnostics, and maintenance scripts support Adventure, Building, Dev's Realm, UI, mini-games, and asset production.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nEvery tool validates input before writing, supports Undo where appropriate, prefers PreviewScene isolation, restores editor state, and leaves no partial output after failure.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nSilent scene saves, active-scene assumptions, incomplete cleanup, generated-asset hand edits, and broad destructive maintenance can erase or contaminate user work.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scripts/Editor\nAssets/Scripts/Gameplay/Builds/Editor\nTools/ProjectMaintenance\nTools/TextureGenerators\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "5a2f7164-82b3-5f01-91bb-b72b2202e0ef",
+      "sourceTitle": "Current Build",
+      "sourceBodySha256": "9b53f86c948299d5e7dcc91f4857da22b5b4213843c9f4d5ad3189c7b136a5bb",
+      "variants": {
+        "zh": {
+          "title": "当前版本",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"project-current-build\",\"guid\":\"efe3e17261f9ae741bd4648121b7376a\"} -->\n# 当前版本\n\n<!-- rr-dev-room:summary -->\n面向公众列出现阶段已有的可用原型基础。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n原型／部分完成\n\nRandom Realm 目前已有可用的原型基础。它还不是已经完成或完全连通的游戏。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n核心玩法\n移动：第三人称移动、跳跃、冲刺、镜头控制和角色动画。\n战斗：瞄准、射击、武器、弹药、投射物、生命值、伤害和死亡。\n敌人智能：发现玩家、寻路、追击、攻击和掉落物品。\n\n游戏结构\n主菜单和枢纽区域连接当前的区域与模式。多人联机包含创建房间、加入房间、玩家生成、同步、队伍计分和会话管理。单人玩法基础包含本地游玩、早期冒险模式，以及基本的胜利和失败状态。\n\n建造与世界\n建造系统包含模块化地板、墙体、转角、平台和其他可放置部件；放置与吸附仍在开发中。世界交互包含门、按钮、压力板、移动平台和其他可交互物体。物品栏与拾取系统涵盖武器、弹药和可收集的装备。\n\n内容与工具\n打砖块、国际象棋和太空射击已作为早期小游戏存在。实验性解谜场景、冒险场景和玩法测试场景支持开发。菜单、游戏内状态显示、结果画面、音效、爆炸和基本视觉反馈提供表现基础。自定义 Unity 编辑器工具、诊断、测试和场景开发工具支持制作。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n把已有基础连接成清楚易懂、从进入到结果连贯完整的玩家旅程。这里列出的每个系统仍是部分完成的原型，后续会继续扩展、连接、测试、调优和打磨，并如实保留其原型状态。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n项目中存在一个系统，并不意味着它已经达到正式制作的完成度。场景整合、权威控制、性能、无障碍使用和跨模式一致性，仍需要有针对性的验证。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scenes/Main/Adventure.unity\nAssets/Scenes/Main/Building.unity\nAssets/Scenes/Main/DevsRealm.unity\nAssets/Scripts/Gameplay\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Current Build",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"project-current-build\",\"guid\":\"efe3e17261f9ae741bd4648121b7376a\"} -->\n# Current Build\n\n<!-- rr-dev-room:summary -->\nA public inventory of the functional prototype foundation that exists today.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nPROTOTYPE / PARTIAL\n\nRandom Realm currently has a functional prototype foundation. This is not a finished or fully connected game.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nCORE GAMEPLAY\nMovement: third-person movement, jumping, sprinting, camera control, and character animations.\nCombat: aiming, shooting, weapons, ammunition, projectiles, health, damage, and death.\nEnemy AI: detect players, navigate, chase, attack, and drop items.\n\nGAME STRUCTURE\nMain Menu and Hub connect the current areas and modes. Multiplayer includes hosting, joining, player spawning, synchronization, team scoring, and session management. The single-player foundation includes local gameplay, an early Adventure mode, and basic victory and defeat states.\n\nBUILD & WORLD\nBuilding includes modular floors, walls, corners, platforms, and other placeable pieces; placement and snapping remain in development. World interaction includes doors, buttons, pressure plates, moving platforms, and other interactive objects. Inventory and pickups cover weapons, ammunition, and collectible equipment.\n\nCONTENT & TOOLS\nBrick Breaker, Chess, and Space Shooter exist as early mini-games. Experimental puzzle, Adventure, and gameplay-test scenes support development. Menus, HUD elements, result screens, sound effects, explosions, and basic visual feedback provide presentation. Custom Unity editor tools, diagnostics, tests, and scene-development utilities support production.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nConnect the existing foundations into readable end-to-end player journeys. Every listed system remains a partial prototype and will be expanded, connected, tested, tuned, and polished without hiding its prototype status.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nA system appearing in the project does not mean it is production complete. Scene integration, authority, performance, accessibility, and cross-mode consistency still require focused verification.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scenes/Main/Adventure.unity\nAssets/Scenes/Main/Building.unity\nAssets/Scenes/Main/DevsRealm.unity\nAssets/Scripts/Gameplay\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "7730018c-9934-588b-b167-ea5d5a334d23",
+      "sourceTitle": "Devs Realm",
+      "sourceBodySha256": "8c068d1de1407a421034f073a0883ab37f9ca9ea5388d1dd44ca8cdb59ec3cc1",
+      "variants": {
+        "zh": {
+          "title": "开发者空间",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"project-devs-realm-introduction\",\"guid\":\"83931ff95de2bcc469e03d9ecb20b54f\"} -->\n# 开发者空间\n\n<!-- rr-dev-room:summary -->\n项目的信息入口，以及用于了解进展、创作和交流的开发者空间。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 一个工作区，两种入口\n二维开发桌面提供快速的信息桌面：任务、团队、路线图、更新和文档。\n\n三维开发者空间提供可以走动、阅读展板和交流的空间入口。两种形式围绕同一个项目工作区。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 先了解，再参与\n介绍屏帮助你先了解项目、游戏内容与方向。任务、成员、路线图和负责人发布的更新，可在开发桌面中查看。\n\n本屏幕只用于阅读介绍。任务领取、协作与进度操作保留在已有任务工作区中。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 空间仍在发展\n开发者空间希望让创作、专注、了解项目状态和联系他人，成为游戏世界的一部分。\n\n工作室式空间和环形 Project Nexus 都曾作为方向探索。最终空间身份仍需判断；概念图和规划区域不能当作已经完成的功能。\n<!-- rr-dev-room:section-end 2 -->\n\n"
+        },
+        "en": {
+          "title": "Dev's Realm",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"project-devs-realm-introduction\",\"guid\":\"83931ff95de2bcc469e03d9ecb20b54f\"} -->\n# Dev's Realm\n\n<!-- rr-dev-room:summary -->\nThe project information hub and a developer space for following progress, creating, and connecting.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## One Workspace, Two Ways In\nThe 2D Dev Desk provides a quick information desktop: Tasks, Team, Roadmap, Updates, and Documents.\n\nThe 3D Dev Realm provides a spatial entry where people can walk around, read display boards, and connect. Both forms center on the same project workspace.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Understand First, Then Participate\nIntroduction screens help you first understand the project, its game content, and its direction. Tasks, members, the roadmap, and updates published by the project lead can be viewed in Dev Desk.\n\nThis screen is only for reading the introduction. Claiming tasks, collaborating, and managing progress remain in the existing task workspace.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## A Space Still Taking Shape\nDev's Realm aims to make creating, focusing, understanding project state, and connecting with others part of the game world.\n\nA studio-style space and a ring-shaped Project Nexus have both been explored as directions. The final spatial identity still needs to be decided; concept imagery and planned areas must not be treated as completed features.\n<!-- rr-dev-room:section-end 2 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "874770de-3215-5d72-8029-67f18ce45126",
+      "sourceTitle": "Architecture",
+      "sourceBodySha256": "3487c33dfb8902f6c43935bd1c02fb80a280a607836b186d5a0f8ba80269466c",
+      "variants": {
+        "zh": {
+          "title": "架构",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"technical-architecture\",\"guid\":\"3225b8bb3abc4b7489502bcb4b2c6601\"} -->\n# 架构\n\n<!-- rr-dev-room:summary -->\n让各系统能够协同组合的依赖、生命周期、权威控制和归属规则。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n架构应让底层服务可复用，领域之间的依赖保持单向，公共 API 范围明确且尽量小，并让归属清楚。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n项目通过程序集定义和领域目录划分游戏、基础设施、玩法、建造、连接管理、Unity 服务、界面、编辑器工具和测试。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n使用已有的生命周期作用域、服务、管理器、接口和消息通道；避免在运行时代码中使用编辑器 API；并把桥接代码放在能够负责相应契约的最低层。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n新增全局单例、循环依赖、`Gameplay` 依赖 `Gameplay.Builds`、运行时代码和编辑器代码混杂，以及没有具体使用方的抽象，都会让迭代更困难，场景生命周期也更不可靠。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scripts/Game\nAssets/Scripts/Infrastructure\nAssets/Scripts/Gameplay\nAssets/Scripts/Gameplay/Builds\nAssets/Scripts/ApplicationLifecycle\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Architecture",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"technical-architecture\",\"guid\":\"3225b8bb3abc4b7489502bcb4b2c6601\"} -->\n# Architecture\n\n<!-- rr-dev-room:summary -->\nThe dependency, lifecycle, authority, and ownership rules that keep systems composable.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nArchitecture should keep low-level services reusable, domain dependencies one-way, public APIs narrow, and ownership explicit.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nThe project is divided into assembly definitions and domain folders for Game, Infrastructure, Gameplay, Building, connection management, Unity Services, UI, editor tooling, and tests.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nUse existing lifetime scopes, services, managers, interfaces, and message channels; keep Editor APIs out of runtime; and place bridges in the lowest layer that can own the contract.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nNew global singletons, circular dependencies, Gameplay depending on Gameplay.Builds, runtime/editor leakage, and abstractions without a concrete consumer make iteration harder and scene lifecycle less reliable.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scripts/Game\nAssets/Scripts/Infrastructure\nAssets/Scripts/Gameplay\nAssets/Scripts/Gameplay/Builds\nAssets/Scripts/ApplicationLifecycle\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "98f13021-cd45-5c0b-a205-6a38fb523397",
+      "sourceTitle": "Asset Pipeline",
+      "sourceBodySha256": "1ea934d5be75ebb2bd759ffa2a74cf5bce626d539eef4d80b26372a172ab9e31",
+      "variants": {
+        "zh": {
+          "title": "资产制作流程",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"technical-asset-pipeline\",\"guid\":\"c6f6a8eed9ae87043ad7254fe81c7d18\"} -->\n# 资产制作流程\n\n<!-- rr-dev-room:summary -->\n正式制作资产时采用的导入、生成、验证和权威来源规则。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n资产制作流程将制作源文件转换成结果可预期的 Unity 资产，同时保留引用、元数据、授权信息和可复现性。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n项目使用导入器、烘焙工具、同步器、生成内容根目录、Blender 辅助工具、纹理生成器、预制体工厂和验证器。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n生成结果始终应能从其真实源文件重新生成；导入失败后不留下未完成的资产；移动时保留 GUID；每次向正式项目写入内容，都应在项目能看到它之前完成验证。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n手动修改生成资产、改动第三方内容、丢失 `.meta` 文件、绕过引用扫描，以及使用旧的导出辅助工具，都可能造成隐蔽的损坏，直到构建时才暴露。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nTools/AssetPipeline\nTools/AssetPipeline/Blender/addons/random_realm_builder_exporter\nAssets/Art/Generated\nAssets/GameData/Builds/Generated\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Asset Pipeline",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"technical-asset-pipeline\",\"guid\":\"c6f6a8eed9ae87043ad7254fe81c7d18\"} -->\n# Asset Pipeline\n\n<!-- rr-dev-room:summary -->\nThe import, generation, validation, and source-of-truth rules for production assets.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nThe asset pipeline turns authored sources into predictable Unity assets while preserving references, metadata, licensing, and reproducibility.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nThe project uses importers, bakers, synchronizers, generated roots, Blender helpers, texture generators, prefab factories, and validators.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nGenerated output is always reproducible from its real source, failed imports leave no partial assets, moves preserve GUIDs, and every production write is validated before it becomes visible to the project.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nHand-editing generated assets, changing third-party content, losing .meta files, bypassing reference scans, and using old exporter helpers can create silent breakage that survives until build time.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nTools/AssetPipeline\nTools/AssetPipeline/Blender/addons/random_realm_builder_exporter\nAssets/Art/Generated\nAssets/GameData/Builds/Generated\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "9cc6013f-8125-5572-b053-940aab1c4512",
+      "sourceTitle": "项目概览",
+      "sourceBodySha256": "ade71d6bbce9213f7e428cb7bb5597e93ced56b84349fb5ac3a0f3053d9d5355",
+      "variants": {
+        "zh": {
+          "title": "项目概览",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"project-introduction\",\"guid\":\"cf983df9a9ce17a45a8cc3e108eae281\"} -->\n# 项目概览\n\n<!-- rr-dev-room:summary -->\n了解目前的可玩基础，以及项目还在逐步连接和完善的部分。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 认识 Random Realm\nRandom Realm 已有可玩的原型基础：角色移动与战斗、早期冒险模式、模块化建造，以及独立小游戏。\n\n这些内容正在连接成更清楚的游戏旅程。项目仍在开发中，并非所有系统都已完成。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 现在可以探索什么\n角色与冒险：第三人称移动、跳跃、镜头、武器、敌人和世界交互。\n\n建造与模式：地板、墙体、平台等模块；打砖块、国际象棋、太空射击小游戏；多人连接与玩家同步基础。\n\n具体完成度以当前版本和实际测试为准。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 接下来的方向\n把已有基础连接成容易理解、能从进入一路玩到结果的体验。\n\n继续完善每个系统的反馈、稳定性、模式衔接和表现。文档中出现的功能，并不表示它已经达到正式发布的完成度。\n<!-- rr-dev-room:section-end 2 -->\n\n"
+        },
+        "en": {
+          "title": "Project Overview",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"project-introduction\",\"guid\":\"cf983df9a9ce17a45a8cc3e108eae281\"} -->\n# Project Overview\n\n<!-- rr-dev-room:summary -->\nUnderstand the current playable foundations and the parts of the project still being connected and improved.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Getting to Know Random Realm\nRandom Realm already has playable prototype foundations: character movement and combat, an early Adventure mode, modular building, and independent mini-games.\n\nThese parts are being connected into a clearer game journey. The project is still in development, and not every system is complete.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## What You Can Explore Now\nCharacter and adventure: third-person movement, jumping, cameras, weapons, enemies, and world interaction.\n\nBuilding and modes: modules such as floors, walls, and platforms; the Brick Breaker, Chess, and Space Shooter mini-games; and foundations for multiplayer connections and player synchronization.\n\nThe actual level of completion depends on the current build and real testing.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## The Direction Ahead\nConnect the existing foundations into an experience that is easy to understand and playable from entry through to the result.\n\nContinue improving each system's feedback, stability, transitions between modes, and presentation. A feature appearing in the documentation does not mean it has reached the level of completion required for a formal release.\n<!-- rr-dev-room:section-end 2 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "a1449a49-ad79-5c70-abcb-bc50f9ce6428",
+      "sourceTitle": "UI / UX",
+      "sourceBodySha256": "980367a2ca76a1a5854e21bb60b607c1000abbe18e2007fa661c5801dafdabae",
+      "variants": {
+        "zh": {
+          "title": "界面与交互体验",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"systems-ui-ux\",\"guid\":\"4c866fcf7aec3264bab86571bc65c144\"} -->\n# 界面与交互体验\n\n<!-- rr-dev-room:summary -->\n菜单、游戏内状态显示、导航、等待和结果画面采用的共用交互与表现规则。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n界面应让玩家意图、系统状态、信息层级和恢复方式一目了然，避免无意义的装饰干扰。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n主菜单页面、游戏内状态显示、设置、任务枢纽、加载反馈、小游戏流程，以及场景中统一的 `GameResultPanel`，构成当前的界面表现基础。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n每次点击最迟应在下一帧能够呈现画面时得到响应；等待过程应显示真实状态；页面应保持空间上的连贯性；内容不能被裁切或溢出；成功、失败、超时、取消和重试都应妥善恢复。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n烘焙在场景中的引用、分辨率变化、嵌套滚动、重复的运行时层级、对比度不足、页面残留，以及网络界面直接修改权威状态，都可能让原本正常的流程退步。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scripts/Gameplay/UI\nAssets/Scripts/Utils/UI\nAssets/Prefabs/UI\nAssets/Resources/UI\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "UI / UX",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"systems-ui-ux\",\"guid\":\"4c866fcf7aec3264bab86571bc65c144\"} -->\n# UI / UX\n\n<!-- rr-dev-room:summary -->\nThe shared interaction and presentation rules for menus, HUD, navigation, waits, and results.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nUI should make player intent, system state, hierarchy, and recovery obvious without decorative noise.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nMain Menu pages, HUD, settings, task hub, loading feedback, mini-game flows, and the unified in-scene GameResultPanel provide the current presentation foundation.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nEvery click responds by the next renderable frame; waits show truthful state; pages preserve spatial continuity; content never clips or bleeds; and success, failure, timeout, cancellation, and retry all recover cleanly.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nScene-baked references, resolution changes, nested scrolls, duplicated runtime hierarchy, weak contrast, page residue, and network UI mutating authority can regress otherwise functional flows.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scripts/Gameplay/UI\nAssets/Scripts/Utils/UI\nAssets/Prefabs/UI\nAssets/Resources/UI\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "ca5722d6-fb8b-5b04-bfb7-871dce492ce1",
+      "sourceTitle": "Adventure",
+      "sourceBodySha256": "60fd7bbf9d69cfef2eb416b88594c6efc31a185c36094189f9dd2e14ca13bc02",
+      "variants": {
+        "zh": {
+          "title": "冒险模式",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"gameplay-adventure\",\"guid\":\"9586db3ea00ffd346ae2b384f0e08aa3\"} -->\n# 冒险模式\n\n<!-- rr-dev-room:summary -->\n连接角色、世界、目标和结果的单人探索与战斗路线。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n冒险模式是整合移动、战斗、敌人、目标、交互、拾取，以及成功或失败结果的主要玩法空间。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n场景包含一条可玩的原型路线，已有角色控制、武器、敌人遭遇、交互机关、拾取物、目标和场景内结果展示。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n提供从进入到结果的清晰旅程，包含容易理解的目标、响应迅速的战斗、有目的的探索、稳定的检查点和可靠的返回路径。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n这个场景很大，而且经常有未保存的改动。修改可能使物理、对象池、镜头、输入、场景生命周期、性能，或第一人称与第三人称体验的一致性退步。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scenes/Main/Adventure.unity\nAssets/Scripts/Gameplay/Character\nAssets/Scripts/Gameplay/Objectives\nAssets/Scripts/Gameplay/LevelLogic\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Adventure",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"gameplay-adventure\",\"guid\":\"9586db3ea00ffd346ae2b384f0e08aa3\"} -->\n# Adventure\n\n<!-- rr-dev-room:summary -->\nThe single-player exploration and combat path that connects character, world, objectives, and results.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nAdventure is the primary integrated gameplay space for movement, combat, enemies, objectives, interaction, pickups, and success or failure.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nThe scene contains a playable prototype path with character control, weapons, enemy encounters, interactive mechanisms, pickups, objectives, and in-scene result presentation.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nDeliver a clear entry-to-result journey with readable objectives, responsive combat, purposeful exploration, stable checkpoints, and a reliable return path.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nThe scene is large and frequently dirty. Changes can regress physics, pooling, cameras, input, scene lifecycle, performance, or first-person and third-person parity.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scenes/Main/Adventure.unity\nAssets/Scripts/Gameplay/Character\nAssets/Scripts/Gameplay/Objectives\nAssets/Scripts/Gameplay/LevelLogic\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "e0b1ef39-c71b-50f9-b9b4-50885af0bc74",
+      "sourceTitle": "Combat & AI",
+      "sourceBodySha256": "1d2e3b8fcd1b8acc384a5d6d44c7e97a72d4c50aa420ab3e37eef0b362c1d53f",
+      "variants": {
+        "zh": {
+          "title": "战斗与敌人智能",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"gameplay-combat-ai\",\"guid\":\"1484b0cf4e83e264e971ba21ef83c20f\"} -->\n# 战斗与敌人智能\n\n<!-- rr-dev-room:summary -->\n瞄准、武器、投射物、伤害、敌人和战斗反馈采用的共用规则。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n战斗将玩家输入和武器状态，连接到投射物、伤害、生命值、死亡、敌人反应和反馈结果。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n已有原型武器、弹药、实际生成的投射物、生命值与伤害，以及敌人的侦测、寻路、追击、攻击、死亡和物品掉落。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n让每次射击都清楚可信：出发位置可见、目标方向正确、碰撞稳定、命中反馈明确、生成数量有明确限制，并让敌人智能的反应遵循相同规则。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n每帧查找、未使用对象池的临时对象、镜头与枪口方向不一致、贴墙射击、网络权威控制，以及同类武器实现逐渐分化，都可能造成细微的功能退步。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scripts/Gameplay/Abilities\nAssets/Scripts/Gameplay/AI\nAssets/Scripts/Gameplay/Items\nAssets/Prefabs/Projectiles\nAssets/Prefabs/Weapons\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Combat & AI",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"gameplay-combat-ai\",\"guid\":\"1484b0cf4e83e264e971ba21ef83c20f\"} -->\n# Combat & AI\n\n<!-- rr-dev-room:summary -->\nThe shared rules for aiming, weapons, projectiles, damage, enemies, and combat feedback.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nCombat connects player input and weapon state to projectile, damage, health, death, enemy response, and feedback outcomes.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nPrototype weapons, ammunition, real projectiles, health and damage, enemy detection, navigation, chasing, attacks, deaths, and item drops are present.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nMake every shot readable and trustworthy: visible origin, correct target direction, stable collision, clear hit response, bounded spawning, and AI reactions that match the same rules.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nPer-frame lookup, unpooled transients, camera-versus-muzzle disagreement, close-wall shots, networking authority, and sibling weapon divergence can create subtle regressions.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scripts/Gameplay/Abilities\nAssets/Scripts/Gameplay/AI\nAssets/Scripts/Gameplay/Items\nAssets/Prefabs/Projectiles\nAssets/Prefabs/Weapons\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "f19c6044-2d41-598f-bf99-0b0460c67c88",
+      "sourceTitle": "Mini-games",
+      "sourceBodySha256": "af51afadd9067042f46f07555de77985cf3d970eac1cfc7c8e5e8a1db74bf7dc",
+      "variants": {
+        "zh": {
+          "title": "小游戏",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"gameplay-mini-games\",\"guid\":\"ce527c9744f4e6f46a67e53f254c7a34\"} -->\n# 小游戏\n\n<!-- rr-dev-room:summary -->\n相互隔离的可玩模式，采用统一的退出与结果表达方式。\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## 概览\n打砖块、国际象棋和太空射击作为独立的可玩实验，保留在整个项目中。\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## 当前状态\n三个小游戏都已有早期可玩实现、专用场景或资源，并遵循共用的返回主菜单要求。\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## 目标\n每个小游戏都应快速启动，清楚说明规则与结果，避免无事可做的等待节奏，并通过共用的确认与结果流程安全退出。\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## 风险\n资源根目录变化、重复的结果流程、缓慢的自动操作、退出场景时的清理问题，以及意外引入的多人联机耦合，都可能破坏原本相互隔离的模式。\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## 参考资料\nAssets/Scenes/Misc/BrickBreaker.unity\nAssets/Scenes/Misc/Chess.unity\nAssets/Scenes/Misc/SpaceShooter.unity\nAssets/Resources/MiniGames\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        },
+        "en": {
+          "title": "Mini-games",
+          "body": "<!-- rr-dev-room:v1 {\"id\":\"gameplay-mini-games\",\"guid\":\"ce527c9744f4e6f46a67e53f254c7a34\"} -->\n# Mini-games\n\n<!-- rr-dev-room:summary -->\nIsolated playable modes with a shared exit and result language.\n<!-- rr-dev-room:summary-end -->\n\n<!-- rr-dev-room:section 0 -->\n## Overview\nBrick Breaker, Chess, and Space Shooter are preserved as independent playable experiments inside the wider project.\n<!-- rr-dev-room:section-end 0 -->\n\n<!-- rr-dev-room:section 1 -->\n## Current State\nAll three have early playable implementations, dedicated scenes or resources, and shared Main Menu return expectations.\n<!-- rr-dev-room:section-end 1 -->\n\n<!-- rr-dev-room:section 2 -->\n## Target\nEach mini-game should start quickly, communicate rules and results clearly, avoid idle pacing, and exit safely through the shared confirmation and result behavior.\n<!-- rr-dev-room:section-end 2 -->\n\n<!-- rr-dev-room:section 3 -->\n## Risks\nResource-root changes, duplicated result flows, slow automatic actions, scene-exit cleanup, and accidental multiplayer coupling can break otherwise isolated modes.\n<!-- rr-dev-room:section-end 3 -->\n\n<!-- rr-dev-room:section 4 -->\n## References\nAssets/Scenes/Misc/BrickBreaker.unity\nAssets/Scenes/Misc/Chess.unity\nAssets/Scenes/Misc/SpaceShooter.unity\nAssets/Resources/MiniGames\n<!-- rr-dev-room:section-end 4 -->\n\n"
+        }
+      }
+    },
+    {
+      "id": "overview",
+      "sourceTitle": "总案",
+      "sourceBodySha256": "a2bcf937cd8fdd76ad1bcd77a9dab598eafca0b1d751341993b9a80425a00365",
+      "variants": {
+        "zh": {
+          "title": "总案",
+          "body": "# 开发文档室\n\n## 项目概览\n\n项目当前状态与未来方向的稳定概貌。\n\n- [当前版本](5a2f7164-82b3-5f01-91bb-b72b2202e0ef.md)\n- [愿景与方向](05107322-018a-57df-ac6e-0b51d4e097d8.md)\n- [项目概览](9cc6013f-8125-5572-b053-940aab1c4512.md)\n- [开发者空间](7730018c-9934-588b-b167-ea5d5a334d23.md)\n\n## 游戏玩法\n\n玩家规则、即时玩法系统与可玩模式的基础。\n\n- [冒险模式](ca5722d6-fb8b-5b04-bfb7-871dce492ce1.md)\n- [战斗与敌人智能](e0b1ef39-c71b-50f9-b9b4-50885af0bc74.md)\n- [小游戏](f19c6044-2d41-598f-bf99-0b0460c67c88.md)\n\n## 系统\n\n连接项目各模式与工作流程的共用产品系统。\n\n- [建造系统](400d6ffa-dc2c-5fab-b263-1575dd9ccf79.md)\n- [多人联机](210e611a-6140-5179-b657-c73326123ede.md)\n- [界面与交互体验](a1449a49-ad79-5c70-abcb-bc50f9ce6428.md)\n- [建造系统](46fd3ac4-ed17-5b3f-8fec-6ccfcc99dff9.md)\n\n## 内容\n\n项目长期采用的视觉与音频方向。\n\n- [美术方向](352c027b-1baa-5528-bb22-e41816d1ae19.md)\n- [音频](21db724d-5152-532f-882b-bd930125fb28.md)\n\n## 技术\n\n架构、工具与资产制作流程知识。\n\n- [架构](874770de-3215-5d72-8029-67f18ce45126.md)\n- [工具](4cd87dfd-0918-51d3-9150-75eee2b6662a.md)\n- [资产制作流程](98f13021-cd45-5c0b-a205-6a38fb523397.md)\n"
+        },
+        "en": {
+          "title": "Overview",
+          "body": "# Dev Room\n\n## Project Overview\n\nThe stable picture of what the project is today and where it is going.\n\n- [Current Build](5a2f7164-82b3-5f01-91bb-b72b2202e0ef.md)\n- [Vision & Direction](05107322-018a-57df-ac6e-0b51d4e097d8.md)\n- [Project Overview](9cc6013f-8125-5572-b053-940aab1c4512.md)\n- [Dev's Realm](7730018c-9934-588b-b167-ea5d5a334d23.md)\n\n## Gameplay\n\nPlayer rules, moment-to-moment systems, and playable-mode foundations.\n\n- [Adventure](ca5722d6-fb8b-5b04-bfb7-871dce492ce1.md)\n- [Combat & AI](e0b1ef39-c71b-50f9-b9b4-50885af0bc74.md)\n- [Mini-games](f19c6044-2d41-598f-bf99-0b0460c67c88.md)\n\n## Systems\n\nShared product systems that connect the project's modes and workflows.\n\n- [Building](400d6ffa-dc2c-5fab-b263-1575dd9ccf79.md)\n- [Multiplayer](210e611a-6140-5179-b657-c73326123ede.md)\n- [UI / UX](a1449a49-ad79-5c70-abcb-bc50f9ce6428.md)\n- [Building System](46fd3ac4-ed17-5b3f-8fec-6ccfcc99dff9.md)\n\n## Content\n\nLong-lived visual and audio direction for the project.\n\n- [Art Direction](352c027b-1baa-5528-bb22-e41816d1ae19.md)\n- [Audio](21db724d-5152-532f-882b-bd930125fb28.md)\n\n## Technical\n\nArchitecture, tools, and production-pipeline knowledge.\n\n- [Architecture](874770de-3215-5d72-8029-67f18ce45126.md)\n- [Tools](4cd87dfd-0918-51d3-9150-75eee2b6662a.md)\n- [Asset Pipeline](98f13021-cd45-5c0b-a205-6a38fb523397.md)\n"
+        }
+      }
+    }
+  ]
+}

@@ -15,6 +15,8 @@ MAX_BODY_BYTES = 512 * 1024
 MAX_HEADER_BYTES = 4096
 MAX_DOCUMENTS = 500
 MAX_REQUEST_BYTES = MAX_BODY_BYTES * 6 + MAX_HEADER_BYTES
+MAX_LOCALE_BYTES = MAX_BODY_BYTES * 2 + MAX_HEADER_BYTES * 2
+MAX_CATALOG_BYTES = 8 * 1024 * 1024
 _HEADER_PREFIX = '<!-- codex-dev-room '
 _HEADER_SUFFIX = ' -->'
 
@@ -24,8 +26,161 @@ class DevRoomConflict(ValueError):
 
 
 class DevRoomService:
-    def __init__(self, document_library):
+    def __init__(self, document_library, translations_path=None):
         self.library = document_library
+        self.translations_path = Path(translations_path) if translations_path is not None else Path(__file__).with_name('dev-room-translations.json')
+
+    @staticmethod
+    def _language(value):
+        if value not in ('zh', 'en') or not isinstance(value, str):
+            raise ValueError('Dev Room 语言仅支持 zh 或 en。')
+        return value
+
+    @staticmethod
+    def _json(raw):
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError('Dev Room 语言文件包含重复字段。')
+                result[key] = value
+            return result
+        try:
+            return json.loads(raw.decode('utf-8'), object_pairs_hook=unique)
+        except (UnicodeError, ValueError) as exc:
+            raise ValueError('Dev Room 语言文件格式有误，原文件已保留。') from exc
+
+    def _variants(self, value):
+        if not isinstance(value, dict) or set(value) - {'zh', 'en'}:
+            raise ValueError('Dev Room 语言版本无效。')
+        for language, variant in value.items():
+            self._language(language)
+            if not isinstance(variant, dict) or set(variant) != {'title', 'body'}:
+                raise ValueError('Dev Room 语言版本字段无效。')
+            self._title(variant['title'])
+            self._body(variant['body'])
+        return value
+
+    @staticmethod
+    def _structure(source, translated):
+        marker = r'<!-- rr-dev-room:[\s\S]*?-->'
+        if re.findall(marker, source) != re.findall(marker, translated):
+            raise ValueError('Dev Room 来源身份和章节标识不能修改。')
+
+    def _catalog(self):
+        path = self.translations_path
+        if not path.exists():
+            return {}
+        for component in (path, *path.parents):
+            if component.is_symlink() or getattr(component.lstat(), 'st_file_attributes', 0) & 0x400:
+                raise ValueError('Dev Room 内置语言文件含文件链接。')
+        with path.open('rb') as source:
+            raw = source.read(MAX_CATALOG_BYTES + 1)
+        if len(raw) > MAX_CATALOG_BYTES:
+            raise ValueError('Dev Room 内置语言文件超过读取限制。')
+        catalog = self._json(raw)
+        if (not isinstance(catalog, dict) or set(catalog) != {'version', 'documents'}
+                or type(catalog['version']) is not int or catalog['version'] != 1
+                or not isinstance(catalog['documents'], list) or len(catalog['documents']) > MAX_DOCUMENTS):
+            raise ValueError('Dev Room 内置语言目录无效。')
+        result = {}
+        for entry in catalog['documents']:
+            if not isinstance(entry, dict) or set(entry) != {'id', 'sourceTitle', 'sourceBodySha256', 'variants'}:
+                raise ValueError('Dev Room 内置语言目录字段无效。')
+            identifier = self._id(entry['id'])
+            if identifier in result or not isinstance(entry['sourceBodySha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', entry['sourceBodySha256']):
+                raise ValueError('Dev Room 内置语言来源无效。')
+            self._title(entry['sourceTitle'])
+            self._variants(entry['variants'])
+            result[identifier] = entry
+        return result
+
+    def _locale_raw(self, root, identifier):
+        path = self._checked_path(root, *DEV_ROOM_PARTS, '.locales', identifier + '.json')
+        if not path.exists():
+            return None, ''
+        if not path.is_file():
+            raise ValueError('Dev Room 语言文件不是普通文件。')
+        with path.open('rb') as source:
+            raw = source.read(MAX_LOCALE_BYTES + 1)
+        return raw, self._updated_at(path.stat())
+
+    def _locale(self, raw, identifier):
+        if raw is None:
+            return None
+        if len(raw) > MAX_LOCALE_BYTES:
+            raise ValueError('Dev Room 语言文件超过读取限制。')
+        value = self._json(raw)
+        required = {'version', 'id', 'sourceRevision', 'variants'}
+        if (not isinstance(value, dict) or set(value) - (required | {'sourceLanguage'}) or not required <= set(value)
+                or type(value['version']) is not int or value['version'] != 1 or value['id'] != identifier
+                or not isinstance(value['sourceRevision'], str) or not re.fullmatch(r'[0-9a-f]{64}', value['sourceRevision'])):
+            raise ValueError('Dev Room 语言文件身份或来源无效。')
+        self._id(value['id'])
+        self._variants(value['variants'])
+        if 'sourceLanguage' in value:
+            self._language(value['sourceLanguage'])
+        return value
+
+    @staticmethod
+    def _matched_catalog(current, catalog):
+        entry = catalog.get(current['id']) if current else None
+        if (entry and current['revision'] and current['title'] == entry['sourceTitle']
+                and hashlib.sha256(current['body'].encode('utf-8')).hexdigest() == entry['sourceBodySha256']):
+            return entry
+        return None
+
+    @staticmethod
+    def _locale_revision(current, raw, entry):
+        if (not current or not current['revision']) and raw is None:
+            return ''
+        fields = [(current['revision'] if current else '').encode('ascii'), raw or b'',
+                  json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8') if entry else b'']
+        digest = hashlib.sha256(b'codex-dev-room-locales-v1\0')
+        for field in fields:
+            digest.update(len(field).to_bytes(8, 'big'))
+            digest.update(field)
+        return digest.hexdigest()
+
+    def _localized(self, root, current, language, catalog):
+        if current is None:
+            return None
+        raw, updated_at = self._locale_raw(root, current['id'])
+        locale = self._locale(raw, current['id'])
+        entry = self._matched_catalog(current, catalog)
+        valid = locale and locale['sourceRevision'] == current['revision']
+        for variant in (locale['variants'].values() if valid else ()):
+            self._structure(current['body'], variant['body'])
+        for variant in (entry['variants'].values() if entry else ()):
+            self._structure(current['body'], variant['body'])
+        variant = locale['variants'].get(language) if valid else None
+        if variant is None and entry:
+            variant = entry['variants'].get(language)
+        if variant is None and valid and locale.get('sourceLanguage') == language:
+            variant = {'title': current['title'], 'body': current['body']}
+        virtual = not current['revision'] and current['id'] == 'overview'
+        if variant:
+            self._structure(current['body'], variant['body'])
+        title = variant['title'] if variant else ('总案' if language == 'zh' else 'Overview') if virtual else ('待翻译文档' if language == 'zh' else 'Translation needed')
+        return {'id': current['id'], 'title': title, 'body': variant['body'] if variant else '',
+                'revision': self._locale_revision(current, raw, entry),
+                'updatedAt': updated_at if variant and valid and language in locale['variants'] else current['updatedAt'],
+                'language': language, 'sourceRevision': current['revision'], 'sourceBody': current['body'],
+                'translationMissing': not variant and not virtual}
+
+    def _state_localized(self, root, identifier, language, catalog=None):
+        catalog = self._catalog() if catalog is None else catalog
+        summaries, selected = [], None
+        for summary in self._summaries(root):
+            current = self._read(root, summary['id'])[0]
+            document = self._localized(root, current, language, catalog)
+            if document is None:
+                continue
+            summaries.append({key: document[key] for key in ('id', 'title', 'updatedAt', 'language', 'translationMissing')})
+            if summary['id'] == identifier:
+                selected = document
+        self._check_current_root(root)
+        return {'root': str(root), 'documents': summaries, 'document': selected}
 
     @staticmethod
     def _id(value):
@@ -222,10 +377,12 @@ class DevRoomService:
         self._check_current_root(root)
         return result
 
-    def state(self, expectedRoot, id='overview'):
+    def state(self, expectedRoot, id='overview', language=None):
         id = self._id(id)
+        if language is not None:
+            language = self._language(language)
         with self._scope(expectedRoot) as root:
-            return self._state(root, id)
+            return self._state(root, id) if language is None else self._state_localized(root, id, language)
 
     def _atomic_write(self, root, parts, content, before_replace=None):
         path = self._checked_path(root, *parts)
@@ -241,6 +398,11 @@ class DevRoomService:
             self._checked_path(root, *temporary_parts)
             if before_replace is not None:
                 before_replace()
+            # Version checks may perform more reads. Recheck after the callback
+            # so a directory swapped during those reads cannot redirect replace.
+            self._check_current_root(root)
+            self._checked_path(root, *parts)
+            self._checked_path(root, *temporary_parts)
             os.replace(temporary, path)
         finally:
             # If a directory was replaced by a link meanwhile, never follow it
@@ -248,6 +410,8 @@ class DevRoomService:
             self._checked_path(root, *temporary_parts).unlink(missing_ok=True)
 
     def save(self, payload):
+        if isinstance(payload, dict) and 'language' in payload:
+            return self._save_localized(payload)
         required = {'expectedRoot', 'id', 'title', 'body', 'expectedRevision'}
         if not isinstance(payload, dict) or set(payload) != required:
             raise ValueError('Dev Room 保存请求无效。')
@@ -286,3 +450,85 @@ class DevRoomService:
                     self._atomic_write(root, backup_parts, old_raw)
             self._atomic_write(root, (*DEV_ROOM_PARTS, id + '.md'), raw, before_replace=require_revision)
             return self._state(root, id)
+
+    def _save_localized(self, payload):
+        if set(payload) != {'expectedRoot', 'id', 'title', 'body', 'expectedRevision', 'language'}:
+            raise ValueError('Dev Room 语言保存请求无效。')
+        identifier, language = self._id(payload['id']), self._language(payload['language'])
+        title, body = self._title(payload['title']), self._body(payload['body'])
+        expected = payload['expectedRevision']
+        if not isinstance(expected, str) or expected and not re.fullmatch(r'[0-9a-f]{64}', expected):
+            raise ValueError('Dev Room 语言版本无效，请重新打开。')
+        with self._scope(payload['expectedRoot']) as root, self._write_lock(root):
+            current, source_raw = self._read(root, identifier)
+            locale_raw, _ = self._locale_raw(root, identifier)
+            locale = self._locale(locale_raw, identifier)
+            catalog = self._catalog()
+            entry = self._matched_catalog(current, catalog)
+            if self._locale_revision(current, locale_raw, entry) != expected:
+                raise DevRoomConflict('文档来源或语言版本已有更新，请保留草稿并重新读取。')
+            self._structure(current['body'] if current else '', body)
+            creating = source_raw is None
+            if creating and locale_raw is not None:
+                raise DevRoomConflict('语言版本的原文缺失，请先核对原文，已有语言稿已保留。')
+            if creating:
+                if len(self._summaries(root)) >= MAX_DOCUMENTS:
+                    raise ValueError('Dev Room 已达 500 份文档，请先整理现有文档。')
+                metadata = json.dumps({'version': 1, 'id': identifier, 'title': title}, ensure_ascii=False, separators=(',', ':')).replace('<', '\\u003c').replace('>', '\\u003e')
+                new_source = (_HEADER_PREFIX + metadata + _HEADER_SUFFIX + '\n' + body).encode('utf-8')
+                source_revision = hashlib.sha256(new_source).hexdigest()
+            else:
+                source_revision = current['revision']
+            valid = locale and locale['sourceRevision'] == source_revision
+            if valid:
+                for variant in locale['variants'].values():
+                    self._structure(current['body'], variant['body'])
+            updated = {'version': 1, 'id': identifier, 'sourceRevision': source_revision,
+                       'variants': dict(locale['variants']) if valid else {}}
+            if valid and 'sourceLanguage' in locale:
+                updated['sourceLanguage'] = locale['sourceLanguage']
+            if creating:
+                updated['sourceLanguage'] = language
+            updated['variants'][language] = {'title': title, 'body': body}
+            new_locale = json.dumps(updated, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8') + b'\n'
+            if len(new_locale) > MAX_LOCALE_BYTES:
+                raise ValueError('Dev Room 语言版本超过保存限制。')
+
+            def require_versions(sidecar_expected=locale_raw):
+                self._check_current_root(root)
+                latest_source = self._checked_path(root, *DEV_ROOM_PARTS, identifier + '.md')
+                if latest_source.exists():
+                    with latest_source.open('rb') as source:
+                        latest_raw = source.read(MAX_BODY_BYTES + MAX_HEADER_BYTES + 1)
+                else:
+                    latest_raw = None
+                if latest_raw != source_raw or self._locale_raw(root, identifier)[0] != sidecar_expected or self._matched_catalog(current, self._catalog()) != entry:
+                    raise DevRoomConflict('文档来源或语言版本已有更新，请保留草稿并重新读取。')
+
+            require_versions()
+            if locale_raw == new_locale:
+                return self._state_localized(root, identifier, language, catalog)
+            if locale_raw is not None:
+                backup_parts = (*DEV_ROOM_PARTS, '.history', identifier, 'locales', hashlib.sha256(locale_raw).hexdigest() + '.json')
+                self._mkdir(root, *backup_parts[:-1])
+                backup = self._checked_path(root, *backup_parts)
+                if backup.exists():
+                    with backup.open('rb') as source:
+                        if source.read(MAX_LOCALE_BYTES + 1) != locale_raw:
+                            raise ValueError('Dev Room 语言历史版本校验失败，原文件已保留。')
+                else:
+                    self._atomic_write(root, backup_parts, locale_raw, before_replace=require_versions)
+            self._mkdir(root, *DEV_ROOM_PARTS, '.locales')
+            parts = (*DEV_ROOM_PARTS, '.locales', identifier + '.json')
+            self._atomic_write(root, parts, new_locale, before_replace=require_versions)
+            if creating:
+                try:
+                    self._atomic_write(root, (*DEV_ROOM_PARTS, identifier + '.md'), new_source,
+                                       before_replace=lambda: require_versions(new_locale))
+                except Exception:
+                    # Only undo our own new sidecar; never touch a replacement or
+                    # a source document another writer created in the meantime.
+                    if self._locale_raw(root, identifier)[0] == new_locale:
+                        self._checked_path(root, *parts).unlink()
+                    raise
+            return self._state_localized(root, identifier, language, catalog)

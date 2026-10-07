@@ -907,11 +907,12 @@ const i18n = {
     randomRealmSurfaceTitle: "地面与场景",
     randomRealmSurfaceStatus: "预留中",
     randomRealmSurfaceBody: "这里先给地面页面、建筑放置、场景检查和导出入口留位置。",
+    randomRealmReleaseSectionLabel: "发布",
     randomRealmReleaseTitle: "发布控制",
     randomRealmReleaseBody: "Steamworks、发布包、宣传素材和工程入口。",
     randomRealmOpenReady: "就绪",
     randomRealmSteamworks: "Steamworks 后台",
-    randomRealmPublishFolder: "Publish 文件夹",
+    randomRealmPublishFolder: "发布文件夹",
     randomRealmProjectFolder: "Unity 工程",
     randomRealmPromoFolder: "宣传素材",
     randomRealmOpening: name => `正在打开：${name}`,
@@ -1759,6 +1760,7 @@ const i18n = {
     randomRealmSurfaceTitle: "Ground and Scene",
     randomRealmSurfaceStatus: "Reserved",
     randomRealmSurfaceBody: "Reserved for ground pages, building placement, scene checks, and export actions.",
+    randomRealmReleaseSectionLabel: "Release",
     randomRealmReleaseTitle: "Release Control",
     randomRealmReleaseBody: "Steamworks, publish builds, promo assets, and project entry points.",
     randomRealmOpenReady: "Ready",
@@ -21474,6 +21476,10 @@ scheduleClockTick();
   copy.zh.structureReview = "这份文档的结构需要核对，原文和已有草稿已保留。";
   copy.en.structureReview = "The document structure needs review. The original and any existing draft are kept.";
   let root = "", documents = [], current = null, editing = false, busy = false, sequence = 0;
+  const selectedLanguage = () => document.documentElement.lang.startsWith("zh") ? "zh" : "en";
+  let activeLanguage = selectedLanguage(), legacyDraft = null, requestedDocumentId = "overview";
+  Object.assign(copy.zh, { intro: "面向开发者的文档，在这里查看和修改。", ready: "保存在当前资料库 · 项目枢纽／开发文档室", missing: "这份文档还没有中文版本。可点击「编辑」补充中文内容。", legacy: "旧格式草稿", legacyNote: "旧格式草稿已完整保留，可展开代理资料查看。", switching: "正在读取中文版本……" });
+  Object.assign(copy.en, { missing: "The English version is not ready yet. Choose Edit to write it.", legacy: "Legacy draft", legacyNote: "The legacy draft is kept in Agent details for review.", switching: "Loading the English version…" });
   let catalog = [], fieldModel = null, fieldSource = "", canonicalBody = "", fieldInvalid = false, listedSelection = null;
   const bodyValue = () => fieldModel ? canonicalBody : ui.BodyInput.value;
   const text = (zh, en) => document.documentElement.lang.startsWith("zh") ? zh : en;
@@ -21509,7 +21515,7 @@ scheduleClockTick();
         };
         field(ui.Fields, "devRoomSummary", text("摘要", "Summary"), fieldModel.summary, true, value => { fieldModel.summary = value; });
         const technical = document.createElement("details"); technical.className = "dev-room-agent-edit";
-        const label = document.createElement("summary"); label.textContent = text("Agent 资料", "Agent details"); technical.append(label);
+        const label = document.createElement("summary"); label.textContent = text("代理资料", "Agent details"); technical.append(label);
         const technicalIndexes = new Set(window.CodexDevRoomEditor.present(fieldSource).technical.map(section => section.index));
         for (const section of fieldModel.sections) {
           const group = document.createElement("section"); group.className = "dev-room-section-edit";
@@ -21524,14 +21530,18 @@ scheduleClockTick();
     ui.BodyInput.hidden = Boolean(fieldModel) || imported(); ui.BodyLabel.hidden = ui.BodyInput.hidden;
   }
   let statusKey = "loading";
-  const draftKey = () => `codex-console-dev-room-drafts-v1:${root}`;
-  function drafts() {
+  const draftKey = (draftRoot = root, language = activeLanguage) => "codex-console-dev-room-drafts-v2:" + draftRoot + ":" + language;
+  function readDrafts(key, strict = false) {
     try {
-      const value = JSON.parse(localStorage.getItem(draftKey()) || "{}");
-      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      const value = JSON.parse(localStorage.getItem(key) || "{}");
+      if (value && typeof value === "object" && !Array.isArray(value)) return value;
+      if (strict) throw new Error("Draft storage needs review");
+      return {};
     }
-    catch { return {}; }
+    catch (error) { if (strict) throw error; return {}; }
   }
+  function drafts() { return readDrafts(draftKey()); }
+  function legacyDrafts() { return readDrafts("codex-console-dev-room-drafts-v1:" + root); }
   function setStatus(key) { statusKey = key; ui.Status.textContent = words()[key]; }
   function appendDevRoomInline(parent, source, depth = 0) {
     const value = String(source);
@@ -21568,11 +21578,18 @@ scheduleClockTick();
   function renderReading() {
     let view;
     try { view = window.CodexDevRoomEditor.present(bodyValue()); }
-    catch { view = { body: text("这份文档暂时无法排版。可以展开 Agent 资料查看原文。", "This document could not be formatted. Open Agent details to read the original."), technical: [], source: null }; }
+    catch { view = { body: text("这份文档暂时无法排版。可以展开代理资料查看原文。", "This document could not be formatted. Open Agent details to read the original."), technical: [], source: null }; }
     let body = view.body;
     const title = body.match(/^\s*# ([^\r\n]+)\r?\n/);
     if (title?.[1] === ui.TitleInput.value) body = body.slice(title[0].length);
     renderDocumentMarkdown(body, ui.Read, appendDevRoomInline);
+    renderAgent(view);
+  }
+  function renderAgent(view) {
+    let sourceView;
+    try { sourceView = window.CodexDevRoomEditor.present(current.sourceBody || bodyValue()); }
+    catch { sourceView = { source: null, technical: [] }; }
+    view = view || { source: sourceView.source, technical: sourceView.technical };
     ui.AgentContent.replaceChildren();
     const note = document.createElement("p");
     note.textContent = text("来源、文件位置和技术参考保存在这里，供查证和协作使用。", "Source information, file locations and technical references are kept here for review and collaboration.");
@@ -21589,7 +21606,9 @@ scheduleClockTick();
     }
     ui.AgentContent.append(info);
     for (const section of view.technical) {
-      const heading = document.createElement("h4"); heading.textContent = section.title;
+      const heading = document.createElement("h4");
+      const names = { References: "参考资料", Sources: "来源", "参考资料": "参考资料", "代理资料": "代理资料" };
+      heading.textContent = text(names[section.title] || section.title, ({ "参考资料": "References", "来源": "Sources", "代理资料": "Agent details" })[section.title] || section.title);
       const content = document.createElement("div"); renderDocumentMarkdown(section.body, content, appendDevRoomInline);
       ui.AgentContent.append(heading, content);
     }
@@ -21597,20 +21616,40 @@ scheduleClockTick();
     label.textContent = text("原始格式（只读）", "Raw format (read only)");
     const original = document.createElement("pre"); original.textContent = bodyValue();
     raw.append(label, original); ui.AgentContent.append(raw);
+    const kept = (title, body) => {
+      const details = document.createElement("details"), summary = document.createElement("summary"), content = document.createElement("pre");
+      summary.textContent = title; content.textContent = body;
+      details.append(summary, content); ui.AgentContent.append(details);
+    };
+    if (current.sourceBody && current.sourceBody !== bodyValue()) kept(text("源文件原稿（只读）", "Source manuscript (read only)"), current.sourceBody);
+    if (legacyDraft && typeof legacyDraft.body === "string") kept(text("旧格式草稿（只读）", "Legacy draft (read only)"), String(legacyDraft.title || "") + "\n\n" + legacyDraft.body);
   }
   function keepDraft() {
     if (!current || !root || !editing) return true;
     if (fieldInvalid) { setStatus("fieldError"); return false; }
-    const saved = drafts();
+    let saved;
+    try { saved = readDrafts(draftKey(), true); }
+    catch { setStatus("draftError"); return false; }
     const changed = current.restored || ui.TitleInput.value !== current.title || bodyValue() !== current.body || !current.revision && current.id !== "overview";
-    if (changed) saved[current.id] = { id: current.id, title: ui.TitleInput.value, body: bodyValue(), expectedRevision: current.revision, savedAt: new Date().toISOString() };
+    if (changed) saved[current.id] = { id: current.id, title: ui.TitleInput.value, body: bodyValue(), expectedRevision: current.revision, language: activeLanguage, savedAt: new Date().toISOString() };
     else delete saved[current.id];
     try { localStorage.setItem(draftKey(), JSON.stringify(saved)); return true; }
     catch { setStatus("draftError"); return false; }
   }
   function applyDraft(document) {
     const draft = drafts()[document.id];
-    if (!draft || typeof draft.title !== "string" || typeof draft.body !== "string" || typeof draft.expectedRevision !== "string") return document;
+    if (!draft || draft.language !== activeLanguage || typeof draft.title !== "string" || typeof draft.body !== "string" || typeof draft.expectedRevision !== "string") return document;
+    // A successful save can leave a draft behind when storage cleanup fails.
+    // Exact saved content is already current; different drafts keep their old base.
+    if (!document.translationMissing && document.title === draft.title && document.body === draft.body && /^[0-9a-f]{64}$/.test(document.revision || "")) {
+      try {
+        const key = draftKey(), kept = readDrafts(key, true), latest = kept[document.id];
+        if (latest?.language === activeLanguage && latest.title === document.title && latest.body === document.body && latest.expectedRevision === draft.expectedRevision) {
+          delete kept[document.id]; localStorage.setItem(key, JSON.stringify(kept));
+        }
+      } catch { /* Keep the original bank if storage is still unavailable. */ }
+      return document;
+    }
     editing = true;
     setStatus("recovered");
     // A restored edit retains its original revision. A newer saved document
@@ -21621,8 +21660,11 @@ scheduleClockTick();
     const scrollTop = ui.List.scrollTop;
     ui.List.replaceChildren();
     const all = new Map(documents.map(item => [item.id, item]));
+    for (const [id, item] of Object.entries(legacyDrafts())) {
+      if (item && item.id === id && typeof item.body === "string" && !all.has(id)) all.set(id, { id, title: words().legacy, legacy: true });
+    }
     for (const item of Object.values(drafts())) {
-      if (item && typeof item.id === "string" && typeof item.title === "string") all.set(item.id, { ...all.get(item.id), ...item, draft: true });
+      if (item && item.language === activeLanguage && typeof item.id === "string" && typeof item.title === "string") all.set(item.id, { ...all.get(item.id), ...item, draft: true });
     }
     const indexed = new Map(catalog.map((item, order) => [item.id, { ...item, order }]));
     const ordered = [...all.values()].sort((a, b) => a.id === "overview" ? -1 : b.id === "overview" ? 1 : (indexed.get(a.id)?.order ?? 999) - (indexed.get(b.id)?.order ?? 999));
@@ -21655,20 +21697,31 @@ scheduleClockTick();
     }
   }
   function render() {
+    byId("Heading").textContent = text("开发文档室", "Dev Room");
+    panel.querySelector(".section-label").textContent = text("项目枢纽", "PROJECT NEXUS");
+    panel.querySelector(".dev-room-sidebar").setAttribute("aria-label", text("开发文档室文档", "Dev Room documents"));
+    panel.querySelector(".dev-room-document").setAttribute("aria-label", text("文档正文", "Document content"));
     for (const node of panel.querySelectorAll("[data-dev-room-text]")) node.textContent = words()[node.dataset.devRoomText];
+    if (selectedLanguage() !== activeLanguage) {
+      ui.Title.textContent = words().untitled; ui.List.replaceChildren(); ui.SavedAt.textContent = "";
+      ui.Editor.hidden = true; ui.Read.hidden = false; ui.Agent.hidden = true;
+      ui.Read.textContent = text("草稿暂时无法保留，请切回原语言检查和保存。", "The draft could not be kept. Return to the previous language to review and save it.");
+      for (const element of [ui.Edit, ui.Save, ui.Copy, ui.New, ui.Reload]) element.disabled = true;
+      ui.Status.textContent = words().draftError; return;
+    }
     ui.Edit.textContent = editing ? words().preview : words().edit;
     ui.Copy.textContent = document.documentElement.lang.startsWith("zh") ? "保存为副本" : "Save as a copy";
     ui.Copy.hidden = statusKey !== "conflict";
     ui.BodyInput.placeholder = words().placeholder;
     ui.Editor.hidden = !editing; ui.Read.hidden = editing; ui.Save.hidden = !editing;
     ui.Agent.hidden = editing || !current;
-    ui.Agent.querySelector("summary").textContent = text("Agent 资料", "Agent details");
+    ui.Agent.querySelector("summary").textContent = text("代理资料", "Agent details");
     for (const label of ui.Fields.querySelectorAll("[data-dev-room-field-label]")) {
       const id = label.dataset.devRoomFieldLabel, index = Number(id.match(/Title(\d+)$/)?.[1]);
       label.textContent = id === "devRoomSummary" ? text("摘要", "Summary") : id.includes("SectionTitle") ? text(`第 ${index + 1} 节标题`, `Section ${index + 1} title`) : words().bodyLabel;
     }
     const technicalLabel = ui.Fields.querySelector(".dev-room-agent-edit > summary");
-    if (technicalLabel) technicalLabel.textContent = text("Agent 资料", "Agent details");
+    if (technicalLabel) technicalLabel.textContent = text("代理资料", "Agent details");
     for (const element of [ui.Edit, ui.Save, ui.Copy, ui.New, ui.Reload, ui.TitleInput, ui.BodyInput]) element.disabled = busy || !current;
     ui.New.disabled = busy || !root;
     ui.Reload.disabled = busy;
@@ -21681,19 +21734,30 @@ scheduleClockTick();
       ui.SavedAt.textContent = current.updatedAt ? `${words().updated} ${new Date(current.updatedAt).toLocaleString(document.documentElement.lang)}` : words().pending;
       if (!editing) {
         if (ui.BodyInput.value.trim()) renderReading();
-        else {
+        else if (current.translationMissing) {
+          const note = document.createElement("p"); note.textContent = words().missing;
+          ui.Read.replaceChildren(note); renderAgent(null);
+        } else {
           const empty = document.createElement("div"); empty.className = "dev-room-empty";
           const heading = document.createElement("strong"); heading.textContent = words().empty;
           const note = document.createElement("p"); note.textContent = words().emptyBody;
-          empty.append(heading, note); ui.Read.replaceChildren(empty); ui.Agent.hidden = true;
+          empty.append(heading, note); ui.Read.replaceChildren(empty); ui.Agent.hidden = !legacyDraft;
+          if (legacyDraft) renderAgent(null);
         }
       }
+    } else {
+      ui.Title.textContent = words().overview; ui.SavedAt.textContent = "";
+      ui.Read.textContent = words()[statusKey] || words().loading;
+      ui.AgentContent.replaceChildren();
     }
     renderList(); ui.Status.textContent = words()[statusKey];
+    if (legacyDraft && statusKey === "ready") ui.Status.textContent = words().legacyNote;
   }
   function select(document) {
     editing = false;
+    requestedDocumentId = document.id;
     current = applyDraft(document);
+    legacyDraft = legacyDrafts()[document.id] || null;
     ui.TitleInput.value = current.title; ui.BodyInput.value = current.body;
     ui.Agent.open = false; prepareFields(current.body);
     if (imported() && !fieldModel) { editing = false; setStatus("structureReview"); }
@@ -21705,38 +21769,54 @@ scheduleClockTick();
     if (!response.ok) { const error = new Error(payload.error || "Dev Room request failed"); error.status = response.status; throw error; }
     return payload;
   }
-  async function load(id = current?.id || "overview") {
+  async function load(id = current?.id || requestedDocumentId) {
     if (busy || !keepDraft()) return;
+    requestedDocumentId = id;
+    const requestLanguage = activeLanguage;
     const requestId = ++sequence;
     busy = true; setStatus("loading"); render();
     try {
       const library = await request("/api/documents/state");
       if (!library.root) throw new Error("No selected library");
       const sameRoot = !root || root === library.root;
-      const query = new URLSearchParams({ expectedRoot: library.root, id: sameRoot ? id : "overview" });
+      const query = new URLSearchParams({ expectedRoot: library.root, id: sameRoot ? id : "overview", language: requestLanguage });
       const [payload, overview] = await Promise.all([
         request(`/api/dev-room/state?${query}`),
-        query.get("id") === "overview" ? Promise.resolve(null) : request(`/api/dev-room/state?${new URLSearchParams({ expectedRoot: library.root, id: "overview" })}`)
+        query.get("id") === "overview" ? Promise.resolve(null) : request("/api/dev-room/state?" + new URLSearchParams({ expectedRoot: library.root, id: "overview", language: requestLanguage }))
       ]);
-      if (requestId !== sequence) return;
+      if (requestId !== sequence || requestLanguage !== activeLanguage || selectedLanguage() !== requestLanguage) return;
       if (payload.root !== library.root || overview && overview.root !== library.root) throw new Error("Library changed");
+      if (payload.document && payload.document.language !== requestLanguage || overview?.document && overview.document.language !== requestLanguage) throw new Error("Document language changed");
       root = payload.root; documents = payload.documents;
       try { catalog = window.CodexDevRoomEditor.catalog((overview || payload).document?.body || "", documents.map(item => item.id)); }
       catch { catalog = []; }
       setStatus("ready");
       const draft = drafts()[sameRoot ? id : "overview"];
-      select(payload.document || (draft ? { id: draft.id, title: "", body: "", revision: "", updatedAt: "" } : { id: "overview", title: words().overview, body: "", revision: "", updatedAt: "" }));
-    } catch { setStatus("failed"); }
+      select(payload.document || (draft ? { id: draft.id, title: "", body: "", revision: "", updatedAt: "", language: requestLanguage } : { id: query.get("id"), title: query.get("id") === "overview" ? words().overview : words().untitled, body: "", revision: "", updatedAt: "", language: requestLanguage }));
+    } catch { if (requestId === sequence) setStatus("failed"); }
     finally { if (requestId === sequence) { busy = false; render(); } }
   }
   ui.New.addEventListener("click", () => {
     if (busy || !root || !keepDraft()) return;
-    const document = { id: crypto.randomUUID(), title: words().untitled, body: "", revision: "", updatedAt: "" };
+    const document = { id: crypto.randomUUID(), title: words().untitled, body: "", revision: "", updatedAt: "", language: activeLanguage };
     select(document); editing = true; keepDraft(); setStatus("draft"); render(); ui.TitleInput.focus(); ui.TitleInput.select();
   });
   ui.Edit.addEventListener("click", () => {
     if (busy || !current) return;
     if (editing && !keepDraft()) return;
+    if (!editing && current.translationMissing && !bodyValue()) {
+      try {
+        const source = current.sourceBody || "", model = window.CodexDevRoomEditor.parse(source);
+        const technical = new Set(window.CodexDevRoomEditor.present(source).technical.map(section => section.index));
+        model.title = ui.TitleInput.value; model.summary = "";
+        for (const section of model.sections) {
+          section.title = technical.has(section.index) ? text("参考资料", "References") : text("第 " + (section.index + 1) + " 节", "Section " + (section.index + 1));
+          section.body = "";
+        }
+        ui.BodyInput.value = window.CodexDevRoomEditor.serialize(source, model);
+        prepareFields();
+      } catch { /* Plain Markdown remains a blank draft; source stays in Agent details. */ }
+    }
     editing = !editing; render(); if (editing) (fieldModel ? ui.TitleInput : ui.BodyInput).focus();
   });
   for (const input of [ui.TitleInput, ui.BodyInput]) input.addEventListener("input", () => {
@@ -21745,18 +21825,29 @@ scheduleClockTick();
     ui.Title.textContent = ui.TitleInput.value || words().untitled; renderList();
   });
   ui.Save.addEventListener("click", async () => {
-    if (busy || !current || !keepDraft()) return;
+    if (busy || !current || selectedLanguage() !== activeLanguage || !keepDraft()) return;
+    const saved = { root, language: activeLanguage, id: current.id, revision: current.revision, title: ui.TitleInput.value, body: bodyValue() };
+    const requestId = ++sequence;
     busy = true; setStatus("saving"); render();
     try {
-      const payload = await request("/api/dev-room/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRoot: root, id: current.id, title: ui.TitleInput.value, body: bodyValue(), expectedRevision: current.revision }) });
-      const kept = drafts(); delete kept[current.id];
-      try { localStorage.setItem(draftKey(), JSON.stringify(kept)); } catch { /* The saved library remains authoritative. */ }
+      const payload = await request("/api/dev-room/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRoot: saved.root, id: saved.id, title: saved.title, body: saved.body, expectedRevision: saved.revision, language: saved.language }) });
+      if (payload.root !== saved.root || payload.document?.id !== saved.id || payload.document?.language !== saved.language) throw new Error("Saved document identity changed");
+      if (payload.document.translationMissing || payload.document.title !== saved.title || payload.document.body !== saved.body || !/^[0-9a-f]{64}$/.test(payload.document.revision || "")) {
+        const error = new Error("Saved language content needs review"); error.status = 409; throw error;
+      }
+      try {
+        const key = draftKey(saved.root, saved.language), kept = readDrafts(key, true), draft = kept[saved.id];
+        if (draft?.expectedRevision === saved.revision && draft.title === saved.title && draft.body === saved.body) {
+          delete kept[saved.id]; localStorage.setItem(key, JSON.stringify(kept));
+        }
+      } catch { /* The full original draft bank stays available. */ }
+      if (requestId !== sequence || root !== saved.root || activeLanguage !== saved.language || selectedLanguage() !== saved.language) return;
       documents = payload.documents; current = payload.document;
       ui.TitleInput.value = current.title; ui.BodyInput.value = current.body;
       prepareFields(current.body);
       editing = false; setStatus("saved");
-    } catch (error) { setStatus(error.status === 409 ? "conflict" : "saveFailed"); }
-    finally { busy = false; render(); }
+    } catch (error) { if (requestId === sequence) setStatus(error.status === 409 ? "conflict" : "saveFailed"); }
+    finally { if (requestId === sequence) { busy = false; render(); } }
   });
   ui.Copy.addEventListener("click", () => {
     if (busy || !current || !keepDraft()) return;
@@ -21772,7 +21863,17 @@ scheduleClockTick();
   window.addEventListener("beforeunload", event => {
     if (!keepDraft()) { event.preventDefault(); event.returnValue = ""; }
   });
-  new MutationObserver(() => render()).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+  function switchLanguage() {
+    const next = selectedLanguage();
+    if (next === activeLanguage) { render(); return; }
+    if (!keepDraft()) { render(); return; }
+    const id = current?.id || requestedDocumentId;
+    ++sequence; activeLanguage = next; busy = false; current = null; legacyDraft = null; editing = false;
+    documents = []; catalog = []; fieldModel = null; fieldSource = ""; canonicalBody = ""; fieldInvalid = false;
+    ui.TitleInput.value = ""; ui.BodyInput.value = ""; ui.Fields.replaceChildren(); ui.Read.replaceChildren(); ui.AgentContent.replaceChildren();
+    setStatus("switching"); render(); void load(id);
+  }
+  new MutationObserver(switchLanguage).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
   new MutationObserver(() => { if (!modulePanel.hidden) void load(); }).observe(modulePanel, { attributes: true, attributeFilter: ["hidden"] });
   render(); if (!modulePanel.hidden) void load();
 })();

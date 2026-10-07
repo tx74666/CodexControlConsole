@@ -113,7 +113,7 @@
 
   // Presentation is a read-only projection. The canonical source is never
   // rewritten, and these helpers never create HTML, URLs, or network requests.
-  const technicalTitles = /^(?:references?|sources?|agent\s*资料)$/i;
+  const technicalTitles = /^(?:references?|sources?|agent\s*资料|参考资料|来源|代理资料)$/i;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   function technicalTitle(value) { return technicalTitles.test(value.trim().replace(/[:：]\s*$/, "")); }
   function readingLines(value) { return value.replace(/\r\n?/g, "\n").split("\n"); }
@@ -209,7 +209,7 @@
       if (flags[index]) { (active ? active.lines : human).push(line); continue; }
       const heading = line.match(/^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*$/);
       if (heading) heading[2] = heading[2].replace(/[ \t]+#+[ \t]*$/, "");
-      const label = line.match(/^ {0,3}(References?|Sources?|Agent\s*资料)\s*[:：]\s*(.*)$/i);
+      const label = line.match(/^ {0,3}(References?|Sources?|Agent\s*资料|参考资料|来源|代理资料)\s*[:：]\s*(.*)$/i);
       if (heading && technicalTitle(heading[2]) || label) {
         flush();
         active = { title: heading ? heading[2] : label[1], lines: label && label[2] ? [label[2]] : [], label: Boolean(label) };

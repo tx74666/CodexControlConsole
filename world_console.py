@@ -1637,10 +1637,11 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             try:
                 query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-                if (parsed.path != "/api/dev-room/state" or set(query) - {"expectedRoot", "id"}
+                if (parsed.path != "/api/dev-room/state" or set(query) - {"expectedRoot", "id", "language"}
                         or "expectedRoot" not in query or any(len(value) != 1 for value in query.values())):
                     raise ValueError("Dev Room 请求地址无效。")
-                self.send_json(DEV_ROOM.state(query["expectedRoot"][0], query.get("id", ["overview"])[0]))
+                self.send_json(DEV_ROOM.state(query["expectedRoot"][0], query.get("id", ["overview"])[0],
+                                              language=query.get("language", [None])[0]))
             except ValueError as error:
                 self.send_json({"error": str(error)}, status=400)
             except (OSError, RuntimeError):

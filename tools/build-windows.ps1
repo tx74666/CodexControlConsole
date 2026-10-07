@@ -290,6 +290,7 @@ if ($BuildApplication) {
   @{ Source = "styles.css"; Destination = "." },
     @{ Source = "app.js"; Destination = "." },
     @{ Source = "dev-room-editor.js"; Destination = "." },
+    @{ Source = "dev-room-translations.json"; Destination = "." },
   @{ Source = "README.md"; Destination = "." },
   @{ Source = "release-defaults.json"; Destination = "." },
   @{ Source = "music-loudness.json"; Destination = "." },
