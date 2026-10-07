@@ -75,6 +75,8 @@ def workflow_get(service, action, query, *, prefix="/api/workflow", desktop=Fals
         return getattr(service, guide[action])(query, prefix=prefix, desktop=desktop, authorize=authorize)
     if action == "mobile/dialogue/guide-send-receipt":
         return service.mobile_dialogue_guide_send_receipt(query, prefix=prefix, authorize=authorize)
+    if action == "mobile/dialogue/send-receipt":
+        return service.mobile_dialogue_send_receipt(query, prefix=prefix, authorize=authorize)
     if action == "codex-work/config":
         if query:
             raise WorkflowError("Work 配置地址无效。")

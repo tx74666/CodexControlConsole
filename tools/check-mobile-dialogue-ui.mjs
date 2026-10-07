@@ -745,7 +745,7 @@ await test("a full point list reports the actual remembered answer as saved with
 });
 await test("a current same-origin result stream validates every identity and reads only on a new result", async () => {
   const h = streamHarness(); assert.equal(h.transport.connections.length, 0); h.panel.setActive(true); await until(() => h.transport.connections.length === 1, "current stream should open after the actual session read"); const stream = h.transport.connections[0], url = new URL(stream.url); assert.equal(url.origin, h.runtime.location.origin); assert.equal(url.searchParams.get("sessionId"), h.current().id); assert.equal(url.searchParams.get("clientId"), h.current().clientId); assert.equal(url.searchParams.get("cursor"), "a".repeat(64)); assert.equal(stream.options.credentials, "same-origin"); assert.equal(stream.options.mode, "same-origin"); assert.equal(stream.options.redirect, "error"); assert.equal(stream.options.headers.Accept, "text/event-stream"); assert.equal(stream.options.headers["X-Codex-Phone"], "1");
-  const ready = resultFrame(h, "b".repeat(64), "idle"); stream.write(": keepalive\r\n\r\nevent: dialogue.ready\r\n"); stream.write(`data: ${JSON.stringify(ready)}\r`); stream.write("\n\r\n"); await flush(); assert.equal(dialogueReads(h), 1); for (const wrong of [{ clientId: randomUUID() }, { sessionId: "3".repeat(32) }, { recordId: "4".repeat(32) }, { cursor: "invalid" }, { jobId: "unknown-id" }, { status: null }, { extra: "unknown-field" }]) stream.frame("dialogue.result", { ...ready, cursor: "c".repeat(64), ...wrong }); stream.frame("other.result", ready); stream.write("event: dialogue.result\ndata: {broken}\n\n"); await flush(); assert.equal(dialogueReads(h), 1);
+  const ready = resultFrame(h, "a".repeat(64), "idle"); stream.write(": keepalive\r\n\r\nevent: dialogue.ready\r\n"); stream.write(`data: ${JSON.stringify(ready)}\r`); stream.write("\n\r\n"); await flush(); assert.equal(dialogueReads(h), 1); for (const wrong of [{ clientId: randomUUID() }, { sessionId: "3".repeat(32) }, { recordId: "4".repeat(32) }, { cursor: "invalid" }, { jobId: "unknown-id" }, { status: null }, { extra: "unknown-field" }]) stream.frame("dialogue.result", { ...ready, cursor: "c".repeat(64), ...wrong }); stream.frame("other.result", ready); stream.write("event: dialogue.result\ndata: {broken}\n\n"); await flush(); assert.equal(dialogueReads(h), 1);
   const input = h.byLabel("提问或保存想法"); input.value = "B：正在阅读时保留的未发文字"; input.fire("input"); h.runtime.window.scrollY = 20; h.scrolls.length = 0; h.result("c".repeat(64)); h.message({ id: "event-answer", role: "assistant", text: "当前讨论的实际新回答" }); stream.frame("dialogue.result", resultFrame(h, "c".repeat(64))); await until(() => h.byClass("dialogue-messages").textContent.includes("当前讨论的实际新回答"), "matching result should read its actual current response"); assert.equal(dialogueReads(h), 2); assert.equal(input.value, "B：正在阅读时保留的未发文字"); assert.equal(h.scrolls.length, 0); assert.equal(h.byText("有新回复 ↓").hidden, false); stream.frame("dialogue.result", resultFrame(h, "c".repeat(64))); await flush(); assert.equal(dialogueReads(h), 2); assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear();
 });
 await test("a result arriving during Chinese composition remains deferred until the same composer is released", async () => {
@@ -763,8 +763,8 @@ await test("clear and opening another saved idea close the old stream before lat
 await test("inactive hidden offline and page lifecycle states close streams and reconnect only on actual reactivation", async () => {
   const h = streamHarness(); h.panel.setActive(true); await until(() => h.transport.connections.length === 1, "first lifecycle stream"); h.panel.setActive(false); assert.equal(h.transport.connections[0].options.signal.aborted, true); await flush(); assert.equal(h.transport.connections.length, 1); h.panel.setActive(true); await until(() => h.transport.connections.length === 2, "reactivated stream"); h.events.get("pagehide")(); assert.equal(h.transport.connections[1].options.signal.aborted, true); await flush(); assert.equal(h.transport.connections.length, 2); h.events.get("pageshow")(); await until(() => h.transport.connections.length === 3, "page show should reconnect its actual discussion"); h.runtime.document.hidden = true; h.events.get("visibilitychange")(); assert.equal(h.transport.connections[2].options.signal.aborted, true); h.runtime.document.hidden = false; h.events.get("visibilitychange")(); await until(() => h.transport.connections.length === 4, "visible active page should reconnect"); h.runtime.navigator.onLine = false; h.events.get("offline")(); assert.equal(h.transport.connections[3].options.signal.aborted, true); await flush(); assert.equal(h.transport.connections.length, 4); h.runtime.navigator.onLine = true; h.events.get("online")(); await until(() => h.transport.connections.length === 5, "actual online event should reconnect"); assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear(); assert.equal(h.transport.connections[4].options.signal.aborted, true); await flush(); assert.equal(h.transport.connections.length, 5);
 });
-await test("EOF and closed frames stop without polling while an explicit reconnect uses the observed cursor", async () => {
-  const h = streamHarness(); h.panel.setActive(true); await until(() => h.transport.connections.length === 1, "first EOF stream"); const first = h.transport.connections[0]; h.result("b".repeat(64)); first.frame("dialogue.ready", resultFrame(h, "b".repeat(64), "idle")); await flush(); first.end(); await until(() => first.options.signal.aborted, "EOF should finish the scoped stream"); assert.match(h.byClass("dialogue-notice").textContent, /回答通知连接已断开/); assert.equal(h.transport.connections.length, 1); assert.equal(dialogueReads(h), 1); assert.equal(h.timers.size, 0); await flush(); assert.equal(h.transport.connections.length, 1); h.events.get("online")(); await until(() => h.transport.connections.length === 2, "online should perform a single reconnect"); const next = h.transport.connections[1]; assert.equal(new URL(next.url).searchParams.get("cursor"), "b".repeat(64)); h.result("c".repeat(64)); h.message({ id: "reconnected-answer", role: "assistant", text: "断线期间的原讨论回答" }); next.frame("dialogue.result", resultFrame(h, "c".repeat(64))); await until(() => h.byClass("dialogue-messages").textContent.includes("断线期间的原讨论回答"), "cursor result restores the exact current answer"); assert.equal(dialogueReads(h), 3); next.frame("dialogue.closed", resultFrame(h, "c".repeat(64), "closed")); await until(() => next.options.signal.aborted, "closed frame must terminate its connection"); await flush(); assert.equal(h.transport.connections.length, 2); assert.equal(h.timers.size, 0); assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear();
+await test("EOF schedules bounded recovery and explicit reconnect uses the observed cursor; closed remains stopped", async () => {
+  const h = streamHarness(); h.panel.setActive(true); await until(() => h.transport.connections.length === 1, "first EOF stream"); const first = h.transport.connections[0]; h.result("b".repeat(64)); first.frame("dialogue.ready", resultFrame(h, "b".repeat(64), "idle")); await flush(); first.end(); await until(() => first.options.signal.aborted, "EOF should finish the scoped stream"); assert.match(h.byClass("dialogue-notice").textContent, /回答通知连接已断开/); assert.equal(h.transport.connections.length, 1); assert.equal(dialogueReads(h), 2); assert.equal(h.timers.size, 1); await flush(); assert.equal(h.transport.connections.length, 1); h.events.get("online")(); await until(() => h.transport.connections.length === 2, "online should perform a single reconnect"); const next = h.transport.connections[1]; assert.equal(new URL(next.url).searchParams.get("cursor"), "b".repeat(64)); h.result("c".repeat(64)); h.message({ id: "reconnected-answer", role: "assistant", text: "断线期间的原讨论回答" }); next.frame("dialogue.result", resultFrame(h, "c".repeat(64))); await until(() => h.byClass("dialogue-messages").textContent.includes("断线期间的原讨论回答"), "cursor result restores the exact current answer"); assert.equal(dialogueReads(h), 4); next.frame("dialogue.closed", resultFrame(h, "c".repeat(64), "closed")); await until(() => next.options.signal.aborted, "closed frame must terminate its connection"); await flush(); assert.equal(h.transport.connections.length, 2); assert.equal(h.timers.size, 0); assert.equal(h.calls.filter(item => item.payload).length, 0); h.panel.clear();
 });
 await test("a result read preserves an unknown send nonce and late B without resending or clearing evidence", async () => {
   const h = streamHarness(); h.panel.setActive(true); await until(() => h.transport.connections.length === 1, "unknown send stream"); h.hook(action => { if (action === "mobile/dialogue/send") throw new TypeError("accepted response unavailable"); }); const input = h.byLabel("提问或保存想法"); input.value = "A：送达尚不明确"; input.fire("input"); h.byText("发送 ↑").click(); await until(() => h.calls.some(item => item.action === "mobile/dialogue/send") && h.panel.canReload(), "unknown delivery should retain its nonce after the attempted send"); const pending = JSON.parse([...h.storage.values()][0]).pending; input.value = "B：保留在本机"; input.fire("input"); h.result("b".repeat(64), "needs_review"); h.transport.connections[0].frame("dialogue.result", resultFrame(h, "b".repeat(64), "needs_review")); await until(() => dialogueReads(h) === 2, "unknown status can trigger only a read"); await flush(); assert.deepEqual(JSON.parse([...h.storage.values()][0]).pending, pending); assert.equal(input.value, "B：保留在本机"); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/send").length, 1); h.byText("清空当前讨论").click(); await flush(); assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/clear").length, 0); h.panel.clear();
@@ -1264,5 +1264,214 @@ await test("API computer browser and unknown sources require same-record exact c
   h.setJobs([browser]); await h.panel.refresh(); assert.equal(label(), "电脑 · ChatGPT");
   for (const change of [value => { value.result.browserEvidence.completion.observedAfterCommit = false; }, value => { delete value.result.browserEvidence.sourceUnitKey; }, value => { value.result.browserEvidence.assistantUnitKey = "fallback-turn-9:4:assistant"; }, value => { value.result.browserEvidence.observedAt = "unknown"; }, value => { value.appDispatch.targetThreadId = randomUUID(); }, value => { value.result.browserEvidence.profile.observedAfter = "Instant"; }]) { const stale = structuredClone(browser); change(stale); h.setJobs([stale]); await h.panel.refresh(); assert.equal(label(), "来源未确认"); }
   const app = structuredClone(job); app.appDispatch.sourceType = "workflow_discussion"; app.appDispatch.targetThreadId = "real-codex-chat"; app.result = { messageId: id, text, dispatchId: app.appDispatch.id, sourceMessageId: "original-app-message", turnId: "real-turn", targetThreadId: app.appDispatch.targetThreadId }; h.setJobs([app]); await h.panel.refresh(); assert.equal(label(), "电脑 · 已登录 App"); app.result.sourceMessageId = ""; h.setJobs([app]); await h.panel.refresh(); assert.equal(label(), "来源未确认"); h.panel.clear();
+});
+async function checkSendRecovery() {
+  const saved = h => JSON.parse([...h.storage.values()][0]);
+  const inputOf = h => h.byLabel('提问或保存想法');
+  const unknown = () => { throw new TypeError('fixture: interrupted before server commit'); };
+  const missing = code => { throw Object.assign(new Error('fixture: absent receipt'), { status: 404, data: { code } }); };
+  const fireOnlyTimer = async h => {
+    assert.equal(h.timers.size, 1, 'one bounded timer, never a timer storm');
+    const [id, callback] = [...h.timers][0]; h.timers.delete(id); callback(); await flush();
+  };
+  const guideReceipt = payload => ({ requestId: payload.requestId, target: 'codex_guide', clientId: payload.clientId,
+    sessionId: payload.sessionId, recordId: payload.recordId, sourceUserMessageId: 'd'.repeat(32),
+    sourceGuideChatId: '01234567-89ab-4cde-8fab-0123456789ab', textSha256: textHash(payload.text),
+    sourceSha256: 'a'.repeat(64), attachmentIds: structuredClone(payload.attachmentIds), expectedRevision: payload.expectedRevision,
+    acceptedSessionRevision: payload.expectedRevision + 1, acceptedAt: '2026-10-07T13:00:00Z' });
+  const canonical = value => {
+    const sorted = item => Array.isArray(item) ? item.map(sorted) : item && typeof item === 'object'
+      ? Object.fromEntries(Object.keys(item).sort().map(key => [key, sorted(item[key])])) : item;
+    return JSON.stringify(sorted(value));
+  };
+  const chatReceipt = (h, payload) => ({ requestId: payload.requestId, clientId: payload.clientId,
+    sessionId: payload.sessionId, recordId: h.current().recordId, jobId: 'f'.repeat(32), sourceUserMessageId: 'e'.repeat(32),
+    requestSha256: textHash(canonical(payload)), textSha256: textHash(payload.text),
+    attachmentIds: structuredClone(payload.attachmentIds), acceptedAt: '2026-10-07T13:00:00Z' });
+  const startUnknownGuide = async h => {
+    await activate(h); inputOf(h).value = 'A: frozen original'; inputOf(h).fire('input'); h.byText('Codex Guide').click();
+    h.hook((action) => { if (action === 'mobile/dialogue/guide-send') unknown(); });
+    h.byText('发给 Codex Guide').click(); await flush();
+    const operation = structuredClone(saved(h).pending); assert.equal(operation.action, 'mobile/dialogue/guide-send');
+    return operation;
+  };
+
+  await test('clear retires composer IME and reactivation preserves its local text', async () => {
+    const h = streamHarness(); await activate(h); const input = inputOf(h);
+    input.value = '未发送的中文草稿'; input.fire('compositionstart'); input.fire('input');
+    assert.equal(h.byText('发送 ↑').disabled, true);
+    h.panel.clear(); assert.equal(h.panel.canReload(), true);
+    await activate(h); assert.equal(inputOf(h).value, '未发送的中文草稿');
+    inputOf(h).value += '，已结束选词'; inputOf(h).fire('input');
+    assert.equal(h.byText('发送 ↑').disabled, false); assert.equal(h.calls.some(call => call.action === 'mobile/dialogue/send'), false);
+    h.panel.clear();
+  });
+
+  await test('aborted old draft cannot resume its retired send preparation', async () => {
+    const h = harness(), gate = deferred(); await activate(h); const input = inputOf(h);
+    h.hook(action => action === 'mobile/dialogue/draft' ? gate.promise : undefined);
+    input.value = 'A before host clear'; input.fire('input'); await fireOnlyTimer(h);
+    h.byText('发送 ↑').click(); await flush(); assert.equal(h.byText('Chat').disabled, true);
+    const snapshot = h.value(), before = h.calls.length; h.panel.clear(); gate.resolve(snapshot); await flush();
+    const followOn = h.calls.slice(before).filter(call => call.payload);
+    assert.deepEqual(followOn, [], 'retired send must not open a session, upload, or send after swallowed cancellation');
+    assert.equal(h.panel.canReload(), true);
+  });
+
+  for (const kind of ['clear', 'remember']) {
+    await test('old ' + kind + ' finally cannot release the new generation busy fence', async () => {
+      const h = streamHarness(), first = deferred(), second = deferred(); await activate(h);
+      if (kind === 'remember') { h.message({ id: 'e'.repeat(32), role: 'assistant', text: '需要保存的原回答', attachmentIds: [] }); await h.panel.refresh(); }
+      const action = kind === 'clear' ? 'mobile/dialogue/clear' : 'mobile/dialogue/remember';
+      const label = kind === 'clear' ? '清空当前讨论' : '存为想法'; let attempts = 0;
+      h.hook(name => name === action ? (++attempts === 1 ? first.promise : second.promise) : undefined);
+      h.byText(label).click(); await flush(); assert.equal(attempts, 1);
+      h.panel.clear(); await activate(h); h.byText(label).click(); await flush(); assert.equal(attempts, 2);
+      const countBefore = h.transport.connections.length; assert.equal(h.byText('Chat').disabled, true);
+      first.resolve(h.value()); await flush();
+      assert.equal(h.byText('Chat').disabled, true, 'an old finally may not clear the new busy flag');
+      if (kind === 'clear') assert.equal(h.transport.connections.length, countBefore, 'old finally may not end current clear SSE suppression');
+      second.resolve(h.value()); await flush(); h.panel.clear();
+    });
+  }
+
+  await test('pending Guide A keeps B local when its actual 800ms timer fires', async () => {
+    const h = streamHarness(), operation = await startUnknownGuide(h);
+    inputOf(h).value = 'B stays local'; inputOf(h).fire('input'); const revision = h.current().revision;
+    const writes = h.calls.filter(call => call.action === 'mobile/dialogue/draft').length;
+    await fireOnlyTimer(h);
+    assert.equal(h.calls.filter(call => call.action === 'mobile/dialogue/draft').length, writes);
+    assert.equal(h.current().revision, revision); assert.deepEqual(saved(h).pending, operation);
+    assert.equal(inputOf(h).value, 'B stays local'); h.panel.clear();
+  });
+
+  await test('exact Guide GET receipt retires A while preserving B without replay', async () => {
+    const h = streamHarness(), operation = await startUnknownGuide(h); inputOf(h).value = 'B after A'; inputOf(h).fire('input');
+    h.hook(action => action.startsWith('mobile/dialogue/guide-send-receipt?') ? { guideSendReceipt: guideReceipt(operation.payload), isCurrent: true } : undefined);
+    const before = h.calls.length; await h.panel.refresh();
+    assert.equal(saved(h).pending, null); assert.equal(inputOf(h).value, 'B after A');
+    assert.equal(h.calls.slice(before).some(call => call.payload), false); h.panel.clear();
+  });
+
+  await test('ordinary Chat exact GET receipt retires A without consuming B or re-POSTing', async () => {
+    const h = streamHarness(); await activate(h); inputOf(h).value = 'A Chat raw text 😀\n'; inputOf(h).fire('input');
+    h.hook(action => action === 'mobile/dialogue/send' ? unknown() : undefined);
+    h.byText('发送 ↑').click(); await flush(); const operation = structuredClone(saved(h).pending);
+    inputOf(h).value = 'B Chat must survive'; inputOf(h).fire('input');
+    h.hook(action => action.startsWith('mobile/dialogue/send-receipt?') ? { sendReceipt: chatReceipt(h, operation.payload), isCurrent: true } : undefined);
+    const before = h.calls.length; await h.panel.refresh();
+    assert.equal(saved(h).pending, null); assert.equal(inputOf(h).value, 'B Chat must survive');
+    assert.equal(h.calls.slice(before).some(call => call.payload), false); h.panel.clear();
+  });
+
+  await test('ordinary Chat manual retry uses the frozen full-body hash and original nonce', async () => {
+    const h = streamHarness(); await activate(h); inputOf(h).value = 'A Chat original'; inputOf(h).fire('input');
+    h.hook(action => action === 'mobile/dialogue/send' ? unknown() : undefined);
+    h.byText('发送 ↑').click(); await flush(); const operation = structuredClone(saved(h).pending);
+    inputOf(h).value = 'B remains local'; inputOf(h).fire('input'); let accepted = false;
+    h.hook((action, payload) => {
+      if (action.startsWith('mobile/dialogue/send-receipt?')) return accepted
+        ? { sendReceipt: chatReceipt(h, operation.payload), isCurrent: true } : missing('send_receipt_not_found');
+      if (action === 'mobile/dialogue/send') {
+        assert.deepEqual(payload, operation.payload); accepted = true; h.current().revision++;
+        h.message({ id: 'e'.repeat(32), role: 'user', text: payload.text, attachmentIds: structuredClone(payload.attachmentIds) });
+        h.setJobs([{ id: 'f'.repeat(32), recordId: h.current().recordId, kind: 'discuss', status: 'waiting', result: {} }]);
+        return h.value();
+      }
+    });
+    await h.panel.refresh(); assert.equal(h.byText('重试上一条原请求').hidden, false);
+    h.byText('重试上一条原请求').click(); await flush();
+    const attempts = h.calls.filter(call => call.action === 'mobile/dialogue/send');
+    assert.equal(attempts.length, 2); assert.deepEqual(attempts[1].payload, operation.payload);
+    assert.equal(saved(h).pending, null); assert.equal(inputOf(h).value, 'B remains local'); h.panel.clear();
+  });
+
+  await test('only explicit dedicated-404 retry reuses all seven original fields and nonce', async () => {
+    const h = streamHarness(), operation = await startUnknownGuide(h); inputOf(h).value = 'B must not replace original A'; inputOf(h).fire('input');
+    h.hook(action => action.startsWith('mobile/dialogue/guide-send-receipt?') ? missing('guide_send_receipt_not_found') : undefined);
+    await h.panel.refresh(); assert.equal(h.byText('重试上一条原请求').hidden, false);
+    assert.equal(h.calls.filter(call => call.action === 'mobile/dialogue/guide-send').length, 1);
+    h.byText('重试上一条原请求').click(); await flush();
+    const attempts = h.calls.filter(call => call.action === 'mobile/dialogue/guide-send');
+    assert.equal(attempts.length, 2); assert.deepEqual(attempts[1].payload, operation.payload);
+    assert.equal(saved(h).pending, null); assert.equal(inputOf(h).value, 'B must not replace original A');
+    assert.equal(h.calls.some(call => call.action === 'mobile/dialogue/send'), false); h.panel.clear();
+  });
+
+  await test('generic or wrong-endpoint 404 cannot expose the original-request retry', async () => {
+    for (const code of ['guide_receipt_not_found', 'other_route_not_found']) {
+      const h = streamHarness(), operation = await startUnknownGuide(h);
+      h.hook(action => action.startsWith('mobile/dialogue/guide-send-receipt?') ? missing(code) : undefined);
+      await h.panel.refresh(); assert.equal(h.byText('重试上一条原请求').hidden, true);
+      assert.deepEqual(saved(h).pending, operation); assert.equal(h.calls.filter(call => call.action === 'mobile/dialogue/guide-send').length, 1);
+      h.panel.clear();
+    }
+  });
+
+  await test('Guide reply locator only reads this discussion and preserves composer B', async () => {
+    const h = streamHarness(); await activate(h); inputOf(h).value = 'A'; inputOf(h).fire('input'); h.byText('Codex Guide').click(); h.byText('发给 Codex Guide').click(); await flush();
+    const user = h.value().detail.messages.at(-1), text = '这个讨论的 Guide 回复';
+    h.message({ id: 'e'.repeat(32), role: 'assistant', text, attachmentIds: [], guideSource: { kind: 'codex_guide', author: 'Codex Guide', messageId: 'e'.repeat(32), clientId: h.current().clientId, sessionId: h.current().id, recordId: h.current().recordId, sourceUserMessageId: user.id, sourceGuideChatId: '01234567-89ab-4cde-8fab-0123456789ab', requestId: randomUUID(), textSha256: textHash(text) } });
+    inputOf(h).value = 'B while reading'; inputOf(h).fire('input'); const before = h.calls.length;
+    h.byText('Guide 回复').click(); await flush();
+    assert.equal(inputOf(h).value, 'B while reading'); assert.match(h.byClass('dialogue-messages').textContent, /这个讨论的 Guide 回复/);
+    assert.equal(h.calls.slice(before).some(call => call.payload), false); h.panel.clear();
+  });
+
+  await test('EOF uses at most three one-shot retries, closed never retries, explicit refresh resets budget', async () => {
+    const h = streamHarness(); await activate(h); assert.equal(h.transport.connections.length, 1);
+    for (let retry = 0; retry < 3; retry++) {
+      h.transport.connections.at(-1).end(); await flush(); assert.equal(h.timers.size, 1);
+      await fireOnlyTimer(h); assert.equal(h.transport.connections.length, retry + 2);
+    }
+    h.transport.connections.at(-1).end(); await flush(); assert.equal(h.timers.size, 0);
+    assert.equal(h.transport.connections.length, 4); assert.equal(dialogueReads(h), 1, 'reconnect is bounded transport recovery, not dialogue polling');
+    await h.panel.refresh(); assert.equal(h.transport.connections.length, 5);
+    h.transport.connections.at(-1).frame('dialogue.closed', resultFrame(h, 'c'.repeat(64), 'closed')); await flush();
+    assert.equal(h.timers.size, 0); assert.equal(h.calls.some(call => call.payload), false); h.panel.clear();
+  });
+
+  await test('reconnect ready with a changed cursor reads the missed exact-scope answer once', async () => {
+    const h = streamHarness(); await activate(h); h.transport.connections[0].end(); await flush(); await fireOnlyTimer(h);
+    h.result('c'.repeat(64)); h.message({ id: 'f'.repeat(32), role: 'assistant', text: '断线期间保存的回答', attachmentIds: [] });
+    const before = dialogueReads(h), stream = h.transport.connections.at(-1);
+    stream.frame('dialogue.ready', resultFrame(h, 'c'.repeat(64), 'succeeded')); await flush();
+    assert.equal(dialogueReads(h), before + 1); assert.match(h.byClass('dialogue-messages').textContent, /断线期间保存的回答/);
+    stream.frame('dialogue.result', resultFrame(h, 'c'.repeat(64), 'succeeded')); await flush(); assert.equal(dialogueReads(h), before + 1);
+    assert.equal(h.calls.some(call => call.payload), false); h.panel.clear();
+  });
+
+  await test('SSE 401 never reconnects, and a retired timer cannot reconnect after host clear', async () => {
+    let auth = 0; const denied = streamHarness({ onAuth() { auth++; } }), originalOpen = denied.transport.open;
+    denied.transport.open = async (url, options) => ({ ...await originalOpen(url, options), status: 401, ok: false });
+    await activate(denied); assert.equal(auth, 1); assert.equal(denied.timers.size, 0); assert.equal(denied.transport.connections.length, 1); denied.panel.clear();
+    const h = streamHarness(); await activate(h); h.transport.connections[0].end(); await flush();
+    const callback = [...h.timers.values()][0]; assert.equal(typeof callback, 'function'); h.panel.clear(); assert.equal(h.timers.size, 0);
+    callback(); await flush(); assert.equal(h.transport.connections.length, 1);
+    await activate(h); assert.equal(h.transport.connections.length, 2);
+    for (let retry = 0; retry < 3; retry++) { h.transport.connections.at(-1).end(); await flush(); await fireOnlyTimer(h); }
+    assert.equal(h.transport.connections.length, 5, 'clear must reset the retired reconnect budget'); h.panel.clear();
+  });
+
+}
+await checkSendRecovery();
+await test("retired saved-image selection cannot send the newly restored same-session draft", async () => {
+  const h = harness(), gate = deferred(); await activate(h); h.uploadedImage("8".repeat(32), "旧图.png"); await h.panel.refresh();
+  h.hook(action => action === "mobile/dialogue/draft" ? gate.promise : undefined);
+  const input = h.byLabel("提问或保存想法"); input.value = "旧页 A"; input.fire("input"); const [timerId, timer] = [...h.timers][0]; h.timers.delete(timerId); timer(); await flush();
+  assert.equal(h.calls.filter(item => item.action === "mobile/dialogue/draft").length, 1);
+  const choice = h.byLabel("本次引用 旧图.png"); choice.checked = true; choice.fire("change"); await flush();
+  const snapshot = h.value(), before = h.calls.length; h.panel.clear(); await activate(h); h.byLabel("提问或保存想法").value = "新页 B"; h.byLabel("提问或保存想法").fire("input");
+  gate.resolve(snapshot); await flush(); assert.equal(h.calls.slice(before).some(item => item.payload), false);
+  assert.equal(h.byLabel("提问或保存想法").value, "新页 B"); assert.equal(h.byText("发送 ↑").disabled, false); h.panel.clear();
+});
+await test("retired local-image removal cannot overwrite the active shared blob pointer or lock input", async () => {
+  const rows = new Map(), writes = [], gate = deferred(); let paused = false;
+  const h = harness({ options: { blobStore: { async get(id) { return rows.get(id); }, async put(value) { writes.push(value.id); if (paused) await gate.promise; rows.set(value.id, value); } } } }); await activate(h);
+  const file = new Blob(["fixture-image"], { type: "image/png" }); file.name = "本地原图.png"; const inputFile = h.byLabel("选择图片文件"); inputFile.files = [file]; inputFile.fire("change"); await flush();
+  const before = writes.length; paused = true; h.byLabel("移除本次图片 本地原图.png").click(); await flush(); assert.equal(writes.length, before + 1);
+  h.panel.clear(); await activate(h); const input = h.byLabel("提问或保存想法"); input.value = "移除期间保留的新草稿"; input.fire("input"); assert.equal(h.byText("发送 ↑").disabled, false);
+  gate.resolve(); await flush(); assert.equal(writes.length, before + 1); assert.equal(input.value, "移除期间保留的新草稿"); assert.equal(h.panel.canReload(), true);
+  assert.equal(h.calls.some(item => item.action === "mobile/dialogue/send"), false); h.panel.clear();
 });
 console.log(`${count} mobile dialogue behavior checks passed.`);

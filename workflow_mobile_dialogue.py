@@ -678,6 +678,60 @@ class MobileDialogueMixin:
     def mobile_dialogue_send(self, body, prefix="/api/workflow", authorize=None):
         return self._mobile_dialogue_write("send", body, prefix, authorize)
 
+    def mobile_dialogue_send_receipt(self, query="", *, prefix="/api/workflow", authorize=None):
+        """Look up an accepted original send without dispatching or changing state."""
+        api = _api()
+        if prefix not in {"/api/workflow", "/api/phone/workflow"}:
+            raise api.WorkflowError("发送回执入口无效。", 403)
+        from workflow_guide_reply import _request, _digest, _object
+        params = parse_qs(query, keep_blank_values=True)
+        keys = {"requestId", "clientId", "sessionId"}
+        if len(query) > 400 or set(params) != keys or any(len(values) != 1 for values in params.values()):
+            raise api.WorkflowError("发送回执地址无效。")
+        identifier = _request(params["requestId"][0])
+        client_id, session_id = _client(params["clientId"][0]), api._id(params["sessionId"][0])
+        if params["requestId"][0] != identifier or params["clientId"][0] != client_id or params["sessionId"][0] != session_id:
+            raise api.WorkflowError("发送回执身份无效。")
+
+        def read(db):
+            db.execute("BEGIN")
+            entry = db.execute("SELECT * FROM requests WHERE id=?", (identifier,)).fetchone()
+            if entry is None:
+                raise api.WorkflowError("原发送回执不存在。", 404, "send_receipt_not_found")
+            if entry["kind"] != "mobile_dialogue_send":
+                raise api.WorkflowError("原请求不是讨论发送。", 409, "send_source_not_matching")
+            session = self._mobile_session(db, client_id, session_id)
+            record_id = session["recordId"]
+            saved = _object(entry["response"])
+            if (set(saved) not in ({"sessionId", "jobId"}, {"sessionId", "jobId", "sourceMessageId"})
+                    or saved.get("sessionId") != session_id):
+                raise api.WorkflowError("原发送回执不属于指定讨论。", 409, "send_source_not_matching")
+            job = db.execute("SELECT * FROM jobs WHERE id=? AND record_id=? AND request_id=?", (saved.get("jobId"), record_id, identifier)).fetchone()
+            if job is None:
+                raise api.WorkflowError("原发送来源无法核对。", 409, "send_source_not_matching")
+            if saved.get("sourceMessageId"):
+                candidates = db.execute("SELECT * FROM messages WHERE id=? AND role='user' AND record_id=?", (saved["sourceMessageId"], record_id)).fetchall()
+            else:
+                payload = _object(job["payload"])
+                candidates = db.execute("SELECT * FROM messages WHERE role='user' AND record_id=? AND created_at=? AND text=?",
+                    (record_id, job["created_at"], payload.get("text"))).fetchall()
+                context = payload.get("context")
+                if not isinstance(context, dict):
+                    raise api.WorkflowError("原发送冻结来源无法核对。", 409, "send_source_not_matching")
+                attachments = context.get("attachmentIds")
+                candidates = [row for row in candidates if json.loads(row["attachment_ids"]) == attachments]
+            if len(candidates) != 1 or self._guide_original_send(db, candidates[0], session) != (job["id"], identifier):
+                raise api.WorkflowError("原发送来源无法核对。", 409, "send_source_not_matching")
+            user = candidates[0]
+            if not re.fullmatch(r"[a-f0-9]{64}", entry["fingerprint"]):
+                raise api.WorkflowError("原发送凭据无法核对。", 409, "send_source_not_matching")
+            receipt = {"requestId": identifier, "clientId": client_id, "sessionId": session_id, "recordId": record_id,
+                "jobId": job["id"], "sourceUserMessageId": user["id"], "requestSha256": entry["fingerprint"],
+                "textSha256": _digest(user["text"]), "attachmentIds": json.loads(user["attachment_ids"]), "acceptedAt": user["created_at"]}
+            return {"sendReceipt": receipt, "isCurrent": self._mobile_client_state(db, client_id)["currentSessionId"] == session_id}
+
+        return self._guide_read(read, authorize)
+
     def mobile_dialogue_save(self, body, prefix="/api/workflow", authorize=None):
         return self._mobile_dialogue_write("save", body, prefix, authorize)
 

@@ -7,6 +7,7 @@
   const tiers = [{ id: "fast", label: "极速" }, { id: "high", label: "高" }, { id: "pro", label: "Pro" }];
   const profileReasoning = { fast: { mode: "standard", effort: "low" }, high: { mode: "standard", effort: "high" }, pro: { mode: "pro", effort: "high" } };
   const canonicalUuid = value => typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+  const canonicalJson = value => JSON.stringify((function sort(item) { return Array.isArray(item) ? item.map(sort) : item && typeof item === "object" ? Object.fromEntries(Object.keys(item).sort().map(key => [key, sort(item[key])])) : item; })(value));
   const sha256Text = text => {
     const bytes = new TextEncoder().encode(text), padded = new Uint8Array(Math.ceil((bytes.length + 9) / 64) * 64); padded.set(bytes); padded[bytes.length] = 128;
     const view = new DataView(padded.buffer); view.setUint32(padded.length - 8, Math.floor(bytes.length / 0x20000000)); view.setUint32(padded.length - 4, bytes.length * 8);
@@ -47,12 +48,14 @@
     state.replyTarget = saved.replyTarget === "codex_guide" ? "codex_guide" : "chat"; state.guide = null;
     const controllers = new Set();
     let queuedReplyTarget = null, modelSettingsOpen = false;
+    let absentReceiptOperation = null, receiptReading = false;
     let eligibleAttachments = [], cancelPendingButton = null;
     state.pointDrafts = pointDrafts;
     let pointEditor = null;
     const editComposing = { body: false, execution: false };
     let draftSync = null, draftTimer = 0, ideaSequence = 0, managementSequence = 0, files = [], fileOwner = null, fileError = false, fileReading = null, fileWriting = 0, uploadRequest = null, packUrl = "", packIdeaId = "", packRevision = 0;
     let resultStream = null, resultEpoch = 0, resultKey = "", resultCursor = "", resultPending = null, resultDraining = false, resultStopped = false, resultTransition = false, pageClosed = false;
+    let resultReconnectTimer = 0, resultReconnectAttempts = 0;
     const blobs = options.blobStore || options.assetStore || fileStore(), filesKey = `${storageKey}:files:${state.clientId}`, filePreviews = [], imageRemovalButtons = [];
     const top = make("header", "", "dialogue-top"), topLeft = make("div", "", "dialogue-top-left"), topActions = make("div", "", "dialogue-top-actions"), heading = make("div", "", "dialogue-heading"), title = make("h2", "当前对话", "dialogue-title"), connectionStatus = make("span", "", "dialogue-connection");
     connectionStatus.hidden = true;
@@ -109,7 +112,9 @@
     const tierSummary = button("高", () => toggleModelSettings(), "dialogue-tier-summary"), modelSettings = make("section", "", "dialogue-model-settings"), modelSettingsId = `dialogue-model-settings-${uuid()}`, closeModelSettings = button("收起设置", () => toggleModelSettings(false)), tierLabel = make("label", "回答档位");
     modelSettings.id = modelSettingsId; modelSettings.hidden = true; modelSettings.setAttribute("aria-label", "模型与回答档位设置"); tierSummary.setAttribute("aria-controls", modelSettingsId); tierSummary.setAttribute("aria-expanded", "false"); tierLabel.append(tier); modelSettings.append(closeModelSettings, tierLabel);
     const status = make("div", "", "dialogue-status"), draftStatus = make("p"), capabilityStatus = make("p", "", "dialogue-capability-status"); status.setAttribute("role", "status"); status.append(draftStatus, capabilityStatus); composeLeft.append(attach, tierSummary); composeRight.append(saveOnly, send); composeActions.append(composeLeft, composeRight); shell.append(pendingImages, composerInput, modelSettings, composeActions, imageInput); composer.append(shell, status); root.classList.add("mobile-dialogue"); root.replaceChildren(top, replyTabs, notice, content, newResult, composer, sidebar);
-    const savedImagePicker = make("details", "", "dialogue-saved-image-picker"), savedImageChoices = make("div", "", "dialogue-attachment-grid"); savedImagePicker.append(make("summary", "已保存图片"), make("p", "选择本次引用的图片；未选择的图片不会发送。", "dialogue-source-note"), savedImageChoices); savedImagePicker.hidden = true; shell.insertBefore(savedImagePicker, composerInput);
+    const savedImagePicker = make("section", "", "dialogue-saved-image-picker"), savedImageChoices = make("div", "", "dialogue-attachment-grid"); savedImagePicker.setAttribute("aria-label", "本轮图片，勾选才会发送"); savedImagePicker.append(savedImageChoices); savedImagePicker.hidden = true; shell.insertBefore(savedImagePicker, composerInput);
+    const receiptRecovery = make("section", "", "dialogue-receipt-recovery"), receiptRecoveryText = make("p"), checkOriginal = button("核对上一条", () => void recoverPendingSend()), retryOriginal = button("重试上一条原请求", () => void retryPendingSend()); receiptRecovery.append(receiptRecoveryText, checkOriginal, retryOriginal); receiptRecovery.hidden = true; composer.insertBefore(receiptRecovery, shell);
+    const viewGuideReplies = button("Guide 回复", () => void showGuideReplies(), "dialogue-guide-replies"); viewGuideReplies.setAttribute("aria-label", "查看本讨论最新的 Codex Guide 回复"); replyTabs.append(viewGuideReplies);
     const modelRow = make("div", "", "dialogue-model-row"), modelLabel = make("label", "模型"), subscriptionModel = field("select", "ChatGPT 订阅实际模型", "dialogue-model"), modelFeedback = make("p", "", "dialogue-model-feedback"), modelCheck = button("查看模型状态", () => void readSubscriptionStatus(true), "dialogue-model-check"); modelFeedback.setAttribute("role", "status"); modelFeedback.setAttribute("aria-live", "polite"); modelRow.append(modelLabel, subscriptionModel, modelFeedback, modelCheck); modelSettings.append(modelRow);
     document.addEventListener("pointerdown", event => { if (!state.active) return; for (const popup of [more, ideaMore, savedImagePicker]) if (popup.open && !popup.contains(event.target)) popup.open = false; }, { capture: true });
     sidebar.addEventListener("cancel", event => { event.preventDefault(); closeSidebar(); });
@@ -323,10 +328,11 @@
         if (generation !== state.generation) throw Object.assign(new Error("已切换页面。"), { cancelled: true });
         if (!response.ok) throw Object.assign(new Error(data.error || `操作未完成（${response.status}）。`), { status: response.status, data });
         if (state.active && generation === state.generation) options.onConnectionState?.(true); return data;
-      } catch (error) { if (state.active && generation === state.generation && (error instanceof TypeError || error.name === "AbortError")) options.onConnectionState?.(false); throw error; }
+      } catch (error) { if (generation !== state.generation) throw Object.assign(error, { cancelled: true }); if (state.active && (error instanceof TypeError || error.name === "AbortError")) options.onConnectionState?.(false); throw error; }
       finally { controllers.delete(controller); window.clearTimeout(timer); }
     }
     function fail(error) { if (!error.auth && !error.cancelled) say(error.name === "AbortError" ? "电脑连接超时，草稿仍在此手机。" : error.message || "暂时无法完成，草稿已保留。", true); }
+    function requireGeneration(generation) { if (generation !== state.generation) throw Object.assign(new Error("已切换页面。"), { cancelled: true }); }
     function applyDialogue(data, expectedSession = "", readCancellation = false) {
       if (!data || data.session?.isCurrent === false || expectedSession && state.session?.id && expectedSession !== state.session.id || data.session?.id === state.session?.id && data.session?.revision < state.session?.revision) return false;
       const cancellationRecovered = readCancellation && recoverCancellationReceipt(data);
@@ -344,13 +350,23 @@
       const selectedTier = data.preferences?.requestedProfile || data.session?.requestedProfile; if (!saved.tier && !state.dirty && tiers.some(item => item.id === selectedTier)) state.tier = selectedTier;
       if (!saved.chatTransport && !state.dirty && !state.pending) { state.chatTransport = data.preferences?.chatTransport === "chatgpt_subscription" ? "chatgpt_subscription" : "browser_chat"; state.subscription = subscriptionChoice(data.preferences?.subscription); }
       const key = currentResultKey();
-      if (key !== resultKey) { closeResultStream(); resultKey = key; resultCursor = ""; resultPending = null; resultStopped = false; }
+      if (key !== resultKey) { closeResultStream(); resultKey = key; resultCursor = ""; resultPending = null; resultStopped = false; resultDraining = false; }
       if (/^[a-f0-9]{64}$/.test(data.resultCursor || "")) { if (!resultCursor || !resultStream && !resultPending) resultCursor = data.resultCursor; if (resultPending?.cursor === data.resultCursor) resultPending = null; }
       tier.value = state.tier; renderConversation(); renderCapability(); renderFiles(); renderGuidePending(); updateControls(); syncResultStream(); if (cancellationRecovered) say("这条未发送请求已结束，原内容与当前草稿保留。"); return true;
     }
     function currentResultKey() { return state.session ? `${state.clientId}:${state.session.id}:${state.session.recordId}` : ""; }
     function canReadResults() { return !offline && !adapter && state.active && state.view === "chat" && !pageClosed && !document.hidden && navigator.onLine !== false && !resultTransition && /^[a-f0-9]{32}$/.test(state.session?.id || "") && /^[a-f0-9]{32}$/.test(state.session?.recordId || ""); }
-    function closeResultStream() { resultEpoch++; const stream = resultStream; resultStream = null; stream?.controller.abort(); void stream?.reader?.cancel().catch(() => {}); }
+    function closeResultStream() { window.clearTimeout(resultReconnectTimer); resultReconnectTimer = 0; resultEpoch++; const stream = resultStream; resultStream = null; stream?.controller.abort(); void stream?.reader?.cancel().catch(() => {}); }
+    function scheduleResultReconnect() {
+      const delays = [1000, 3000, 10000];
+      if (!canReadResults() || resultReconnectTimer || resultReconnectAttempts >= delays.length) return;
+      const generation = state.generation, key = currentResultKey(), epoch = resultEpoch;
+      resultReconnectTimer = window.setTimeout(() => {
+        resultReconnectTimer = 0;
+        if (generation !== state.generation || key !== currentResultKey() || epoch !== resultEpoch || !canReadResults()) return;
+        resultStopped = false; syncResultStream();
+      }, delays[resultReconnectAttempts++]);
+    }
     function currentResultStream(stream) { return resultStream === stream && stream.epoch === resultEpoch && stream.generation === state.generation && stream.key === currentResultKey() && canReadResults(); }
     function receiveResultFrame(stream, frame) {
       if (!currentResultStream(stream)) return;
@@ -360,8 +376,9 @@
       let data; try { data = JSON.parse(dataLines.map(line => line.slice(5).replace(/^ /, "")).join("\n")); } catch { return; }
       if (!data || Object.keys(data).sort().join(",") !== "clientId,cursor,jobId,recordId,sessionId,status" || data.clientId !== stream.clientId || data.sessionId !== stream.sessionId || data.recordId !== stream.recordId || !/^[a-f0-9]{64}$/.test(data.cursor || "") || data.jobId !== null && !/^[a-f0-9]{32}$/.test(data.jobId || "") || typeof data.status !== "string" || !data.status || data.status.length > 80) return;
       if (event === "dialogue.closed") { resultStopped = true; closeResultStream(); return; }
-      if (event === "dialogue.ready") { resultCursor = data.cursor; void drainResults(); return; }
+      if (event === "dialogue.ready") { if (data.cursor !== resultCursor) { resultCursor = data.cursor; resultPending = { key: stream.key, generation: stream.generation, cursor: data.cursor }; } void drainResults(); return; }
       if (data.cursor === resultCursor) return;
+      resultReconnectAttempts = 0;
       resultCursor = data.cursor; resultPending = { key: stream.key, generation: stream.generation, cursor: data.cursor }; void drainResults();
     }
     function syncResultStream() {
@@ -374,7 +391,8 @@
         try {
           const response = await fetch(url.href, { method: "GET", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", signal: stream.controller.signal, headers: { Accept: "text/event-stream", ...(phone ? { "X-Codex-Phone": "1" } : {}) } });
           if (!currentResultStream(stream)) { await response.body?.cancel(); return; }
-          if (response.status === 401) { options.onAuth?.(); throw new Error("请重新连接电脑。"); }
+          if (response.status === 401) { stream.noRetry = true; options.onAuth?.(); throw new Error("请重新连接电脑。"); }
+          if (response.status >= 400 && response.status < 500 && ![408, 429].includes(response.status)) stream.noRetry = true;
           if (!response.ok || !/^text\/event-stream(?:;|$)/i.test(response.headers.get("Content-Type") || "") || !response.body?.getReader) throw new Error("回答通知连接暂不可用，请重新连接电脑后查看。");
           stream.reader = response.body.getReader(); const decoder = new TextDecoder(); let buffered = "";
           while (currentResultStream(stream)) {
@@ -385,7 +403,7 @@
             let boundary; while ((boundary = buffered.indexOf("\n\n")) !== -1) { const frame = buffered.slice(0, boundary); buffered = buffered.slice(boundary + 2); receiveResultFrame(stream, frame); if (!currentResultStream(stream)) return; }
           }
         } catch (error) { if (currentResultStream(stream) && error.name !== "AbortError") { options.onConnectionState?.(false); if (!state.storageFailed) fail(error); } }
-        finally { if (resultStream === stream) { resultStopped = true; closeResultStream(); } }
+        finally { if (resultStream === stream) { resultStopped = true; closeResultStream(); if (!stream.noRetry) scheduleResultReconnect(); } }
       })();
     }
     async function drainResults() {
@@ -393,7 +411,7 @@
       const pending = resultPending; if (pending.key !== currentResultKey() || pending.generation !== state.generation) { resultPending = null; return; }
       resultDraining = true;
       try { if (await refresh(false) && resultPending === pending) resultPending = null; }
-      finally { resultDraining = false; if (resultPending && resultPending !== pending) void drainResults(); }
+      finally { if (pending.generation === state.generation && pending.key === currentResultKey()) { resultDraining = false; if (resultPending && resultPending !== pending) void drainResults(); } }
     }
     function verifiedSubscriptionSelection(job) {
       const result = job?.result, selected = subscriptionChoice(result?.subscription);
@@ -569,8 +587,14 @@
       if (guideMode) send.disabled = state.busy || state.composing || clearing || Boolean(state.pending && !guideUnknown) || !guideUnknown && (empty && !hasImages || !offline && !state.guide?.available);
       else if (guideUnknown) send.disabled = true;
       tierSummary.disabled = state.busy || state.composing; chatTab.disabled = guideTab.disabled = state.busy;
+      const recoverable = ["mobile/dialogue/send", "mobile/dialogue/guide-send"].includes(state.pending?.action);
+      receiptRecovery.hidden = state.view !== "chat" || !recoverable;
+      receiptRecoveryText.textContent = recoverable ? `上一条 ${state.pending.action === "mobile/dialogue/guide-send" ? "Codex Guide" : "Chat"} 需要核对；当前草稿没有再次发送。` : "";
+      checkOriginal.disabled = retryOriginal.disabled = state.busy || state.composing || receiptReading;
+      retryOriginal.hidden = !recoverable || absentReceiptOperation !== state.pending;
+      viewGuideReplies.disabled = state.busy || state.composing || state.reading || offline;
       renderGuidePending(); void drainResults(); }
-    async function writeFiles(value) { fileWriting++; try { await blobs.put(value); } catch (error) { fileError = true; throw error; } finally { fileWriting--; } }
+    async function writeFiles(value) { const generation = state.generation; fileWriting++; try { await blobs.put(value); } catch (error) { if (generation === state.generation) fileError = true; throw error; } finally { fileWriting--; } }
     async function saveFiles() { try { await writeFiles({ id: filesKey, files, fileOwner, uploadRequest }); fileError = false; } catch (error) { fileError = true; fail(error); throw error; } }
     async function restoreSessionFiles(id) {
       if (!id || fileOwner === id) return;
@@ -582,9 +606,22 @@
       const renderedSessionId = state.session?.id;
       const addImage = (source, name, action) => { const card = make("div", "", "dialogue-draft-image"), remove = button("", action, "dialogue-image-remove"), glyph = make("span", "×"); glyph.setAttribute("aria-hidden", "true"); remove.append(glyph); remove.setAttribute("aria-label", `移除本次图片 ${name}`); remove.title = "只取消本次选图，保留原图"; imageRemovalButtons.push(remove); if (source) { const image = make("img"); image.src = source; image.alt = name; card.append(image); } else card.append(make("span", name)); card.append(remove); pendingImages.append(card); };
       for (const file of currentFiles()) { const source = URL.createObjectURL?.(file); if (source) filePreviews.push(source); addImage(source, file.name || "待保存图片", () => void removeLocalImage(file, renderedSessionId)); }
-      const selected = new Set(state.session?.draft?.attachmentIds || []); for (const item of state.detail?.attachments || []) { if (!selected.has(item.id) || !/^image\//.test(item.mimeType || "")) continue; addImage(item.previewUrl || item.url, item.name || "已上传图片", () => void selectSavedImage(item.id, false, renderedSessionId)); }
+      const selected = new Set(state.session?.draft?.attachmentIds || []), eligible = new Set(eligibleAttachments.map(item => item.id)); for (const item of state.detail?.attachments || []) { if (!selected.has(item.id) || eligible.has(item.id) || !/^image\//.test(item.mimeType || "")) continue; addImage(item.previewUrl || item.url, item.name || "已上传图片", () => void selectSavedImage(item.id, false, renderedSessionId)); }
       const allowed = new Set([...(state.session?.eligibleAttachmentIds || []), ...(state.session?.uploadedAttachmentIds || [])]); savedImageChoices.replaceChildren();
-      for (const item of eligibleAttachments) { if (!allowed.has(item.id) || !/^image\//.test(item.mimeType || "")) continue; const label = make("label", "", "dialogue-saved-image-choice"), choice = field("input", `本次引用 ${item.name || "已保存图片"}`); choice.type = "checkbox"; choice.checked = selected.has(item.id); label.dataset.selected = String(choice.checked); choice.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest); choice.addEventListener("change", () => void selectSavedImage(item.id, choice.checked, renderedSessionId)); label.append(choice, make("span", item.name || "已保存图片")); const source = item.previewUrl || item.url; if (source) { const image = make("img"); image.src = source; image.alt = item.name || "已保存图片"; label.append(image); } savedImageChoices.append(label); }
+      for (const item of eligibleAttachments) {
+        if (!allowed.has(item.id) || !/^image\//.test(item.mimeType || "")) continue;
+        const label = make("label", "", "dialogue-saved-image-choice"), choice = field("input", `本次引用 ${item.name || "已保存图片"}`);
+        choice.type = "checkbox"; choice.checked = selected.has(item.id); label.dataset.selected = String(choice.checked);
+        choice.disabled = state.busy || Boolean(state.pending) || Boolean(uploadRequest);
+        choice.addEventListener("change", () => void selectSavedImage(item.id, choice.checked, renderedSessionId));
+        label.append(choice, make("span", item.name || "已保存图片"));
+        const source = item.previewUrl || item.url; if (source) { const image = make("img"); image.src = source; image.alt = item.name || "已保存图片"; label.append(image); }
+        if (choice.checked) {
+          const remove = button("", event => { event?.preventDefault?.(); event?.stopPropagation?.(); void selectSavedImage(item.id, false, renderedSessionId); }, "dialogue-image-remove");
+          remove.setAttribute("aria-label", `移除本次图片 ${item.name || "已保存图片"}`); remove.append(make("span", "×")); imageRemovalButtons.push(remove); label.append(remove);
+        }
+        savedImageChoices.append(label);
+      }
       savedImagePicker.hidden = !savedImageChoices.children.length;
       pendingImages.hidden = !pendingImages.children.length; updateControls();
     }
@@ -597,23 +634,25 @@
         if (!ownsImage() || state.pending || uploadRequest) return;
         const remaining = [...files]; remaining.splice(remaining.indexOf(file), 1);
         const row = { files: remaining, fileOwner: renderedSessionId, uploadRequest: null };
-        await writeFiles({ id: `${filesKey}:${renderedSessionId}`, ...row }); await writeFiles({ id: filesKey, ...row });
+        await writeFiles({ id: `${filesKey}:${renderedSessionId}`, ...row }); if (!ownsImage()) return; await writeFiles({ id: filesKey, ...row });
         if (!ownsImage()) return;
         files = remaining; fileOwner = renderedSessionId; fileError = false; removed = true; saveLocalDraft(); say("已移除本次图片，文字与其他图片保留；尚未发送。");
       } catch (error) { if (ownsImage()) fail(error); }
       finally { if (generation === state.generation) { state.busy = false; renderFiles(); if (removed && state.session?.id === renderedSessionId) void syncDraft(); } }
     }
     async function selectSavedImage(id, selected, renderedSessionId) {
+      const generation = state.generation;
       if (state.busy || state.pending || uploadRequest || !state.session || state.session.id !== renderedSessionId) { renderFiles(); return; }
       const sessionId = state.session.id; state.busy = true; updateControls();
-      try { if (draftSync) await draftSync; if (state.session?.id !== sessionId || !eligibleAttachments.some(item => item.id === id)) throw new Error("图片来源已变化，请重新读取当前想法。"); const ids = new Set(state.session.draft?.attachmentIds || []); if (selected) ids.add(id); else ids.delete(id); const selectedImages = [...(state.detail?.attachments || []), ...eligibleAttachments].filter((item, index, values) => ids.has(item.id) && values.findIndex(other => other.id === item.id) === index); if (ids.size + currentFiles().length > 4 || selectedImages.reduce((sum, item) => sum + (item.size || 0), 0) + currentFiles().reduce((sum, item) => sum + item.size, 0) > 24 * 1024 * 1024) throw new Error("本次最多引用 4 张图片，合计不超过 24 MB。"); saveLocalDraft(); const payload = submission(); payload.attachmentIds = [...ids]; const data = await call("mobile/dialogue/draft", payload); if (state.session?.id !== sessionId || !applyDialogue(data, sessionId)) return; say("本次选图已保存，尚未发送。"); } catch (error) { fail(error); } finally { state.busy = false; renderFiles(); }
+      try { if (draftSync) await draftSync; requireGeneration(generation); if (state.session?.id !== sessionId || !eligibleAttachments.some(item => item.id === id)) throw new Error("图片来源已变化，请重新读取当前想法。"); const ids = new Set(state.session.draft?.attachmentIds || []); if (selected) ids.add(id); else ids.delete(id); const selectedImages = [...(state.detail?.attachments || []), ...eligibleAttachments].filter((item, index, values) => ids.has(item.id) && values.findIndex(other => other.id === item.id) === index); if (ids.size + currentFiles().length > 4 || selectedImages.reduce((sum, item) => sum + (item.size || 0), 0) + currentFiles().reduce((sum, item) => sum + item.size, 0) > 24 * 1024 * 1024) throw new Error("本次最多引用 4 张图片，合计不超过 24 MB。"); saveLocalDraft(); const payload = submission(); payload.attachmentIds = [...ids]; const data = await call("mobile/dialogue/draft", payload); if (state.session?.id !== sessionId || !applyDialogue(data, sessionId)) return; say("本次选图已保存，尚未发送。"); } catch (error) { if (generation === state.generation) fail(error); } finally { if (generation === state.generation) { state.busy = false; renderFiles(); } }
     }
     async function uploadFiles(intent) {
+      const generation = state.generation;
       if (!intent.files.length) return [];
-      if (fileReading) await fileReading; if (fileError) await saveFiles();
-      await ensureSession();
-      if (!fileOwner) { fileOwner = state.session.id; await saveFiles(); }
-      if (!uploadRequest) { uploadRequest = { requestId: uuid(), recordId: state.session.recordId, route: "mobile/dialogue/upload", scope: { clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision } }; await saveFiles(); }
+      if (fileReading) await fileReading; requireGeneration(generation); if (fileError) { await saveFiles(); requireGeneration(generation); }
+      await ensureSession(); requireGeneration(generation);
+      if (!fileOwner) { fileOwner = state.session.id; await saveFiles(); requireGeneration(generation); }
+      if (!uploadRequest) { uploadRequest = { requestId: uuid(), recordId: state.session.recordId, route: "mobile/dialogue/upload", scope: { clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision } }; await saveFiles(); requireGeneration(generation); }
       if (uploadRequest.recordId !== state.session.recordId) throw new Error("待上传图片属于原讨论，请先返回原讨论保存，不会附到其它想法。");
       if (uploadRequest.route !== "mobile/dialogue/upload" || uploadRequest.scope?.clientId !== state.clientId || uploadRequest.scope?.sessionId !== state.session.id) throw new Error("旧图片上传结果尚需核对；原图片和请求仍保留，未作为新上传重复发送。");
       let uploaded;
@@ -624,13 +663,14 @@
         // These upload responses precede the transaction/receipt. An unknown
         // outcome must keep the original nonce and files frozen.
         const code = error.data?.code || error.code;
-        if ([413, 415].includes(error.status) || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch"].includes(code)) { uploadRequest = null; await saveFiles(); renderFiles(); }
+        if (generation === state.generation && ([413, 415].includes(error.status) || error.status === 409 && ["revision_conflict", "dialogue_changed", "task_source_mismatch"].includes(code))) { uploadRequest = null; await saveFiles(); requireGeneration(generation); renderFiles(); }
         throw error;
       }
+      requireGeneration(generation);
       const attachmentIds = uploaded.uploadedAttachmentIds || uploaded.attachmentIds || (uploaded.attachments || []).map(item => item.id);
       if (!attachmentIds.length) throw new Error("尚未取得图片保存凭据，原图片草稿仍保留。");
       if (uploaded.session && !applyDialogue(uploaded, uploadRequest.scope.sessionId)) throw new Error("讨论已切换；原图片上传凭据保留，未附到新讨论。");
-      const payload = submission(intent); payload.attachmentIds = [...new Set([...payload.attachmentIds, ...attachmentIds])]; if (payload.attachmentIds.length > 4) throw new Error("本次图片超过 4 张，请先取消一张已选图片；原文件和上传凭据仍保留。"); const data = await call("mobile/dialogue/draft", payload); applyDialogue(data, state.session.id); files = files.filter(file => !intent.files.includes(file)); if (!files.length) fileOwner = null; uploadRequest = null; await saveFiles(); renderFiles(); return attachmentIds;
+      const payload = submission(intent); payload.attachmentIds = [...new Set([...payload.attachmentIds, ...attachmentIds])]; if (payload.attachmentIds.length > 4) throw new Error("本次图片超过 4 张，请先取消一张已选图片；原文件和上传凭据仍保留。"); const data = await call("mobile/dialogue/draft", payload); applyDialogue(data, state.session.id); files = files.filter(file => !intent.files.includes(file)); if (!files.length) fileOwner = null; uploadRequest = null; await saveFiles(); requireGeneration(generation); renderFiles(); return attachmentIds;
     }
     async function ensureSession() {
       if (state.session) return state.session;
@@ -654,11 +694,11 @@
           || typeof receipt.acceptedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(receipt.acceptedAt) || Number.isNaN(Date.parse(receipt.acceptedAt))) return null;
       return receipt;
     }
-    function finishGuideReceipt(data, payload) {
+    function finishGuideReceipt(data, payload, preserveDraft = false) {
       if (!matchingGuideReceipt(data, payload) || state.pending?.action !== "mobile/dialogue/guide-send" || state.pending.payload.requestId !== payload.requestId) return false;
       const operation = state.pending; state.pending = null;
       if (!persist()) { state.pending = operation; return false; }
-      if (state.session?.id === payload.sessionId && state.session.recordId === payload.recordId && composerInput.value === payload.text && !state.composing) {
+      if (!preserveDraft && state.session?.id === payload.sessionId && state.session.recordId === payload.recordId && composerInput.value === payload.text && !state.composing) {
         composerInput.value = ""; state.drafts[payload.sessionId] = { text: "", tier: state.tier, unsynced: false }; state.dirty = false; autosize(composerInput); persist();
       }
       return true;
@@ -671,9 +711,66 @@
       try {
         const query = new URLSearchParams(Object.fromEntries(["requestId", "clientId", "sessionId", "recordId"].map(key => [key, payload[key]])));
         const data = await call(`mobile/dialogue/guide-send-receipt?${query}`);
-        if (state.pending !== operation || typeof data?.isCurrent !== "boolean" || !finishGuideReceipt(data, payload)) return false;
+        if (state.pending !== operation || typeof data?.isCurrent !== "boolean" || !finishGuideReceipt(data, payload, true)) return false;
         say("Codex Guide 请求已接收；回复留在原讨论，当前草稿保留。"); renderGuidePending(); return true;
-      } catch (error) { if (!error.auth && !error.cancelled) say("Codex Guide 接收情况尚待核对；原内容与请求编号保留，未重复发送。", true); return false; }
+      } catch (error) { if (state.pending === operation && error.status === 404 && error.data?.code === "guide_send_receipt_not_found") absentReceiptOperation = operation; if (!error.auth && !error.cancelled) say("尚未查到 Codex Guide 回执；原内容与请求编号保留，未重复发送。", true); return false; }
+    }
+    function matchingSendReceipt(data, payload) {
+      const receipt = data?.sendReceipt;
+      return typeof data?.isCurrent === "boolean" && receipt && Object.keys(receipt).sort().join(",") === "acceptedAt,attachmentIds,clientId,jobId,recordId,requestId,requestSha256,sessionId,sourceUserMessageId,textSha256"
+        && canonicalUuid(receipt.requestId) && receipt.requestId === payload.requestId && receipt.clientId === state.clientId && receipt.clientId === payload.clientId && receipt.sessionId === payload.sessionId
+        && [receipt.sessionId, receipt.recordId, receipt.jobId, receipt.sourceUserMessageId].every(id => /^[a-f0-9]{32}$/.test(id || ""))
+        && (state.session?.id !== payload.sessionId || state.session.recordId === receipt.recordId)
+        && receipt.requestSha256 === sha256Text(canonicalJson(payload)) && receipt.textSha256 === sha256Text(payload.text)
+        && JSON.stringify(receipt.attachmentIds) === JSON.stringify(payload.attachmentIds)
+        && typeof receipt.acceptedAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(receipt.acceptedAt) && !Number.isNaN(Date.parse(receipt.acceptedAt)) ? receipt : null;
+    }
+    async function recoverPendingSend(allowBusy = false) {
+      const operation = state.pending, generation = state.generation;
+      if (!["mobile/dialogue/send", "mobile/dialogue/guide-send"].includes(operation?.action) || receiptReading || state.composing || state.busy && !allowBusy) return false;
+      const payload = operation.payload; if (!payload || !canonicalUuid(payload.requestId) || payload.clientId !== state.clientId) return false;
+      receiptReading = true; absentReceiptOperation = null; updateControls();
+      try {
+        if (operation.action === "mobile/dialogue/guide-send") return await recoverGuideReceipt();
+        const query = new URLSearchParams(Object.fromEntries(["requestId", "clientId", "sessionId"].map(key => [key, payload[key]])));
+        const data = await call(`mobile/dialogue/send-receipt?${query}`);
+        if (generation !== state.generation || state.pending !== operation || !matchingSendReceipt(data, payload)) return false;
+        state.pending = null;
+        if (!persist()) { state.pending = operation; return false; }
+        say("上一条 Chat 已接收，当前草稿保留；未重复发送。"); return true;
+      } catch (error) {
+        if (generation === state.generation && state.pending === operation && error.status === 404 && error.data?.code === "send_receipt_not_found") absentReceiptOperation = operation;
+        if (!error.auth && !error.cancelled) say("尚未查到上一条回执；原请求和当前草稿保留，未重复发送。", true);
+        return false;
+      } finally { if (generation === state.generation) { receiptReading = false; updateControls(); } }
+    }
+    async function retryPendingSend() {
+      const operation = state.pending, generation = state.generation;
+      if (state.busy || state.composing || receiptReading || absentReceiptOperation !== operation || !["mobile/dialogue/send", "mobile/dialogue/guide-send"].includes(operation?.action)) return;
+      state.busy = true; updateControls();
+      try {
+        if (await recoverPendingSend(true) || generation !== state.generation || state.pending !== operation || absentReceiptOperation !== operation) return;
+        // Only this explicitly clicked retry can submit the original immutable body.
+        const data = await call(operation.action, operation.payload);
+        if (generation !== state.generation || state.pending !== operation) return;
+        if (operation.action === "mobile/dialogue/guide-send") {
+          if (!finishGuideReceipt(data, operation.payload, true)) throw new Error("原接收回执尚未核实，请保留页面与草稿。");
+        } else if (!await recoverPendingSend(true)) throw new Error("原发送回执尚未核实，请保留页面与草稿。");
+        if (state.session?.id === operation.payload.sessionId) applyDialogue(data, operation.payload.sessionId);
+        say("原请求已接收，当前草稿保留；没有创建第二次请求。");
+      } catch (error) {
+        if (generation === state.generation && state.pending === operation && writeRejected(error)) { state.pending = null; persist(); await refresh(false); }
+        fail(error);
+      } finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
+    }
+    async function showGuideReplies() {
+      if (state.busy || state.composing || state.reading || state.view !== "chat") return;
+      const generation = state.generation; saveLocalDraft();
+      if (!await refresh() || generation !== state.generation) return;
+      const latest = [...messages.children].filter(row => row.dataset.author === "codex_guide").at(-1);
+      if (!latest) { say("当前讨论尚未收到 Codex Guide 回复，原草稿与选图保留。"); return; }
+      state.newResults = false; newResult.hidden = true;
+      latest.scrollIntoView?.({ block: "center", behavior: "smooth" });
     }
     function submission(intent = composeIntent(), uploadedIds = []) { if (intent.sessionId && intent.sessionId !== state.session?.id) throw new Error("讨论已切换，原输入保留，未发送到其它讨论。"); return { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision, text: intent.text, attachmentIds: [...new Set([...intent.attachmentIds, ...uploadedIds])], requestedProfile: intent.requestedProfile, ...(!offline ? { chatTransport: intent.chatTransport, ...(intent.chatTransport === "chatgpt_subscription" ? { subscription: intent.subscription } : {}) } : {}) }; }
     function durablePayload(action, candidate, identity) {
@@ -705,12 +802,13 @@
       return { sessionId: session.id, recordId: session.recordId, dispatchId: dispatch.id, jobId: job.id };
     }
     async function cancelUnsentRequest(target) {
+      const generation = state.generation;
       if (state.busy || state.composing) return;
       const matches = () => { const current = cancellablePending(); return current && ["sessionId", "recordId", "dispatchId", "jobId"].every(key => current[key] === target[key]); };
       if (!matches()) { say("请求状态已变化，请刷新当前讨论后核对。", true); return; }
       state.busy = true; saveLocalDraft(); updateControls();
       try {
-        if (draftSync) await draftSync;
+        if (draftSync) await draftSync; requireGeneration(generation);
         if (!matches()) throw new Error("请求状态已变化，尚未结束；请核对当前讨论。");
         const candidate = { requestId: uuid(), clientId: state.clientId, sessionId: target.sessionId, recordId: target.recordId,
           expectedRevision: state.session.revision, dispatchId: target.dispatchId };
@@ -724,38 +822,41 @@
           throw new Error("结束结果尚未核实，原请求编号与草稿保留；请刷新核对。");
         state.pending = null; persist(); say("这条未发送请求已结束，原内容与当前草稿保留。");
       } catch (error) {
-        if (error.status >= 400 && error.status < 500 && state.pending?.action === "mobile/dialogue/cancel-pending") { state.pending = null; persist(); }
+        if (generation === state.generation && error.status >= 400 && error.status < 500 && state.pending?.action === "mobile/dialogue/cancel-pending") { state.pending = null; persist(); }
         const unknownRequestId = state.pending?.action === "mobile/dialogue/cancel-pending" ? state.pending.payload.requestId : "";
         if (!error.cancelled && state.session?.id === target.sessionId && state.session?.recordId === target.recordId) await refresh(false);
         if (unknownRequestId && !state.pending) return;
         fail(error);
-      } finally { state.busy = false; updateControls(); }
+      } finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     async function syncDraft() {
-      if (draftSync || !state.active || state.busy || !state.dirty || state.storageFailed || offline || state.pending?.action === "mobile/dialogue/clear") return;
+      if (draftSync || !state.active || state.busy || state.composing || !state.dirty || state.storageFailed || offline || state.pending || uploadRequest) return;
       const intent = composeIntent(), text = intent.text;
       draftSync = (async () => {
         try { await ensureSession(); const id = state.session.id, data = await call("mobile/dialogue/draft", submission(intent)); if (applyDialogue(data, id) && composerInput.value === text) { state.drafts[id] = { text, tier: intent.requestedProfile, unsynced: false }; state.dirty = false; persist(); } }
         catch (error) { fail(error); }
       })();
-      try { await draftSync; } finally { draftSync = null; }
+      const currentSync = draftSync; try { await currentSync; } finally { if (draftSync === currentSync) draftSync = null; }
     }
     async function sendMessage() {
+      const generation = state.generation;
+      if (["mobile/dialogue/send", "mobile/dialogue/guide-send"].includes(state.pending?.action)) { await recoverPendingSend(); return; }
       if (state.replyTarget === "codex_guide") { await sendGuideMessage(); return; }
       if (state.pending?.action === "mobile/dialogue/guide-send") { say("先核对原 Codex Guide 请求；它不会改发给 Chat。", true); return; }
       if (state.busy || state.composing || !composerInput.value.trim() && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length) return;
       if (offline) { if (!saveLocalDraft()) return; say("请连接电脑后发送；这段草稿已保存在此手机。"); options.onConnect?.(); return; }
       if (state.chatTransport === "chatgpt_subscription" && !subscriptionReady()) { say(subscriptionProfileIssue() || "请先核对订阅连接与当前请求；原文字和图片保留。", true); return; }
       const intent = composeIntent(), text = intent.text; state.busy = true; updateControls(); say("");
-      try { if (draftSync) await draftSync; await ensureSession(); const uploadedIds = !state.pending ? await uploadFiles(intent) : []; const payload = durablePayload("mobile/dialogue/send", submission(intent, uploadedIds), ["sessionId", "text", "attachmentIds", "requestedProfile", "chatTransport", "subscription"]);
+      try { if (draftSync) await draftSync; requireGeneration(generation); await ensureSession(); requireGeneration(generation); const uploadedIds = !state.pending ? await uploadFiles(intent) : []; requireGeneration(generation); const payload = durablePayload("mobile/dialogue/send", submission(intent, uploadedIds), ["sessionId", "text", "attachmentIds", "requestedProfile", "chatTransport", "subscription"]);
         const data = await call("mobile/dialogue/send", payload); state.pending = null;
         if (applyDialogue(data, payload.sessionId) && composerInput.value === text) { composerInput.value = ""; state.drafts[payload.sessionId] = { text: "", tier: state.tier, unsynced: false }; state.dirty = false; autosize(composerInput); }
         const result = data.job?.result, savedAnswer = payload.chatTransport === "chatgpt_subscription" && data.job?.status === "succeeded" && result?.source === "chatgpt_subscription" && result.terminalEventObserved === true && result.terminalStatus === "completed" && result.completionEvidence === "response.completed" && result.text?.trim() && data.detail?.messages?.some(message => message.role === "assistant" && message.id === result.messageId && message.text === result.text);
         persist(); if (!latestDialogueFailure()) say(savedAnswer ? "本轮回答已保存。" : payload.chatTransport === "chatgpt_subscription" ? acceptedSendNotices[2] : acceptedSendNotices[data.execution?.relayStatus === "connected" ? 0 : 1]);
-      } catch (error) { if (writeRejected(error)) { state.pending = null; persist(); if (intent.chatTransport === "chatgpt_subscription" && ["subscription_not_connected", "subscription_selection_stale", "subscription_model_unavailable", "subscription_profile_unavailable", "subscription_profile_mismatch", "subscription_reasoning_mismatch", "subscription_binding_invalid"].includes(error.data?.code || error.code)) await readSubscriptionStatus(); } fail(error); }
-      finally { state.busy = false; updateControls(); }
+      } catch (error) { if (generation === state.generation && writeRejected(error)) { state.pending = null; persist(); if (intent.chatTransport === "chatgpt_subscription" && ["subscription_not_connected", "subscription_selection_stale", "subscription_model_unavailable", "subscription_profile_unavailable", "subscription_profile_mismatch", "subscription_reasoning_mismatch", "subscription_binding_invalid"].includes(error.data?.code || error.code)) await readSubscriptionStatus(); } fail(error); }
+      finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     async function sendGuideMessage() {
+      const generation = state.generation;
       if (state.busy || state.composing) return;
       if (state.pending?.action === "mobile/dialogue/guide-send") { await recoverGuideReceipt(); await refresh(); return; }
       if (state.pending) { say("上一项请求还需要核对，原目标与内容保留；未交给 Codex Guide。", true); return; }
@@ -764,22 +865,23 @@
       if (!state.guide?.available) { say("Codex Guide 暂未就绪，原文字与选图保留。", true); return; }
       const intent = composeIntent(); state.busy = true; updateControls(); say("");
       try {
-        if (draftSync) await draftSync; await ensureSession(); const uploadedIds = await uploadFiles(intent);
-        const payload = durablePayload("mobile/dialogue/guide-send", guideSubmission(intent, uploadedIds), ["clientId", "sessionId", "recordId", "text", "attachmentIds"]);
+        if (draftSync) await draftSync; requireGeneration(generation); await ensureSession(); requireGeneration(generation); const uploadedIds = await uploadFiles(intent);
+        requireGeneration(generation); const payload = durablePayload("mobile/dialogue/guide-send", guideSubmission(intent, uploadedIds), ["clientId", "sessionId", "recordId", "text", "attachmentIds"]);
         const data = await call("mobile/dialogue/guide-send", payload);
         if (!matchingGuideReceipt(data, payload)) throw new Error("Codex Guide 接收回执还需要核对；原请求保留，未重复发送。");
         applyDialogue(data, payload.sessionId);
         if (!finishGuideReceipt(data, payload)) throw new Error("原接收凭据尚未可靠保存，请保留页面与草稿。");
         renderGuidePending(); say("已接收，等待 Codex Guide；回复留在同一讨论。");
-      } catch (error) { if (writeRejected(error)) { state.pending = null; persist(); } fail(error); }
-      finally { state.busy = false; updateControls(); }
+      } catch (error) { if (generation === state.generation && writeRejected(error)) { state.pending = null; persist(); } fail(error); }
+      finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     async function saveIdea() {
+      const generation = state.generation;
       if (state.busy || state.composing || !composerInput.value.trim() && !currentFiles().length && !(state.session?.draft?.attachmentIds || []).length) return;
       const intent = composeIntent(), text = intent.text; state.busy = true; updateControls();
-      try { if (draftSync) await draftSync; await ensureSession(); const uploadedIds = !state.pending ? await uploadFiles(intent) : []; const payload = durablePayload("mobile/dialogue/save", submission(intent, uploadedIds), ["sessionId", "text", "requestedProfile"]), data = await call("mobile/dialogue/save", payload); state.pending = null; applyDialogue(data, payload.sessionId);
+      try { if (draftSync) await draftSync; requireGeneration(generation); await ensureSession(); requireGeneration(generation); const uploadedIds = !state.pending ? await uploadFiles(intent) : []; requireGeneration(generation); const payload = durablePayload("mobile/dialogue/save", submission(intent, uploadedIds), ["sessionId", "text", "requestedProfile"]), data = await call("mobile/dialogue/save", payload); state.pending = null; applyDialogue(data, payload.sessionId);
         if (composerInput.value === text) { composerInput.value = ""; state.drafts[payload.sessionId] = { text: "", tier: state.tier, unsynced: false }; state.dirty = false; autosize(composerInput); } persist(); say(offline ? "想法已保存在此手机。" : "想法已保存到电脑，随时可以接着聊。"); if (data.idea) state.idea = data.idea;
-      } catch (error) { if (writeRejected(error)) { state.pending = null; persist(); } fail(error); } finally { state.busy = false; updateControls(); }
+      } catch (error) { if (generation === state.generation && writeRejected(error)) { state.pending = null; persist(); } fail(error); } finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     function matchingClearReceipt(data) {
       const operation = state.pending, payload = operation?.payload;
@@ -799,25 +901,28 @@
       say("当前讨论已重新开始；旧草稿、原回答与保存的想法仍然保留。"); return true;
     }
     async function clearDiscussion() {
+      const generation = state.generation;
       if (state.busy || state.composing) return;
       if (state.pending && state.pending.action !== "mobile/dialogue/clear") { say("上一条操作是否送达还需要核对，暂不切换讨论；原草稿与请求编号保留。", true); return; }
       if (uploadRequest) { say("上一项图片上传结果还需要核对，暂不切换讨论；原图片与上传编号保留。", true); return; }
       more.open = false; if (state.view !== "chat") return;
       state.busy = true; resultTransition = true; closeResultStream(); updateControls(); saveLocalDraft();
-      try { if (draftSync) await draftSync; if (state.pending?.action !== "mobile/dialogue/clear") await ensureSession(); if (currentFiles().length) { fileOwner = state.session.id; await saveFiles(); }
+      try { if (draftSync) await draftSync; requireGeneration(generation); if (state.pending?.action !== "mobile/dialogue/clear") await ensureSession(); requireGeneration(generation); if (currentFiles().length) { fileOwner = state.session.id; await saveFiles(); requireGeneration(generation); }
         const payload = state.pending?.action === "mobile/dialogue/clear" ? state.pending.payload : durablePayload("mobile/dialogue/clear", { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision }, ["clientId", "sessionId"]);
         const data = await call("mobile/dialogue/clear", payload); if (!finishClear(data)) throw new Error("清空结果尚待核对；请刷新查看同一次清空回执，原草稿与请求编号保留。");
-      } catch (error) { if (writeRejected(error) && state.pending?.action === "mobile/dialogue/clear") { state.pending = null; persist(); } fail(error); } finally { resultTransition = false; state.busy = false; updateControls(); syncResultStream(); }
+      } catch (error) { if (generation === state.generation && writeRejected(error) && state.pending?.action === "mobile/dialogue/clear") { state.pending = null; persist(); } fail(error); } finally { if (generation === state.generation) { resultTransition = false; state.busy = false; updateControls(); syncResultStream(); } }
     }
     async function rememberAnswer(sourceMessageId) {
+      const generation = state.generation;
       if (state.busy || !state.session) return; state.busy = true; updateControls();
-      try { if (draftSync) await draftSync; const candidate = { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision, sourceMessageId, ...(state.session.ideaId ? { ideaId: state.session.ideaId, expectedIdeaRevision: state.session.ideaRevision } : {}) }, payload = durablePayload("mobile/dialogue/remember", candidate, ["sessionId", "sourceMessageId", "ideaId"]); const data = await call("mobile/dialogue/remember", payload); state.pending = null; persist(); applyDialogue(data, payload.sessionId); say(data.keyPointAdded === false && data.keyPointOmittedReason === "point_limit" ? "完整回答与来源已保存；长期要点已满，未新增要点。" : payload.ideaId ? "已补充到此想法，原回答来源已保留。" : "已存为想法，原回答来源已保留。"); }
-      catch (error) { if (writeRejected(error)) { state.pending = null; persist(); } fail(error); } finally { state.busy = false; updateControls(); }
+      try { if (draftSync) await draftSync; requireGeneration(generation); const candidate = { requestId: uuid(), clientId: state.clientId, sessionId: state.session.id, expectedRevision: state.session.revision, sourceMessageId, ...(state.session.ideaId ? { ideaId: state.session.ideaId, expectedIdeaRevision: state.session.ideaRevision } : {}) }, payload = durablePayload("mobile/dialogue/remember", candidate, ["sessionId", "sourceMessageId", "ideaId"]); const data = await call("mobile/dialogue/remember", payload); state.pending = null; persist(); applyDialogue(data, payload.sessionId); say(data.keyPointAdded === false && data.keyPointOmittedReason === "point_limit" ? "完整回答与来源已保存；长期要点已满，未新增要点。" : payload.ideaId ? "已补充到此想法，原回答来源已保留。" : "已存为想法，原回答来源已保留。"); }
+      catch (error) { if (generation === state.generation && writeRejected(error)) { state.pending = null; persist(); } fail(error); } finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     async function refresh(recoverEvents = true) {
-      if (!state.active || state.reading || state.composing && state.view === "chat" || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return false; if (recoverEvents && !resultStream) resultStopped = false; capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
-      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (state.pending?.action === "mobile/dialogue/clear") { if (finishClear(data)) return true; if (data.session?.id === state.pending.payload.sessionId && data.session?.clientId === state.clientId && applyDialogue(data, sessionId, true) && !sessionId) restoreDraft(); say("清空结果尚待核对；原草稿与请求编号保留，可再次点清空核对同一次请求。", true); return false; } if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); if (applied && state.pending?.action === "mobile/dialogue/guide-send") await recoverGuideReceipt(); if (applied && state.replyTarget === "chat" && state.chatTransport === "chatgpt_subscription") await readSubscriptionStatus(); return applied; } }
-      catch (error) { fail(error); } finally { state.reading = false; updateControls(); syncResultStream(); }
+      const generation = state.generation;
+      if (!state.active || state.reading || state.composing && state.view === "chat" || pointEditor?.composing && state.view === "detail" || editComposing.body || editComposing.execution) return false; if (recoverEvents) { window.clearTimeout(resultReconnectTimer); resultReconnectTimer = 0; resultReconnectAttempts = 0; if (!resultStream) resultStopped = false; } capturePointEditor(); state.reading = true; const sequence = ++state.requestSequence, sessionId = state.session?.id || "";
+      try { if (state.view === "ideas") await loadIdeas(); else if (["detail", "execution"].includes(state.view) && state.idea) await openIdea(state.idea.id, true); else { const data = await call(`mobile/dialogue?clientId=${encodeURIComponent(state.clientId)}`); if (sequence !== state.requestSequence) return false; if (state.pending?.action === "mobile/dialogue/clear") { if (finishClear(data)) return true; if (data.session?.id === state.pending.payload.sessionId && data.session?.clientId === state.clientId && applyDialogue(data, sessionId, true) && !sessionId) restoreDraft(); say("清空结果尚待核对；原草稿与请求编号保留，可再次点清空核对同一次请求。", true); return false; } if (sessionId && data.session?.id !== sessionId && state.dirty) return false; const applied = applyDialogue(data, sessionId, true); if (applied && (!state.dirty || !sessionId) && !state.composing) restoreDraft(); if (applied && ["mobile/dialogue/send", "mobile/dialogue/guide-send"].includes(state.pending?.action)) await recoverPendingSend(); if (applied && state.replyTarget === "chat" && state.chatTransport === "chatgpt_subscription") await readSubscriptionStatus(); return applied; } }
+      catch (error) { fail(error); } finally { if (generation === state.generation) { state.reading = false; updateControls(); syncResultStream(); } }
     }
     async function showIdeas() { if (state.busy) return; const generation = state.generation, scroll = state.listScroll; closeManagement(); if (state.view === "chat") { state.chatScroll = window.scrollY; saveLocalDraft(); void syncDraft(); } detailReturn = null; state.view = "ideas"; say(""); renderView(); await loadIdeas(); restoreListPosition(generation, scroll); }
     async function loadIdeas() {
@@ -929,6 +1034,7 @@
       } catch (error) { if (managementCurrent(value) && sequence === value.selectionSequence) fail(error); }
     }
     async function submitManagement() {
+      const generation = state.generation;
       const value = state.management; if (state.busy || !value?.ready || !managementCurrent(value)) return;
       if (state.pending && !value.retry) { say("上次整理结果还待核对，请先点「重试上次整理」。", true); return; }
       if (!value.retry && (state.editorDirty || state.idea.revision !== value.source.revision)) { say("原想法版本已改变，请保存或刷新后重新选择内容。", true); return; }
@@ -943,9 +1049,9 @@
         }
         state.busy = true; updateControls(); const data = await call(action, payload), result = data?.idea;
         if (!result?.id || !Number.isInteger(result.revision) || result.revision < 1 || value.kind === "move" && result.id !== value.source.id || value.kind !== "move" && [value.source.id, value.second?.id].includes(result.id)) throw new Error("整理结果的来源与版本暂时无法核对，原请求编号已保留。");
-        state.pending = null; persist(); state.busy = false; closeManagement(); await openIdea(result.id); say(value.kind === "move" ? "归类已保存，内容与来源保留。" : value.kind === "split" ? "已保存为独立想法，原想法保留。" : "已保存合并想法，两份原稿保留。");
-      } catch (error) { if (writeRejected(error) && ![401, 403].includes(error.status)) { state.pending = null; persist(); } else if (state.pending?.management) say("这次整理的结果还待核对；在更多里点「重试上次整理」，会保留同一请求编号。", true); if (!state.pending?.management) fail(error); }
-      finally { state.busy = false; updateControls(); }
+        state.pending = null; persist(); state.busy = false; closeManagement(); await openIdea(result.id); requireGeneration(generation); say(value.kind === "move" ? "归类已保存，内容与来源保留。" : value.kind === "split" ? "已保存为独立想法，原想法保留。" : "已保存合并想法，两份原稿保留。");
+      } catch (error) { if (generation !== state.generation) return; if (writeRejected(error) && ![401, 403].includes(error.status)) { state.pending = null; persist(); } else if (state.pending?.management) say("这次整理的结果还待核对；在更多里点「重试上次整理」，会保留同一请求编号。", true); if (!state.pending?.management) fail(error); }
+      finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     async function changePointKind(ideaId, pointId, kind) {
       if (state.busy || state.view !== "detail" || state.idea?.id !== ideaId) return false;
@@ -1015,6 +1121,7 @@
       for (const kind of ["body", "execution"]) { const key = kind === "body" ? "bodySource" : "executionSource"; if (sameEditSource(draft[key], kind, before)) draft[key] = editSource(kind, actual); }
     }
     async function updateIdea(extra = null, expectedIdeaId = null) {
+      const generation = state.generation;
       if (state.busy || !state.idea || expectedIdeaId && state.idea.id !== expectedIdeaId) return false; if (state.pending?.management) { say("上次整理结果还待核对，请先点「重试上次整理」。", true); return false; }
       const kind = !extra ? "body" : extra.executionDraft !== undefined ? "execution" : null;
       if (kind && (editComposing[kind] || !editSourceMatches(kind))) { renderEditReviews(); updateControls(); say("来源版本需要先核对，原草稿保留，尚未保存。", true); return false; }
@@ -1034,37 +1141,41 @@
         const stored = persist(); if (!stored && kind) { if (kind === "body") { if (unchanged) { ideaTitle.value = frozen.title; ideaBody.value = frozen.body; draft.title = frozen.title; draft.body = frozen.body; } draft.dirty = true; state.editorDirty = true; } else draft.executionDirty = true; }
         renderIdea(); say(!stored ? "内容已保存，但本机草稿状态尚未保存；原输入保留，请保持页面。" : !unchanged ? "本次内容已保存；等待时的新输入仍是本机草稿。" : kind === "execution" ? "执行稿已保存，尚未交给 Codex。" : "修改已保存。", !stored); return true;
       }
-      catch (error) { fail(error); return false; } finally { state.busy = false; updateControls(); }
+      catch (error) { fail(error); return false; } finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     async function archiveCurrent() {
+      const generation = state.generation;
       if (state.busy || !state.idea || state.editorDirty) { if (state.editorDirty) say("先保存当前修改，再归档。"); return; } if (state.pending?.management) { say("上次整理结果还待核对，请先点「重试上次整理」。", true); return; } state.busy = true; updateControls();
       try { const data = await call("mobile/idea/archive", { requestId: uuid(), id: state.idea.id, expectedRevision: state.idea.revision, archived: !state.idea.archived }); state.idea = data.idea || state.idea; ideaMore.open = false; renderIdea(); say(state.idea.archived ? "已归档，内容和附件仍然保留。" : "已恢复到想法列表。"); }
-      catch (error) { fail(error); } finally { state.busy = false; updateControls(); }
+      catch (error) { fail(error); } finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     async function openIdeaDiscussion() {
+      const generation = state.generation;
       if (state.busy || !state.idea || state.editorDirty) return; state.busy = true; updateControls();
       if (state.pending) { state.busy = false; updateControls(); say("上一条操作是否送达还需要核对，暂不切换讨论；原草稿与请求编号保留。", true); return; }
       resultTransition = true; closeResultStream();
-      try { if (draftSync) await draftSync; saveLocalDraft(); const data = await call("mobile/dialogue/open", { requestId: uuid(), clientId: state.clientId, ideaId: state.idea.id, expectedIdeaRevision: state.idea.revision }); state.messageIds.clear(); applyDialogue(data); detailReturn = null; state.view = "chat"; restoreDraft(); renderView(); say(""); window.scrollTo({ top: 0, behavior: "auto" }); }
-      catch (error) { fail(error); } finally { resultTransition = false; state.busy = false; updateControls(); syncResultStream(); }
+      try { if (draftSync) await draftSync; requireGeneration(generation); saveLocalDraft(); const data = await call("mobile/dialogue/open", { requestId: uuid(), clientId: state.clientId, ideaId: state.idea.id, expectedIdeaRevision: state.idea.revision }); state.messageIds.clear(); applyDialogue(data); detailReturn = null; state.view = "chat"; restoreDraft(); renderView(); say(""); window.scrollTo({ top: 0, behavior: "auto" }); }
+      catch (error) { fail(error); } finally { if (generation === state.generation) { resultTransition = false; state.busy = false; updateControls(); syncResultStream(); } }
     }
     function showExecutionDraft() { if (!state.idea || state.editorDirty) return; closeManagement(); state.view = "execution"; const draft = state.editDrafts[state.idea.id]; executionText.value = draft?.executionDirty ? draft.executionDraft : state.idea.executionDraft || state.idea.body || ""; if (!draft?.executionDirty && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); renderView(); autosize(executionText, 12000); window.scrollTo({ top: 0, behavior: "auto" }); }
     function clearPack() { if (packUrl) URL.revokeObjectURL?.(packUrl); packUrl = ""; packIdeaId = ""; packRevision = 0; packLink.hidden = true; packLink.removeAttribute?.("href"); }
     async function exportPack() {
+      const generation = state.generation;
       if (!offline || !state.idea || state.busy || state.editorDirty) { if (state.editorDirty) say("先保存当前修改，再导出完整想法包。"); return; }
       const idea = { id: state.idea.id, revision: state.idea.revision }; state.busy = true; updateControls();
-      try { const result = await options.onExportPack(idea); if (!(result?.blob instanceof Blob) || !URL.createObjectURL) throw new Error("完整想法包尚未生成，手机副本保留。"); clearPack(); packUrl = URL.createObjectURL(result.blob); packIdeaId = idea.id; packRevision = idea.revision; packLink.href = packUrl; packLink.download = result.fileName || "想法.console-idea"; packLink.textContent = `保存 v${idea.revision} 完整想法包`; packLink.hidden = false; say("完整想法包已生成；点保存链接后在系统中保存，再到电脑更多里导入。手机原副本保留。"); }
-      catch (error) { fail(error); } finally { state.busy = false; updateControls(); }
+      try { const result = await options.onExportPack(idea); requireGeneration(generation); if (!(result?.blob instanceof Blob) || !URL.createObjectURL) throw new Error("完整想法包尚未生成，手机副本保留。"); clearPack(); packUrl = URL.createObjectURL(result.blob); packIdeaId = idea.id; packRevision = idea.revision; packLink.href = packUrl; packLink.download = result.fileName || "想法.console-idea"; packLink.textContent = `保存 v${idea.revision} 完整想法包`; packLink.hidden = false; say("完整想法包已生成；点保存链接后在系统中保存，再到电脑更多里导入。手机原副本保留。"); }
+      catch (error) { fail(error); } finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     async function handoffIdea(reservation = null, retryPending = false) {
+      const generation = state.generation;
       if (!offline || !state.idea || state.busy || state.editorDirty && !retryPending) return false;
       const ideaId = state.idea.id, revision = state.idea.revision;
       try {
         // Reserve inside the original tap, before any IndexedDB or network await.
         reservation ||= options.onHandoffReserve?.(); if (!reservation || !options.onHandoff) throw new Error("交接入口尚未准备好，内容仍在此手机。");
         state.busy = true; updateControls(); say("正在核对已保存版本与图片，手机原副本保留…");
-        await options.onHandoff(reservation, { id: ideaId, revision, retryPending }); say(retryPending ? "上次版本已核对，当前修改仍在手机；带到电脑会使用当前已保存版本。" : "电脑已确认导入这条想法；手机原副本保留。到电脑核对工作区后才执行。"); return true;
-      } catch (error) { fail(error); return false; } finally { state.busy = false; updateControls(); }
+        await options.onHandoff(reservation, { id: ideaId, revision, retryPending }); requireGeneration(generation); say(retryPending ? "上次版本已核对，当前修改仍在手机；带到电脑会使用当前已保存版本。" : "电脑已确认导入这条想法；手机原副本保留。到电脑核对工作区后才执行。"); return true;
+      } catch (error) { fail(error); return false; } finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     }
     async function handToCodex() {
       if (!state.idea || state.busy || editComposing.execution || !editSourceMatches("execution") || !executionText.value.trim()) return;
@@ -1111,15 +1222,16 @@
     }
     async function copyText(text) { try { if (!navigator.clipboard?.writeText) throw new Error("请长按内容选择并复制。"); await navigator.clipboard.writeText(text); say("已复制。"); } catch (error) { fail(error); } }
     composer.addEventListener("submit", event => event.preventDefault());
-    packInput.addEventListener("change", async () => { const file = packInput.files?.[0]; packInput.value = ""; if (!file || state.busy || !options.onImportPack) return; state.busy = true; updateControls(); try { const receipt = await options.onImportPack(file); if (!receipt?.imported?.ideaId) throw new Error("导入回执无法核对，原资料保留。"); state.busy = false; await openIdea(receipt.imported.ideaId); say("这条手机想法已导入，手机原副本保留；尚未发送或执行。"); } catch (error) { fail(error); } finally { state.busy = false; updateControls(); } });
+    packInput.addEventListener("change", async () => { const generation = state.generation; const file = packInput.files?.[0]; packInput.value = ""; if (!file || state.busy || !options.onImportPack) return; state.busy = true; updateControls(); try { const receipt = await options.onImportPack(file); requireGeneration(generation); if (!receipt?.imported?.ideaId) throw new Error("导入回执无法核对，原资料保留。"); state.busy = false; await openIdea(receipt.imported.ideaId); requireGeneration(generation); say("这条手机想法已导入，手机原副本保留；尚未发送或执行。"); } catch (error) { fail(error); } finally { if (generation === state.generation) { state.busy = false; updateControls(); } } });
     imageInput.addEventListener("change", async () => {
+      const generation = state.generation;
       if (uploadRequest) { say("上次图片上传的内容与编号已冻结；原文件保留，先完成原图片请求。", true); imageInput.value = ""; return; }
       const chosen = Array.from(imageInput.files || []); imageInput.value = ""; if (state.busy || !chosen.length) return;
       const selectedIds = new Set(state.session?.draft?.attachmentIds || []), selectedSize = [...(state.detail?.attachments || []), ...eligibleAttachments].filter((item, index, values) => selectedIds.has(item.id) && values.findIndex(other => other.id === item.id) === index).reduce((sum, item) => sum + (item.size || 0), 0);
       if (chosen.some(item => !/^image\//.test(item.type) || item.size > 8 * 1024 * 1024) || selectedIds.size + currentFiles().length + chosen.length > 4 || selectedSize + [...currentFiles(), ...chosen].reduce((sum, item) => sum + item.size, 0) > 24 * 1024 * 1024) { say("一次最多保留 4 张图片，每张不超过 8 MB，总共不超过 24 MB。", true); return; }
       state.busy = true; updateControls();
-      try { if (draftSync) await draftSync; if (fileReading) await fileReading; await ensureSession(); if (fileOwner && fileOwner !== state.session?.id && files.length) { await writeFiles({ id: `${filesKey}:${fileOwner}`, files, uploadRequest, fileOwner }); files = []; uploadRequest = null; } fileOwner = state.session.id; files.push(...chosen); renderFiles(); await saveFiles(); say("图片草稿已保存在此手机；只保存不会发送。"); }
-      catch (error) { fileError = true; fail(error); } finally { state.busy = false; updateControls(); }
+      try { if (draftSync) await draftSync; if (fileReading) await fileReading; if (generation !== state.generation) return; await ensureSession(); if (fileOwner && fileOwner !== state.session?.id && files.length) { await writeFiles({ id: `${filesKey}:${fileOwner}`, files, uploadRequest, fileOwner }); if (generation !== state.generation) return; files = []; uploadRequest = null; } fileOwner = state.session.id; files.push(...chosen); renderFiles(); await saveFiles(); if (generation === state.generation) say("图片草稿已保存在此手机；只保存不会发送。"); }
+      catch (error) { if (generation === state.generation) { fileError = true; fail(error); } } finally { if (generation === state.generation) { state.busy = false; updateControls(); } }
     });
     composerInput.addEventListener("input", () => { saveLocalDraft(true); window.clearTimeout(draftTimer); draftTimer = window.setTimeout(() => void syncDraft(), 800); }); composerInput.addEventListener("compositionstart", () => { state.composing = true; updateControls(); }); composerInput.addEventListener("compositionend", () => { state.composing = false; saveLocalDraft(true); if (queuedReplyTarget) selectReplyTarget(queuedReplyTarget); });
     composerInput.addEventListener("keydown", event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing && !state.composing) { event.preventDefault(); void sendMessage(); } });
@@ -1138,7 +1250,7 @@
     window.addEventListener("codex:dialogue-result", event => { if (state.active && event.detail?.clientId === state.clientId && event.detail?.sessionId === state.session?.id && event.detail?.recordId === state.session?.recordId) void refresh(); });
     persist(); restoreDraft(); renderCapability(); renderView();
     fileReading = blobs.get(filesKey).then(value => { if (value?.files) { files = value.files; fileOwner = value.fileOwner || null; uploadRequest = value.uploadRequest || null; renderFiles(); } }).catch(() => { /* No claim of file recovery is made without a readable store. */ }).finally(() => { fileReading = null; });
-    return { setConnectionStatus, focusComposer, setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { closeSidebar(false); closeResultStream(); capturePointEditor(); saveLocalDraft(); more.open = false; modelSettingsOpen = false; renderSubscription(); } }, refresh, getWorkSource, getWorkScope, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { closeSidebar(false); closeResultStream(); resultKey = resultCursor = ""; resultPending = null; capturePointEditor(); pointEditor = null; state.generation += 1; state.subscriptionReading = false; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.guide = state.idea = state.ideaDetail = state.management = null; queuedReplyTarget = null; modelSettingsOpen = false; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; loadedIdeaList = detailReturn = null; renderSidebarIdeas(); state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
+    return { setConnectionStatus, focusComposer, setActive(value) { const changed = state.active !== Boolean(value); state.active = Boolean(value); if (state.active && changed) { root.hidden = false; void refresh(); } else if (!state.active) { closeSidebar(false); closeResultStream(); capturePointEditor(); saveLocalDraft(); more.open = false; modelSettingsOpen = false; renderSubscription(); } }, refresh, getWorkSource, getWorkScope, hasDraft() { return state.busy || fileReading || fileWriting || fileError || currentFiles().length > 0 || state.dirty && Boolean(composerInput.value.trim()) || state.editorDirty || Object.values(state.editDrafts).some(draft => draft?.dirty || draft?.executionDirty) || Object.keys(state.pointDrafts).length > 0 || state.manageDirty || Boolean(state.pending); }, canReload() { return !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.storageFailed && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, async prepareReload() { capturePointEditor(); saveLocalDraft(); if (state.editorDirty) persistEditor(); if (state.view === "execution" && state.idea && executionText.value !== (state.idea.executionDraft || "")) persistExecution(); return !state.storageFailed && !state.busy && !state.manageDirty && !draftSync && !fileReading && !fileWriting && !fileError && !state.composing && !pointEditor?.composing && !editComposing.body && !editComposing.execution; }, clear() { saveLocalDraft(); closeSidebar(false); closeResultStream(); resultKey = resultCursor = ""; resultPending = null; capturePointEditor(); pointEditor = null; state.generation += 1; state.busy = state.reading = state.composing = state.subscriptionReading = false; receiptReading = resultDraining = resultTransition = resultStopped = false; resultReconnectAttempts = 0; absentReceiptOperation = null; draftSync = null; editComposing.body = editComposing.execution = false; window.clearTimeout(draftTimer); controllers.forEach(item => item.abort()); controllers.clear(); state.active = false; state.session = state.detail = state.guide = state.idea = state.ideaDetail = state.management = null; queuedReplyTarget = null; modelSettingsOpen = false; state.manageDirty = false; managementSequence++; managementView.hidden = true; state.ideas = []; loadedIdeaList = detailReturn = null; renderSidebarIdeas(); state.messageIds.clear(); messages.replaceChildren(); ideaList.replaceChildren(); detailAttachments.replaceChildren(); root.hidden = true; }, openIdea, showIdeas };
   }
   window.CodexMobileDialogue = Object.freeze({ create });
 })();
