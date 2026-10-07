@@ -19,6 +19,10 @@
     const state = { active: false, busy: false, generation: 0, source: null, recordId: typeof saved.recordId === "string" ? saved.recordId : "", config: null, review: null, pending: saved.pending || null, setupUnknown: saved.setupUnknown === true, runs: [], timer: 0, setupTimer: 0, composing: false, storageFailed: false };
     const notice = make("p", "", "workflow-notice"), heading = make("h2", "Work Agents"), back = button("返回对话", () => options.onBack?.()), load = button("载入当前讨论", () => void loadSource()), refresh = button("查看进度", () => void refreshAll());
     notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite");
+    const subscriptionLink = make("a", "连接 ChatGPT 订阅", "workflow-button workflow-primary codex-work-subscription-link");
+    subscriptionLink.href = "./subscription.html"; subscriptionLink.target = "_blank"; subscriptionLink.rel = "noopener noreferrer";
+    subscriptionLink.setAttribute("aria-label", "打开 ChatGPT 订阅连接设置（新标签页）"); subscriptionLink.hidden = true;
+    const connectionRow = make("div", "", "codex-work-connection"); connectionRow.append(notice); if (!phone) connectionRow.append(subscriptionLink);
     const header = make("div", "", "workflow-header"); header.append(heading, back, load, refresh);
     const sourceText = make("textarea"); sourceText.readOnly = true; sourceText.rows = 4; sourceText.setAttribute("aria-label", "本轮 Work 底稿");
     const workspace = select(), model = select(), profile = select(); profile.setAttribute("aria-label", "Work 档位");
@@ -35,8 +39,8 @@
     workspaceId.value = "console"; workspaceName.value = "Codex Console";
     if (!phone) permissions.append(field("工作区 ID", workspaceId), field("名称", workspaceName), field("项目完整目录", workspaceRoot), field("允许修改的完整目录", allowedRoot), button("保存工作区授权", () => void configureWorkspace()));
     else permissions.append(make("p", "工作区访问范围由电脑端明确保存。"));
-    root.classList.add("workflow-panel", "codex-work-panel"); root.replaceChildren(header, notice, setupBox, form, review, runs, permissions);
-    function say(text, error = false) { notice.textContent = text; notice.dataset.error = String(error); }
+    root.classList.add("workflow-panel", "codex-work-panel"); root.replaceChildren(header, connectionRow, setupBox, form, review, runs, permissions);
+    function say(text, error = false, kind = "") { notice.textContent = text; notice.dataset.error = String(error); notice.dataset.kind = kind; connectionRow.hidden = !text && subscriptionLink.hidden; }
     function currentPhoneScope() {
       const value = options.getScope?.();
       if (!value || value.recordId !== state.recordId || !/^[a-f0-9]{32}$/.test(value.recordId) || !/^[a-f0-9]{32}$/.test(value.sessionId || "") || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value.clientId || "")) return null;
@@ -55,6 +59,10 @@
     function render() {
       const validSource = state.source?.recordId === state.recordId && state.source.text === sourceText.value;
       const modelAvailable = state.config?.subscription?.models?.some(item => item.slug === model.value), ready = state.config?.setup?.ready === true && state.config?.setup?.busy !== true;
+      const account = state.config?.subscription, recovering = ["catalog_loading", "catalog_required", "catalog_failed"].includes(account?.status);
+      subscriptionLink.hidden = phone || !state.config || Boolean(account?.connected && modelAvailable);
+      subscriptionLink.textContent = account?.connected || recovering ? "查看订阅连接" : "连接 ChatGPT 订阅";
+      connectionRow.hidden = !notice.textContent && subscriptionLink.hidden;
       prepare.disabled = state.busy || state.pending || !validSource || !workspace.value || !modelAvailable || !["fast", "high"].includes(profile.value) || !state.config?.subscription?.connected || !ready || state.composing;
       workspace.disabled = model.disabled = profile.disabled = state.busy || Boolean(state.pending);
       load.disabled = state.busy || Boolean(state.pending); confirm.disabled = state.busy || !state.review || Boolean(state.pending) || !ready || !modelAvailable || !state.config?.subscription?.connected; dismiss.disabled = state.busy || Boolean(state.pending);
@@ -91,7 +99,7 @@
       optionsFor(workspace, (data.workspaces || []).map(item => ({ ...item, disabled: item.available === false })), workspace.value || saved.workspaceId);
       optionsFor(model, (data.subscription?.models || []).map(item => ({ id: item.slug, name: item.displayName || item.name || item.slug })), model.value || saved.model, true);
       if (state.review && (state.review.source?.subscription?.connectionId !== data.subscription?.connectionId || state.review.source?.subscription?.catalogRevision !== data.subscription?.catalogRevision || !data.subscription?.models?.some(item => item.slug === model.value))) state.review = null;
-      render(); if (!data.subscription?.connected) say(({ catalog_loading: "正在恢复已授权的模型列表，请稍候再查看。", catalog_required: "模型列表尚未恢复，请在电脑查看订阅连接。", catalog_failed: "模型列表读取失败，请在电脑重新读取模型。" })[data.subscription?.status] || "请先在电脑连接 ChatGPT 订阅。", true); else if (model.value && !data.subscription.models?.some(item => item.slug === model.value)) say("原模型暂不可选，请明确选择当前已授权模型；不会自动改用其它模型。", true);
+      render(); if (!data.subscription?.connected) say(({ catalog_loading: "正在恢复已授权的模型列表，请稍候再查看。", catalog_required: "模型列表尚未恢复，请在电脑查看订阅连接。", catalog_failed: "模型列表读取失败，请在电脑重新读取模型。" })[data.subscription?.status] || (phone ? "请先在电脑连接 ChatGPT 订阅。" : "请先连接 ChatGPT 订阅。"), true, "subscription"); else if (model.value && !data.subscription.models?.some(item => item.slug === model.value)) say("原模型暂不可选，请明确选择当前已授权模型；不会自动改用其它模型。", true, "subscription"); else if (notice.dataset.kind === "subscription") say("");
       window.clearTimeout(state.setupTimer); if (state.active && data.setup?.busy === true) state.setupTimer = window.setTimeout(() => { if (state.active) void readConfig().catch(error => say(error.message, true)); }, 2000);
       return data;
     }
