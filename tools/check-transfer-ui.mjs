@@ -19,37 +19,41 @@ function message(id = "one", phone = true, text = "手机文字") {
 const historyPage = (messages, revision = "r1", hasMore = false) => ({ messages, revision, hasMore });
 const cardFor = (h, id) => h.all("article").find(card => card.dataset.messageId === id);
 const starFor = (h, id) => h.all("button", cardFor(h, id)).find(button => button.className === "transfer-button transfer-star");
-function harness(phone = true) {
+function harness(phone = true, { nativeDialog = true, authClears = true } = {}) {
   class Element {
-    constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.hidden = false; this.value = ""; this._text = ""; this.attributes = {}; this.classList = { add() {} }; }
+    constructor(tag = "div") {
+      this.tagName = tag.toUpperCase(); this.children = []; this.listeners = new Map(); this.dataset = {}; this.hidden = false; this.value = ""; this._text = ""; this.attributes = {}; this.scrollTop = this.scrollLeft = 0; this.classList = { add() {} };
+      if (tag === "dialog" && nativeDialog) { this.showModal = () => { this.open = true; }; this.close = () => { this.open = false; this.dispatch("close"); }; }
+    }
     append(...elements) { this.children.push(...elements); for (const element of elements) element.parentElement = this; }
     replaceChildren(...elements) { for (const child of this.children) child.parentElement = null; this.children = []; this.append(...elements); this._text = ""; }
     set textContent(value) { this.replaceChildren(); this._text = String(value); }
     get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
     get childElementCount() { return this.children.length; }
     set innerHTML(_) { throw new Error("No untrusted HTML allowed."); }
-    setAttribute(key, value) { this.attributes[key] = String(value); }
+    setAttribute(key, value) { this.attributes[key] = String(value); if (key === "open") this.open = true; }
+    removeAttribute(key) { delete this.attributes[key]; delete this[key]; }
     addEventListener(name, handler) { this.listeners.set(name, handler); }
     dispatch(name, fields = {}) {
       const event = { target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...fields };
       for (let element = this; element; element = element.parentElement) { event.currentTarget = element; element.listeners.get(name)?.(event); }
       return event;
     }
-    click() { this.clicked = true; return this.listeners.get("click")?.({}); }
-    focus() { this.focused = true; }
+    click() { this.clicked = true; return this.listeners.get("click")?.({ target: this, preventDefault() {} }); }
+    focus(options) { this.focused = true; this.focusOptions = options; document.activeElement = this; }
     select() { this.selected = true; }
     setSelectionRange() { this.selected = true; }
-    remove() { this.removed = true; }
+    remove() { this.removed = true; this.parentElement = null; }
   }
-  const calls = [], answers = [], timers = new Map(), events = new Map(), previews = [], revoked = []; let nextTimer = 1, authCount = 0;
+  const calls = [], answers = [], timers = new Map(), events = new Map(), windowEvents = new Map(), previews = [], revoked = [], scrollCalls = []; let nextTimer = 1, authCount = 0;
   const root = new Element(), body = new Element("body");
   const document = { body, hidden: false, createElement: tag => new Element(tag), addEventListener(name, handler) { events.set(name, handler); }, execCommand: () => true };
   class BrowserURL extends URL { static createObjectURL(file) { const value = `blob:${previews.length}`; previews.push({ file, value }); return value; } static revokeObjectURL(value) { revoked.push(value); } }
-  const runtime = { document, navigator: {}, URL: BrowserURL, URLSearchParams, AbortController, TypeError, FormData, File, window: { isSecureContext: false, location: { href: "http://192.168.0.2:8899/?tab=transfer" }, setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); } }, async fetch(url, options) { calls.push({ url, options }); const answer = answers.shift(); assert.ok(answer, `Unexpected request ${url}`); return await answer; } };
+  const runtime = { document, navigator: {}, URL: BrowserURL, URLSearchParams, AbortController, TypeError, FormData, File, window: { isSecureContext: false, scrollX: 0, scrollY: 0, scrollTo(x, y) { scrollCalls.push([x, y]); this.scrollX = x; this.scrollY = y; }, addEventListener(name, handler) { windowEvents.set(name, handler); }, location: { href: "http://192.168.0.2:8899/?tab=transfer" }, setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); } }, async fetch(url, options) { calls.push({ url, options }); const answer = answers.shift(); assert.ok(answer, `Unexpected request ${url}`); return await answer; } };
   runInNewContext(script, runtime);
-  const panel = runtime.window.CodexTransferPanel.create(root, { phone, onAuth() { authCount++; panel.clear(); } });
+  const panel = runtime.window.CodexTransferPanel.create(root, { phone, onAuth() { authCount++; if (authClears) panel.clear(); } });
   const all = (tag, start = root) => {
-    const nodes = []; function visit(element) { if (element.tagName === tag.toUpperCase()) nodes.push(element); for (const child of element.children) visit(child); } visit(start); return nodes;
+    const nodes = []; function visit(element) { if (element.removed) return; if (element.tagName === tag.toUpperCase()) nodes.push(element); for (const child of element.children) visit(child); } visit(start); return nodes;
   };
   const button = text => all("button").find(item => item.textContent === text);
   const form = all("form")[0], text = all("textarea")[0], photos = all("input")[0];
@@ -57,7 +61,7 @@ function harness(phone = true) {
   async function send() { return form.listeners.get("submit")({ preventDefault() {} }); }
   function type(value) { text.value = value; text.listeners.get("input")({}); }
   function paste(clipboardData, target = form) { return target.dispatch("paste", { clipboardData }); }
-  return { root, body, panel, runtime, document, calls, answers, timers, events, all, button, form, text, photos, select, send, type, paste, previews, revoked, authCount: () => authCount, respond(value, status) { answers.push(response(value, status)); } };
+  return { root, body, panel, runtime, document, calls, answers, timers, events, windowEvents, scrollCalls, all, button, form, text, photos, select, send, type, paste, previews, revoked, authCount: () => authCount, respond(value, status) { answers.push(response(value, status)); } };
 }
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count++; }
@@ -347,5 +351,80 @@ await test("a late unauthorized response from a revoked connection cannot clear 
   const h = harness(); const old = defer(); h.answers.push(old.promise); h.panel.setActive(true); h.panel.clear();
   old.resolve(response({ error: "旧配对已失效" }, 401)); await settle(); assert.equal(h.authCount(), 0);
   h.respond({ messages: [message("new")], revision: "r2" }); h.panel.setActive(true); await settle(); assert.equal(h.all("article").length, 1);
+});
+const previewTrigger = h => h.all("button").find(button => button.className === "transfer-preview-trigger");
+await test("phone thumbnails open an in-page preview and return without sending or losing the draft", async () => {
+  const h = harness(); h.respond(historyPage([message()])); h.panel.setActive(true); await settle();
+  h.type("未发送草稿"); h.select(photo("pending.png")); h.root.scrollTop = 160; h.runtime.window.scrollY = 720;
+  const trigger = previewTrigger(h); assert.equal(trigger.tagName, "BUTTON"); assert.equal(trigger.target, undefined); trigger.click();
+  const dialog = h.all("dialog")[0], image = h.all("img", dialog)[0]; assert.equal(dialog.open, true); assert.equal(dialog.attributes.role, "dialog");
+  assert.match(h.all("img", trigger)[0].src, /\/api\/phone\/transfer\/attachment\?id=asset-1&preview=1$/);
+  assert.match(image.src, /\/api\/phone\/transfer\/attachment\?id=asset-1$/); assert.equal(image.hidden, true);
+  image.dispatch("load"); assert.equal(image.hidden, false);
+  const download = h.all("a", dialog)[0]; assert.match(download.href, /attachment\?id=asset-1$/); assert.equal(download.download, "<script>photo.png");
+  assert.equal(h.document.activeElement, h.button("关闭 · 返回互传")); assert.equal(h.calls.length, 1);
+  h.root.scrollTop = 0; h.runtime.window.scrollY = 0; h.button("关闭 · 返回互传").click();
+  assert.equal(h.all("dialog").length, 0); assert.equal(image.src, undefined); assert.equal(h.document.activeElement, trigger); assert.equal(trigger.focusOptions.preventScroll, true);
+  assert.equal(h.root.scrollTop, 160); assert.deepEqual(h.scrollCalls, [[0, 720]]); assert.equal(h.text.value, "未发送草稿"); assert.equal(h.all("img").length, 2);
+  assert.deepEqual(h.revoked, []); assert.equal(h.calls.filter(call => call.options.method === "POST").length, 0); assert.equal(h.body.attributes.style, undefined);
+});
+await test("native and fallback preview exits support close, Escape and background without page navigation", async () => {
+  for (const nativeDialog of [true, false]) {
+    const h = harness(true, { nativeDialog }); h.respond(historyPage([message()])); h.panel.setActive(true); await settle(); assert.equal(h.panel.hasDraft(), false);
+    for (const exit of ["button", "escape", "background", ...(nativeDialog ? ["cancel", "native-close"] : [])]) {
+      previewTrigger(h).click(); const dialog = h.all("dialog")[0]; assert.equal(h.panel.hasDraft(), true);
+      if (!nativeDialog) {
+        assert.equal(dialog.dataset.fallback, "true"); const close = h.button("关闭 · 返回互传"), download = h.all("a", dialog)[0];
+        assert.equal(dialog.dispatch("keydown", { key: "Tab", shiftKey: true }).defaultPrevented, true); assert.equal(h.document.activeElement, download);
+        assert.equal(dialog.dispatch("keydown", { key: "Tab", shiftKey: false }).defaultPrevented, true); assert.equal(h.document.activeElement, close);
+      }
+      if (exit === "button") h.button("关闭 · 返回互传").click();
+      else if (exit === "escape") assert.equal(dialog.dispatch("keydown", { key: "Escape" }).defaultPrevented, true);
+      else if (exit === "background") dialog.dispatch("click", { target: dialog.children.at(-1) });
+      else if (exit === "cancel") assert.equal(dialog.dispatch("cancel").defaultPrevented, true);
+      else dialog.close();
+      assert.equal(h.all("dialog").length, 0); assert.equal(h.panel.hasDraft(), false); assert.equal(h.calls.length, 1);
+    }
+  }
+});
+await test("preview errors keep a visible exit and stale image events cannot change the next preview", async () => {
+  const h = harness(); h.respond(historyPage([message()])); h.panel.setActive(true); await settle(); previewTrigger(h).click();
+  const old = h.all("img", h.all("dialog")[0])[0]; old.dispatch("error"); assert.equal(old.hidden, true); assert.match(h.all("dialog")[0].textContent, /图片暂时无法显示.*关闭 · 返回互传/);
+  h.button("关闭 · 返回互传").click(); previewTrigger(h).click(); const next = h.all("dialog")[0], nextImage = h.all("img", next)[0]; nextImage.dispatch("load");
+  old.dispatch("error"); old.dispatch("load"); assert.equal(nextImage.hidden, false); assert.doesNotMatch(next.textContent, /暂时无法显示/); assert.equal(old.src, undefined);
+  next.dispatch("keydown", { key: "Escape" }); assert.equal(h.calls.length, 1);
+});
+await test("a history redraw preserves the preview and restores focus to the current thumbnail", async () => {
+  const h = harness(); h.respond(historyPage([message()])); h.panel.setActive(true); await settle(); const old = previewTrigger(h); old.click(); const dialog = h.all("dialog")[0];
+  h.respond(historyPage([{ ...message(), starred: true }], "r2")); await h.panel.refresh(); const current = previewTrigger(h); assert.notEqual(current, old); assert.equal(h.all("dialog")[0], dialog);
+  h.button("关闭 · 返回互传").click(); assert.equal(h.document.activeElement, current); old.click(); assert.equal(h.all("dialog").length, 0);
+  current.click(); h.respond(historyPage([], "r3")); await h.panel.refresh(); assert.equal(h.all("dialog").length, 0); assert.equal(h.document.activeElement.className, "transfer-history-heading");
+  assert.equal(h.calls.filter(call => call.options.method === "POST").length, 0);
+});
+await test("tab changes, private clear, page exit and unauthorized reads release only their preview", async () => {
+  for (const exit of ["tab", "clear", "pagehide", "auth"]) {
+    const h = harness(true, { authClears: false }); h.respond(historyPage([message()])); h.panel.setActive(true); await settle(); h.type("保留草稿"); h.select(photo()); const trigger = previewTrigger(h); trigger.click(); const image = h.all("img", h.all("dialog")[0])[0];
+    const focused = h.document.activeElement;
+    if (exit === "tab") h.panel.setActive(false);
+    else if (exit === "clear") h.panel.clear();
+    else if (exit === "pagehide") h.windowEvents.get("pagehide")();
+    else { h.respond({ error: "配对失效" }, 401); await h.panel.refresh(); assert.equal(h.authCount(), 1); }
+    assert.equal(h.all("dialog").length, 0); assert.equal(image.src, undefined); assert.equal(h.text.value, "保留草稿"); assert.equal(h.document.activeElement, focused); assert.equal(h.scrollCalls.length, 0);
+    assert.deepEqual(h.revoked, exit === "clear" ? ["blob:0"] : []); if (exit === "tab" || exit === "clear") { trigger.click(); assert.equal(h.all("dialog").length, 0); }
+  }
+});
+await test("an inactive late poll cannot reopen the preview and HEIC originals stay download-only", async () => {
+  const h = harness(); h.respond(historyPage([message()])); h.panel.setActive(true); await settle(); previewTrigger(h).click(); const pending = defer(); h.answers.push(pending.promise); const loading = h.panel.refresh(); h.panel.setActive(false);
+  pending.resolve(response(historyPage([message()], "late"))); await loading; previewTrigger(h).click(); assert.equal(h.all("dialog").length, 0);
+  const other = harness(), heic = message(); heic.attachments[0] = { ...heic.attachments[0], name: "iPhone.HEIC", mimeType: "image/heic", previewable: false };
+  other.respond(historyPage([heic])); other.panel.setActive(true); await settle(); assert.equal(previewTrigger(other), undefined); assert.equal(other.all("img").length, 0); assert.equal(other.all("a")[0].download, "iPhone.HEIC"); assert.match(other.root.textContent, /此格式请下载原文件查看/);
+});
+await test("unsafe preview URLs are refused while valid originals retain their download link", async () => {
+  for (const previewUrl of ["https://evil.test/api/phone/transfer/attachment?id=asset-1", "/api/transfer/attachment?id=asset-1", "/api/phone/transfer/attachment?id="]) {
+    const h = harness(), item = message(); item.attachments[0].previewUrl = previewUrl; h.respond(historyPage([item])); h.panel.setActive(true); await settle();
+    assert.equal(previewTrigger(h), undefined); assert.equal(h.all("img").length, 0); assert.equal(h.all("a").length, 1); assert.match(h.all("a")[0].href, /\/api\/phone\/transfer\/attachment\?id=asset-1$/);
+  }
+  const desktop = harness(false); desktop.respond(historyPage([message("one", false)])); desktop.panel.setActive(true); await settle();
+  assert.equal(previewTrigger(desktop), undefined); assert.equal(desktop.all("a").find(link => link.children.length).target, "_blank");
 });
 console.log(`Transfer UI checks passed (${count} cases).`);
