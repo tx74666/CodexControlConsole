@@ -78,6 +78,9 @@ $PythonSources = @(
   "desktop_layout.py",
   "document_library.py",
   "dev_room.py",
+  "resource_library.py",
+  "resource_preview.py",
+  "resource_http.py",
   "workspace_plan.py",
   "phone_companion.py",
   "phone_device_store.py",
@@ -139,6 +142,8 @@ $PythonChecks = @(
   "tools/check-desktop-layout.py",
   "tools/check-document-library.py",
   "tools/check-dev-room.py",
+  "tools/check-resource-library.py",
+  "tools/check-resource-http.py",
   "tools/check-document-images.py",
   "tools/check-document-references.py",
   "tools/check-workspace-plan.py",
@@ -241,6 +246,7 @@ try {
     "tools/check-workspace-plan-persistence-ui.mjs",
     "tools/check-build-version.ps1",
     "tools/check-console-ui.mjs",
+    "tools/check-resource-ui.mjs",
     "services/feedback-relay/src/index.js",
     "services/feedback-relay/test/feedback.test.js"
   ))
@@ -291,6 +297,8 @@ try {
   Invoke-QualityStep "Transfer JavaScript syntax" { & $Node --check transfer-panel.js }
   Invoke-QualityStep "Task incubator JavaScript syntax" { & $Node --check incubator-panel.js }
   Invoke-QualityStep "Conversation browser syntax" { & $Node --check conversations-panel.js }
+  Invoke-QualityStep "Resource library JavaScript syntax" { & $Node --check resources.js }
+  Invoke-QualityStep "Resource library UI behavior" { & $Node tools/check-resource-ui.mjs }
   Invoke-QualityStep "Conversation browser UI" { & $Node tools/check-conversations-ui.mjs }
   Invoke-QualityStep "Task incubator UI" { & $Node tools/check-incubator-ui.mjs }
   Invoke-QualityStep "Workflow JavaScript syntax" { & $Node --check workflow-panel.js }

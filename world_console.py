@@ -56,6 +56,9 @@ from external_app_launcher import launch_or_focus_executable
 from reference_views import ReferenceViewSetService
 from document_library import DocumentLibraryService, current_memory
 from dev_room import DevRoomService, DevRoomConflict, MAX_REQUEST_BYTES as MAX_DEV_ROOM_REQUEST_BYTES
+from resource_library import ResourceLibraryService, ResourceLibraryError, ResourceLibraryConflict
+from resource_preview import ResourcePreviewError
+from resource_http import resource_get, resource_post
 from phone_companion import PhoneCompanionService
 from phone_device_store import PhoneDeviceStore
 from phone_discovery import DiscoveryAnnouncer
@@ -214,12 +217,14 @@ INSTALLATION_STATE_FILE = CACHE_DIR / "installation.json"
 MEDIA_CONFIG_FILE = USER_DATA_DIR / "media.json"
 DOCUMENT_LIBRARY = DocumentLibraryService(CACHE_DIR / "documents.json")
 DEV_ROOM = DevRoomService(DOCUMENT_LIBRARY)
+RESOURCE_LIBRARY = ResourceLibraryService(DOCUMENT_LIBRARY)
 _transfer_local_data = Path(os.environ.get("LOCALAPPDATA", "").strip() or Path.home() / "AppData" / "Local")
 TRANSFER_STORE = TransferStore(lambda: DOCUMENT_LIBRARY.state().get("root", ""),
                               _transfer_local_data / "CodexControlConsole" / "transfers", public_root=APP_DIR)
 PHONE_DEVICE_STORE = PhoneDeviceStore(CACHE_DIR / "phone-private")
 PHONE_COMPANION = PhoneCompanionService(
     DOCUMENT_LIBRARY, lambda: read_actual_workspace_plan(USER_DATA_DIR), APP_DIR, APP_VERSION,
+    resource_service=RESOURCE_LIBRARY,
     device_getter=DOCUMENT_LIBRARY.overview,
     music_getter=lambda: phone_music_catalog(),
     music_file_getter=lambda path: music_path_from_relative(path),
@@ -1612,6 +1617,21 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             except (OSError, RuntimeError):
                 self.send_json({"error": "本机开发状态暂时无法读取，请稍后重新读取。"}, status=503)
             return
+        if parsed.path == "/resources.html":
+            self.send_file_response(APP_DIR / "resources.html", "text/html; charset=utf-8")
+            return
+        if parsed.path.startswith("/api/resources/"):
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            try:
+                self.send_json(resource_get(RESOURCE_LIBRARY, parsed.path.removeprefix("/api/resources/"), parsed.query))
+            except ResourceLibraryError as error:
+                self.send_json({"error": str(error)}, status=getattr(error, "status", 400))
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            except (OSError, RuntimeError):
+                self.send_json({"error": "资源库暂时无法读取，请检查所选资料库。"}, status=503)
+            return
         if parsed.path.startswith("/api/dev-room/"):
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
@@ -2028,7 +2048,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self._private_phone_path():
             self.send_error(404)
             return
-        if urllib.parse.urlparse(self.path).path.startswith(("/api/transfer/", "/api/workflow/", "/api/dev-room/")):
+        if urllib.parse.urlparse(self.path).path.startswith(("/api/transfer/", "/api/workflow/", "/api/dev-room/", "/api/resources/")):
             self.do_GET()
             return
         super().do_HEAD()
@@ -2085,6 +2105,23 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             except (OSError, RuntimeError):
                 self.send_json({"error": "更新请求未取得明确回执，请核对原请求状态。",
                     "code": "developer_update_unavailable"}, status=503)
+            return
+        if parsed.path.startswith("/api/resources/"):
+            if not self.require_local_request():
+                return
+            try:
+                if parsed.query:
+                    raise ValueError("资源请求地址无效。")
+                self.send_json(resource_post(RESOURCE_LIBRARY, parsed.path.removeprefix("/api/resources/"),
+                    self.read_json_body(max_bytes=128 * 1024)))
+            except ResourceLibraryConflict as error:
+                self.send_json({"error": str(error), "code": "revision_conflict"}, status=409)
+            except (ResourceLibraryError, ResourcePreviewError) as error:
+                self.send_json({"error": str(error)}, status=getattr(error, "status", 400))
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            except (OSError, RuntimeError):
+                self.send_json({"error": "资源操作未完成，请刷新后重试。"}, status=503)
             return
         if parsed.path.startswith("/api/dev-room/"):
             if not self.require_local_request():

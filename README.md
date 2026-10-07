@@ -12,6 +12,12 @@ A Windows control console for music, wallpaper, Blender, Unity, Steamwork, Rando
 
 On the desktop Console, open **开发者模式**, bind the existing local Console `main` source folder, then enable the mode. The top **Update · v…** button generates a Summary, commits the current source changes and pushes them to `tx74666/CodexControlConsole`. The local folder is authoritative: remote changes stop the update for review. This action does not pull, overwrite local source, change the version, publish a release or install an application. Private data and local handoffs are excluded. If upload is interrupted, check the original result; **继续上传** reuses the original commit.
 
+## Resource library
+
+Open **Document → 资源库** on the computer, or **更多 → 资料与设备 → 资源库** on the paired phone. Browse source images, reuse collected records, and choose 收藏 or 准备使用. Repeating a search reuses its saved results; 重新搜索 explicitly requests fresh results. Preparing to use a resource records a choice and does not download it or change a project.
+
+Direct search currently supports downloadable Sketchfab models and Poly Haven models, textures and HDRIs. Other public HTTPS resource pages can be added by URL: read their available title/image metadata, review it, and save. Pages requiring sign-in or blocking previews can still be recorded manually. This is a source search and collection tool; arbitrary full-web conversational search is not connected to this page. Each resource retains its source, license, cost, notes and selection status in the existing Document library under `游戏资源/.console-resources`; personal collections are not included in release packages.
+
 ## Dev Room
 
 **RandomRealm → Dev Room** provides readable documents and an overview in the current Document library under `projects/Project Nexus/Dev Room`. Existing overview links retain their original groups and open the matching document. Titles, paragraphs, lists and tables render as Markdown; source identifiers and technical references are kept in collapsed **Agent details**, with the original document available read only. Imported Unity documents expose editable title, summary and section text fields while preserving their internal source and section markers. Existing local drafts, revision checks, previous saved files and Save as a copy remain in place. Reading never rewrites stored documents. This reading update does not install a Unity bridge or enable unverified Unity writeback.

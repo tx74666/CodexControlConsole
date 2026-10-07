@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111a27">
+  <title>Console · 资源库</title>
+  <link rel="icon" href="favicon.ico">
+  <link rel="stylesheet" href="resources.css?v=1.0.79">
+  <script src="resources.js?v=1.0.79" defer></script>
+</head>
+<body>
+  <main class="resource-shell">
+    <header class="page-header">
+      <a id="backLink" class="back-link" href="/?consoleView=document"><span aria-hidden="true">←</span> 返回 Console</a>
+      <div class="heading-row">
+        <div><p class="eyebrow">CONSOLE · RESOURCE LIBRARY</p><h1>资源库<span class="title-dot" aria-hidden="true">.</span></h1></div>
+        <span class="header-mark" aria-hidden="true">◇</span>
+      </div>
+      <p class="page-intro">找过的直接拿出来，新的再去找。先看图片，再决定收藏或使用。</p>
+    </header>
+
+    <section class="search-panel" aria-label="查找资源">
+      <form id="searchForm" autocomplete="off">
+        <label class="field-label" for="query">你想找什么？</label>
+        <div class="query-wrap"><span class="search-icon" aria-hidden="true"></span><input id="query" name="q" type="search" maxlength="120" placeholder="名称、关键词，例如：斩击、树木、石头" enterkeyhint="search"></div>
+        <div class="filter-row">
+          <label class="select-field"><span>分类</span><select id="kind" name="kind"><option value="all">全部类型</option><option value="model">模型</option><option value="vfx">VFX 特效</option><option value="texture">材质 / 贴图</option><option value="hdri">HDRI</option><option value="other">其他资源</option></select></label>
+          <label class="select-field"><span>状态</span><select id="status" name="status"><option value="all">全部状态</option><option value="saved">已收藏</option><option value="planned">准备使用</option><option value="candidate">候选</option></select></label>
+          <button id="localSearch" class="primary-button" type="submit">查已收集<span aria-hidden="true"> ↗</span></button>
+        </div>
+      </form>
+      <div class="online-row">
+        <label class="select-field source-field"><span>联网来源</span><select id="provider"><option value="sketchfab">Sketchfab · 模型</option><option value="polyhaven">Poly Haven · 素材</option></select></label>
+        <button id="onlineSearch" class="secondary-button" type="button">联网找</button>
+        <button id="refreshSearch" class="text-button" type="button" hidden>重新搜索</button>
+        <p id="providerNote" class="source-note">选定来源后才联网搜索。</p>
+      </div>
+      <p id="operationStatus" class="operation-status" role="status" aria-live="polite">正在读取已收集的资源…</p>
+    </section>
+
+    <section class="collection-section" aria-labelledby="resultsTitle">
+      <div class="collection-heading"><div><p class="eyebrow">PREVIEW & CHOOSE</p><h2 id="resultsTitle">已收集的资源</h2></div><span id="resultCount" class="result-count">—</span></div>
+      <p id="resultNote" class="result-note">收藏和准备使用都会保留在这里，准备使用只是选择，尚未导入项目。</p>
+      <div id="resourceGrid" class="resource-grid" aria-busy="true"></div>
+      <div id="emptyState" class="empty-state" hidden><span class="empty-symbol" aria-hidden="true">◇</span><h3 id="emptyTitle">这里还没有匹配的资源</h3><p id="emptyText">换一个关键词或分类，也可以选好来源后「联网找」。</p></div>
+    </section>
+
+    <details id="addDetails" class="add-panel">
+      <summary><span><span aria-hidden="true">＋</span> 添加网址</span><span class="summary-note">来自其他网站</span></summary>
+      <p class="muted">任何网站的 HTTPS 资源页都可以收进来。先读取网页预览，核对后再收藏。</p>
+      <form id="previewForm" autocomplete="off">
+        <label class="field-label" for="addUrl">资源网址</label>
+        <div class="url-row"><input id="addUrl" type="url" inputmode="url" maxlength="4096" placeholder="https://…" required><button id="previewButton" class="secondary-button" type="submit">读取预览</button></div>
+      </form>
+      <p id="addFeedback" class="operation-status" role="status" aria-live="polite"></p>
+      <form id="addForm" class="manual-form" hidden autocomplete="off">
+        <div class="add-preview" id="addPreview" hidden></div>
+        <div class="manual-grid">
+          <label class="stacked-field"><span>名称</span><input id="addName" maxlength="240" required placeholder="为这项资源起个名字"></label>
+          <label class="stacked-field"><span>分类</span><select id="addKind"><option value="model">模型</option><option value="vfx">VFX 特效</option><option value="texture">材质 / 贴图</option><option value="hdri">HDRI</option><option value="other" selected>其他资源</option></select></label>
+          <label class="stacked-field full-width"><span>预览图片网址 <small>可留空</small></span><input id="addImage" type="url" inputmode="url" maxlength="4096" placeholder="https://…"></label>
+          <label class="stacked-field full-width"><span>简介 <small>可编辑</small></span><textarea id="addDescription" rows="2" maxlength="3000"></textarea></label>
+          <label class="stacked-field full-width"><span>你的备注 <small>可留空</small></span><textarea id="addNotes" rows="2" maxlength="3000" placeholder="打算用在哪里、为什么收藏…"></textarea></label>
+        </div>
+        <div class="add-actions"><button id="addSave" class="primary-button" type="submit">收藏这个资源</button><p class="muted">许可和费用记为「待核对」。</p></div>
+      </form>
+    </details>
+    <footer class="page-footer"><span>保留来源 · 复用记录 · 由你选择</span><span>Console 资源库</span></footer>
+  </main>
+
+  <dialog id="imageDialog" class="image-dialog" aria-labelledby="imageTitle">
+    <div class="dialog-header"><h2 id="imageTitle">图片预览</h2><button id="closeImage" class="dialog-close" type="button" aria-label="关闭图片预览">×</button></div>
+    <div id="dialogImageWrap" class="dialog-image-wrap"></div>
+    <div class="dialog-footer"><p>图片用于挑选效果，实际内容与许可以来源页面为准。</p><a id="dialogSource" class="secondary-button" target="_blank" rel="noopener noreferrer">打开来源 ↗</a></div>
+  </dialog>
+</body>
+</html>

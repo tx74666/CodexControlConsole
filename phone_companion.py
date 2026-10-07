@@ -33,6 +33,9 @@ from phone_discovery import discover_lan_interfaces
 from workflow_service import WorkflowError
 from workflow_models import WorkflowModelError
 from workflow_http import workflow_get, workflow_post, workflow_import_idea, workflow_upload_dialogue, send_workflow_events
+from resource_library import ResourceLibraryError, ResourceLibraryConflict
+from resource_preview import ResourcePreviewError
+from resource_http import resource_get, resource_post
 
 
 PAIR_TTL = 300
@@ -52,6 +55,7 @@ PLAN_SYNC_ORIGIN = "https://tx74666.github.io"
 NETWORK_WARNING = "只在你信任的同一 Wi-Fi 内使用。当前连接未加密；电脑关闭、休眠或关闭手机入口后不能访问。"
 ASSETS = {
     "/": "mobile.html", "/mobile.html": "mobile.html",
+    "/resources.html": "resources.html", "/resources.js": "resources.js", "/resources.css": "resources.css",
     "/mobile.css": "mobile.css", "/mobile.js": "mobile.js",
     "/mobile-dialogue.js": "mobile-dialogue.js", "/mobile-dialogue.css": "mobile-dialogue.css",
     "/mobile-handoff.js": "mobile-handoff.js",
@@ -302,6 +306,13 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                     self._send(result)
                 return
             session = companion.session(self._token(), self.client_address[0])
+            if parsed.path.startswith("/api/phone/resources/"):
+                if companion.resource_service is None:
+                    raise PhoneRequestError("电脑端资源库尚未更新。", 503)
+                result = resource_get(companion.resource_service, parsed.path.removeprefix("/api/phone/resources/"), parsed.query)
+                companion.session(self._token(), self.client_address[0])
+                self._send(result)
+                return
             if parsed.path.startswith("/api/phone/workflow/"):
                 if companion.workflow_service is None:
                     raise PhoneRequestError("电脑端工作组件尚未更新。", 503)
@@ -439,6 +450,17 @@ class _PhoneHandler(BaseHTTPRequestHandler):
             companion = self._context(post=True)
             if parsed.query:
                 raise PhoneRequestError("请求地址无效。")
+            if parsed.path.startswith("/api/phone/resources/"):
+                token, peer = self._token(), self.client_address[0]
+                authorize = lambda: companion.session(token, peer)
+                authorize()
+                if companion.resource_service is None:
+                    raise PhoneRequestError("电脑端资源库尚未更新。", 503)
+                result = resource_post(companion.resource_service,
+                    parsed.path.removeprefix("/api/phone/resources/"), self._body(maximum=128 * 1024), authorize=authorize)
+                authorize()
+                self._send(result)
+                return
             if parsed.path.startswith("/api/phone/workflow/"):
                 token, peer = self._token(), self.client_address[0]
                 authorize = lambda: companion.session(token, peer)
@@ -522,6 +544,10 @@ class _PhoneHandler(BaseHTTPRequestHandler):
                 raise PhoneRequestError("手机入口没有此功能。", 404)
         except PhoneRequestError as error:
             self._send({"error": str(error)}, error.status)
+        except ResourceLibraryConflict as error:
+            self._send({"error": str(error), "code": "revision_conflict"}, 409)
+        except (ResourceLibraryError, ResourcePreviewError) as error:
+            self._send({"error": str(error)}, getattr(error, "status", 400))
         except (TransferError, DeviceStoreError, WorkflowError, WorkflowModelError) as error:
             self._send({"error": str(error), "code": getattr(error, "code", "invalid_request"),
                 **({"queueAccepted": False} if getattr(error, "queueAccepted", None) is False else {})}, error.status)
@@ -533,7 +559,7 @@ class PhoneCompanionService:
     def __init__(self, document_library, plan_getter, app_dir, version, device_getter=None,
                  *, clock=None, interface_getter=None, music_getter=None,
                  music_file_getter=None, music_lyrics_getter=None, computer_id=None, transfer_store=None,
-                 device_store=None, announcer=None, monitor_interval=60, workflow_service=None):
+                 device_store=None, announcer=None, monitor_interval=60, workflow_service=None, resource_service=None):
         self.documents = document_library
         self.plan_getter = plan_getter
         self.device_getter = device_getter or document_library.overview
@@ -563,6 +589,7 @@ class PhoneCompanionService:
         self.music_lyrics_getter = music_lyrics_getter
         self.transfer_store = transfer_store
         self.workflow_service = workflow_service
+        self.resource_service = resource_service
         self.device_store = device_store
         self.announcer = announcer
         self._network_fingerprint = ""
