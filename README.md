@@ -8,6 +8,12 @@ Ordinary Chat uses the signed-in ChatGPT account rather than a model API key. Th
 
 A Windows control console for music, wallpaper, Blender, Unity, Steamwork, RandomRealm, and workspace tools.
 
+## Resource library
+
+Open **Document → 资源库** on the computer, or **更多 → 资料与设备 → 资源库** on the paired phone. Browse source images, reuse collected records, and choose 收藏 or 准备使用. Repeating a search reuses its saved results; 重新搜索 explicitly requests fresh results. Preparing to use a resource records a choice and does not download it or change a project.
+
+Direct search currently supports downloadable Sketchfab models and Poly Haven models, textures and HDRIs. Other public HTTPS resource pages can be added by URL: read their available title/image metadata, review it, and save. Pages requiring sign-in or blocking previews can still be recorded manually. This is a source search and collection tool; arbitrary full-web conversational search is not connected to this page. Each resource retains its source, license, cost, notes and selection status in the existing Document library under `游戏资源/.console-resources`; personal collections are not included in release packages.
+
 ## Dev Room
 
 **RandomRealm → Dev Room** is the Project Nexus document framework. It starts with a blank overview and provides a document list, reading, editing, New and Save. Content stays in the current Document library under `projects/Project Nexus/Dev Room`; reading the blank overview does not create a file. Unfinished edits are kept locally and restored on reopening. Saves verify the selected library and document revision, retain the previous saved file, and offer Save as a copy when another edit conflicts. This first framework does not classify content or synchronize it to Unity.
