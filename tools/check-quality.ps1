@@ -80,6 +80,7 @@ $PythonSources = @(
   "dev_room.py",
   "resource_library.py",
   "resource_catalogs.py",
+  "resource_sources.py",
   "resource_preview.py",
   "resource_http.py",
   "workspace_plan.py",

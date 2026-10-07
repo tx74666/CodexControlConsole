@@ -52,6 +52,16 @@ class CatalogueChecks(unittest.TestCase):
     def search(self, **kwargs):
         return self.service.search({'expectedRoot': str(self.root), 'q': 'earth', **kwargs})
 
+    def batch(self, **kwargs):
+        return self.search(providers=kwargs.pop('providers', ['sketchfab', 'polyhaven']),
+                           kind=kwargs.pop('kind', 'all'), **kwargs)
+
+    def fixture_candidates(self, provider, kind, count, *, shared=False):
+        return [self.service._candidate({'name': f'Fixture {provider} {index}',
+            'url': 'https://example.com/shared' if shared else f'https://example.com/{provider}/{index}',
+            'kind': kind, 'license': 'Fixture checked license', 'provenance': ['Isolated test fixture']}, provider)
+            for index in range(count)]
+
     def save(self, **kwargs):
         return self.service.save({'expectedRoot': str(self.root),
             'expectedRevision': self.service.state()['revision'], **kwargs})
@@ -200,13 +210,252 @@ class CatalogueChecks(unittest.TestCase):
 
     def test_external_sources_cannot_be_posted_as_direct_searches(self):
         external = [p for p in resources.PROVIDERS if p['mode'] == 'external']
-        self.assertEqual({p['id'] for p in external}, {'itchio', 'unity', 'fab', 'cgtrader'})
+        self.assertTrue({'itchio', 'unity', 'fab', 'cgtrader'}.issubset({p['id'] for p in external}))
         with patch.object(resources, '_fetch_json', side_effect=AssertionError('external source must not fetch')), \
              patch.object(resources, '_fetch_text', side_effect=AssertionError('external source must not fetch')):
             for source in external:
                 with self.subTest(source=source['id']), self.assertRaises(resources.ResourceLibraryError):
                     self.search(provider=source['id'], kind=source['defaultKind'])
         self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_provider_directory_exposes_five_core_catalogues_and_shared_external_registry(self):
+        api = [p for p in resources.PROVIDERS if p['mode'] == 'api']
+        self.assertEqual({p['id'] for p in api}, {'sketchfab', 'polyhaven', 'ambientcg', 'kenney', 'opengameart'})
+        self.assertTrue(all(p['core'] is True and p['group'] == 'catalog' for p in api))
+        self.assertEqual([p for p in resources.PROVIDERS if p['mode'] == 'external'], resources.EXTERNAL_PROVIDERS)
+
+    def test_batch_is_serial_deduplicates_providers_and_commits_once(self):
+        calls = []
+        def response(provider, kind, query, count):
+            calls.append((provider, kind, query, count))
+            return self.fixture_candidates(provider, kind, 1, shared=True)
+        with patch.object(self.service, '_provider_search', side_effect=response), \
+             patch.object(self.service, '_write', wraps=self.service._write) as write:
+            result = self.batch(providers=['sketchfab', 'polyhaven', 'sketchfab', 'ambientcg'], q='汽车')
+        self.assertEqual(calls, [('sketchfab', 'model', 'car', 12), ('polyhaven', 'model', 'car', 12),
+                                 ('ambientcg', 'texture', 'car', 12)])
+        self.assertTrue(result['batch'])
+        self.assertEqual(result['revision'], 1)
+        self.assertEqual(write.call_count, 1)
+        self.assertEqual(len(result['items']), 1)
+        self.assertEqual([r['provider'] for r in result['sources']], ['sketchfab', 'polyhaven', 'ambientcg'])
+        self.assertEqual([r['status'] for r in result['sources']], ['ok', 'ok', 'ok'])
+        self.assertEqual([r['count'] for r in result['sources']], [1, 1, 1])
+        self.assertFalse(result['cached'])
+        self.assertEqual((result['query'], result['searchQuery']), ('汽车', 'car'))
+        self.assertEqual({r['provider'] for r in result['items'][0]['queries']}, {'sketchfab', 'polyhaven', 'ambientcg'})
+        before = self.store.read_bytes()
+        with patch.object(self.service, '_provider_search', side_effect=AssertionError('all sources must reuse cache')):
+            cached = self.batch(providers=['sketchfab', 'polyhaven', 'ambientcg'], q='汽车')
+        self.assertTrue(cached['cached'])
+        self.assertTrue(all(r['cached'] for r in cached['sources']))
+        self.assertEqual(cached['items'], result['items'])
+        self.assertEqual(self.store.read_bytes(), before)
+
+    def test_batch_partial_failure_keeps_confirmed_resource_and_receipts(self):
+        chosen = self.save(name='My confirmed resource', url='https://example.com/shared',
+            kind='model', status='planned', notes='Keep my selection', license='Original license')
+        def response(provider, kind, query, count):
+            if provider == 'polyhaven':
+                raise resources.ResourceLibraryError('Fixture upstream unavailable', status=502)
+            return {'items': self.fixture_candidates(provider, kind, 1, shared=True),
+                    'skippedCount': 1, 'warnings': ['One malformed fixture was skipped']}
+        with patch.object(self.service, '_provider_search', side_effect=response), \
+             patch.object(self.service, '_write', wraps=self.service._write) as write:
+            result = self.batch()
+        self.assertEqual(write.call_count, 1)
+        self.assertEqual(result['revision'], chosen['revision'] + 1)
+        self.assertEqual([r['status'] for r in result['sources']], ['ok', 'error'])
+        self.assertIn('Poly Haven', ' '.join(result['warnings']))
+        self.assertEqual((result['skippedCount'], result['sources'][0]['skippedCount']), (1, 1))
+        item = result['items'][0]
+        self.assertEqual((item['id'], item['name'], item['status'], item['notes'], item['license']),
+            (chosen['item']['id'], 'My confirmed resource', 'planned', 'Keep my selection', 'Original license'))
+        before = self.store.read_bytes()
+        with patch.object(self.service, '_provider_search', side_effect=response) as fetch:
+            repeated = self.batch()
+        self.assertEqual(fetch.call_args_list[0].args[0], 'polyhaven')
+        self.assertEqual(fetch.call_count, 1)
+        self.assertTrue(repeated['cached'])
+        self.assertEqual([r['status'] for r in repeated['sources']], ['ok', 'error'])
+        self.assertEqual(self.store.read_bytes(), before)
+
+    def test_batch_skips_unsupported_kinds_without_requesting_them(self):
+        with patch.object(self.service, '_provider_search', side_effect=lambda p,k,q,c:self.fixture_candidates(p,k,1)) as fetch:
+            result = self.batch(providers=['sketchfab', 'kenney', 'polyhaven', 'ambientcg'], kind='hdri')
+        self.assertEqual([call.args[0] for call in fetch.call_args_list], ['polyhaven', 'ambientcg'])
+        self.assertEqual([r['status'] for r in result['sources']], ['skipped', 'skipped', 'ok', 'ok'])
+        self.assertEqual([r['count'] for r in result['sources']], [0, 0, 1, 1])
+        with patch.object(self.service, '_provider_search', side_effect=AssertionError('unsupported source must not request')):
+            with self.assertRaises(resources.ResourceLibraryError) as failed:
+                self.batch(providers=['sketchfab', 'kenney'], kind='hdri')
+        self.assertEqual(failed.exception.status, 400)
+
+    def test_batch_all_failures_never_write_existing_or_fresh_library(self):
+        with patch.object(self.service, '_provider_search', side_effect=resources.ResourceLibraryError('Fixture timeout', status=502)), \
+             patch.object(self.service, '_write', wraps=self.service._write) as write:
+            with self.assertRaises(resources.ResourceLibraryError) as failed:
+                self.batch()
+        self.assertEqual(failed.exception.status, 502)
+        self.assertIn('Sketchfab', str(failed.exception))
+        self.assertIn('Poly Haven', str(failed.exception))
+        self.assertEqual(write.call_count, 0)
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.save(name='Existing choice', url='https://example.com/original', status='saved')
+        before = self.store.read_bytes()
+        with patch.object(self.service, '_provider_search', side_effect=resources.ResourceLibraryError('Fixture timeout', status=502)):
+            with self.assertRaises(resources.ResourceLibraryError):
+                self.batch()
+        self.assertEqual(self.store.read_bytes(), before)
+
+    def test_batch_count_expands_12_to_24_and_reuses_24_for_12_without_writing(self):
+        with patch.object(self.service, '_provider_search', side_effect=lambda p,k,q,c:self.fixture_candidates(p,k,c)) as fetch:
+            first = self.batch(providers=['sketchfab'], count=12)
+            selected = self.save(id=first['items'][0]['id'], status='saved', notes='Keep my notes')
+            expanded = self.batch(providers=['sketchfab'], count=24)
+        self.assertEqual([call.args[3] for call in fetch.call_args_list], [12, 24])
+        self.assertFalse(expanded['cached'])
+        self.assertEqual(len(expanded['items']), 24)
+        self.assertEqual(expanded['revision'], selected['revision'] + 1)
+        self.assertEqual(expanded['items'][0]['notes'], 'Keep my notes')
+        self.assertEqual(expanded['items'][0]['status'], 'saved')
+        records = json.loads(self.store.read_text(encoding='utf-8'))['searches']
+        self.assertEqual((len(records), records[0]['count']), (1, 24))
+        before = self.store.read_bytes()
+        with patch.object(self.service, '_provider_search', side_effect=AssertionError('larger cache must not fetch')):
+            reduced = self.batch(providers=['sketchfab'], count=12)
+        self.assertTrue(reduced['cached'])
+        self.assertEqual(len(reduced['items']), 12)
+        self.assertEqual((reduced['sources'][0]['countRequested'], reduced['sources'][0]['actualCount']), (12, 12))
+        self.assertEqual(self.store.read_bytes(), before)
+
+    def test_single_provider_count_and_old_optional_count_cache_remain_compatible(self):
+        with patch.object(self.service, '_provider_search', side_effect=lambda p,k,q,c:self.fixture_candidates(p,k,c)):
+            self.search(count=12)
+        old = json.loads(self.store.read_text(encoding='utf-8'))
+        old['searches'][0].pop('count')
+        self.store.write_text(json.dumps(old), encoding='utf-8')
+        with patch.object(self.service, '_provider_search', side_effect=AssertionError('old missing count means 12')):
+            self.assertTrue(self.search(count=12)['cached'])
+        with patch.object(self.service, '_provider_search', side_effect=lambda p,k,q,c:self.fixture_candidates(p,k,c)) as fetch:
+            expanded = self.search(count=24)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(len(expanded['items']), 24)
+        before = self.store.read_bytes()
+        with patch.object(self.service, '_provider_search', side_effect=AssertionError('larger cache must not fetch')):
+            reduced = self.search(count=12)
+        self.assertTrue(reduced['cached'])
+        self.assertEqual(len(reduced['items']), 12)
+        self.assertEqual(self.store.read_bytes(), before)
+
+    def test_optional_cache_count_invalid_values_do_not_overwrite_existing_data(self):
+        with patch.object(self.service, '_provider_search', return_value=[]):
+            self.batch(providers=['sketchfab'])
+        original = json.loads(self.store.read_text(encoding='utf-8'))
+        for invalid in (True, 0, 25, 12.0, '12', None):
+            corrupt = json.loads(json.dumps(original))
+            corrupt['searches'][0]['count'] = invalid
+            raw = json.dumps(corrupt).encode('utf-8')
+            self.store.write_bytes(raw)
+            with self.subTest(count=invalid), self.assertRaises(resources.ResourceLibraryError):
+                self.service.state()
+            with patch.object(self.service, '_provider_search', side_effect=AssertionError('corrupt cache must not fetch')):
+                with self.assertRaises(resources.ResourceLibraryError):
+                    self.batch(providers=['sketchfab'])
+            self.assertEqual(self.store.read_bytes(), raw)
+
+    def test_batch_cache_reports_actual_old_search_query_after_literal_dictionary_changes(self):
+        with patch.object(self.service, '_provider_search', side_effect=lambda p,k,q,c:self.fixture_candidates(p,k,1)):
+            self.batch(providers=['sketchfab'], q='汽车')
+        old = json.loads(self.store.read_text(encoding='utf-8'))
+        old['searches'][0]['searchQuery'] = '汽车'
+        old['items'][0]['queries'][0]['searchQuery'] = '汽车'
+        raw = json.dumps(old).encode('utf-8')
+        self.store.write_bytes(raw)
+        with patch.object(self.service, '_provider_search', side_effect=AssertionError('old query must reuse its genuine cached search')):
+            result = self.batch(providers=['sketchfab'], q='汽车')
+        self.assertTrue(result['cached'])
+        self.assertEqual((result['query'], result['searchQuery']), ('汽车', '汽车'))
+        self.assertEqual(result['sources'][0]['searchQuery'], '汽车')
+        self.assertEqual(self.store.read_bytes(), raw)
+
+    def test_batch_zero_results_are_success_and_not_failed_requests(self):
+        with patch.object(self.service, '_provider_search', return_value=[]):
+            result = self.batch()
+        self.assertEqual(result['items'], [])
+        self.assertEqual([r['status'] for r in result['sources']], ['ok', 'ok'])
+        self.assertEqual(result['revision'], 1)
+        before = self.store.read_bytes()
+        with patch.object(self.service, '_provider_search', side_effect=AssertionError('empty successful cache must reuse')):
+            self.assertTrue(self.batch()['cached'])
+        self.assertEqual(self.store.read_bytes(), before)
+
+    def test_batch_root_change_aborts_before_next_provider_and_does_not_save(self):
+        other = self.base / 'other-database'
+        other.mkdir()
+        def response(provider, kind, query, count):
+            self.documents.select(str(other))
+            return self.fixture_candidates(provider, kind, 1)
+        with patch.object(self.service, '_provider_search', side_effect=response) as fetch:
+            with self.assertRaises(resources.ResourceLibraryConflict):
+                self.batch()
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual(list(other.iterdir()), [])
+
+    def test_batch_authorization_revocation_aborts_without_saving_or_more_requests(self):
+        allowed = [True]
+        def authorize():
+            self.assertFalse(self.documents._lock._is_owned())
+            if not allowed[0]:
+                raise PermissionError('Fixture pairing revoked')
+        def response(provider, kind, query, count):
+            allowed[0] = False
+            return self.fixture_candidates(provider, kind, 1)
+        with patch.object(self.service, '_provider_search', side_effect=response) as fetch:
+            with self.assertRaises(PermissionError):
+                self.service.search({'expectedRoot': str(self.root), 'q': 'earth',
+                    'providers': ['sketchfab', 'polyhaven'], 'kind': 'all'}, authorize=authorize)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_batch_explicit_revision_conflict_keeps_concurrent_user_save(self):
+        def response(provider, kind, query, count):
+            self.save(name='Concurrent user choice', url='https://example.com/concurrent', status='saved')
+            return self.fixture_candidates(provider, kind, 1)
+        with patch.object(self.service, '_provider_search', side_effect=response) as fetch:
+            with self.assertRaises(resources.ResourceLibraryConflict):
+                self.batch(expectedRevision=0)
+        self.assertEqual(fetch.call_count, 1)
+        state = self.service.state()
+        self.assertEqual([item['name'] for item in state['items']], ['Concurrent user choice'])
+        self.assertEqual(state['revision'], 1)
+        self.assertEqual(json.loads(self.store.read_text(encoding='utf-8'))['searches'], [])
+
+    def test_batch_rejects_external_invalid_providers_and_limits_before_network(self):
+        for kwargs in ({'providers': []}, {'providers': ['sketchfab', 'itchio']},
+                       {'providers': ['unknown']}, {'providers': [['sketchfab']]},
+                       {'count': 1}, {'count': True}, {'kind': 'unsupported'}):
+            with self.subTest(kwargs=kwargs), \
+                 patch.object(self.service, '_provider_search', side_effect=AssertionError('invalid input must not request')), \
+                 self.assertRaises(resources.ResourceLibraryError):
+                self.batch(**kwargs)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_expanded_literal_mapping_preserves_query_and_avoids_single_character_substitution(self):
+        cases = {'汽车': 'car', '汽車': 'car', '车辆': 'vehicle', '車輛': 'vehicle',
+                 '赛车': 'racing', '賽車': 'racing', '斩击': 'slash', '斬擊': 'slash',
+                 '刀光': 'slash', '爆炸': 'explosion', '火焰': 'fire', '烟雾': 'smoke',
+                 '煙霧': 'smoke', '魔法': 'magic', '怪物': 'monster', '武器': 'weapon', '草地': 'grass'}
+        for query, actual in cases.items():
+            with self.subTest(query=query):
+                self.assertEqual(resources._search_query(query), actual)
+        self.assertEqual(resources._search_query('火车 剑'), '火车 剑')
+        with patch.object(self.service, '_provider_search', side_effect=lambda p,k,q,c:self.fixture_candidates(p,k,1)):
+            result = self.batch(providers=['sketchfab'], q='烟雾')
+        self.assertEqual((result['query'], result['searchQuery']), ('烟雾', 'smoke'))
+        self.assertEqual(result['items'][0]['queries'][0]['query'], '烟雾')
+        self.assertEqual(result['items'][0]['queries'][0]['searchQuery'], 'smoke')
 
     def test_catalog_results_use_shared_candidate_validation_and_preserve_choices(self):
         row = {'name': 'A catalogue model', 'url': 'https://kenney.nl/assets/car-kit',

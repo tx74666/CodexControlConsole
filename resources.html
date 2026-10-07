@@ -30,12 +30,16 @@
           <button id="localSearch" class="primary-button" type="submit">查已收集<span aria-hidden="true"> ↗</span></button>
         </div>
       </form>
-      <div class="online-row">
-        <label class="select-field source-field"><span>资源来源</span><select id="provider" disabled><option value="">正在读取来源…</option></select></label>
-        <button id="onlineSearch" class="secondary-button" type="button">联网找</button>
-        <a id="externalSearch" class="secondary-button" target="_blank" rel="noopener noreferrer" hidden>打开网站搜索 ↗</a>
-        <button id="refreshSearch" class="text-button" type="button" hidden>重新搜索</button>
-        <p id="providerNote" class="source-note">选定来源后才联网搜索。</p>
+      <div class="source-section">
+        <div class="source-toolbar"><div class="source-presets" role="group" aria-label="网站选择方案"><button id="corePreset" class="preset-button" type="button" aria-pressed="true">精选网站</button><button id="widePreset" class="preset-button" type="button" aria-pressed="false">广泛浏览</button></div><span id="sourceCounts" class="source-counts">正在读取网站…</span></div>
+        <details id="sourcePicker" class="source-picker"><summary><span>选择网站</span><span id="selectedCount">—</span></summary>
+          <div class="picker-actions"><button id="selectAllSources" class="text-button" type="button">全选网站</button><button id="clearSources" class="text-button" type="button">清空</button><span>可多选，选择方案不会联网。</span></div>
+          <div class="picker-columns"><section><h3>直接预览</h3><div id="apiSourceList" class="source-list"></div></section><section><h3>网站浏览</h3><div id="externalSourceList" class="source-list"></div></section></div>
+        </details>
+        <div class="search-actions"><button id="onlineSearch" class="primary-button" type="button">一键检索 <span aria-hidden="true">↗</span></button><label class="result-limit"><span>每站上限</span><select id="resultLimit"><option value="12">12 项</option><option value="24">24 项</option></select></label><button id="refreshSearch" class="text-button" type="button" hidden>重新检索</button></div>
+        <p id="providerNote" class="source-note">可预览的网站直接返回图片；其他网站提供逐个打开的浏览链接。</p>
+        <details id="browsePanel" class="browse-panel" hidden><summary class="browse-heading"><span id="browseTitle">打开网站浏览</span><span id="browseCount"></span></summary><p id="browseNote"></p><div id="browseLinks" class="browse-links"></div></details>
+        <details id="webDiscovery" class="web-discovery" hidden><summary>联网发现 <span>围绕游戏素材继续找</span></summary><p>在搜索网站寻找更多游戏素材，选中的资源可以通过「添加网址」收藏。</p><div id="webDiscoveryLinks" class="discovery-links"></div></details>
       </div>
       <p id="operationStatus" class="operation-status" role="status" aria-live="polite">正在读取已收集的资源…</p>
     </section>
@@ -44,6 +48,7 @@
       <div class="collection-heading"><div><p class="eyebrow">PREVIEW & CHOOSE</p><h2 id="resultsTitle">资源库记录</h2></div><span id="resultCount" class="result-count">—</span></div>
       <p id="resultNote" class="result-note">搜索候选与已收藏分别标记；准备使用只是选择，尚未导入项目。</p>
       <p id="resultWarnings" class="result-warnings" hidden></p>
+      <details id="sourceResults" class="source-results" hidden><summary><span>逐站检索回执</span><span id="sourceResultsCount"></span></summary><ul id="sourceResultsList"></ul></details>
       <div id="resourceGrid" class="resource-grid" aria-busy="true"></div>
       <div id="emptyState" class="empty-state" hidden><span class="empty-symbol" aria-hidden="true">◇</span><h3 id="emptyTitle">这里还没有匹配的资源</h3><p id="emptyText">换一个关键词或分类，也可以选好来源后「联网找」。</p></div>
     </section>

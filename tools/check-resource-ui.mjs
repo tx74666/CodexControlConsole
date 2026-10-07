@@ -30,17 +30,19 @@ class Element {
   replaceChildren(...children) { this._text = ""; this.children = []; this.append(...children); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
   querySelectorAll(selector) {
-    assert.equal(selector, "[data-save]", "Extend this small fixture only for actual UI needs");
+    const attribute = /^\[data-(save|provider)\]$/.exec(selector)?.[1];
+    assert.ok(attribute, "Extend this small fixture only for actual UI needs");
     const matches = [];
-    const visit = element => { for (const child of element.children) { if (Object.hasOwn(child.dataset, "save")) matches.push(child); visit(child); } };
+    const visit = element => { for (const child of element.children) { if (Object.hasOwn(child.dataset, attribute)) matches.push(child); visit(child); } };
     visit(this); return matches;
   }
   addEventListener(name, callback) { const callbacks = this.listeners.get(name) || []; callbacks.push(callback); this.listeners.set(name, callbacks); }
   dispatch(name, event = {}) { if (name === "click" && this.disabled) return; for (const callback of this.listeners.get(name) || []) callback({ target: this, preventDefault() {}, ...event }); }
   focus() {}
+  get parentElement() { return this.parent; }
 }
 function harness({ phone = false, stored = null, initial = state() } = {}) {
-  const nodes = new Map(), calls = [], replies = new Map([["GET state", initial]]), storage = new Map();
+  const nodes = new Map(), calls = [], navigations = [], replies = new Map([["GET state", initial]]), storage = new Map();
   for (const match of html.matchAll(/<([a-z][a-z0-9]*)\b[^>]*\bid="([^"]+)"[^>]*>/gi)) nodes.set(match[2], new Element(match[1], attributes(match[0])));
   // Read real select defaults rather than duplicating the script's filter values.
   for (const match of html.matchAll(/<select\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/select>/gi)) {
@@ -53,7 +55,7 @@ function harness({ phone = false, stored = null, initial = state() } = {}) {
     URL, URLSearchParams, console,
     document: { getElementById: control, createElement: tag => new Element(tag), body: new Element("body") },
     location: { search: phone ? "?phone=1" : "" },
-    window: { scrollY: 0, addEventListener() {}, scrollTo() {} },
+    window: { scrollY: 0, addEventListener() {}, scrollTo() {}, open(...args) { navigations.push(args); throw new Error("Websites must be opened only through human-operated links"); } },
     sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     async fetch(url, options) {
       const parsed = new URL(url, "http://127.0.0.1:43123/resources.html");
@@ -69,7 +71,7 @@ function harness({ phone = false, stored = null, initial = state() } = {}) {
       return { ok: reply.httpError !== true, async json() { return structuredClone(reply); } };
     }
   }, { filename: "resources.js" });
-  return { calls, control, storage, respond: (key, value) => replies.set(key, value) };
+  return { calls, navigations, control, storage, respond: (key, value) => replies.set(key, value) };
 }
 
 let passed = 0;
@@ -130,34 +132,40 @@ await test("phone mode stays on the phone API with its required same-origin head
   assert.equal(h.control("backLink").href, "/mobile.html?tab=documents"); assert.equal(h.calls.length, 1);
 });
 
-await test("a new server catalog renders and restores arbitrary API sources with their supported default kind", async () => {
+await test("a new server catalog renders arbitrary APIs, migrates the old single choice, and accepts an older single-source receipt", async () => {
   const providers = [{ id: "new-catalog-source", name: "新来源 <span>可预览</span>", mode: "api", kinds: ["model", "texture"], defaultKind: "texture", note: "已接通图片预览" }];
   const h = harness({ initial: state({ providers }), stored: { provider: "new-catalog-source", q: "石头", kind: "all", status: "all" } }); await flush();
-  assert.equal(h.control("provider").children.length, 1);
-  assert.equal(h.control("provider").children[0].value, "new-catalog-source");
-  assert.equal(h.control("provider").children[0].textContent, "新来源 <span>可预览</span> · 可预览");
-  assert.equal(h.control("provider").value, "new-catalog-source");
+  const checkboxes = h.control("apiSourceList").querySelectorAll("[data-provider]").filter(element => element.tagName === "INPUT");
+  assert.equal(checkboxes.length, 1); assert.equal(checkboxes[0].value, "new-catalog-source"); assert.equal(checkboxes[0].checked, true);
+  assert.match(h.control("apiSourceList").textContent, /新来源 <span>可预览<\/span>/);
   assert.match(h.control("resultNote").textContent, /候选 1.*已收藏 0.*候选尚未收藏/);
   h.respond("POST search", { ...state({ providers, revision: 18 }), searchQuery: "rock", cached: false });
   h.control("onlineSearch").dispatch("click"); await flush();
   const search = h.calls.find(call => call.action === "search");
-  assert.equal(search.body.provider, "new-catalog-source"); assert.equal(search.body.kind, "texture"); assert.equal(search.body.q, "石头");
+  assert.deepEqual(search.body.providers, ["new-catalog-source"]); assert.equal(search.body.kind, "all"); assert.equal(search.body.count, 12); assert.equal(search.body.q, "石头");
   assert.match(h.control("resultNote").textContent, /实际搜索词：rock/);
-  assert.equal(JSON.parse(h.storage.get("console-resources-view")).provider, "new-catalog-source");
+  assert.deepEqual(JSON.parse(h.storage.get("console-resources-view")).selectedProviders, ["new-catalog-source"]);
+  assert.match(h.control("providerNote").textContent, /全部类型按各站默认分类检索/);
 });
 
-await test("external catalog entries expose an encoded human-operated website link without searching or changing cards", async () => {
+await test("external-only selection prepares encoded human-operated links without POST or changing cards", async () => {
   const providers = [{ id: "external-fixture", name: "itch.io", mode: "external", kinds: ["model", "other"], defaultKind: "model", note: "可把选中的资源网址添加回来。", searchUrlTemplate: "https://itch.io/search?q={query}&facets=c.2" }];
   const h = harness({ initial: state({ providers }), stored: { provider: "external-fixture", q: "stone & 草地" } }); await flush();
-  const card = h.control("resourceGrid").children[0], link = h.control("externalSearch");
-  assert.equal(h.control("provider").value, "external-fixture"); assert.equal(h.control("onlineSearch").hidden, true); assert.equal(link.hidden, false);
+  const card = h.control("resourceGrid").children[0];
+  h.control("onlineSearch").dispatch("click"); await flush();
+  const link = h.control("browseLinks").children[0];
+  assert.equal(h.control("browsePanel").hidden, false);
+  assert.equal(h.control("browsePanel").open, true);
   assert.equal(link.href, `https://itch.io/search?q=${encodeURIComponent("stone & 草地")}&facets=c.2`);
-  assert.equal(link.attributes.get("target"), "_blank"); assert.match(link.attributes.get("rel"), /noopener/); assert.match(link.attributes.get("rel"), /noreferrer/);
-  assert.match(h.control("providerNote").textContent, /在来源网站查看结果，不会自动加入这里/);
+  assert.equal(link.target, "_blank"); assert.match(link.rel, /noopener/); assert.match(link.rel, /noreferrer/);
+  assert.match(h.control("browseNote").textContent, /尚未在 Console 内检索/);
   link.dispatch("click"); await flush();
   assert.equal(h.calls.length, 1); assert.equal(h.control("resourceGrid").children[0], card);
+  assert.equal(h.navigations.length, 0);
   h.control("query").value = "新词"; h.control("query").dispatch("input");
-  assert.equal(link.href, `https://itch.io/search?q=${encodeURIComponent("新词")}&facets=c.2`);
+  assert.equal(h.control("browsePanel").hidden, true);
+  h.control("onlineSearch").dispatch("click"); await flush();
+  assert.equal(h.control("browseLinks").children[0].href, `https://itch.io/search?q=${encodeURIComponent("新词")}&facets=c.2`);
   assert.equal(h.calls.length, 1);
 });
 
@@ -165,10 +173,84 @@ await test("unapproved external templates cannot become links or fall through to
   for (const searchUrlTemplate of ["https://unknown.example/search?q={query}", "javascript:alert('{query}')", "https://itch.io/search?q={query}&next={query}"]) {
     const providers = [{ id: "external-fixture", name: "外部来源", mode: "external", kinds: ["model"], searchUrlTemplate }];
     const h = harness({ initial: state({ providers }), stored: { q: "tree" } }); await flush();
-    const link = h.control("externalSearch");
-    assert.equal(link.href, ""); assert.equal(link.attributes.get("aria-disabled"), "true");
-    link.dispatch("click"); await flush();
+    h.control("onlineSearch").dispatch("click"); await flush();
+    assert.equal(h.control("browseLinks").children.length, 0);
     assert.equal(h.calls.length, 1); assert.equal(h.control("operationStatus").dataset.error, "true");
+  }
+});
+
+const selectionCatalog = [
+  { id: "model-api", name: "模型来源", mode: "api", group: "catalog", core: true, kinds: ["model"], defaultKind: "model" },
+  { id: "texture-api", name: "贴图来源", mode: "api", group: "catalog", core: false, kinds: ["texture"], defaultKind: "texture" },
+  { id: "itch", name: "itch.io", mode: "external", group: "catalog", core: true, kinds: ["model", "vfx", "other"], searchUrlTemplate: "https://itch.io/search?q={query}&facets=c.2" },
+  { id: "fab", name: "Fab", mode: "external", group: "catalog", core: false, kinds: ["model"], searchUrlTemplate: "https://www.fab.com/search?q={query}" },
+  { id: "bing", name: "Bing", mode: "external", group: "web", core: true, kinds: ["other"], searchUrlTemplate: "https://www.bing.com/search?q={query}%20game%20assets" }
+];
+const chosen = h => [...JSON.parse(h.storage.get("console-resources-view")).selectedProviders].sort();
+
+await test("core and wide presets, select all, and checkbox changes are local selections; web discovery stays independent", async () => {
+  const h = harness({ initial: state({ providers: selectionCatalog }), stored: { q: "tree" } }); await flush();
+  h.control("corePreset").dispatch("click"); assert.deepEqual(chosen(h), ["itch", "model-api"]);
+  assert.match(h.control("sourceCounts").textContent, /1 站可直接预览 · 1 站打开浏览/);
+  h.control("widePreset").dispatch("click"); assert.deepEqual(chosen(h), ["fab", "itch", "model-api", "texture-api"]);
+  h.control("clearSources").dispatch("click"); assert.deepEqual(chosen(h), []); assert.equal(h.control("onlineSearch").disabled, true);
+  h.control("selectAllSources").dispatch("click"); assert.deepEqual(chosen(h), ["fab", "itch", "model-api", "texture-api"]);
+  const texture = h.control("apiSourceList").querySelectorAll("[data-provider]").find(element => element.tagName === "INPUT" && element.value === "texture-api");
+  texture.checked = false; texture.dispatch("change"); assert.deepEqual(chosen(h), ["fab", "itch", "model-api"]);
+  assert.equal(h.calls.length, 1); assert.equal(h.control("webDiscoveryLinks").children.length, 1);
+});
+
+await test("batch search posts only compatible APIs once, provides external links, and discloses partial source failures", async () => {
+  const h = harness({ initial: state({ providers: selectionCatalog }), stored: { q: "tree", selectedProviders: ["model-api", "texture-api", "itch", "fab"], resultLimit: "24" } }); await flush();
+  h.respond("POST search", { ...state({ providers: selectionCatalog, revision: 18 }), batch: true, searchQuery: "tree", sources: [
+    { provider: "model-api", name: "模型来源", kind: "model", status: "ok", count: 1, skippedCount: 2, warnings: ["两个条目无效"] },
+    { provider: "texture-api", name: "贴图来源", kind: "texture", status: "error", error: "来源暂不可用 <script>" }
+  ] });
+  h.control("onlineSearch").dispatch("click"); h.control("onlineSearch").dispatch("click"); await flush();
+  const posts = h.calls.filter(call => call.method === "POST"); assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0].body, { expectedRoot: "D:\\资源库", q: "tree", providers: ["model-api", "texture-api"], kind: "all", count: 24, refresh: false });
+  assert.equal(h.control("browseLinks").children.length, 2); assert.match(h.control("operationStatus").textContent, /找到 1 项.*1 站未完成.*另有 2 项/);
+  assert.equal(h.control("browsePanel").open, false);
+  assert.equal(h.navigations.length, 0);
+  assert.match(h.control("sourceResultsList").textContent, /来源暂不可用 <script>/); assert.match(h.control("sourceResultsList").textContent, /模型 · 1 项/);
+  assert.match(h.control("resultWarnings").textContent, /贴图来源/);
+});
+
+await test("unsupported source kinds are never sent, and an all-source failure keeps the existing cards", async () => {
+  const h = harness({ initial: state({ providers: selectionCatalog }), stored: { q: "tree", kind: "model", selectedProviders: ["model-api", "texture-api", "itch"] } }); await flush();
+  const card = h.control("resourceGrid").children[0];
+  h.respond("POST search", { ...state({ providers: selectionCatalog, items: [] }), batch: true, sources: [{ provider: "model-api", name: "模型来源", kind: "model", status: "error", error: "来源未响应" }] });
+  h.control("onlineSearch").dispatch("click"); await flush();
+  assert.deepEqual(h.calls.find(call => call.action === "search").body.providers, ["model-api"]);
+  assert.equal(h.control("resourceGrid").children[0], card); assert.equal(h.control("operationStatus").dataset.error, "true");
+  assert.match(h.control("providerNote").textContent, /当前分类不支持 1 站/); assert.match(h.control("sourceResultsList").textContent, /来源未响应/);
+});
+
+await test("web discovery links encode terms and never open windows automatically or become batch API selections", async () => {
+  const h = harness({ initial: state({ providers: selectionCatalog }), stored: { q: "车 & 草地", selectedProviders: [] } }); await flush();
+  const link = h.control("webDiscoveryLinks").children[0];
+  assert.equal(link.href, `https://www.bing.com/search?q=${encodeURIComponent("车 & 草地")}%20game%20assets`);
+  link.dispatch("click"); await flush(); assert.equal(h.calls.length, 1);
+  const reload = harness({ initial: state({ providers: selectionCatalog }), stored: JSON.parse(h.storage.get("console-resources-view")) }); await flush();
+  assert.equal(reload.control("onlineSearch").disabled, true); assert.deepEqual(chosen(reload), []);
+});
+
+await test("all pinned official browsing destinations in the server registry remain usable through human-operated links", async () => {
+  const registry = readFileSync(new URL("../resource_sources.py", import.meta.url), "utf8");
+  const destinations = [...registry.matchAll(/["'](searchUrlTemplate|browseUrl)["']\s*:\s*(["'])([^"']+)\2/g)].map((match, index) => ({ id: `registered-${index}`, name: `已核实网站 ${index}`, mode: "external", group: "catalog", core: true, kinds: ["other"], [match[1]]: match[3] }));
+  assert.ok(destinations.length >= 5, "Use the checked-in official source registry as the API boundary fixture");
+  const h = harness({ initial: state({ providers: destinations }), stored: { q: "树 & 模型" } }); await flush();
+  h.control("onlineSearch").dispatch("click"); await flush();
+  assert.equal(h.control("browseLinks").children.length, destinations.length, "A registered official link must also pass the UI's independent URL allowlist");
+  for (const link of h.control("browseLinks").children) { const url = new URL(link.href); assert.equal(url.protocol, "https:"); assert.equal(url.username, ""); assert.equal(url.password, ""); assert.equal(link.target, "_blank"); }
+  assert.equal(h.calls.length, 1); assert.equal(h.navigations.length, 0);
+});
+
+await test("browse destinations reject domain lookalikes, credentials, changed paths, and arbitrary servers", async () => {
+  for (const browseUrl of ["https://quaternius.com.evil.test/", "https://user:password@quaternius.com/", "https://quaternius.com/extra", "https://unknown.example/"]) {
+    const providers = [{ id: "unsafe-browse", name: "未核实目录", mode: "external", group: "catalog", core: true, kinds: ["model"], browseUrl }];
+    const h = harness({ initial: state({ providers }), stored: { q: "tree" } }); await flush(); h.control("onlineSearch").dispatch("click"); await flush();
+    assert.equal(h.control("browseLinks").children.length, 0); assert.equal(h.calls.length, 1); assert.equal(h.navigations.length, 0);
   }
 });
 

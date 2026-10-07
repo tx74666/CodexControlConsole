@@ -19,6 +19,7 @@ from urllib.request import build_opener, HTTPRedirectHandler, Request
 import uuid
 
 from resource_catalogs import CATALOG_PROVIDERS, search_catalog
+from resource_sources import EXTERNAL_PROVIDERS
 
 
 STORE_RELATIVE = '游戏资源/.console-resources/library.json'
@@ -32,30 +33,21 @@ MAX_PROVENANCE = 2000
 SEARCH_TIMEOUT = 12
 KINDS = {'model', 'texture', 'hdri', 'vfx', 'other'}
 STATUSES = {'candidate', 'saved', 'planned'}
-PROVIDERS = [
+PROVIDERS = [{**provider, 'core': True, 'group': 'catalog'} for provider in [
     {'id': 'sketchfab', 'name': 'Sketchfab', 'kinds': ['model'], 'mode': 'api', 'defaultKind': 'model',
      'note': '公開可下載模型；逐項核對許可，下載仍需帳戶。'},
     {'id': 'polyhaven', 'name': 'Poly Haven', 'kinds': ['model', 'texture', 'hdri'], 'mode': 'api', 'defaultKind': 'model',
      'note': '官方資源列表與縮圖，CC0。'},
-] + CATALOG_PROVIDERS + [
-    {'id': 'itchio', 'name': 'itch.io', 'kinds': ['model', 'texture', 'vfx', 'other'],
-     'mode': 'external', 'defaultKind': 'other', 'searchUrlTemplate': 'https://itch.io/search?q={query}&facets=c.2',
-     'note': '開啟來源搜尋頁；選中公開資源網址後可預覽並保存。'},
-    {'id': 'unity', 'name': 'Unity Asset Store', 'kinds': ['model', 'texture', 'vfx', 'other'],
-     'mode': 'external', 'defaultKind': 'vfx', 'searchUrlTemplate': 'https://marketplace.unity.com/search?q={query}',
-     'note': '開啟來源搜尋頁；選中公開資源網址後可預覽並保存。'},
-    {'id': 'fab', 'name': 'Fab', 'kinds': ['model', 'texture', 'hdri', 'vfx', 'other'],
-     'mode': 'external', 'defaultKind': 'model', 'searchUrlTemplate': 'https://www.fab.com/search?q={query}',
-     'note': '開啟來源搜尋頁；選中公開資源網址後可預覽並保存。'},
-    {'id': 'cgtrader', 'name': 'CGTrader', 'kinds': ['model'],
-     'mode': 'external', 'defaultKind': 'model', 'searchUrlTemplate': 'https://www.cgtrader.com/search?keywords={query}',
-     'note': '開啟來源搜尋頁；選中公開資源網址後可預覽並保存。'},
-]
+] + CATALOG_PROVIDERS] + EXTERNAL_PROVIDERS
 QUERY_WORDS = {'地球': 'earth', '角色': 'character', '人物': 'character',
                '房屋': 'house', '房子': 'house', '椅子': 'chair',
                '石头': 'rock', '石頭': 'rock', '木头': 'wood', '木頭': 'wood',
                '树木': 'tree', '樹木': 'tree', '植物': 'plant', '金属': 'metal',
-               '金屬': 'metal', '天空': 'sky'}
+               '金屬': 'metal', '天空': 'sky', '汽车': 'car', '汽車': 'car',
+               '车辆': 'vehicle', '車輛': 'vehicle', '赛车': 'racing', '賽車': 'racing',
+               '斩击': 'slash', '斬擊': 'slash', '刀光': 'slash', '爆炸': 'explosion',
+               '火焰': 'fire', '烟雾': 'smoke', '煙霧': 'smoke', '魔法': 'magic',
+               '怪物': 'monster', '武器': 'weapon', '草地': 'grass'}
 
 
 class ResourceLibraryError(ValueError):
@@ -378,6 +370,8 @@ class ResourceLibraryService:
             search_keys.add(key)
             _text(search.get('searchQuery'), '實際搜尋詞', 240, required=True)
             _text(search.get('searchTime'), '搜尋時間', 100, required=True)
+            if 'count' in search and (type(search['count']) is not int or not 1 <= search['count'] <= 24):
+                raise ResourceLibraryError('搜尋快取數量無效。')
             if not isinstance(search.get('itemIds'), list) or len(search['itemIds']) > 24 or any(not isinstance(i, str) or i not in ids for i in search['itemIds']):
                 raise ResourceLibraryError('搜尋快取引用無效。')
             if type(search.get('skippedCount', 0)) is not int or not 0 <= search.get('skippedCount', 0) <= 24:
@@ -549,23 +543,30 @@ class ResourceLibraryService:
         return {**self._result(root, data), 'item': item}
 
     @staticmethod
-    def _cached(data, provider, kind, normalized):
+    def _cached(data, provider, kind, normalized, count=1):
         return next((s for s in data['searches'] if s['provider'] == provider and s['kind'] == kind
-                     and _query(s['query'])[1] == normalized), None)
+                     and _query(s['query'])[1] == normalized and s.get('count', 12) >= count), None)
 
-    def _search_result(self, root, data, search, cached):
+    def _search_result(self, root, data, search, cached, count=24):
         by_id = {i['id']: i for i in data['items']}
-        return {**self._result(root, data, [by_id[i] for i in search['itemIds']]),
+        items = [by_id[i] for i in search['itemIds'][:count]]
+        return {**self._result(root, data, items),
                 **{key: search[key] for key in ('query', 'searchQuery', 'provider', 'kind', 'searchTime')},
-                'cached': cached, 'skippedCount': search.get('skippedCount', 0), 'warnings': search.get('warnings', [])}
+                'cached': cached, 'skippedCount': search.get('skippedCount', 0), 'warnings': search.get('warnings', []),
+                'countRequested': count, 'actualCount': len(items)}
 
     def search(self, payload, authorize=None):
         if authorize is not None:
             authorize()
         if not isinstance(payload, dict):
             raise ResourceLibraryError('搜尋內容無效。')
+        if 'providers' in payload:
+            return self._search_batch(payload, authorize)
         query, normalized = _query(payload.get('q', ''))
         provider, kind = payload.get('provider', 'sketchfab'), payload.get('kind', 'model')
+        if kind == 'all':
+            descriptor = next((p for p in PROVIDERS if p['id'] == provider and p.get('mode', 'api') == 'api'), None)
+            kind = descriptor['defaultKind'] if descriptor else kind
         if not any(p['id'] == provider and p.get('mode', 'api') == 'api' and kind in p['kinds'] for p in PROVIDERS):
             raise ResourceLibraryError('此來源不支援所選資源類型。')
         refresh = payload.get('refresh', False)
@@ -575,9 +576,9 @@ class ResourceLibraryService:
         expected = payload.get('expectedRoot')
         with self._scope(expected, write=True) as root:
             data = self._load()
-            cached = self._cached(data, provider, kind, normalized)
+            cached = self._cached(data, provider, kind, normalized, count)
             if cached is not None and not refresh:
-                return self._search_result(root, data, cached, True)
+                return self._search_result(root, data, cached, True, count)
         actual_query = _search_query(query)
         provider_result = self._provider_search(provider, kind, actual_query, count)
         if isinstance(provider_result, list):
@@ -594,9 +595,9 @@ class ResourceLibraryService:
                 self._revision(data, payload['expectedRevision'])
             base_revision = data['revision']
             # Another server may have completed the same explicit request.
-            cached = self._cached(data, provider, kind, normalized)
+            cached = self._cached(data, provider, kind, normalized, count)
             if cached is not None and not refresh:
-                return self._search_result(root, data, cached, True)
+                return self._search_result(root, data, cached, True, count)
             item_ids = []
             for candidate in candidates:
                 candidate['queries'] = [{'provider': provider, 'query': query, 'kind': kind, 'searchQuery': actual_query}]
@@ -606,16 +607,149 @@ class ResourceLibraryService:
                     item_ids.append(item['id'])
             search = {'query': query, 'searchQuery': actual_query, 'provider': provider,
                       'kind': kind, 'searchTime': search_time, 'itemIds': item_ids,
-                      'skippedCount': skipped_count, 'warnings': warnings}
-            if cached:
-                data['searches'].remove(cached)
+                      'skippedCount': skipped_count, 'warnings': warnings, 'count': count}
+            previous_search = self._cached(data, provider, kind, normalized)
+            if previous_search:
+                data['searches'].remove(previous_search)
             elif len(data['searches']) >= MAX_SEARCHES:
                 # Eviction affects repeat-search cache only, never resources.
                 data['searches'].pop(0)
             data['searches'].append(search)
             data['revision'] += 1
         root = self._commit(data, expected, base_revision, authorize)
-        return self._search_result(root, data, search, False)
+        return self._search_result(root, data, search, False, count)
+
+    def _search_batch(self, payload, authorize):
+        """Search at most five catalogues serially and commit successes once."""
+        query, normalized = _query(payload.get('q', ''))
+        requested = payload['providers']
+        if not isinstance(requested, list) or not requested or len(requested) > 25 or any(not isinstance(p, str) for p in requested):
+            raise ResourceLibraryError('請選擇最多 5 個可直接搜尋的來源。')
+        provider_ids = list(dict.fromkeys(requested))
+        descriptors = {p['id']: p for p in PROVIDERS if p.get('mode', 'api') == 'api'}
+        if len(provider_ids) > 5 or any(p not in descriptors for p in provider_ids):
+            raise ResourceLibraryError('批次搜尋只支援最多 5 個可直接搜尋的來源。')
+        kind, count, refresh = payload.get('kind', 'all'), payload.get('count', 12), payload.get('refresh', False)
+        if not isinstance(kind, str) or kind not in KINDS | {'all'}:
+            raise ResourceLibraryError('資源類型無效。')
+        if type(count) is not int or count not in {12, 24} or type(refresh) is not bool:
+            raise ResourceLibraryError('批次搜尋每站上限只能選 12 或 24 項。')
+        expected = payload.get('expectedRoot')
+        with self._scope(expected, write=True) as root:
+            initial = self._load()
+            if 'expectedRevision' in payload:
+                self._revision(initial, payload['expectedRevision'])
+        actual_query, jobs = _search_query(query), []
+        for provider in provider_ids:
+            descriptor = descriptors[provider]
+            source_kind = descriptor['defaultKind'] if kind == 'all' else kind
+            receipt = {'provider': provider, 'name': descriptor['name'], 'kind': source_kind,
+                       'status': 'skipped', 'count': 0, 'countRequested': count, 'actualCount': 0,
+                       'cached': False, 'skippedCount': 0, 'warnings': []}
+            job = {'receipt': receipt, 'search': None, 'candidates': None}
+            jobs.append(job)
+            if source_kind not in descriptor['kinds']:
+                receipt['warnings'] = ['此來源不支援所選類型，本次未請求。']
+                continue
+            if authorize is not None:
+                authorize()
+            cached = self._cached(initial, provider, source_kind, normalized, count)
+            if cached is not None and not refresh:
+                job['search'] = cached
+                receipt.update({'status': 'ok', 'cached': True})
+                continue
+            try:
+                result = self._provider_search(provider, source_kind, actual_query, count)
+            except ResourceLibraryConflict:
+                raise
+            except ResourceLibraryError as exc:
+                receipt.update({'status': 'error', 'error': str(exc)[:400]})
+            else:
+                if isinstance(result, list):
+                    candidates, skipped_count, warnings = result, 0, []
+                else:
+                    candidates = result['items']
+                    skipped_count, warnings = result['skippedCount'], result['warnings']
+                job['candidates'] = candidates
+                job['search'] = {'query': query, 'searchQuery': actual_query, 'provider': provider,
+                                 'kind': source_kind, 'searchTime': _now(), 'count': count,
+                                 'itemIds': [], 'skippedCount': skipped_count, 'warnings': warnings}
+                receipt['status'] = 'ok'
+            if authorize is not None:
+                authorize()
+            # Root changes and explicit revision conflicts abort the whole batch.
+            # Authorization runs outside both the document and catalogue locks.
+            with self._scope(expected, write=True):
+                if 'expectedRevision' in payload:
+                    self._revision(self._load(), payload['expectedRevision'])
+        successful = [job for job in jobs if job['receipt']['status'] == 'ok']
+        if not successful:
+            failures = [job['receipt'] for job in jobs if job['receipt']['status'] == 'error']
+            if not failures:
+                raise ResourceLibraryError('所選來源均不支援此類型，本次未請求。')
+            details = '；'.join(f"{r['name']}：{r['error'][:140]}" for r in failures)
+            raise ResourceLibraryError(f'所選來源本次搜尋均失敗，原清單已保留：{details}', status=502)
+        if authorize is not None:
+            authorize()
+        with self._scope(expected, write=True) as root:
+            data = self._load()
+            if 'expectedRevision' in payload:
+                self._revision(data, payload['expectedRevision'])
+            base_revision, changed = data['revision'], False
+            existing_ids = {item['id'] for item in data['items']}
+            for job in successful:
+                receipt = job['receipt']
+                provider, source_kind = receipt['provider'], receipt['kind']
+                current = self._cached(data, provider, source_kind, normalized, count)
+                if current is not None and not refresh:
+                    job['search'] = current
+                    receipt['cached'] = True
+                elif job['candidates'] is None:
+                    if any(i not in existing_ids for i in job['search']['itemIds']):
+                        raise ResourceLibraryConflict('資源清單已更新，請重新載入後再搜尋。')
+                else:
+                    search, item_ids = job['search'], []
+                    for candidate in job['candidates']:
+                        candidate['queries'] = [{'provider': provider, 'query': query, 'kind': source_kind, 'searchQuery': actual_query}]
+                        candidate['provenance'].append({'provider': provider, 'query': query, 'searchQuery': actual_query,
+                                                        'searchTime': search['searchTime']})
+                        item = self._merge(data, candidate)
+                        if item['id'] not in item_ids:
+                            item_ids.append(item['id'])
+                    search['itemIds'] = item_ids
+                    previous = self._cached(data, provider, source_kind, normalized)
+                    if previous is not None:
+                        data['searches'].remove(previous)
+                    elif len(data['searches']) >= MAX_SEARCHES:
+                        data['searches'].pop(0)
+                    data['searches'].append(search)
+                    changed = True
+            if changed:
+                data['revision'] += 1
+        if changed:
+            root = self._commit(data, expected, base_revision, authorize)
+        by_id, items, seen, warnings = {i['id']: i for i in data['items']}, [], set(), []
+        for job in jobs:
+            receipt, search = job['receipt'], job['search']
+            if receipt['status'] == 'ok':
+                source_ids = search['itemIds'][:count]
+                receipt.update({'count': len(source_ids), 'actualCount': len(source_ids),
+                                'skippedCount': search.get('skippedCount', 0), 'warnings': search.get('warnings', []),
+                                'searchQuery': search['searchQuery']})
+                for identifier in source_ids:
+                    if identifier not in seen:
+                        items.append(by_id[identifier])
+                        seen.add(identifier)
+            warnings.extend(f"{receipt['name']}：{warning}" for warning in receipt['warnings'])
+            if receipt['status'] == 'error':
+                warnings.append(f"{receipt['name']}：{receipt['error']}")
+        used_queries = list(dict.fromkeys(job['search']['searchQuery'] for job in successful))
+        return {**self._result(root, data, items), 'query': query, 'searchQuery': ' / '.join(used_queries),
+                'kind': kind, 'searchTime': max(job['search']['searchTime'] for job in successful),
+                'batch': True, 'sources': [job['receipt'] for job in jobs],
+                'cached': all(job['receipt']['cached'] for job in successful), 'warnings': warnings,
+                'skippedCount': sum(job['receipt']['skippedCount'] for job in jobs), 'countRequested': count,
+                'actualCount': len(items)}
 
     def _provider_search(self, provider, kind, query, count):
         if provider in {p['id'] for p in CATALOG_PROVIDERS}:
