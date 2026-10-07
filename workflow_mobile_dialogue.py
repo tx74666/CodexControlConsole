@@ -217,6 +217,9 @@ class MobileDialogueMixin:
                     "workProgressSha256": hashlib.sha256(_api()._json(payload["codexWork"]).encode("utf-8")).hexdigest()})
         if own_work:
             proof["work"] = own_work
+        guide = self._guide_event_proof(db, session)
+        if guide:
+            proof["guide"] = guide
         cursor = hashlib.sha256(_api()._json(proof).encode("utf-8")).hexdigest()
         return {"clientId": client_id, "sessionId": session_id, "recordId": session["recordId"], "cursor": cursor,
             "jobId": job["id"] if job else None, "status": status}
@@ -551,6 +554,10 @@ class MobileDialogueMixin:
             revision = self._revision(db)
         profile = session["requestedProfile"] if session else client["requestedProfile"]
         detail = self.detail(session["recordId"], prefix) if session else None
+        if detail:
+            detail["messages"] = [message for message in detail["messages"] if "guideSource" not in message or
+                all(message["guideSource"].get(key) == value for key, value in
+                    (("clientId", client_id), ("sessionId", session["id"]), ("recordId", session["recordId"])))]
         cancellation_receipts = []
         if detail:
             with self._db() as db:
@@ -848,9 +855,11 @@ class MobileDialogueMixin:
                         api._json(payload), "waiting", 1, None, now, now,
                         "已确认此消息；等待 ChatGPT 订阅连接发送，尚未发送。" if subscription is not None else
                         "已确认此消息；等待普通 Chat 转发器核对所选档位，尚未发送。", "", "{}"))
-                    self._message(db, record["id"], "user", text, attachment_ids=context["attachmentIds"], created_at=now)
+                    source_message_id = self._message(db, record["id"], "user", text, attachment_ids=context["attachmentIds"], created_at=now)
+                    self._guide_bind_user_message(db, source_message_id, session, job_id, body["requestId"])
                     session["draft"] = {"text": "", "attachmentIds": []}
                     saved["jobId"] = job_id
+                    saved["sourceMessageId"] = source_message_id
                 elif action == "save":
                     idea = self._idea(db, session["ideaId"]) if session["ideaId"] else None
                     if idea and idea["revision"] != session["ideaRevision"]:
@@ -955,8 +964,15 @@ class MobileDialogueMixin:
                 session = self._mobile_guard(db, body, client_id)
                 message = db.execute("SELECT * FROM messages WHERE id=? AND record_id=? AND role='assistant'", (api._id(body.get("sourceMessageId")), session["recordId"])).fetchone()
                 jobs = db.execute("SELECT * FROM jobs WHERE record_id=? AND kind='discuss' AND status='succeeded' AND json_extract(result,'$.messageId')=?", (session["recordId"], body["sourceMessageId"])).fetchall()
-                if message is None or len(jobs) != 1 or json.loads(jobs[0]["result"]).get("text") != message["text"]:
+                guide = db.execute("SELECT * FROM guide_replies WHERE message_id=?", (body["sourceMessageId"],)).fetchone()
+                guide_valid = (guide is not None and message is not None and guide["client_id"] == client_id
+                    and guide["session_id"] == session["id"] and guide["record_id"] == session["recordId"]
+                    and guide["text_sha256"] == hashlib.sha256(message["text"].encode("utf-8")).hexdigest())
+                if message is None or (not guide_valid and (guide is not None or len(jobs) != 1
+                        or json.loads(jobs[0]["result"]).get("text") != message["text"])):
                     raise api.WorkflowError("请只保存此讨论已完成的实际回答。", 409, "answer_source_mismatch")
+                if guide_valid:
+                    self._guide_user_source(db, guide["source_user_message_id"], session)
                 idea = self._idea(db, body["ideaId"]) if body.get("ideaId") is not None else None
                 if idea:
                     if _revision(body.get("expectedIdeaRevision")) != idea["revision"]:
@@ -967,12 +983,18 @@ class MobileDialogueMixin:
                     raise api.WorkflowError("想法版本必须与明确想法一起提供。")
                 else:
                     idea = self._mobile_create_idea(db, message["text"])
-                payload = json.loads(jobs[0]["payload"])
-                source = payload.get("sourceTask") or {}
-                dialogue = payload.get("mobileDialogue") or {}
-                point_added = self._mobile_add_provenance(db, idea["id"], {"kind": "assistant_suggestion", "sourceSessionId": dialogue.get("id", session["id"]),
-                    "sourceSessionRevision": dialogue.get("revision", session["revision"]), "sourceRecordId": session["recordId"],
-                    "sourceMessageId": message["id"], "sourceJobId": jobs[0]["id"], "sourceIdeaId": source.get("ideaId"), "sourceIdeaRevision": source.get("revision")}, message["text"])
+                if guide_valid:
+                    provenance = {"kind": "assistant_suggestion", "sourceSessionId": session["id"],
+                        "sourceSessionRevision": session["revision"], "sourceRecordId": session["recordId"],
+                        "sourceMessageId": message["id"], "guideSource": self._guide_public_source(guide)}
+                else:
+                    payload = json.loads(jobs[0]["payload"])
+                    source = payload.get("sourceTask") or {}
+                    dialogue = payload.get("mobileDialogue") or {}
+                    provenance = {"kind": "assistant_suggestion", "sourceSessionId": dialogue.get("id", session["id"]),
+                        "sourceSessionRevision": dialogue.get("revision", session["revision"]), "sourceRecordId": session["recordId"],
+                        "sourceMessageId": message["id"], "sourceJobId": jobs[0]["id"], "sourceIdeaId": source.get("ideaId"), "sourceIdeaRevision": source.get("revision")}
+                point_added = self._mobile_add_provenance(db, idea["id"], provenance, message["text"])
                 if session["ideaId"] == idea["id"]:
                     session["ideaRevision"] = idea["revision"]
                 self._mobile_save_session(db, session)

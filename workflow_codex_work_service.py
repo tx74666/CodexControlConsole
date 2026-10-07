@@ -354,10 +354,10 @@ class CodexWorkMixin:
                 remaining -= size
         return files
 
-    def _codex_work_context(self, db, record_id):
+    def _codex_work_context(self, db, record_id, dialogue=None):
         record = self._record(db, record_id)
         history = [{"id": row["id"], "role": row["role"], "text": row["text"], "createdAt": row["created_at"]}
-                   for row in db.execute("SELECT * FROM (SELECT rowid,* FROM messages WHERE record_id=? ORDER BY rowid DESC LIMIT 12) ORDER BY rowid", (record_id,))]
+                   for row in reversed(self._guide_history(db, record_id, dialogue))]
         source = self._source_task(db, record_id)
         idea = self._native_idea_context(db, source) if source else None
         value = {"record": {key: record[key] for key in ("id", "title", "project_id", "context", "updated_at")},
@@ -406,7 +406,7 @@ class CodexWorkMixin:
                 images = self._codex_work_images(db, body["recordId"], body["attachmentIds"])
                 if not text.strip() and not images:
                     _fail("codex_work_request_invalid", "请输入本轮内容或明确选择图片。", 400)
-                context = self._codex_work_context(db, body["recordId"])
+                context = self._codex_work_context(db, body["recordId"], dialogue)
                 source = {"recordId": body["recordId"], "text": text, "attachmentIds": list(body["attachmentIds"]),
                           "images": images, "workspace": workspace, "subscription": binding,
                           "requestedProfile": body["requestedProfile"], "context": context,
@@ -436,7 +436,15 @@ class CodexWorkMixin:
         # Desktop global revision changed by the review itself. Compare the
         # actual record/context and authority; mobile retains its exact revision.
         self._codex_work_scope(db, review["requestBody"], prefix, revision=_phone(prefix))
-        if self._codex_work_context(db, source["recordId"]) != source["context"]:
+        current_context = self._codex_work_context(db, source["recordId"], source["mobileDialogue"])
+        reviewed_context = source["context"]
+        if _phone(prefix):
+            # A late Guide from another discussion changes the shared record's
+            # timestamp. The actual record fields and scoped content still guard
+            # this review; preserve the immutable original review and its hash.
+            current_context = {**current_context, "record": {key: value for key, value in current_context["record"].items() if key != "updated_at"}}
+            reviewed_context = {**reviewed_context, "record": {key: value for key, value in reviewed_context["record"].items() if key != "updated_at"}}
+        if current_context != reviewed_context:
             _fail("codex_work_source_changed")
         if self._codex_work_workspace(db, source["workspace"]["id"], source["workspace"]["authorizationSha256"]) != source["workspace"]:
             _fail("codex_work_permission_changed", status=403)

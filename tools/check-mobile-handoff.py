@@ -830,6 +830,72 @@ class MobilePendingCancellationChecks(unittest.TestCase):
             db.execute("UPDATE requests SET response=? WHERE id=?", (json.dumps({"jobId": self.job_id, "sessionId": uuid.uuid4().hex}), request_id))
         self.reject(body, "cancel_context_mismatch")
 
+    def test_cancel_accepts_exact_legacy_two_field_send_receipt_without_restoring_source(self):
+        with self.service._db() as db:
+            request_id = db.execute("SELECT request_id FROM jobs WHERE id=?", (self.job_id,)).fetchone()[0]
+            db.execute("UPDATE requests SET response=? WHERE id=?", (json.dumps({"sessionId": self.state["session"]["id"],
+                "jobId": self.job_id}), request_id))
+            db.execute("DELETE FROM mobile_message_sources WHERE job_id=?", (self.job_id,))
+        before = self.snapshot()
+        current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+        self.assertIs(current["detail"]["jobs"][-1]["appDispatch"]["canCancelPending"], True)
+        self.assertEqual(self.snapshot(), before)
+        result = self.post("cancel-pending", self.cancel_body())
+        self.assertIs(result["cancellation"]["unsent"], True)
+        self.assertEqual(self.snapshot()["mobile_message_sources"], [])
+
+    def test_cancel_rejects_changed_new_source_message_id_and_readonly_hint_cannot_repair(self):
+        with self.service._db() as db:
+            request_id = db.execute("SELECT request_id FROM jobs WHERE id=?", (self.job_id,)).fetchone()[0]
+            original = json.loads(db.execute("SELECT response FROM requests WHERE id=?", (request_id,)).fetchone()[0])
+            source = dict(db.execute("SELECT * FROM mobile_message_sources WHERE job_id=?", (self.job_id,)).fetchone())
+        for wrong in (uuid.uuid4().hex, None, [source["message_id"]]):
+            with self.subTest(wrong=wrong):
+                with self.service._db() as db:
+                    db.execute("UPDATE requests SET response=? WHERE id=?", (json.dumps({**original, "sourceMessageId": wrong}), request_id))
+                before = self.snapshot()
+                current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+                self.assertIs(current["detail"]["jobs"][-1]["appDispatch"]["canCancelPending"], False)
+                self.assertEqual(self.snapshot(), before)
+                self.reject(self.cancel_body(), "cancel_context_mismatch")
+        with self.service._db() as db:
+            db.execute("UPDATE requests SET response=? WHERE id=?", (json.dumps(original), request_id))
+            db.execute("DELETE FROM mobile_message_sources WHERE job_id=?", (self.job_id,))
+        before = self.snapshot()
+        with patch.object(self.service, "_guide_user_source", side_effect=AssertionError("cancel hint cannot restore provenance")):
+            current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+            self.assertIs(current["detail"]["jobs"][-1]["appDispatch"]["canCancelPending"], False)
+            self.reject(self.cancel_body(), "cancel_context_mismatch")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_cancel_new_source_checks_immutable_scope_request_job_text_and_attachments(self):
+        with self.service._db() as db:
+            source = dict(db.execute("SELECT * FROM mobile_message_sources WHERE job_id=?", (self.job_id,)).fetchone())
+            message = dict(db.execute("SELECT * FROM messages WHERE id=?", (source["message_id"],)).fetchone())
+            job = dict(db.execute("SELECT * FROM jobs WHERE id=?", (self.job_id,)).fetchone())
+            dispatch = dict(db.execute("SELECT * FROM idea_dispatches WHERE id=?", (self.dispatch_id,)).fetchone())
+        changes = [("mobile_message_sources", "message_id", source, key, value) for key, value in (
+            ("client_id", str(uuid.uuid4())), ("session_id", uuid.uuid4().hex), ("record_id", uuid.uuid4().hex),
+            ("request_id", str(uuid.uuid4())), ("job_id", uuid.uuid4().hex), ("text_sha256", "f" * 64),
+            ("attachment_ids", json.dumps([uuid.uuid4().hex])), ("created_at", "2026-01-01T00:00:00+00:00"))]
+        changes += [("messages", "id", message, key, value) for key, value in (
+            ("text", "篡改正文"), ("attachment_ids", json.dumps([uuid.uuid4().hex])), ("role", "assistant"))]
+        changes += [("jobs", "id", job, "attempt", 2), ("jobs", "id", job, "parent_id", uuid.uuid4().hex),
+            ("idea_dispatches", "id", dispatch, "snapshot", json.dumps({**json.loads(dispatch["snapshot"]), "attachmentIds": [uuid.uuid4().hex]})),
+            ("jobs", "id", job, "payload", json.dumps({**json.loads(job["payload"]),
+                "appFrozen": {**json.loads(job["payload"])["appFrozen"], "images": [{"id": uuid.uuid4().hex}]}}))]
+        for table, identity, original, field, value in changes:
+            with self.subTest(table=table, field=field):
+                with self.service._db() as db:
+                    db.execute("UPDATE " + table + " SET " + field + "=? WHERE " + identity + "=?", (value, original[identity]))
+                before = self.snapshot()
+                current = workflow_get(self.service, "mobile/dialogue", "clientId=" + self.client)
+                self.assertIs(current["detail"]["jobs"][-1]["appDispatch"]["canCancelPending"], False)
+                self.assertEqual(self.snapshot(), before)
+                self.reject(self.cancel_body(), "cancel_context_mismatch")
+                with self.service._db() as db:
+                    db.execute("UPDATE " + table + " SET " + field + "=? WHERE " + identity + "=?", (original[field], original[identity]))
+
     def test_cancel_authorization_recheck_rolls_back_both_failures_and_receipt(self):
         calls = []
         def revoke():

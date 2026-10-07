@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-10-06T20:08:13Z",
+  "capturedAt": "2026-10-07T11:37:05Z",
   "music": {
     "layoutVersion": 1,
     "tiers": {
@@ -45,7 +45,9 @@
       "manager",
       "unity"
     ],
-    "archive": [],
+    "archive": [
+      "randomrealm"
+    ],
     "deepArchive": [
       "manager",
       "unity"

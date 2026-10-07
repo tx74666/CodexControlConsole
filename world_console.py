@@ -1661,7 +1661,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     with WORKFLOW_SERVICE.read_attachment(parsed.query) as item:
                         send_transfer_attachment(self, item)
                 else:
-                    self.send_json(workflow_get(WORKFLOW_SERVICE, action, parsed.query, authorize=authorize_workflow_read))
+                    self.send_json(workflow_get(WORKFLOW_SERVICE, action, parsed.query, desktop=True, authorize=authorize_workflow_read))
             except (WorkflowError, WorkflowModelError, TransferError) as error:
                 self.send_json({"error": str(error), "code": getattr(error, "code", "invalid_request")}, status=error.status)
             except (OSError, sqlite3.Error):

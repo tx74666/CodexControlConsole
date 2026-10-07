@@ -948,4 +948,11 @@ await test("Work reviewed duplicate original IDs count once and five distinct re
     assert.deepEqual(workflowSaved(h).drafts[task.recordId].review.context.attachmentIds, excessive ? ids : ["source"]); assert.equal(h.button("确认 Work 修改").disabled, excessive);
   }
 });
+await test("trusted Guide replies retain their author alongside existing desktop task answers", async () => {
+  const h = harness({ phone: false }), task = addTask(h.server), text = "  Guide 原文\n保留尾换行\n";
+  h.server.detail.messages.push({ id: "e".repeat(32), role: "assistant", text, guideSource: { kind: "codex_guide", author: "Codex Guide", messageId: "e".repeat(32), recordId: task.recordId } });
+  await h.start(); await h.panel.openTask(task); h.type("原草稿保持");
+  const rows = h.all("article").filter(item => item.className === "workflow-message"), guide = rows.find(item => item.dataset.author === "codex_guide");
+  assert.ok(guide); assert.equal(guide.children[0].textContent, "Codex Guide · 回复"); assert.equal(guide.children[1].textContent, text); assert.equal(rows[0].children[0].textContent, "Chat · 讨论回复"); assert.equal(h.draft.value, "原草稿保持"); assertNoExecution(h);
+});
 console.log(`Workflow UI checks passed (${count} cases).`);

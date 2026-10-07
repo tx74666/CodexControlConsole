@@ -65,9 +65,13 @@ def workflow_upload_dialogue(service, fields, files, *, prefix="/api/workflow", 
     return operation(fields, files, prefix=prefix, authorize=authorize)
 
 
-def workflow_get(service, action, query, *, prefix="/api/workflow", authorize=None):
+def workflow_get(service, action, query, *, prefix="/api/workflow", desktop=False, authorize=None):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    guide = {"mobile/dialogue/guide-source": "mobile_dialogue_guide_source_get",
+             "mobile/dialogue/guide-reply": "mobile_dialogue_guide_reply_get"}
+    if action in guide:
+        return getattr(service, guide[action])(query, prefix=prefix, desktop=desktop, authorize=authorize)
     if action == "codex-work/config":
         if query:
             raise WorkflowError("Work 配置地址无效。")
@@ -123,6 +127,10 @@ def workflow_get(service, action, query, *, prefix="/api/workflow", authorize=No
 def workflow_post(service, action, body, *, prefix="/api/workflow", desktop=False, authorize=None):
     if service is None:
         raise WorkflowError("电脑端工作组件尚未更新。", 503)
+    guide = {"mobile/dialogue/guide-source": "mobile_dialogue_guide_source",
+             "mobile/dialogue/guide-reply": "mobile_dialogue_guide_reply"}
+    if action in guide:
+        return getattr(service, guide[action])(body, prefix=prefix, desktop=desktop, authorize=authorize)
     if action in {"codex-work/setup", "codex-work/workspaces"} and not desktop:
         raise WorkflowError("请在电脑明确配置 Work 沙箱与工作区权限。", 403, "codex_work_desktop_required")
     if action.startswith("subscription/"):

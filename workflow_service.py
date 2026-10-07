@@ -24,6 +24,7 @@ from workflow_transcription import LocalTranscriptionError, local_transcribe, lo
 from workflow_script_proposals import script_blocks, action_blocks
 from workflow_native_work import NativeWorkMixin
 from workflow_mobile_dialogue import MobileDialogueMixin
+from workflow_guide_reply import GuideReplyMixin
 from workflow_mobile_handoff import MobileHandoffMixin
 from workflow_subscription_delivery import SubscriptionDeliveryMixin
 from workflow_codex_work_service import CodexWorkMixin
@@ -77,7 +78,7 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, NativeWorkMixin, SubscriptionDeliveryMixin):
+class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, GuideReplyMixin, NativeWorkMixin, SubscriptionDeliveryMixin):
     def __init__(self, data_dir, models=None, callbacks=None, projects=None, *, computer_id=None, computer_name=None, recover_jobs=True):
         self.data_dir = Path(data_dir).expanduser().resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -129,6 +130,16 @@ class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, N
                         request_id TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,attempt INTEGER NOT NULL,
                         parent_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,error TEXT NOT NULL,log TEXT NOT NULL,result TEXT NOT NULL);
                     CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY,kind TEXT NOT NULL,fingerprint TEXT NOT NULL,response TEXT NOT NULL);
+                    CREATE TABLE IF NOT EXISTS mobile_message_sources (message_id TEXT PRIMARY KEY,client_id TEXT NOT NULL,
+                        session_id TEXT NOT NULL,record_id TEXT NOT NULL,request_id TEXT NOT NULL UNIQUE,job_id TEXT NOT NULL UNIQUE,
+                        text_sha256 TEXT NOT NULL,attachment_ids TEXT NOT NULL,created_at TEXT NOT NULL);
+                    CREATE TABLE IF NOT EXISTS guide_sources (id INTEGER PRIMARY KEY CHECK(id=1),chat_id TEXT NOT NULL,
+                        request_id TEXT NOT NULL,created_at TEXT NOT NULL);
+                    CREATE TABLE IF NOT EXISTS guide_replies (request_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,
+                        client_id TEXT NOT NULL,session_id TEXT NOT NULL,record_id TEXT NOT NULL,source_user_message_id TEXT NOT NULL,
+                        source_guide_chat_id TEXT NOT NULL,text_sha256 TEXT NOT NULL,created_at TEXT NOT NULL);
+                    CREATE INDEX IF NOT EXISTS guide_reply_scope ON guide_replies(client_id,session_id,record_id);
+                    CREATE INDEX IF NOT EXISTS guide_reply_record ON guide_replies(record_id);
                     CREATE TABLE IF NOT EXISTS ideas (id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,
                         stage TEXT NOT NULL,priority TEXT NOT NULL,parent_id TEXT,target_kind TEXT NOT NULL,
                         target_thread_id TEXT NOT NULL,target_name TEXT NOT NULL,revision INTEGER NOT NULL,
@@ -417,7 +428,10 @@ class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, N
             messages = [{"id": item["id"], "role": item["role"], "text": item["text"], "createdAt": item["created_at"],
                          "attachmentIds": json.loads(item["attachment_ids"]), "options": json.loads(item["options"])}
                         for item in db.execute("SELECT * FROM messages WHERE record_id=? ORDER BY rowid", (identifier,))]
+            guide_sources = self._guide_message_sources(db, identifier)
             for message in messages:
+                if message["id"] in guide_sources:
+                    message["guideSource"] = guide_sources[message["id"]]
                 if message["role"] == "assistant":
                     message["scriptProposals"] = self._script_proposals(db, identifier, message["id"])
                     message["actionProposals"] = self._action_proposals(db, identifier, message["id"])
@@ -1927,8 +1941,7 @@ class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, N
                 "originalSize": original.stat().st_size, "originalSha256": self._file_digest(original),
                 "originalMimeType": item["mime_type"]})
         history, remaining = [], 40000
-        recent = db.execute("SELECT role,text,created_at FROM messages WHERE record_id=? ORDER BY rowid DESC LIMIT 12",
-            (record["id"],)).fetchall()
+        recent = self._guide_history(db, record["id"], payload.get("mobileDialogue"))
         for item in recent:
             content = item["text"][-min(remaining, 10000):]
             if content:

@@ -352,19 +352,28 @@
       if (source?.ideaId === ideaId && typeof source.title === "string" && source.title) return source.title;
       return state.idea?.id === ideaId && typeof state.idea.title === "string" && state.idea.title ? state.idea.title : "想法讨论";
     }
+    function guideSourceFor(message) {
+      const source = message?.guideSource;
+      if (!source || message.role !== "assistant" || source.kind !== "codex_guide" || source.author !== "Codex Guide"
+          || source.messageId !== message.id || source.clientId !== state.session?.clientId || source.sessionId !== state.session?.id || source.recordId !== state.session?.recordId
+          || !/^[a-f0-9]{32}$/.test(source.sourceUserMessageId || "") || !/^[a-f0-9]{64}$/.test(source.textSha256 || "")
+          || ![source.requestId, source.sourceGuideChatId].every(value => typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value))
+          || !(state.detail?.messages || []).some(item => item.id === source.sourceUserMessageId && item.role === "user")) return null;
+      return source;
+    }
     function renderConversation() {
       if (state.view === "chat") title.textContent = currentDiscussionTitle();
       if (state.view !== "chat") { for (const node of [context, welcome, messages, pending]) node.hidden = true; return; }
       const atBottom = window.innerHeight + (sidebar.open ? sidebarScroll : window.scrollY) >= document.documentElement.scrollHeight - 150;
-      const values = Array.isArray(state.detail?.messages) ? state.detail.messages : [];
+      const values = (Array.isArray(state.detail?.messages) ? state.detail.messages : []).filter(item => !item.guideSource || guideSourceFor(item));
       const fresh = values.some(item => item.role === "assistant" && !state.messageIds.has(item.id));
       state.messageIds = new Set(values.map(item => item.id)); messages.replaceChildren();
       for (const message of values.filter(item => ["user", "assistant"].includes(item.role))) {
-        const row = make("article", "", "dialogue-message"); row.dataset.role = message.role;
+        const guide = guideSourceFor(message), row = make("article", "", "dialogue-message"); row.dataset.role = message.role; if (guide) row.dataset.author = "codex_guide";
         const meta = make("div", "", "dialogue-message-meta"), time = make("time", savedTime(message.createdAt), "dialogue-message-time");
         time.title = "记录保存时间 · Asia/Shanghai（UTC+08:00）";
         if (time.textContent !== "时间未记录") time.setAttribute("datetime", message.createdAt);
-        meta.append(make("p", message.role === "assistant" ? "ChatGPT" : "你", "dialogue-message-label"), time);
+        meta.append(make("p", guide ? "Codex Guide" : message.role === "assistant" ? "ChatGPT" : "你", "dialogue-message-label"), time);
         const body = make("div", "", "dialogue-message-text"), original = message.text || "";
         if (message.role === "assistant" && typeof options.renderMessage === "function") {
           try { options.renderMessage(original, body); body.dataset.formatted = "true"; }
@@ -383,7 +392,7 @@
         }
         if (roundImages.children.length) row.append(roundImages);
         const receipt = (state.detail?.jobs || []).find(job => job.recordId === state.session?.recordId && job.status === "succeeded" && job.result?.messageId === message.id && job.result.text === message.text && job.result.source === "chatgpt_subscription" && job.result.terminalEventObserved === true && job.result.terminalStatus === "completed" && job.result.completionEvidence === "response.completed" && typeof job.result.actualModel === "string" && job.result.actualModel.length <= 200 && message.text?.trim());
-        if (message.role === "assistant" && receipt) { const verified = verifiedSubscriptionSelection(receipt), profile = verified ? ` · 实际 ${tiers.find(item => item.id === verified.requestedProfile).label}` : "", note = make("p", `实际模型：${receipt.result.actualModel} · 回答已保存${profile}`, "dialogue-message-note"); if (verified) note.title = reasoningLabel(verified.requestedProfile); row.append(note); if (acceptedSendNotices.includes(notice.textContent)) say(); }
+        if (message.role === "assistant" && !guide && receipt) { const verified = verifiedSubscriptionSelection(receipt), profile = verified ? ` · 实际 ${tiers.find(item => item.id === verified.requestedProfile).label}` : "", note = make("p", `实际模型：${receipt.result.actualModel} · 回答已保存${profile}`, "dialogue-message-note"); if (verified) note.title = reasoningLabel(verified.requestedProfile); row.append(note); if (acceptedSendNotices.includes(notice.textContent)) say(); }
         if (message.role === "assistant") { const actions = make("div", "", "dialogue-message-actions"); actions.append(button(state.session?.ideaId ? "补充到此想法" : "存为想法", () => void rememberAnswer(message.id)), button("复制", () => void copyText(message.text || ""))); row.append(actions); }
         if (message.truncated) row.append(make("p", "此回答来源已截断，全文请到原 Chat 查看。", "dialogue-message-note")); messages.append(row);
       }

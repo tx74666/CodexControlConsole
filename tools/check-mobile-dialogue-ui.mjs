@@ -1168,4 +1168,29 @@ await test("old native fetch aborts cannot mark a newly activated host disconnec
     assert.equal(h.byLabel("想法内容").value, ""); assert.equal(h.byText("编辑"), undefined); assert.equal(h.scrolls.length, 0);
   }
 });
+const guideReply = h => ({ id: "e".repeat(32), role: "assistant", text: "  Guide 的原文\n<script>只是文字</script>\n保留尾换行\n", createdAt: "2026-10-07T11:00:00Z", attachmentIds: [], guideSource: {
+  kind: "codex_guide", author: "Codex Guide", messageId: "e".repeat(32), clientId: h.current().clientId, sessionId: h.current().id, recordId: h.current().recordId,
+  sourceUserMessageId: "c".repeat(32), sourceGuideChatId: randomUUID(), requestId: randomUUID(), textSha256: "d".repeat(64)
+} });
+await test("Guide reply arrives through the original idle SSE cursor and preserves ChatGPT answer IME draft and tier", async () => {
+  const h = streamHarness(); h.message({ id: "c".repeat(32), role: "user", text: "Guide，看到了请在这里回复" }); h.message({ id: "a".repeat(32), role: "assistant", text: "原 ChatGPT 回答保留" }); await activate(h);
+  const input = h.byLabel("提问或保存想法"); input.value = "还在输入的中文草稿"; input.fire("input"); input.fire("compositionstart"); const tier = h.byLabel("回答档位").value, reads = dialogueReads(h), reply = guideReply(h), cursor = "f".repeat(64);
+  h.message(reply); h.result(cursor, "idle"); h.transport.connections.at(-1).frame("dialogue.result", resultFrame(h, cursor, "idle")); await flush();
+  assert.equal(dialogueReads(h), reads); assert.equal(h.byClass("dialogue-messages").children.length, 2); input.fire("compositionend"); await until(() => dialogueReads(h) > reads, "Guide result refresh waits for composition release"); await flush();
+  const rows = h.byClass("dialogue-messages").children; assert.equal(rows.length, 3); assert.equal(rows[1].children[0].children[0].textContent, "ChatGPT"); assert.equal(rows[1].children[1].textContent, "原 ChatGPT 回答保留");
+  assert.equal(rows[2].children[0].children[0].textContent, "Codex Guide"); assert.equal(rows[2].dataset.author, "codex_guide"); assert.equal(rows[2].children[1].textContent, reply.text); assert.equal(rows[2].children.some(node => node.className === "dialogue-message-note"), false);
+  assert.equal(input.value, "还在输入的中文草稿"); assert.equal(h.byLabel("回答档位").value, tier); assert.equal(h.calls.some(item => item.payload), false); h.panel.clear();
+});
+await test("foreign or malformed Guide provenance cannot borrow the current conversation or ChatGPT author", async () => {
+  for (const alter of [value => { value.guideSource.sessionId = "9".repeat(32); }, value => { value.guideSource.clientId = randomUUID(); }, value => { value.guideSource.recordId = "9".repeat(32); }, value => { value.guideSource.messageId = "9".repeat(32); }, value => { value.guideSource.sourceUserMessageId = "9".repeat(32); }, value => { value.guideSource.sourceGuideChatId = "invalid"; }, value => { value.guideSource.author = "ChatGPT"; }, value => { value.guideSource.textSha256 = "invalid"; }, value => { value.role = "user"; }]) {
+    const h = streamHarness(); h.message({ id: "c".repeat(32), role: "user", text: "原消息" }); await activate(h); const reply = guideReply(h); alter(reply); h.message(reply); await h.panel.refresh();
+    assert.equal(h.byClass("dialogue-messages").children.length, 1); assert.doesNotMatch(h.byClass("dialogue-messages").textContent, /Guide 的原文|Codex Guide|ChatGPT/); assert.equal(h.calls.some(item => item.payload), false); h.panel.clear();
+  }
+});
+await test("a Guide reply never receives a model completion label even from an inconsistent job projection", async () => {
+  const h = streamHarness(); h.message({ id: "c".repeat(32), role: "user", text: "原消息" }); await activate(h); const reply = guideReply(h); h.message(reply);
+  h.setJobs([{ recordId: h.current().recordId, status: "succeeded", result: { messageId: reply.id, text: reply.text, source: "chatgpt_subscription", terminalEventObserved: true, terminalStatus: "completed", completionEvidence: "response.completed", actualModel: "inconsistent-fixture-model" } }]); await h.panel.refresh();
+  assert.match(h.byClass("dialogue-messages").textContent, /Codex Guide/); assert.doesNotMatch(h.byClass("dialogue-messages").textContent, /实际模型|inconsistent-fixture-model|实际 Pro/);
+  const guideRow = h.byClass("dialogue-messages").children.at(-1), actions = guideRow.children.find(node => node.className === "dialogue-message-actions"); actions.children.find(node => node.textContent === "复制").click(); await flush(); assert.equal(h.copies.at(-1), reply.text); assert.equal(h.calls.some(item => item.payload), false); h.panel.clear();
+});
 console.log(`${count} mobile dialogue behavior checks passed.`);

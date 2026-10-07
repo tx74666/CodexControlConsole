@@ -152,8 +152,38 @@ class MobileHandoffMixin:
         except (ValueError, TypeError, AttributeError):
             raise api.WorkflowError("原发送凭据无法核对。", 409, "cancel_context_mismatch") from None
         original = db.execute("SELECT kind,response FROM requests WHERE id=?", (original_id,)).fetchone()
-        if (original is None or original["kind"] != "mobile_dialogue_send"
-                or json.loads(original["response"]) != {"sessionId": session["id"], "jobId": job["id"]}):
+        try:
+            saved_send = json.loads(original["response"]) if original else None
+        except (ValueError, TypeError):
+            saved_send = None
+        expected_send = {"sessionId": session["id"], "jobId": job["id"]}
+        original_matches = original is not None and original["kind"] == "mobile_dialogue_send"
+        if isinstance(saved_send, dict) and set(saved_send) == {"sessionId", "jobId", "sourceMessageId"}:
+            message_id = saved_send["sourceMessageId"]
+            original_matches = original_matches and {key: saved_send[key] for key in expected_send} == expected_send
+            # This predicate also powers readonly hints. New sends create this
+            # immutable binding atomically; never recover or write one here.
+            source = message = None
+            if isinstance(message_id, str) and re.fullmatch(r"[a-f0-9]{32}", message_id):
+                source = db.execute("SELECT * FROM mobile_message_sources WHERE message_id=?", (message_id,)).fetchone()
+                message = db.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
+            try:
+                original_matches = (original_matches and source is not None and message is not None
+                    and source["client_id"] == client_id and source["session_id"] == session["id"]
+                    and source["record_id"] == record_id and source["job_id"] == job["id"]
+                    and source["request_id"] == original_id and message["role"] == "user"
+                    and job["attempt"] == 1 and job["parent_id"] is None
+                    and message["record_id"] == record_id and message["text"] == payload["text"]
+                    and source["text_sha256"] == hashlib.sha256(message["text"].encode("utf-8")).hexdigest()
+                    and json.loads(source["attachment_ids"]) == json.loads(message["attachment_ids"]) == payload["context"]["attachmentIds"]
+                        == snapshot["attachmentIds"] == [image["id"] for image in payload["appFrozen"]["images"]]
+                    and source["created_at"] == message["created_at"] == job["created_at"] == row["created_at"])
+            except (ValueError, TypeError, KeyError, AttributeError, UnicodeError):
+                original_matches = False
+        else:
+            # Preserve the exact pre-provenance two-field receipt boundary.
+            original_matches = original_matches and saved_send == expected_send
+        if not original_matches:
             raise api.WorkflowError("原发送凭据与本条请求不匹配。", 409, "cancel_context_mismatch")
         if (row["status"] != ("failed" if cancelled else "pending") or job["status"] != ("failed" if cancelled else "waiting")
                 or _prior_dispatch_evidence(db, row) or json.loads(job["result"]) != {}):
