@@ -118,7 +118,7 @@
       if (!source?.recordId || typeof source.text !== "string" || !Array.isArray(source.attachmentIds)) { say("当前讨论还在保存或图片尚未上传。请返回对话点「只保存」，再载入本轮。", true); return false; }
       state.generation++; state.source = { ...source, attachmentIds: [...source.attachmentIds] }; state.recordId = source.recordId; sourceText.value = source.text; state.review = null; persist(); sourceImages.replaceChildren();
       sourceImages.append(make("p", source.attachmentIds.length ? `本轮选择 ${source.attachmentIds.length} 张图片；核对页展示冻结内容。` : "本轮没有选图。", "workflow-muted"));
-      say("已载入当前底稿，尚未创建 Agent。"); render(); await readRuns(); return true;
+      if (notice.dataset.kind !== "subscription") say("已载入当前底稿，尚未创建 Agent。"); render(); await readRuns(); return true;
     }
     async function prepareWork() {
       if (prepare.disabled) return; state.busy = true; render(); const generation = state.generation;
