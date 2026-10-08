@@ -12,6 +12,18 @@ const html = readFileSync(new URL("../phone/index.html", import.meta.url), "utf8
 const css = readFileSync(new URL("../phone/styles.css", import.meta.url), "utf8");
 const manifest = JSON.parse(readFileSync(new URL("../phone/manifest.webmanifest", import.meta.url), "utf8"));
 const defer = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+// Use the real template ancestry to catch links hidden by a different page or collapsed section.
+function templatePath(id) {
+  const stack = [], voidTags = new Set("area base br col embed hr img input link meta param source track wbr".split(" "));
+  for (const match of html.matchAll(/<\/?([a-z][\w:-]*)\b[^>]*>/gi)) {
+    const tag = match[1].toLowerCase(), markup = match[0];
+    if (markup.startsWith("</")) { const index = stack.findLastIndex(item => item.tag === tag); if (index >= 0) stack.length = index; continue; }
+    const node = { tag, id: markup.match(/\bid="([^"]+)"/)?.[1], hidden: /\shidden(?:\s|>)/.test(markup), open: /\sopen(?:\s|>)/.test(markup) };
+    if (node.id === id) return [...stack, node];
+    if (!voidTags.has(tag) && !markup.endsWith("/>")) stack.push(node);
+  }
+  throw new Error(`Missing template node ${id}`);
+}
 const result = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, async json() { return body; } });
 const plan = () => ({ plan: { version: 1, revision: "fixture-1", groups: Array.from({ length: 4 }, (_, index) => ({ id: `group-${index}`, title: ["示例计划一", "示例计划二", "示例计划三", "示例计划四"][index], summary: `摘要 ${index}`, items: [{ id: `task-${index}`, text: "<script>保留为文字</script>", done: index === 1 }] })) }, label: "计划清单（电脑浏览器中的勾选进度暂未同步）", error: "" });
 const inbox = () => ({ entries: [
@@ -31,16 +43,18 @@ function harness({ syncEnabled = false, withIncubator = false, withDialogue = fa
     get textContent() { return this._text + this.children.map(item => item.textContent).join(""); }
     set innerHTML(_) { throw new Error("Raw HTML must never be used."); }
     setAttribute(key, value) { this.attributes[key] = String(value); }
-    removeAttribute(key) { delete this.attributes[key]; if (key === "src") this.src = ""; }
+    removeAttribute(key) { delete this.attributes[key]; if (key === "src") this.src = ""; if (key === "href") this.href = ""; }
     addEventListener(key, fn) { this.listeners.set(key, fn); }
     focus() { this.focused = true; }
     select() { this.selected = true; }
     setSelectionRange(start, end) { this.selection = [start, end]; }
     scrollIntoView() { this.scrolled = true; }
     click() { this.clicked = true; }
+    showModal() { this.open = true; }
+    close() { this.open = false; this.listeners.get("close")?.(); }
     remove() { this.removed = true; }
   }
-  const nodes = new Map(), calls = [], answers = [], saved = storage || new Map(), timers = new Map(); let nextTimer = 1;
+  const nodes = new Map(), calls = [], opened = [], answers = [], saved = storage || new Map(), timers = new Map(); let nextTimer = 1;
   const dialogue = { root: null, options: null, active: false, createCalls: 0 };
   const get = id => { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); };
   const audio = get("musicAudio"); audio.paused = true; audio.currentTime = 0; audio.duration = NaN; audio.src = ""; audio.playCalls = 0; audio.pauseCalls = 0; audio.loadCalls = 0; const mediaEvents = [];
@@ -69,6 +83,7 @@ function harness({ syncEnabled = false, withIncubator = false, withDialogue = fa
   };
   const registration = { waiting: null, installing: null, updateCalls: 0, addEventListener(name, callback) { registrationEvents.set(name, callback); }, async update() { this.updateCalls++; if (this.updateError) throw this.updateError; if (this.onUpdate) await this.onUpdate(); } };
   const runtime = { URL, URLSearchParams, AbortController, TypeError, Request, document, history, navigator: { onLine: true, serviceWorker: { controller: {}, ready: Promise.resolve(registration), register: async (...args) => { registrations.push(args); return registration; }, addEventListener(name, callback) { workerEvents.set(name, callback); } } }, PhoneStore, Blob, atob, structuredClone, localStorage: { getItem: key => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) }, window: { setTimeout(fn, delay) { const id = nextTimer++; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, location: { href: "http://192.0.2.1:8899/CodexControlConsole/phone/index.html", reload() { reloads.push(true); } }, addEventListener(name, callback) { addEvent(windowEvents, name, callback); } }, async fetch(url, options) { mediaEvents.push(`fetch:${url}`); calls.push({ url, options }); const response = answers.shift(); assert.ok(response, `Unexpected fetch ${url}`); return typeof response === "function" ? response() : await response; } };
+  runtime.window.open = (...args) => { opened.push(args); return null; };
   if (withDialogue) runtime.window.CodexMobileDialogue = { create(root, options) { dialogue.root = root; dialogue.options = options; dialogue.createCalls++; return { setActive(value) { dialogue.active = Boolean(value); }, canReload: () => true }; } };
   const names = "incubatorApi,ensurePhoneIncubator,ensurePhoneDialogue,openComputerWork,updateIsIdle,parseTransferAddress,acceptTransferQr,transferAddress,restoreTransferConnection,openTransferConnection,forgetTransferConnection,state,taskSync,validatePlanSnapshot,applyPlanSnapshot,syncAddress,supportsTaskSync,updateSyncFallback,connectTaskSync,pollTaskSync,disconnectTaskSync,restoreTaskSync,validateImport,mergeLibrary,reviewImport,commitImport,backupLibrary,mutateLibrary,saveMusicTrack,downloadMusic,importMusicFiles,addLocalLyric,checkUpdate,setupWorker,maybeReloadUpdate,api,bootstrap,refresh,refreshDashboard,renderPlan,renderDevice,renderDocuments,renderInbox,openDocument,moveReader,closeReader,pathValue,appendLink,renderMarkdown,setFont,selectTab,loadMusic,musicTrackList,selectMusicTrack,playMusic,advanceMusic,parseMusicLyrics,syncMusicLyrics,stopMusicPlayback,clearMusic,musicAudioError,loadMusicLyrics,renderMusicTracks";
   assert.ok(source.includes("  void bootstrap();\n})();"), "test export insertion must match only bootstrap footer");
@@ -78,7 +93,9 @@ function harness({ syncEnabled = false, withIncubator = false, withDialogue = fa
   if (withIncubator) runInNewContext(incubatorSource, runtime);
   runInNewContext(testSource.replace("  void bootstrap();\n})();", `  globalThis.PHONE_TEST = {${names}};\n})();`), runtime);
   const api = runtime.PHONE_TEST;
-  return { api, dialogue, stores, PhoneStore, runtime, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, timers, documentEvents, windowEvents, workerEvents, registrationEvents, registration, registrations, reloads, respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
+  return { api, dialogue, stores, PhoneStore, runtime, opened, get, document, calls, answers, saved, history, tabs, listTabs, musicTabs, audio, mediaEvents, timers, documentEvents, windowEvents, workerEvents, registrationEvents, registration, registrations, reloads,
+    visible(id) { return templatePath(id).every(item => { const node = item.id && nodes.get(item.id); return !(node ? node.hidden : item.hidden) && (item.tag !== "details" || (node ? node.open : item.open)); }); },
+    respond(body, status = 200) { answers.push(result(body, status)); }, ready() { api.state.ready = true; api.state.library = api.validateImport(importFixture()); api.state.dashboard = api.state.library.dashboard; stores.get("records").set("library", structuredClone(api.state.library)); get("pairScreen").hidden = true; get("appScreen").hidden = false; api.renderDocuments(); }, all(root, tag) { const found = []; const visit = item => { if (item.tagName === tag.toUpperCase()) found.push(item); for (const child of item.children) visit(child); }; visit(root); return found; } };
 }
 
 function importFixture() {
@@ -123,15 +140,18 @@ function workerHarness({ active = true, clients = [], installError = null } = {}
 let count = 0;
 async function test(name, run) { await run(); console.log(`PASS ${name}`); count += 1; }
 await test("transfer remembers a LAN address without changing private offline records", async () => {
-  const h = harness(); h.ready(); const before = JSON.stringify(h.stores.get("records").get("library"));
+  const h = harness(); h.ready(); h.runtime.window.location.href = "https://example.test/phone/index.html"; const appLocation = h.runtime.window.location.href, before = JSON.stringify(h.stores.get("records").get("library"));
   h.get("transferAddress").value = "http://192.168.1.10:8899/";
   await h.api.openTransferConnection();
-  assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=transfer");
-  assert.equal(h.stores.get("settings").get("transferConnection").address, h.runtime.window.location.href);
+  const target = "http://192.168.1.10:8899/?tab=transfer";
+  assert.equal(h.runtime.window.location.href, appLocation); assert.deepEqual(h.opened, [[target, "_blank", "noopener,noreferrer"]]);
+  assert.equal(h.get("transferLaunchLink").href, target); assert.equal(h.get("transferLaunchLink").hidden, false);
+  assert.equal(h.stores.get("settings").get("transferConnection").address, target);
   h.get("transferAddress").value = ""; await h.api.restoreTransferConnection();
-  assert.equal(h.get("transferAddress").value, h.runtime.window.location.href); assert.equal(h.get("transferForget").hidden, false);
+  assert.equal(h.get("transferAddress").value, target); assert.equal(h.get("transferForget").hidden, false);
   h.api.selectTab("transfer"); assert.equal(h.get("transferPanel").hidden, false); assert.equal(h.get("materialsPanel").hidden, true);
   await h.api.forgetTransferConnection(); assert.equal(h.stores.get("settings").has("transferConnection"), false);
+  assert.equal(h.get("transferLaunchLink").hidden, true); assert.equal(h.get("transferLaunchLink").href, "");
   assert.equal(JSON.stringify(h.stores.get("records").get("library")), before); assert.equal(h.calls.length, 0);
 });
 await test("transfer refuses public addresses, credentials, arbitrary paths and bearer links", async () => {
@@ -142,35 +162,101 @@ await test("transfer refuses public addresses, credentials, arbitrary paths and 
   assert.equal(h.api.transferAddress("http://10.1.2.3:8899/"), "http://10.1.2.3:8899/?tab=transfer");
   const before = h.runtime.window.location.href; h.get("transferAddress").value = "http://example.com/"; await h.api.openTransferConnection();
   assert.equal(h.runtime.window.location.href, before); assert.equal(h.stores.get("settings").has("transferConnection"), false);
+  assert.equal(h.opened.length, 0); assert.equal(h.get("transferLaunchLink").hidden, true); assert.equal(h.get("transferLaunchLink").href, "");
   assert.equal(h.get("transferNotice").dataset.error, "true"); assert.equal(h.calls.length, 0);
 });
 await test("transfer can open even when optional address preferences cannot be saved", async () => {
-  const h = harness(); h.PhoneStore.failWrites = true; h.get("transferAddress").value = "http://192.168.1.10:8899/";
-  await h.api.openTransferConnection(); assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=transfer");
+  const h = harness(); const before = h.runtime.window.location.href; h.PhoneStore.failWrites = true; h.get("transferAddress").value = "http://192.168.1.10:8899/";
+  await h.api.openTransferConnection(); assert.equal(h.opened[0][0], "http://192.168.1.10:8899/?tab=transfer"); assert.equal(h.runtime.window.location.href, before); assert.equal(h.get("transferLaunchLink").hidden, false);
 });
 await test("remembered computer opens work records without exporting phone data or credentials", async () => {
-  const h = harness(); h.ready(); const privateBefore = JSON.stringify([...h.stores.get("records")]);
+  const h = harness(); h.ready(); const appLocation = h.runtime.window.location.href, privateBefore = JSON.stringify([...h.stores.get("records")]);
   h.get("transferAddress").value = "http://192.168.1.10:8899/";
   await h.api.openTransferConnection();
   await h.api.openTransferConnection(true, "work");
-  assert.equal(h.runtime.window.location.href, "http://192.168.1.10:8899/?tab=work&workView=dialogue");
+  assert.equal(h.runtime.window.location.href, appLocation); assert.equal(h.opened.at(-1)[0], "http://192.168.1.10:8899/?tab=work&workView=dialogue"); assert.equal(h.get("transferLaunchLink").href, h.opened.at(-1)[0]);
   assert.equal(h.stores.get("settings").get("transferConnection").address, "http://192.168.1.10:8899/?tab=transfer");
   assert.equal(JSON.stringify([...h.stores.get("records")]), privateBefore); assert.equal(h.calls.length, 0);
 });
-await test("PWA QR saves only stable computer address and one click reopens without any token", async () => {
-  const h = harness(); h.ready(); const privateBefore = JSON.stringify([...h.stores.get("records")]);
+await test("PWA QR waits for a human click, saves only a stable address, and remembered reopening removes invitations", async () => {
+  const h = harness(); h.ready(); const appLocation = h.runtime.window.location.href, privateBefore = JSON.stringify([...h.stores.get("records")]);
   const token = "a".repeat(43), stable = "http://codex-0123456789abcdef.local:8899/?tab=transfer";
   await h.api.acceptTransferQr(stable + "#qrToken=" + token);
-  assert.equal(h.runtime.window.location.href, stable + "#qrToken=" + token); assert.equal(h.stores.get("settings").get("transferConnection").address, stable);
+  assert.equal(h.runtime.window.location.href, appLocation); assert.equal(h.opened.length, 0); assert.equal(h.get("transferLaunchLink").href, stable + "#qrToken=" + token); assert.equal(h.get("transferLaunchLink").hidden, false); assert.equal(h.stores.get("settings").get("transferConnection").address, stable);
   assert.equal(h.get("transferRemembered").hidden, false); assert.match(h.get("transferComputerName").textContent, /codex-0123456789abcdef.local/);
-  await h.api.restoreTransferConnection(); await h.api.openTransferConnection(true); assert.equal(h.runtime.window.location.href, stable);
+  await h.api.restoreTransferConnection(); await h.api.openTransferConnection(true); assert.equal(h.runtime.window.location.href, appLocation); assert.equal(h.opened[0][0], stable); assert.equal(h.get("transferLaunchLink").href, stable);
   assert.equal(JSON.stringify([...h.stores.get("records")]), privateBefore); assert.equal(h.calls.length, 0); assert.doesNotMatch(JSON.stringify([...h.stores.get("settings")]), /qrToken|aaaa/);
 });
 await test("PWA rejects public credential arbitrary fragment and forged local QR navigation", async () => {
   const h = harness(); const before = h.runtime.window.location.href, token = "a".repeat(43);
   for (const value of ["https://evil.test/#qrToken=" + token, "http://codex-0123456789abcdef.local.evil.test/#qrToken=" + token, "http://user:secret@192.168.1.2/#qrToken=" + token, "http://192.168.1.2/evil#qrToken=" + token, "http://192.168.1.2/#qrToken=" + token + "&token=x", "http://192.168.1.2/#qrToken=short", "http://192.168.1.2/#pair=notpin"]) await assert.rejects(h.api.acceptTransferQr(value));
   assert.equal(h.runtime.window.location.href, before); assert.equal(h.stores.get("settings").has("transferConnection"), false); assert.equal(h.calls.length, 0);
+  assert.equal(h.opened.length, 0); assert.equal(h.get("transferLaunchLink").hidden, true); assert.equal(h.get("transferLaunchLink").href, "");
   assert.equal(h.api.parseTransferAddress("http://10.1.2.3:8899/#pair=123456", true).pairing, "#pair=123456");
+});
+
+await test("manual launch preserves the HTTPS App and opens during the gesture before an asynchronous preference save", async () => {
+  const h = harness(); h.ready(); const pending = defer(), originalPut = h.PhoneStore.put;
+  const privateBefore = JSON.stringify([...h.stores.get("records")]); let putStarted = false;
+  h.runtime.window.location.href = "https://example.test/project/phone/index.html";
+  h.get("transferAddress").value = "http://192.168.1.10:8899/mobile.html?tab=transfer";
+  h.PhoneStore.put = async function(name, value) { putStarted = true; await pending.promise; return originalPut.call(this, name, value); };
+  const action = h.api.openTransferConnection(false, "work");
+  assert.deepEqual(h.opened, [["http://192.168.1.10:8899/?tab=work&workView=dialogue", "_blank", "noopener,noreferrer"]]);
+  assert.equal(putStarted, false, "A popup must open synchronously before the first asynchronous preference operation");
+  assert.equal(h.get("transferLaunchLink").href, h.opened[0][0]); assert.equal(h.get("transferLaunchLink").hidden, false);
+  assert.equal(h.get("transferNotice").dataset.error, "false", "noopener returning null is not proof of popup failure");
+  await settle(); assert.equal(putStarted, true); pending.resolve(); await action;
+  assert.equal(h.runtime.window.location.href, "https://example.test/project/phone/index.html"); assert.equal(JSON.stringify([...h.stores.get("records")]), privateBefore);
+  const link = html.match(/<a\b[^>]*\bid="transferLaunchLink"[^>]*>/)?.[0]; assert.ok(link); assert.match(link, /target="_blank"/); assert.match(link, /rel="noopener noreferrer"/);
+  assert.equal(h.calls.length, 0);
+});
+
+await test("blocked popups keep the same clickable fallback and never replace the offline App or private drafts", async () => {
+  const h = harness(); h.ready(); const location = h.runtime.window.location.href;
+  h.saved.set("codexMobileDialogue.v1:offline", JSON.stringify({ drafts: { local: { text: "保留未发送草稿" } } }));
+  const records = JSON.stringify([...h.stores.get("records")]), drafts = JSON.stringify([...h.saved]);
+  let attempts = 0; h.runtime.window.open = () => { attempts++; throw new Error("Blocked popup"); };
+  h.get("transferAddress").value = "http://192.168.1.10:8899/"; await h.api.openTransferConnection();
+  assert.equal(attempts, 1); assert.equal(h.runtime.window.location.href, location); assert.equal(h.get("transferLaunchLink").href, "http://192.168.1.10:8899/?tab=transfer"); assert.equal(h.get("transferLaunchLink").hidden, false);
+  assert.equal(h.get("transferNotice").dataset.error, "false"); assert.match(h.get("transferNotice").textContent, /点击.*打开链接/);
+  assert.equal(JSON.stringify([...h.stores.get("records")]), records); assert.equal(JSON.stringify([...h.saved]), drafts); assert.equal(h.calls.length, 0);
+});
+
+await test("Work connection retains the dialogue and exposes its clickable fallback outside the hidden transfer page", async () => {
+  const h = harness({ withDialogue: true }); h.ready();
+  h.stores.get("settings").set("transferConnection", { id: "transferConnection", address: "http://192.168.1.10:8899/?tab=transfer" });
+  await h.api.restoreTransferConnection(); h.api.selectTab("work"); h.api.ensurePhoneDialogue();
+  assert.equal(h.get("transferPanel").hidden, true); assert.equal(h.visible("transferLaunchLink"), false);
+  h.runtime.window.open = () => null; const location = h.runtime.window.location.href;
+  h.dialogue.options.onConnect(); await settle();
+  assert.equal(h.api.state.tab, "work"); assert.equal(h.dialogue.active, true); assert.equal(h.get("transferPanel").hidden, true);
+  assert.equal(h.visible("transferLaunchLink"), true, "The actual link and every HTML ancestor must be visible while Work remains active");
+  assert.equal(h.get("transferLaunchLink").href, "http://192.168.1.10:8899/?tab=work&workView=dialogue"); assert.equal(h.get("transferLaunchLink").scrolled, true);
+  assert.equal(h.runtime.window.location.href, location); assert.equal(h.calls.length, 0);
+});
+
+await test("new QR invitations replace one link and address edits or new scans immediately remove its pairing fragments", async () => {
+  const h = harness(), stable = "http://192.168.1.10:8899/?tab=transfer", token = "b".repeat(43);
+  h.get("transferQrDialog").open = true; await h.api.acceptTransferQr(stable + "#qrToken=" + token);
+  assert.equal(h.get("transferQrDialog").open, false); assert.equal(h.get("transferLaunchLink").href, stable + "#qrToken=" + token);
+  await h.api.acceptTransferQr("http://10.1.2.3:8899/#pair=123456");
+  assert.equal(h.get("transferLaunchLink").href, "http://10.1.2.3:8899/?tab=transfer#pair=123456"); assert.doesNotMatch(JSON.stringify([...h.stores.get("settings")]), /pair=|qrToken|bbbb/);
+  h.get("transferAddress").value = "http://10.1.2.4:8899/"; h.get("transferAddress").listeners.get("input")();
+  assert.equal(h.get("transferLaunchLink").hidden, true); assert.equal(h.get("transferLaunchLink").href, "");
+  await h.api.acceptTransferQr(stable + "#qrToken=" + token); h.get("transferScan").listeners.get("click")();
+  assert.equal(h.get("transferLaunchLink").hidden, true); assert.equal(h.get("transferLaunchLink").href, ""); assert.equal(h.opened.length, 0); assert.equal(h.calls.length, 0);
+});
+
+await test("forgetting during an old QR preference save retires the invitation and cannot resurrect the computer entry", async () => {
+  const h = harness(); h.ready(); const pending = defer(), originalPut = h.PhoneStore.put, before = JSON.stringify([...h.stores.get("records")]);
+  h.PhoneStore.put = async function(name, value) { await pending.promise; return originalPut.call(this, name, value); };
+  const old = h.api.acceptTransferQr("http://192.168.1.10:8899/#pair=123456"); await settle();
+  const forgetting = h.api.forgetTransferConnection();
+  assert.equal(h.get("transferLaunchLink").hidden, true); assert.equal(h.get("transferLaunchLink").href, ""); assert.equal(h.get("transferRemembered").hidden, true);
+  pending.resolve(); await Promise.all([old, forgetting]);
+  assert.equal(h.stores.get("settings").has("transferConnection"), false); assert.equal(h.get("transferRemembered").hidden, true); assert.equal(h.get("transferLaunchLink").href, "");
+  assert.equal(JSON.stringify([...h.stores.get("records")]), before); assert.equal(h.opened.length, 0); assert.equal(h.calls.length, 0);
 });
 
 await test("relative project installation has Work Music materials transfer and private offline incubator", () => {
@@ -633,11 +719,11 @@ await test("Work adapter identifies this phone and reload waits for unsafe draft
   h.api.state.updatePending = true; assert.equal(h.api.updateIsIdle(), false); safe = true; assert.equal(h.api.updateIsIdle(), true);
   h.api.selectTab("materials"); assert.equal(active, false); assert.equal(h.get("materialsPanel").hidden, false); assert.equal(h.get("workPanel").hidden, true);
 });
-await test("computer Work entry navigates only after a saved LAN address and never uploads offline ideas", async () => {
-  const h = harness(); await h.api.openComputerWork(); assert.equal(h.api.state.tab, "transfer"); assert.match(h.get("transferNotice").textContent, /配对后打开电脑工作区/);
+await test("computer Work opens separately after a saved LAN address and never uploads offline ideas", async () => {
+  const h = harness(); const before = h.runtime.window.location.href; await h.api.openComputerWork(); assert.equal(h.api.state.tab, "transfer"); assert.match(h.get("transferNotice").textContent, /配对后打开电脑工作区/);
   h.stores.get("settings").set("transferConnection", { id: "transferConnection", address: "http://codex-0123456789abcdef.local:8899/?tab=transfer" }); await h.api.restoreTransferConnection();
   await h.api.incubatorApi("incubator/create", { requestId: requestId(17), title: "不会自动上传" }); await h.api.openComputerWork();
-  assert.equal(h.runtime.window.location.href, "http://codex-0123456789abcdef.local:8899/?tab=work&workView=dialogue"); assert.equal(h.get("computerWorkOpen").textContent, "打开 Console 工作区"); assert.equal(h.calls.length, 0); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 1);
+  assert.equal(h.runtime.window.location.href, before); assert.equal(h.opened.at(-1)[0], "http://codex-0123456789abcdef.local:8899/?tab=work&workView=dialogue"); assert.equal(h.get("computerWorkOpen").textContent, "打开 Console 工作区"); assert.equal(h.calls.length, 0); assert.equal((await h.api.incubatorApi("incubator")).ideas.length, 1);
 });
 await test("offline sidebar Work and conversations use the computer entry and preserve local ideas and drafts", async () => {
   for (const module of ["workflow", "conversations"]) for (const remembered of [false, true]) {
@@ -653,7 +739,7 @@ await test("offline sidebar Work and conversations use the computer entry and pr
     h.api.selectTab("work"); const adapter = h.api.ensurePhoneDialogue(); assert.ok(adapter); assert.equal(h.dialogue.createCalls, 1); assert.equal(h.dialogue.root, h.get("phoneDialogue")); assert.equal(h.dialogue.options.offline, true); assert.equal(h.dialogue.active, true);
     const beforeRecords = JSON.stringify([...h.stores.get("records")]), beforeDrafts = JSON.stringify([...h.saved]), beforeLocation = h.runtime.window.location.href;
     h.dialogue.options.onModule(module); await settle();
-    if (remembered) { assert.equal(h.runtime.window.location.href, "http://codex-0123456789abcdef.local:8899/?tab=work&workView=dialogue"); assert.equal(h.api.state.tab, "work"); }
+    if (remembered) { assert.equal(h.runtime.window.location.href, beforeLocation); assert.equal(h.opened.at(-1)[0], "http://codex-0123456789abcdef.local:8899/?tab=work&workView=dialogue"); assert.equal(h.get("transferLaunchLink").href, h.opened.at(-1)[0]); assert.equal(h.api.state.tab, "work"); }
     else { assert.equal(h.api.state.tab, "transfer"); assert.equal(h.runtime.window.location.href, beforeLocation); assert.match(h.get("transferNotice").textContent, /配对后打开电脑工作区/); assert.equal(h.dialogue.active, false); }
     assert.equal(forbiddenCalls, 0); assert.equal(h.calls.length, 0); assert.equal(JSON.stringify([...h.stores.get("records")]), beforeRecords); assert.equal(JSON.stringify([...h.saved]), beforeDrafts); assert.equal(h.saved.get(draftKey), draft); assert.equal(h.stores.get("media").size, 1); assert.equal(await h.stores.get("media").get("fixture-image").blob.text(), "local original image");
   }

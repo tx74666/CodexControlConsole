@@ -32,6 +32,10 @@
     <div id="appScreen">
       <div class="toolbar" id="appToolbar"><p id="updatedLabel" class="muted"></p><button id="refreshButton" class="text-button" type="button">刷新</button></div>
       <p id="appNotice" class="notice" role="status" aria-live="polite"></p>
+      <div id="transferLaunch" class="card" hidden>
+        <a id="transferLaunchLink" class="task-sync-link" target="_blank" rel="noopener noreferrer" hidden>打开电脑连接页面 ↗</a>
+        <p class="muted small">电脑页面会单独打开，此 App 的离线资料、想法和草稿仍保留。</p>
+      </div>
       <section id="workPanel" class="tab-panel" aria-labelledby="workTitle">
         <h2 id="workTitle" class="visually-hidden">当前对话</h2>
         <div id="phoneDialogue"></div>

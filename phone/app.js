@@ -12,6 +12,8 @@
   const MUSIC_TIERS = [{ value: "first", number: "1", suffix: "st" }, { value: "second", number: "2", suffix: "nd" }, { value: "third", number: "3", suffix: "rd" }];
   const taskSync = { generation: 0, controller: null, timer: null, config: null, busy: false, connected: false };
   let rememberedTransferAddress = "";
+  let transferConnectionGeneration = 0;
+  let transferPreferenceQueue = Promise.resolve();
   let phoneIncubator = null;
   let phoneDialogue = null;
   let phoneHandoff = null;
@@ -397,6 +399,21 @@
     return { address: url.origin + "/?tab=transfer", pairing };
   }
   function transferAddress(value) { return parseTransferAddress(value).address; }
+  function clearTransferLaunch() {
+    const generation = ++transferConnectionGeneration;
+    el("transferLaunch").hidden = true;
+    el("transferLaunchLink").hidden = true;
+    el("transferLaunchLink").removeAttribute("href");
+    return generation;
+  }
+  function showTransferLaunch(target, generation, work = false) {
+    if (generation !== transferConnectionGeneration) return;
+    el("transferLaunchLink").href = target;
+    el("transferLaunchLink").textContent = work ? "打开电脑工作区 ↗" : "打开电脑连接页面 ↗";
+    el("transferLaunchLink").hidden = false;
+    el("transferLaunch").hidden = false;
+    el("transferLaunchLink").scrollIntoView({ block: "nearest" });
+  }
   function renderTransferConnection(address) {
     rememberedTransferAddress = address; el("transferAddress").value = address;
     el("transferRemembered").hidden = !address; el("transferForget").hidden = !address;
@@ -405,39 +422,57 @@
     el("transferScan").textContent = address ? "扫描新的电脑二维码" : "扫码连接电脑";
   }
   async function restoreTransferConnection() {
+    const generation = transferConnectionGeneration;
     try {
       const saved = await PhoneStore.get("settings", "transferConnection");
-      if (saved?.address) renderTransferConnection(transferAddress(saved.address));
+      if (generation === transferConnectionGeneration && saved?.address) renderTransferConnection(transferAddress(saved.address));
     } catch { /* A remembered address is optional; private offline data stays independent. */ }
   }
-  async function saveTransferConnection(address) {
-    try { await PhoneStore.put("settings", { id: "transferConnection", address }); } catch { /* Opening works even when preferences cannot be saved. */ }
-    renderTransferConnection(address);
+  async function saveTransferConnection(address, generation) {
+    const pending = transferPreferenceQueue.then(async () => {
+      if (generation !== transferConnectionGeneration) return;
+      try { await PhoneStore.put("settings", { id: "transferConnection", address }); } catch { /* Opening works even when preferences cannot be saved. */ }
+      if (generation === transferConnectionGeneration) renderTransferConnection(address);
+    });
+    transferPreferenceQueue = pending.catch(() => {});
+    await pending;
   }
   async function openTransferConnection(useRemembered = false, view = "transfer") {
+    const generation = clearTransferLaunch();
     try {
       const address = transferAddress(useRemembered ? rememberedTransferAddress : el("transferAddress").value);
-      transferScanner?.stop(); await saveTransferConnection(address);
       const target = new URL(address);
       if (view === "work") { target.searchParams.set("tab", "work"); target.searchParams.set("workView", "dialogue"); }
-      window.location.href = target.href;
+      transferScanner?.stop(); showTransferLaunch(target.href, generation, view === "work");
+      // Safari requires the user's synchronous gesture; noopener may return null even after opening.
+      try { window.open(target.href, "_blank", "noopener,noreferrer"); } catch { /* The same explicit link remains available when a popup is blocked. */ }
+      notice("transferNotice", "已准备电脑页面；未打开时可点击页面中的打开链接。");
+      await saveTransferConnection(address, generation);
     } catch (error) { failure(error, "transferNotice"); }
   }
   async function acceptTransferQr(value) {
+    const generation = clearTransferLaunch();
     const parsed = parseTransferAddress(value, true);
-    transferScanner?.stop(); await saveTransferConnection(parsed.address);
+    transferScanner?.stop();
     if (el("transferQrDialog").open) el("transferQrDialog").close();
-    window.location.href = parsed.address + parsed.pairing;
+    showTransferLaunch(parsed.address + parsed.pairing, generation);
+    notice("transferNotice", "二维码已识别，点击打开链接进入电脑页面。");
+    await saveTransferConnection(parsed.address, generation);
   }
   function scanTransferConnection() {
+    clearTransferLaunch();
     if (!transferScanner) { notice("transferNotice", "扫码组件尚未加载，请检查程序更新；也可以从备用入口选择二维码照片或填写地址。", true); return; }
     if (!el("transferQrDialog").open) el("transferQrDialog").showModal();
     void transferScanner.start();
   }
   async function forgetTransferConnection() {
+    const generation = clearTransferLaunch();
+    transferScanner?.stop();
+    renderTransferConnection("");
     try {
-      await PhoneStore.remove("settings", "transferConnection"); renderTransferConnection("");
-      notice("transferNotice", "电脑入口已清除。要撤销手机配对，可在电脑的连接设置中忘记设备。");
+      const pending = transferPreferenceQueue.then(() => PhoneStore.remove("settings", "transferConnection"));
+      transferPreferenceQueue = pending.catch(() => {}); await pending;
+      if (generation === transferConnectionGeneration) notice("transferNotice", "电脑入口已清除。要撤销手机配对，可在电脑的连接设置中忘记设备。");
     } catch (error) { failure(error, "transferNotice"); }
   }
   function supportsTaskSync(address) {
@@ -1172,6 +1207,7 @@
   }
   el("backupButton").addEventListener("click", () => void backupLibrary());
   el("transferConnectForm").addEventListener("submit", event => { event.preventDefault(); void openTransferConnection(); });
+  el("transferAddress").addEventListener("input", () => { clearTransferLaunch(); transferScanner?.stop(); });
   el("transferWorkOpen").addEventListener("click", () => void openTransferConnection(false, "work"));
   el("transferRememberedOpen").addEventListener("click", () => void openTransferConnection(true));
   el("workRememberedOpen").addEventListener("click", () => void openTransferConnection(true, "work"));
@@ -1179,8 +1215,8 @@
   el("transferQrRetry").addEventListener("click", scanTransferConnection);
   el("transferQrClose").addEventListener("click", () => el("transferQrDialog").close());
   el("transferQrDialog").addEventListener("close", () => transferScanner?.stop());
-  for (const id of ["transferQrPhoto", "transferQrPhotoInDialog"]) el(id).addEventListener("click", () => { transferScanner?.stop(); el("transferQrFile").click(); });
-  el("transferQrFile").addEventListener("change", () => { const file = el("transferQrFile").files?.[0]; el("transferQrFile").value = ""; if (!file || !transferScanner) return; if (!el("transferQrDialog").open) el("transferQrDialog").showModal(); void transferScanner.readFile(file); });
+  for (const id of ["transferQrPhoto", "transferQrPhotoInDialog"]) el(id).addEventListener("click", () => { clearTransferLaunch(); transferScanner?.stop(); el("transferQrFile").click(); });
+  el("transferQrFile").addEventListener("change", () => { clearTransferLaunch(); const file = el("transferQrFile").files?.[0]; el("transferQrFile").value = ""; if (!file || !transferScanner) return; if (!el("transferQrDialog").open) el("transferQrDialog").showModal(); void transferScanner.readFile(file); });
   el("transferForget").addEventListener("click", () => void forgetTransferConnection());
   el("restoreButton").addEventListener("click", async () => { if (state.busy) return; setBusy(true); try { await disconnectTaskSync(false); await libraryMutationQueue; const previous = await PhoneStore.get("records", "previousImport"); if (!previous) return; const next = mergeLibrary({ ...previous, id: "library", importedAt: new Date().toISOString() }, state.library); await PhoneStore.replaceLibrary(next); state.library = next; closeReader(false); await refreshDashboard(); notice("settingsNotice", "已恢复上次导入的资料，本机进度仍然保留。"); } catch (error) { failure(error, "settingsNotice"); } finally { setBusy(false); } });
   el("checkUpdate").addEventListener("click", () => void checkUpdate());
