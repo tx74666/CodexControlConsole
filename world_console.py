@@ -88,6 +88,8 @@ def hidden_subprocess_kwargs():
 def package_runtime_status(version, frozen=False):
     result = {
         "ok": False, "version": version, "ytDlp": False, "ytDlpVersion": "",
+        "mediaCertificates": False,
+        "mediaChallengeScripts": False, "ejsVersion": "",
         "subscriptionRuntime": False, "subscriptionModules": False,
         "jwtVersion": "", "cryptographyVersion": "", "errors": [],
     }
@@ -104,6 +106,18 @@ def package_runtime_status(version, frozen=False):
 
     stage = "import"
     try:
+        import certifi
+        from ssl import SSLContext, PROTOCOL_TLS_CLIENT
+
+        # A leftover data-only certifi directory can import as a namespace
+        # without where(). Validate both its implementation and actual PEM.
+        stage = "certificate_module"
+        if not callable(getattr(certifi, "where", None)):
+            raise AttributeError("certifi.where is unavailable")
+        stage = "certificate_bundle"
+        SSLContext(PROTOCOL_TLS_CLIENT).load_verify_locations(certifi.where())
+        result["mediaCertificates"] = True
+        stage = "import"
         import yt_dlp
 
         stage = "module_surface"
@@ -111,6 +125,16 @@ def package_runtime_status(version, frozen=False):
         result["ytDlp"] = callable(getattr(yt_dlp, "YoutubeDL", None))
         if not result["ytDlp"]:
             failed("media", stage)
+        stage = "challenge_import"
+        import yt_dlp_ejs
+        from yt_dlp_ejs.yt.solver import core, lib
+
+        result["ejsVersion"] = str(yt_dlp_ejs.version)
+        stage = "challenge_scripts"
+        scripts = (core(), lib())
+        if not all(isinstance(script, str) and script.strip() for script in scripts):
+            raise ValueError("YouTube challenge scripts are unavailable")
+        result["mediaChallengeScripts"] = True
     except Exception as error:
         failed("media", stage, error)
 
@@ -146,7 +170,10 @@ def package_runtime_status(version, frozen=False):
     except Exception as error:
         failed("subscription", stage, error)
 
-    result["ok"] = result["ytDlp"] and (result["subscriptionRuntime"] or not frozen)
+    result["ok"] = (
+        result["ytDlp"] and result["mediaCertificates"] and result["mediaChallengeScripts"]
+        and (result["subscriptionRuntime"] or not frozen)
+    )
     return result
 
 

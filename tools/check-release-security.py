@@ -104,6 +104,7 @@ def main():
         "ifaddr==0.2.0",
         "zeroconf==0.151.5",
         "altgraph==0.17.5",
+        "certifi==2026.6.17",
         "packaging==26.2",
         "PyJWT[crypto]==2.15.1",
         "cryptography==50.0.1",
@@ -113,7 +114,8 @@ def main():
         "pyinstaller-hooks-contrib==2026.6",
         "pywin32-ctypes==0.2.3",
         "setuptools==83.0.0",
-        "yt-dlp==2026.7.4",
+        "yt-dlp==2026.8.19",
+        "yt-dlp-ejs==0.8.0",
     }
     require(set(requirements.splitlines()) == locked_packages, "Windows release dependency lock changed unexpectedly")
 
@@ -123,6 +125,10 @@ def main():
     require('"--noupx"' in build, "PyInstaller UPX is not explicitly disabled")
     require('@("--exclude-module", "yt_dlp")' in build, "Store package still includes the network media downloader")
     require('"--collect-all", "yt_dlp"' not in build, "yt-dlp source files are still duplicated in the installed package")
+    require('@("--hidden-import", "certifi", "--collect-data", "certifi")' in build,
+            "the network media package must include certifi code and its CA bundle")
+    require('@("--hidden-import", "yt_dlp_ejs.yt.solver", "--collect-data", "yt_dlp_ejs")' in build,
+            "the network media package must include the YouTube challenge solver and its scripts")
     require('"--exclude-module", "tkinter"' in build, "unused Tcl/Tk files are still included")
     require('"--hidden-import", "tkinter"' not in build, "tkinter is still forced into the package")
     require("System.Windows.Forms.OpenFileDialog" in blender_share, "Windows Blender picker no longer uses the native dialog")

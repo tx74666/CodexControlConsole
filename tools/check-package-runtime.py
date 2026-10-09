@@ -29,7 +29,9 @@ class Digest:
 
 
 def load_route(fail_import=None, fail_hash=None, fail_signature=None, frozen=True,
-               missing_surface=False, missing_signature=False):
+               missing_surface=False, missing_signature=False,
+               missing_certifi_surface=False, fail_certificate=None,
+               fail_challenge_scripts=None, empty_challenge_script=False):
     imports = []
 
     def must_not_run(*args, **kwargs):
@@ -45,8 +47,26 @@ def load_route(fail_import=None, fail_hash=None, fail_signature=None, frozen=Tru
             raise fail_signature(SECRET)
         return {} if missing_signature else {"RS256": object()}
 
+    class CertificateContext:
+        def __init__(self, protocol):
+            assert protocol == "fixture-TLS-client"
+
+        def load_verify_locations(self, cafile):
+            assert cafile == SECRET
+            if fail_certificate:
+                raise fail_certificate(SECRET)
+
+    def challenge_script():
+        if fail_challenge_scripts:
+            raise fail_challenge_scripts(SECRET)
+        return "" if empty_challenge_script else "fixture-JS-script"
+
     modules = {
+        "certifi": SimpleNamespace() if missing_certifi_surface else SimpleNamespace(where=lambda: SECRET),
+        "ssl": SimpleNamespace(SSLContext=CertificateContext, PROTOCOL_TLS_CLIENT="fixture-TLS-client"),
         "yt_dlp": SimpleNamespace(version=SimpleNamespace(__version__="fixture-media"), YoutubeDL=must_not_run),
+        "yt_dlp_ejs": SimpleNamespace(version="0.8.0"),
+        "yt_dlp_ejs.yt.solver": SimpleNamespace(core=challenge_script, lib=challenge_script),
         "jwt": SimpleNamespace(__version__="fixture-jwt", algorithms=SimpleNamespace(get_default_algorithms=algorithms)),
         "cryptography": SimpleNamespace(__version__="fixture-crypto"),
         "cryptography.hazmat.primitives": SimpleNamespace(hashes=SimpleNamespace(Hash=make_hash, SHA256=object)),
@@ -120,10 +140,59 @@ class PackageRuntimeTests(unittest.TestCase):
         status, result = http_result(namespace)
         self.assertEqual(status, 200)
         self.assertTrue(result["ok"])
+        self.assertTrue(result["mediaCertificates"])
+        self.assertTrue(result["mediaChallengeScripts"])
+        self.assertEqual(result["ejsVersion"], "0.8.0")
         self.assertTrue(result["subscriptionModules"])
         self.assertTrue(result["subscriptionRuntime"])
         self.assertEqual(result["errors"], [])
-        self.assertEqual(len(imports), 7)
+        self.assertEqual(len(imports), 11)
+
+    def test_missing_and_empty_challenge_scripts_fail_without_network(self):
+        for case, expected_code in (
+            ({"fail_challenge_scripts": OSError}, "OSError"),
+            ({"empty_challenge_script": True}, "ValueError"),
+        ):
+            with self.subTest(case=case):
+                namespace, _ = load_route(**case)
+                _, result = http_result(namespace)
+                self.assertFalse(result["ok"])
+                self.assertTrue(result["ytDlp"])
+                self.assertTrue(result["mediaCertificates"])
+                self.assertFalse(result["mediaChallengeScripts"])
+                self.assertTrue(result["subscriptionRuntime"])
+                self.assertEqual(result["errors"], [
+                    {"component": "media", "stage": "challenge_scripts", "code": expected_code},
+                ])
+                self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_data_only_certifi_namespace_fails_before_downloader_import(self):
+        namespace, imports = load_route(missing_certifi_surface=True)
+        status, result = http_result(namespace)
+        self.assertEqual(status, 200)
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["mediaCertificates"])
+        self.assertFalse(result["ytDlp"])
+        self.assertTrue(result["subscriptionRuntime"])
+        self.assertEqual(result["errors"], [
+            {"component": "media", "stage": "certificate_module", "code": "AttributeError"},
+        ])
+        self.assertNotIn("yt_dlp", imports)
+        self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_missing_or_invalid_ca_bundle_is_a_safe_media_failure(self):
+        for error in (OSError, ValueError):
+            with self.subTest(error=error.__name__):
+                namespace, imports = load_route(fail_certificate=error)
+                _, result = http_result(namespace)
+                self.assertFalse(result["ok"])
+                self.assertFalse(result["mediaCertificates"])
+                self.assertTrue(result["subscriptionRuntime"])
+                self.assertEqual(result["errors"], [
+                    {"component": "media", "stage": "certificate_bundle", "code": error.__name__},
+                ])
+                self.assertNotIn("yt_dlp", imports)
+                self.assertNotIn(SECRET, json.dumps(result))
 
     def test_media_exception_still_returns_json_and_checks_subscription(self):
         namespace, _ = load_route(fail_import=("yt_dlp", AttributeError))

@@ -1,4 +1,5 @@
 altgraph==0.17.5
+certifi==2026.6.17
 colorama==0.4.6
 ifaddr==0.2.0
 packaging==26.2
@@ -11,5 +12,6 @@ pyinstaller==6.21.0
 pyinstaller-hooks-contrib==2026.6
 pywin32-ctypes==0.2.3
 setuptools==83.0.0
-yt-dlp==2026.7.4
+yt-dlp==2026.8.19
+yt-dlp-ejs==0.8.0
 zeroconf==0.151.5

@@ -347,6 +347,11 @@ if ($BuildApplication) {
 
   if ($InstallMode -eq "store") {
     $PyInstallerArgs += @("--exclude-module", "yt_dlp")
+  } else {
+    # yt-dlp imports certifi optionally. Always package its implementation and CA
+    # bundle so an older installation's data-only directory cannot shadow it.
+    $PyInstallerArgs += @("--hidden-import", "certifi", "--collect-data", "certifi")
+    $PyInstallerArgs += @("--hidden-import", "yt_dlp_ejs.yt.solver", "--collect-data", "yt_dlp_ejs")
   }
 
   foreach ($item in $DataItems) {
