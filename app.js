@@ -44,8 +44,44 @@ const deviceLayoutDefaults = window.CODEX_DEVICE_LAYOUT && typeof window.CODEX_D
   : {};
 const storeManagedInstall = String(deviceLayoutDefaults.installMode || "").toLowerCase() === "store";
 
+// Desktop management belongs to Console. Remove legacy shortcuts even if an old
+// document is restored or a later renderer inserts them outside the Console tab.
+function enforceDesktopConsoleControls(root = document) {
+  const legacy = "#consoleDeveloperModeTop, #consoleDeveloperSettingsTop, #consoleUpdateTop";
+  const managed = "[data-console-management], #consoleDeveloperTools, #consoleUpdateAuto, #consoleUpdateRefresh, #consoleUpdateInstall, #consoleUninstall, #updateProductConsole, #updateProductWorld";
+  const selector = `${legacy}, ${managed}`;
+  const consolePanel = document.querySelector('[data-module-panel="workspace"]');
+  const candidates = Array.from(root.querySelectorAll(selector));
+  if (root.nodeType === 1 && root.matches(selector)) candidates.unshift(root);
+  for (const node of candidates) {
+    if (node.matches(legacy) || !consolePanel?.contains(node)) node.remove();
+  }
+}
+
+function startDesktopConsoleControlPolicy() {
+  enforceDesktopConsoleControls();
+  if (!document.body || typeof MutationObserver !== "function") return;
+  const observer = new MutationObserver(records => {
+    for (const record of records) {
+      if (record.type === "attributes") enforceDesktopConsoleControls(record.target);
+      else for (const node of record.addedNodes) {
+        if (node.nodeType === 1) enforceDesktopConsoleControls(node);
+      }
+    }
+  });
+  const observe = () => observer.observe(document.body, {
+    childList: true, subtree: true, attributes: true,
+    attributeFilter: ["id", "data-console-management"]
+  });
+  observe();
+  window.addEventListener("pagehide", () => observer.disconnect());
+  window.addEventListener("pageshow", () => { enforceDesktopConsoleControls(); observe(); });
+}
+
+startDesktopConsoleControlPolicy();
+
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.89";
+const consoleUiVersion = "1.0.90";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -1037,8 +1073,6 @@ const i18n = {
     consoleUpdateInstallProduct: "安装",
     consoleUpdateOpen: "打开",
     consoleUpdateRelease: "Release",
-    consoleUpdateTop: (name, version) => `更新 ${name} v${version}`,
-    consoleUpdateTopCount: count => `${count} 项更新`,
     consoleUpdateNotInstalled: "尚未安装",
     consoleUpdateSource: "源码目录由 GitHub Desktop 管理",
     consoleUpdateInstalling: "正在安装更新",
@@ -1890,8 +1924,6 @@ const i18n = {
     consoleUpdateInstallProduct: "Install",
     consoleUpdateOpen: "Open",
     consoleUpdateRelease: "Release",
-    consoleUpdateTop: (name, version) => `Update ${name} v${version}`,
-    consoleUpdateTopCount: count => `${count} updates`,
     consoleUpdateNotInstalled: "Not installed",
     consoleUpdateSource: "Source checkout is managed through GitHub Desktop",
     consoleUpdateInstalling: "Installing update",

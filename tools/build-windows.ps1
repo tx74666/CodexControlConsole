@@ -2,6 +2,7 @@ param(
   [string]$Version = "",
   [string]$OutputDir = "dist",
   [string]$Python = "python",
+  [string]$Node = "node",
   [ValidateSet("All", "Application", "Installer")]
   [string]$Stage = "All",
   [ValidateSet("installed", "store")]
@@ -109,6 +110,20 @@ $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $BuildRoot = Join-Path $ProjectRoot "build\console-installer"
 $BuildApplication = $Stage -in @("All", "Application")
 $BuildInstaller = $Stage -in @("All", "Installer")
+$NodeCommand = Get-Command $Node -ErrorAction SilentlyContinue
+$NodeCandidates = @()
+if ($NodeCommand) { $NodeCandidates += $NodeCommand.Source }
+$NodeCandidates += Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
+$DesktopPolicyNode = $NodeCandidates |
+  Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } |
+  Select-Object -First 1
+if (-not $DesktopPolicyNode) {
+  throw "Node.js is required to verify the desktop Console management-entry policy."
+}
+& $DesktopPolicyNode (Join-Path $PSScriptRoot "check-console-header-controls.mjs")
+if ($LASTEXITCODE -ne 0) {
+  throw "Desktop Console management-entry policy failed before packaging."
+}
 if ($BuildApplication) {
   $UiSource = Get-Content -LiteralPath (Join-Path $ProjectRoot "app.js") -Raw -Encoding UTF8
   $UiEntrySources = @{}
@@ -379,6 +394,10 @@ if (-not (Test-Path -LiteralPath $BundledManifestPath -PathType Leaf)) {
 }
 $BundledManifest = Get-Content -LiteralPath $BundledManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 Assert-BundledBuildVersion -Manifest $BundledManifest -ExpectedVersion $Version
+& $DesktopPolicyNode (Join-Path $PSScriptRoot "check-console-header-controls.mjs") --app-dir $AppDir
+if ($LASTEXITCODE -ne 0) {
+  throw "Packaged desktop Console management-entry policy failed. Rebuild the Application stage."
+}
 
 if (-not $BuildInstaller) {
   Write-Host "Created application bundle $AppDir"
