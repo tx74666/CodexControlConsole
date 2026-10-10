@@ -537,8 +537,10 @@ async function evaluate(client, expression, awaitPromise = false, userGesture = 
 
 async function waitForDocument(client) {
   await waitForValue(
-    () => evaluate(client, "document.readyState"),
-    value => value === "interactive" || value === "complete",
+    () => evaluate(client, `document.readyState === 'complete'
+      && window.location.origin === ${JSON.stringify(baseUrl.origin)}
+      && typeof language === 'string' && typeof applyLanguage === 'function'`),
+    value => value === true,
     "page did not finish loading"
   );
 }
@@ -2989,7 +2991,7 @@ async function main() {
     const browserTarget = await fetch(`http://127.0.0.1:${port}/json/version`).then(response => response.json());
     browserClient = new CdpClient(browserTarget.webSocketDebuggerUrl);
     await browserClient.open();
-    client = await createPageClient(port, new URL("workspace.html", baseUrl).href);
+    client = await createPageClient(port, "about:blank");
     await client.send("Page.bringToFront");
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: 1280,
@@ -2997,13 +2999,13 @@ async function main() {
       deviceScaleFactor: 1,
       mobile: false
     });
-    await client.send("Page.reload", { ignoreCache: true });
-    await client.send("Runtime.evaluate", {
-      expression: `window.addEventListener('error', event => {
+    await client.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `window.addEventListener('error', event => {
         window.__consoleCheckErrors = window.__consoleCheckErrors || [];
         window.__consoleCheckErrors.push(event.message || 'unknown error');
       })`
     });
+    await client.send("Page.navigate", { url: new URL("workspace.html", baseUrl).href });
     if (transitionOnly) {
       await waitForDocument(client);
       await delay(120);
