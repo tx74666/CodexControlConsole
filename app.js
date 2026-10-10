@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.92";
+const consoleUiVersion = "1.0.93";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -875,7 +875,7 @@ const i18n = {
     playbackModePlayOnce: "一次",
     playbackModeTitle: label => `播放模式：${label}`,
     volumeLabel: "音量",
-    musicListTitle: "本地音乐",
+    musicListTitle: "曲目",
     musicNotSelected: "未选择",
     trackCount: count => `${count} 首`,
     noTracks: "还没有音乐",
@@ -1735,7 +1735,7 @@ const i18n = {
     playbackModePlayOnce: "Once",
     playbackModeTitle: label => `Playback mode: ${label}`,
     volumeLabel: "Volume",
-    musicListTitle: "Local Music",
+    musicListTitle: "Tracks",
     musicNotSelected: "Not selected",
     trackCount: count => `${count} track${count === 1 ? "" : "s"}`,
     noTracks: "No music yet",
