@@ -147,6 +147,7 @@ $PythonChecks = @(
   "tools/check-document-library.py",
   "tools/check-dev-room.py",
   "tools/check-dev-room-locales.py",
+  "tools/check-randomrealm-music-order-sync.py",
   "tools/check-resource-library.py",
   "tools/check-resource-catalogs.py",
   "tools/check-resource-http.py",
@@ -209,6 +210,7 @@ try {
     "tools/check-dev-room-editor.mjs",
     "tools/check-dev-room-translations.mjs",
     "tools/check-dev-room-language-ui.mjs",
+    "tools/check-randomrealm-music-order-ui.mjs",
     "console-developer-update.js",
     "console-developer-update.css",
     "tools/check-console-developer-update-ui.mjs",
@@ -283,6 +285,7 @@ try {
   }
 
   Invoke-QualityStep "Application JavaScript syntax" { & $Node --check app.js }
+  Invoke-QualityStep "RandomRealm music order synchronization UI" { & $Node tools/check-randomrealm-music-order-ui.mjs }
   Invoke-QualityStep "Developer Update JavaScript syntax" { & $Node --check console-developer-update.js }
   Invoke-QualityStep "Developer Update UI behavior" { & $Node tools/check-console-developer-update-ui.mjs }
   Invoke-QualityStep "Desktop Console header control policy" { & $Node tools/check-console-header-controls.mjs }
