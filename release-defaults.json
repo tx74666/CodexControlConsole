@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-10-07T15:11:50Z",
+  "capturedAt": "2026-10-10T10:33:48Z",
   "music": {
     "layoutVersion": 1,
     "tiers": {
@@ -11,7 +11,6 @@
       "Around the World.mp3": "second",
       "Airborne.mp3": "second",
       "Ma rose éternelle.mp3": "second",
-      "Luminescence.mp3": "second",
       "Fire Inside.mp3": "second"
     },
     "order": [
@@ -22,9 +21,9 @@
       "Around the World.mp3",
       "Airborne.mp3",
       "Ma rose éternelle.mp3",
-      "Luminescence.mp3",
       "Fire Inside.mp3",
       "Toxic.mp3",
+      "Luminescence.mp3",
       "Never Be Alone.mp3",
       "Stasis.mp3",
       "Final Step.mp3",
@@ -36,16 +35,18 @@
   },
   "modules": {
     "order": [
-      "music",
       "wallpaper",
+      "music",
       "workspace",
-      "steamwork",
       "blender",
       "randomrealm",
+      "steamwork",
       "manager",
       "unity"
     ],
-    "archive": [],
+    "archive": [
+      "steamwork"
+    ],
     "deepArchive": [
       "manager",
       "unity"
