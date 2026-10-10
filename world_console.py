@@ -1,5 +1,6 @@
 import argparse
 import array
+import copy
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
@@ -9287,6 +9288,127 @@ def lyrics_word_spans(text, duration, boundaries, peaks, valleys=None, feature_s
     return spans
 
 
+def music_alignment_sidecar_path(path):
+    digest = hashlib.sha1(str(Path(path).resolve()).encode("utf-8", errors="ignore")).hexdigest()
+    return MUSIC_ANALYSIS_DIR.parent / "music_alignment" / f"{digest}.json"
+
+
+def validate_music_alignment_variant(variant, path, lyrics_path):
+    """Validate bindings and timing structure; this does not certify the acoustic method."""
+    def number(value, label):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"invalid alignment {label}")
+        return value
+
+    analysis = variant.get("analysis")
+    if not isinstance(analysis, dict) or analysis.get("ok") is not True:
+        raise ValueError("invalid alignment analysis")
+    if (analysis.get("path") != music_relative_path(path)
+            or analysis.get("lyricsPath") != music_relative_path(lyrics_path)):
+        raise ValueError("alignment analysis path mismatch")
+    duration = number(analysis.get("duration"), "audio duration")
+    if duration <= 0:
+        raise ValueError("invalid alignment audio duration")
+    rows = parsed_timed_lyrics(lyrics_path)
+    lines = analysis.get("lines")
+    if not isinstance(lines, list) or len(lines) != len(rows):
+        raise ValueError("alignment lyric row count mismatch")
+    epsilon = 0.0011
+    previous_alignment_start = -1.0
+    for index, (row, line) in enumerate(zip(rows, lines)):
+        if not isinstance(line, dict) or type(line.get("index")) is not int or line["index"] != index:
+            raise ValueError("alignment lyric ordinal mismatch")
+        if line.get("text") != row["text"]:
+            raise ValueError("alignment lyric text mismatch")
+        if ("rest" in line and type(line["rest"]) is not bool) or bool(line.get("rest")) != row["rest"]:
+            raise ValueError("alignment lyric rest mismatch")
+        raw_time = number(line.get("time"), "lyric time")
+        base = number(line.get("analysisTime"), "analysisTime")
+        line_duration = number(line.get("duration"), "line duration")
+        if (abs(raw_time - row["time"]) > epsilon or raw_time < 0 or raw_time > duration + epsilon
+                or base < 0 or base > duration + epsilon or line_duration < 0
+                or base + line_duration > duration + epsilon):
+            raise ValueError("alignment lyric timing mismatch")
+        alignment = line.get("alignment")
+        aligned_start, aligned_end = base, base + line_duration
+        if alignment is not None:
+            if not isinstance(alignment, dict):
+                raise ValueError("invalid alignment interval")
+            aligned_start = number(alignment.get("start"), "start")
+            aligned_end = number(alignment.get("end"), "end")
+            if (aligned_start < 0 or aligned_end <= aligned_start or aligned_end > duration + epsilon
+                    or aligned_start < previous_alignment_start - epsilon):
+                raise ValueError("invalid alignment bounds")
+            if (not isinstance(alignment.get("source"), str) or not alignment["source"].strip()
+                    or not isinstance(alignment.get("quality"), str) or not alignment["quality"].strip()):
+                raise ValueError("invalid alignment provenance")
+            previous_alignment_start = aligned_start
+        spans = line.get("wordSpans", [])
+        if not isinstance(spans, list) or (row["rest"] and spans):
+            raise ValueError("invalid alignment wordSpans")
+        words = lyrics_word_tokens(row["text"])
+        if spans and len(spans) != len(words):
+            raise ValueError("alignment word count mismatch")
+        previous_end = -epsilon
+        for word, span in zip(words, spans):
+            if (not isinstance(span, dict) or not isinstance(span.get("word"), str)
+                    or [item.casefold() for item in lyrics_word_tokens(span["word"])] != [word.casefold()]):
+                raise ValueError("alignment word text mismatch")
+            start = number(span.get("start"), "word start")
+            end = number(span.get("end"), "word end")
+            fill_end = number(span.get("fillEnd", end), "word fillEnd")
+            if (start < 0 or end <= start or start < previous_end - epsilon
+                    or fill_end < start - epsilon or fill_end > end + epsilon
+                    or base + start < aligned_start - epsilon or base + end > aligned_end + epsilon):
+                raise ValueError("invalid alignment word bounds")
+            previous_end = end
+    return analysis
+
+
+def read_music_alignment_sidecar(path, lyrics_path):
+    """Read only: ordinary v88 cache writes and mark invalidation never touch this file."""
+    sidecar = music_alignment_sidecar_path(path)
+    if not sidecar.is_file():
+        return None
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or type(payload.get("format")) is not int or payload["format"] != 1:
+            return None
+        audio_sha = payload.get("audioSha256")
+        variants = payload.get("variants")
+        if not isinstance(audio_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", audio_sha) or not isinstance(variants, list):
+            return None
+        meta = music_analysis_cache_meta(path, lyrics_path)
+        selected = [item for item in variants if isinstance(item, dict) and item.get("meta") == meta]
+        if len(selected) != 1:
+            return None
+        variant = selected[0]
+        lyrics_sha = variant.get("lyricsSha256")
+        if (not isinstance(lyrics_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", lyrics_sha)
+                or lyrics_sha.lower() != file_sha256(lyrics_path)):
+            return None
+        analysis = validate_music_alignment_variant(variant, path, lyrics_path)
+        if audio_sha.lower() != file_sha256(path) or meta != music_analysis_cache_meta(path, lyrics_path):
+            return None
+        result = copy.deepcopy(analysis)
+        # Validation permits casefold-equivalent words; playback maps exact display tokens.
+        for line in result["lines"]:
+            for word, span in zip(lyrics_word_tokens(line["text"]), line.get("wordSpans", [])):
+                span["word"] = word
+        return result
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        return None
+
+
+def has_acoustic_alignment(analysis):
+    if not isinstance(analysis, dict) or not isinstance(analysis.get("lines"), list):
+        return False
+    return any(
+        isinstance(line, dict) and isinstance(line.get("alignment"), dict)
+        and line["alignment"].get("quality") == "acoustic_aligned"
+        for line in analysis["lines"]
+    )
+
 def music_lyrics_analysis(relative_path, language=""):
     path = music_path_from_relative(relative_path)
     lyrics_language = normalize_lyrics_language(language)
@@ -9294,7 +9416,16 @@ def music_lyrics_analysis(relative_path, language=""):
     if not lyrics_path:
         raise ValueError("lyrics file was not found")
 
+    aligned = read_music_alignment_sidecar(path, lyrics_path)
+    if aligned is not None:
+        aligned["lyricsLanguage"] = lyrics_language
+        aligned["manualMarks"] = music_lyric_marks_for_path(path)
+        return aligned
+
     cached = read_music_analysis_cache(path, lyrics_path)
+    # Precise results are authoritative only while their independent bindings validate.
+    if cached and has_acoustic_alignment(cached):
+        cached = None
     if cached:
         cached = dict(cached)
         if lyrics_language:

@@ -9634,13 +9634,20 @@ const lyricsLineRestHoldSeconds = 0.34;
 const lyricsLineRestFadeMinSeconds = 0.32;
 const lyricsLineRestFadeMaxSeconds = 0.78;
 
+function lyricsTrustedAlignment(index) {
+  const alignment = lyricsAnalysisLine(index)?.alignment;
+  if (alignment?.quality !== "acoustic_aligned" || !String(alignment.source || "").trim()) return null;
+  if (!Number.isFinite(alignment.start) || !Number.isFinite(alignment.end) || alignment.start < 0 || alignment.end <= alignment.start) return null;
+  return alignment;
+}
+
 function lyricsLineDisplayStartTime(index) {
   const rawStart = Number(musicLyricsLines[index]?.time);
   const analysisStart = lyricsLineAnalysisStartTime(index);
   const manualStart = manualLyricLineStartTime(index);
-  if (Number.isFinite(manualStart)) {
-    return manualStart - (index <= 0 ? lyricsFirstLineLeadSeconds : lyricsLineSwitchLeadSeconds);
-  }
+  if (Number.isFinite(manualStart)) return manualStart;
+  const alignment = lyricsTrustedAlignment(index);
+  if (alignment) return alignment.start;
   let start = Number.isFinite(rawStart) ? rawStart : analysisStart;
   if (Number.isFinite(rawStart) && Number.isFinite(analysisStart)) {
     const analysisDelay = analysisStart - rawStart;
@@ -9656,8 +9663,16 @@ function activeLyricsIndexAt(time) {
   if (!musicLyricsSynced || !musicLyricsLines.length || !musicLyricsLines[0] || !Number.isFinite(musicLyricsLines[0].time)) return -1;
   let active = -1;
   for (let index = 0; index < musicLyricsLines.length; index += 1) {
-    if (time >= lyricsLineDisplayStartTime(index)) active = index;
-    else break;
+    if (!(time >= lyricsLineDisplayStartTime(index))) break;
+    // Caption rest rows must not interrupt a still-live acoustic phrase.
+    if (musicLyricsLines[index]?.rest && active >= 0 && lyricsTrustedAlignment(active)
+      && time < lyricsLineEndTime(active)) continue;
+    active = index;
+  }
+  // A verified vocal end or explicit manual end leaves a real rest before the next onset.
+  if (active >= 0 && (lyricsTrustedAlignment(active) || Number.isFinite(manualLyricLineEndTime(active)))) {
+    const end = lyricsLineEndTime(active);
+    if (Number.isFinite(end) && time >= end) return -1;
   }
   return active;
 }
@@ -10145,18 +10160,14 @@ function lyricsLineAnalysisStartTime(index) {
 }
 
 function lyricsLineWordStartTime(index) {
+  const alignment = lyricsTrustedAlignment(index);
   const manualStart = manualLyricLineStartTime(index);
-  if (Number.isFinite(manualStart)) return manualStart;
-  const rawStart = Number(musicLyricsLines[index]?.time);
+  // Acoustic spans retain their analysisTime origin; absolute marks alter only their endpoint.
+  if (!alignment && Number.isFinite(manualStart)) return manualStart;
+  // wordSpans and fillPoints use the full analysisTime as their relative origin.
   const analysisStart = lyricsLineAnalysisStartTime(index);
-  if (!Number.isFinite(rawStart)) return analysisStart;
-  if (!Number.isFinite(analysisStart)) return rawStart;
-
-  const analysisDelay = analysisStart - rawStart;
-  if (analysisDelay > 0) {
-    return rawStart + Math.min(0.075, analysisDelay * 0.34);
-  }
-  return analysisStart;
+  if (Number.isFinite(analysisStart)) return analysisStart;
+  return alignment ? alignment.start : Number(musicLyricsLines[index]?.time);
 }
 
 function lyricsLineWordStats(index) {
@@ -10267,9 +10278,11 @@ function lyricsWordFillStartTime(index) {
 function lyricsLineEndTime(index) {
   const start = lyricsWordFillStartTime(index);
   if (!Number.isFinite(start)) return start;
-  const autoEnd = start + lyricsEstimatedWordFillDuration(index);
   const manualEnd = manualLyricLineEndTime(index);
-  return Number.isFinite(manualEnd) ? Math.max(autoEnd, manualEnd) : autoEnd;
+  if (Number.isFinite(manualEnd) && manualEnd > start) return manualEnd;
+  const alignment = lyricsTrustedAlignment(index);
+  if (alignment) return alignment.end;
+  return start + lyricsEstimatedWordFillDuration(index);
 }
 
 function lyricsLineOutroProgress(index, time = 0) {
@@ -10308,20 +10321,78 @@ function lyricsLineProgress(index, time) {
   return easeLyricsValue(raw);
 }
 
-function updateActiveLyricsWordProgress() {
+function lyricsMappedWordSpans(index, wordCount) {
+  const words = lyricsTimingTokens(lyricsLineText(index));
+  const spans = lyricsAnalysisLine(index)?.wordSpans;
+  // A translated/CJK display can have different tokens from the original vocal analysis.
+  if (!Array.isArray(spans) || spans.length !== wordCount || words.length !== wordCount) return null;
+  if (!spans.every((span, wordIndex) => String(span?.word || "") === words[wordIndex])) return null;
+  return spans;
+}
+
+function lyricsWordPlaybackState(index, wordIndex, wordCount, time, spans = lyricsMappedWordSpans(index, wordCount)) {
+  const lineStart = lyricsWordFillStartTime(index);
+  const lineEnd = lyricsLineEndTime(index);
+  const empty = { fill: 0, current: false, hold: false, wave: false, strength: 0.72, lineOnly: false };
+  if (!Number.isFinite(time) || !Number.isFinite(lineStart)) return empty;
+  if (!spans) {
+    // Keep unmatched translations at line level; do not invent word/character times.
+    return { ...empty, fill: time >= lyricsLineDisplayStartTime(index) && (!Number.isFinite(lineEnd) || time < lineEnd) ? 1 : 0, lineOnly: true };
+  }
+  const span = spans[wordIndex];
+  const relativeStart = Number(span?.start);
+  const relativeFillEnd = Number(span?.fillEnd ?? span?.end);
+  const relativeEnd = Number(span?.end ?? span?.fillEnd);
+  if (![relativeStart, relativeFillEnd, relativeEnd].every(Number.isFinite) || relativeFillEnd <= relativeStart || relativeEnd < relativeFillEnd) return empty;
+  const manualStart = exactManualLyricBoundaryTime(index, wordIndex, "start");
+  const manualEnd = exactManualLyricBoundaryTime(index, wordIndex + 1, "end");
+  const start = Number.isFinite(manualStart) ? manualStart : lineStart + relativeStart;
+  let fillEnd = Number.isFinite(manualEnd) ? manualEnd : lineStart + relativeFillEnd;
+  let end = Number.isFinite(manualEnd) ? manualEnd : lineStart + relativeEnd;
+  if (wordIndex === wordCount - 1 && Number.isFinite(lineEnd)) {
+    fillEnd = Math.min(fillEnd, lineEnd);
+    end = Math.min(end, lineEnd);
+  }
+  if (fillEnd <= start || end < fillEnd) return empty;
+  const strength = clamp(Number(span.strength) || 0.72, 0, 1);
+  if (time <= start) return { ...empty, strength };
+  if (time >= fillEnd) return { ...empty, fill: 1, current: time < end, hold: time < end, strength };
+  const progress = clamp((time - start) / (fillEnd - start), 0, 1);
+  // Acoustic word intervals are actual endpoints. Heuristic curves remain explicitly heuristic.
+  if (lyricsTrustedAlignment(index)) return { ...empty, fill: progress, current: true, strength };
+  const elapsed = relativeStart + progress * (relativeFillEnd - relativeStart);
+  const curveState = lyricsFillStateFromSpanPoints(elapsed, span);
+  return {
+    ...empty,
+    fill: curveState ? clamp(curveState.fill, 0, 1) : easeLyricsWordFill(progress, span),
+    current: true,
+    hold: Boolean(curveState?.hold),
+    wave: Boolean(curveState?.wave),
+    strength
+  };
+}
+
+function updateActiveLyricsWordProgress(time = 0) {
   const list = els.nowPlayingLyricsList;
   const active = list?.querySelector(".music-lyrics-line.active");
   if (!list || !active || !musicLyricsSynced || musicLyricsActiveIndex < 0) return;
   list.querySelectorAll(".music-lyrics-line:not(.active)").forEach(node => resetLyricsWordProgress(node, 0));
-  active.style.setProperty("--line-progress", "1");
+  const wordNodes = Array.from(active.querySelectorAll(".lyric-word"));
+  const spans = lyricsMappedWordSpans(musicLyricsActiveIndex, wordNodes.length);
+  const lineEnd = lyricsLineEndTime(musicLyricsActiveIndex);
+  const resting = Number.isFinite(lineEnd) && time >= lineEnd;
+  active.style.setProperty("--line-progress", String(lyricsLineProgress(musicLyricsActiveIndex, time)));
   active.style.setProperty("--line-end-soft", "0");
-  active.style.setProperty("--line-rest-progress", "0");
-  active.style.setProperty("--line-rest-glow", "28%");
-  active.classList.remove("ending", "line-resting");
-  active.querySelectorAll(".lyric-word").forEach(word => {
-    word.style.setProperty("--word-fill", "1");
-    word.style.setProperty("--word-strength", "0.72");
-    word.style.setProperty("--word-transition", "120ms");
+  active.style.setProperty("--line-rest-progress", resting ? "1" : "0");
+  active.style.setProperty("--line-rest-glow", resting ? "12%" : "28%");
+  active.classList.remove("ending");
+  active.classList.toggle("line-resting", resting);
+  wordNodes.forEach((word, wordIndex) => {
+    const state = lyricsWordPlaybackState(musicLyricsActiveIndex, wordIndex, wordNodes.length, time, spans);
+    word.style.setProperty("--word-fill", String(state.fill));
+    word.style.setProperty("--word-strength", String(state.strength));
+    // The audio clock already interpolates continuously and must also handle backwards seeks.
+    word.style.setProperty("--word-transition", "0ms");
     word.style.removeProperty("--word-current-brightness");
     word.style.removeProperty("--word-current-saturation");
     word.style.removeProperty("--word-valley");
@@ -10329,8 +10400,11 @@ function updateActiveLyricsWordProgress() {
     word.style.removeProperty("--word-break-strength");
     word.style.removeProperty("--word-phrase-rest");
     word.style.removeProperty("--word-valley-shadow");
-    word.classList.add("word-sung");
-    word.classList.remove("word-current", "word-hold", "word-wave-current", "word-phrase-rest", "word-strong", "word-valley-break", "word-group-break");
+    word.classList.toggle("word-sung", state.fill >= 0.999);
+    word.classList.toggle("word-current", state.current);
+    word.classList.toggle("word-hold", state.hold);
+    word.classList.toggle("word-wave-current", state.wave && state.current);
+    word.classList.remove("word-phrase-rest", "word-strong", "word-valley-break", "word-group-break");
   });
 }
 
@@ -10706,6 +10780,13 @@ function lyricsBoundaryReferenceTime(lineIndex, boundaryIndex, role) {
   const analysisLine = lyricsAnalysisLine(lineIndex);
   const wordCount = lyricsWordCountForLine(lineIndex, analysisLine);
   const lineStart = lyricsWordFillStartTime(lineIndex);
+  if (lyricsTrustedAlignment(lineIndex) && Number.isFinite(lineStart)) {
+    // The end before a gap differs from the following word's start.
+    const spans = Array.isArray(analysisLine?.wordSpans) ? analysisLine.wordSpans : [];
+    const span = role === "start" ? spans[boundaryIndex] : spans[boundaryIndex - 1];
+    const relative = Number(role === "start" ? span?.start : span?.end);
+    if (Number.isFinite(relative) && relative >= 0) return lineStart + relative;
+  }
   if (Number.isFinite(lineStart)) {
     return lineStart + lyricsAutoBoundaryRelativeTime(boundaryIndex, analysisLine, wordCount);
   }
@@ -12348,7 +12429,7 @@ function updateLyricsProgress(time = 0) {
   }
   let nextIndex = activeLyricsIndexAt(time);
   if (heldLyricsActiveIndex >= 0) {
-    if (performance.now() < heldLyricsActiveUntil) {
+    if (performance.now() < heldLyricsActiveUntil && !lyricsTrustedAlignment(heldLyricsActiveIndex) && !Number.isFinite(manualLyricLineEndTime(heldLyricsActiveIndex))) {
       nextIndex = heldLyricsActiveIndex;
     } else {
       heldLyricsActiveIndex = -1;

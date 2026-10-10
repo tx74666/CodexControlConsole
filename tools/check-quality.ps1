@@ -198,7 +198,8 @@ $PythonChecks = @(
   "tools/test_device_library.py",
   "tools/check-external-app-launcher.py",
   "tools/check-http-boundary.py",
-  "tools/check-runtime-state.py"
+  "tools/check-runtime-state.py",
+  "tools/check-lyrics-alignment-sidecar.py"
 )
 
 Push-Location $ProjectRoot
@@ -289,6 +290,7 @@ try {
   Invoke-QualityStep "Developer Update JavaScript syntax" { & $Node --check console-developer-update.js }
   Invoke-QualityStep "Developer Update UI behavior" { & $Node tools/check-console-developer-update-ui.mjs }
   Invoke-QualityStep "Desktop Console header control policy" { & $Node tools/check-console-header-controls.mjs }
+  Invoke-QualityStep "Lyric word timing and vocal rest playback" { & $Node tools/check-lyrics-playback-timing.mjs }
   Invoke-QualityStep "Dev Room text fields syntax" { & $Node --check dev-room-editor.js }
   Invoke-QualityStep "Dev Room text preservation and presentation" { & $Node tools/check-dev-room-editor.mjs }
   Invoke-QualityStep "Dev Room bilingual document coverage" { & $Node tools/check-dev-room-translations.mjs }
