@@ -2429,7 +2429,9 @@ async function runBrowserChecks(client) {
       && !musicGlyphState.hasMojibake,
     `music glyph encoding is broken: ${JSON.stringify(musicGlyphState)}`
   );
+  const expectedMusicCalibrations = JSON.parse(readFileSync(join(projectRoot, "music-loudness.json"), "utf8")).tracks;
   const musicLoudnessState = await evaluate(client, `(() => {
+    const expectedCalibrations = ${JSON.stringify(expectedMusicCalibrations)};
     const reference = tracks.find(track => track.name === "Luminescence");
     const quiet = tracks.find(track => track.name === "Liquid Roller");
     const gentle = tracks.find(track => track.name === "Ma rose éternelle");
@@ -2439,6 +2441,10 @@ async function runBrowserChecks(client) {
     return {
       trackCount: tracks.length,
       calibratedCount: tracks.filter(track => Number.isFinite(Number(track.loudnessGainDb))).length,
+      builtInCalibrations: Object.keys(expectedCalibrations).map(name => {
+        const matches = tracks.filter(track => track.name === name);
+        return { name, matches: matches.length, gainDb: matches[0]?.loudnessGainDb ?? null };
+      }),
       referenceGainDb: trackLoudnessGainDb(reference),
       quietGainDb: trackLoudnessGainDb(quiet),
       gentleGainDb: trackLoudnessGainDb(gentle),
@@ -2450,7 +2456,11 @@ async function runBrowserChecks(client) {
     };
   })()`);
   assert(
-    musicLoudnessState.trackCount === 16 && musicLoudnessState.calibratedCount === 16,
+    musicLoudnessState.builtInCalibrations.length === Object.keys(expectedMusicCalibrations).length
+      && musicLoudnessState.builtInCalibrations.every(row => row.matches === 1
+        && typeof row.gainDb === "number"
+        && Number.isFinite(row.gainDb)
+        && row.gainDb === expectedMusicCalibrations[row.name].gainDb),
     `not every built-in track is calibrated: ${JSON.stringify(musicLoudnessState)}`
   );
   assert(
