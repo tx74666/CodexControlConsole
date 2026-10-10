@@ -70,7 +70,9 @@ class TransferChecks(unittest.TestCase):
         self.temp.cleanup()
 
     def request(self, path, method="GET", body=None, headers=None):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        # Windows CI image validation/fsync can outlast a five-second client budget.
+        # Keep the same single request and every containment/revocation assertion.
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         authority = f"127.0.0.1:{self.port}"
         merged = {"Host": authority}
         if self.cookie:
