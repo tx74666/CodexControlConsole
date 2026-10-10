@@ -558,6 +558,13 @@ BLENDER_LIVE_SELECTION_MAX_AGE_SECONDS = 8
 NATIVE_FILE_DRAG_SOURCE = APP_DIR / "tools" / "NativeFileDrag.cs"
 NATIVE_FILE_DRAG_EXE = APP_DIR / "tools" / "NativeFileDrag.exe"
 RANDOMREALM_PROJECT_DIR = Path(os.environ.get("CODEX_CONTROL_RANDOMREALM_PROJECT_DIR", r"D:\Unity Projects\RandomRealm2"))
+RANDOMREALM_MUSIC_CATALOG_FILE = RANDOMREALM_PROJECT_DIR / "Assets" / "Resources" / "ConsoleMusic" / "catalog.json"
+RANDOMREALM_MUSIC_STATE_DIR = Path(os.environ.get(
+    "CODEX_CONTROL_RANDOMREALM_MUSIC_STATE_DIR",
+    str(Path.home() / "AppData" / "LocalLow" / "DefaultCompany" / "RandomRealm2" / "ConsoleMusic"),
+))
+RANDOMREALM_MUSIC_ORDER_REQUEST_FILE = RANDOMREALM_MUSIC_STATE_DIR / "order-sync-request.json"
+RANDOMREALM_MUSIC_ORDER_RECEIPT_FILE = RANDOMREALM_MUSIC_STATE_DIR / "order-sync-receipt.json"
 BLENDER_TO_UNITY_EXPORT_DIR = Path(os.environ.get("CODEX_CONTROL_BLENDER_TO_UNITY_EXPORT_DIR", r"D:\Blender\~Import-Export\BuilderToUnity"))
 UNITY_TEMP_BRIDGE_DIR = RANDOMREALM_PROJECT_DIR / "Assets" / "~Temp" / "BlenderBridge"
 UNITY_BRIDGE_REQUEST_FILE = RANDOMREALM_PROJECT_DIR / "Temp" / "CodexBlenderToUnity.request.json"
@@ -841,6 +848,7 @@ TRANSLATION_TARGET = "zh-TW"
 MUSIC_LIBRARY_LOCK = threading.Lock()
 CONSOLE_STATE_LOCK = threading.RLock()
 MUSIC_STATE_LOCK = threading.RLock()
+RANDOMREALM_MUSIC_ORDER_LOCK = threading.RLock()
 MUSIC_LYRIC_MARKS_LOCK = threading.RLock()
 MUSIC_LIBRARY_IMPORT_SCHEDULER_LOCK = threading.Lock()
 MUSIC_LIBRARY_IMPORT_SCHEDULER = None
@@ -1622,6 +1630,19 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self._private_phone_path():
             self.send_error(404)
             return
+        if parsed.path == "/api/randomrealm/music-order-sync":
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            try:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if set(query) - {"requestId"} or any(len(values) != 1 for values in query.values()):
+                    raise ValueError("Music order sync address is invalid.")
+                self.send_json(randomrealm_music_order_sync_status(query.get("requestId", [""])[0]))
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            except OSError:
+                self.send_json({"error": "Music order sync status could not be read."}, status=503)
+            return
         if (parsed.path == "/api/console/developer-update"
                 or parsed.path.startswith("/api/console/developer-update/")):
             if not self.require_local_request() or not self.require_trusted_post_context():
@@ -2099,6 +2120,20 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if not self.require_trusted_post_context():
             return
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/randomrealm/music-order-sync":
+            if not self.require_local_request():
+                return
+            try:
+                if parsed.query or self.read_json_body(max_bytes=1024) != {}:
+                    raise ValueError("Use the music order sync button.")
+                self.send_json(request_randomrealm_music_order_sync())
+            except RequestBodyError as error:
+                self.send_json({"error": str(error)}, status=error.status)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            except OSError:
+                self.send_json({"error": "Music order sync request could not be saved."}, status=503)
+            return
         if (parsed.path == "/api/console/developer-update"
                 or parsed.path.startswith("/api/console/developer-update/")):
             if not self.require_local_request():
@@ -10053,6 +10088,126 @@ def write_music_state(payload):
 
         store_music_state(current, previous=previous)
         return {"ok": not stale_client, "staleClient": stale_client, "state": current}
+
+
+def read_randomrealm_music_order_json(path, max_bytes=32768):
+    path = Path(path)
+    if not path.exists():
+        return None
+    with path.open("rb") as source:
+        raw = source.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError("Music order sync data is too large.")
+    try:
+        result = json.loads(raw.decode("utf-8-sig"))
+    except (ValueError, UnicodeError) as error:
+        raise ValueError("Music order sync data is invalid.") from error
+    if not isinstance(result, dict):
+        raise ValueError("Music order sync data is invalid.")
+    return result
+
+
+def randomrealm_music_order_request_id(value):
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value,
+    ):
+        raise ValueError("Music order sync request ID is invalid.")
+    return value
+
+
+def randomrealm_music_order_sync_status(request_id=""):
+    if request_id:
+        randomrealm_music_order_request_id(request_id)
+    with RANDOMREALM_MUSIC_ORDER_LOCK:
+        request = read_randomrealm_music_order_json(RANDOMREALM_MUSIC_ORDER_REQUEST_FILE)
+        if request is None:
+            return {"ok": True, "status": "idle", "requestId": ""}
+        current_id = randomrealm_music_order_request_id(request.get("requestId"))
+        if request.get("version") != 1:
+            raise ValueError("Music order sync request version is invalid.")
+        if request_id and current_id != request_id:
+            return {"ok": True, "status": "superseded", "requestId": request_id}
+        result = {"ok": True, "status": "pending", "requestId": current_id}
+        try:
+            receipt = read_randomrealm_music_order_json(RANDOMREALM_MUSIC_ORDER_RECEIPT_FILE)
+        except ValueError:
+            receipt = None
+        # A file write is only a pending request. Require the game's matching receipt.
+        if (receipt and receipt.get("version") == 1 and receipt.get("requestId") == current_id
+                and receipt.get("status") in {"applied", "rejected"}):
+            result["status"] = receipt["status"]
+            result["appliedUtc"] = str(receipt.get("appliedUtc") or "")[:64]
+        return result
+
+
+def build_randomrealm_music_order_request():
+    # Read current disk state directly; this operation must not migrate or rewrite Music.
+    with MUSIC_STATE_LOCK:
+        state = read_randomrealm_music_order_json(MUSIC_STATE_FILE, max_bytes=1024 * 1024)
+    if state is None or not isinstance(state.get("order"), list) or not isinstance(state.get("tiers"), dict):
+        raise ValueError("Save the Music song order before syncing.")
+    with RANDOMREALM_MUSIC_CATALOG_FILE.open("rb") as source:
+        raw_catalog = source.read(1024 * 1024 + 1)
+    if len(raw_catalog) > 1024 * 1024:
+        raise ValueError("The game's music catalog is too large.")
+    try:
+        catalog = json.loads(raw_catalog.decode("utf-8-sig"))
+    except (ValueError, UnicodeError) as error:
+        raise ValueError("The game's music catalog is invalid.") from error
+    if not isinstance(catalog, dict) or catalog.get("version") != 1:
+        raise ValueError("The game's music catalog is invalid.")
+    tracks = catalog.get("tracks")
+    if not isinstance(tracks, list) or len(tracks) != 17:
+        raise ValueError("The game must contain the existing 17 songs.")
+    by_audio = {}
+    ids = set()
+    for track in tracks:
+        if not isinstance(track, dict):
+            raise ValueError("The game's music catalog is invalid.")
+        audio = track.get("audioFile")
+        track_id = track.get("id")
+        audio_sha = track.get("audioSha256")
+        if (not isinstance(audio, str) or not audio or "/" in audio or "\\" in audio
+                or audio in {".", ".."} or audio in by_audio
+                or not isinstance(track_id, str) or not re.fullmatch(r"[0-9a-f]{16}", track_id)
+                or track_id in ids or not isinstance(audio_sha, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", audio_sha)):
+            raise ValueError("The game's music catalog has ambiguous song identities.")
+        by_audio[audio] = track
+        ids.add(track_id)
+    ordered_audio = []
+    for audio in state["order"]:
+        if not isinstance(audio, str):
+            raise ValueError("The saved Music order is invalid.")
+        if audio in by_audio:
+            if audio in ordered_audio:
+                raise ValueError("The saved Music order contains a duplicate song.")
+            ordered_audio.append(audio)
+    if len(ordered_audio) != 17:
+        raise ValueError("The saved Music order does not match all 17 game songs.")
+    entries = []
+    for tier in (1, 2, 3):
+        for audio in ordered_audio:
+            saved_tier = state["tiers"].get(audio)
+            current_tier = 1 if saved_tier == "first" else 2 if saved_tier == "second" else 3
+            if current_tier == tier:
+                track = by_audio[audio]
+                entries.append({"id": track["id"], "audioSha256": track["audioSha256"],
+                                "tier": tier, "order": len(entries)})
+    return {"version": 1, "requestId": str(uuid.uuid4()),
+            "createdUtc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "catalogSha256": hashlib.sha256(raw_catalog).hexdigest(), "entries": entries}
+
+
+def request_randomrealm_music_order_sync():
+    with RANDOMREALM_MUSIC_ORDER_LOCK:
+        status = randomrealm_music_order_sync_status()
+        if status["status"] == "pending":
+            return status  # Never overwrite an unconsumed request on repeated clicks.
+        request = build_randomrealm_music_order_request()
+        # Each later manual click is fresh: the game may have reordered or undone it.
+        atomic_write_json(RANDOMREALM_MUSIC_ORDER_REQUEST_FILE, request)
+        return randomrealm_music_order_sync_status(request["requestId"])
 
 
 def local_music_path_for_display_name(display_name):

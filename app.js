@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.91";
+const consoleUiVersion = "1.0.92";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -951,6 +951,14 @@ const i18n = {
     randomRealmSteamworks: "Steamworks 后台",
     randomRealmPublishFolder: "发布文件夹",
     randomRealmProjectFolder: "Unity 工程",
+    randomRealmMusicOrderSync: "同步歌曲次序到游戏",
+    randomRealmMusicOrderSaving: "正在保存歌曲次序…",
+    randomRealmMusicOrderPending: "等待游戏应用",
+    randomRealmMusicOrderApplied: "已同步",
+    randomRealmMusicOrderRejected: "游戏未应用，请重试",
+    randomRealmMusicOrderSuperseded: "已有另一条同步请求",
+    randomRealmMusicOrderSaveFailed: "歌曲次序未保存，请重试",
+    randomRealmMusicOrderFailed: message => `未同步：${message}`,
     randomRealmPromoFolder: "宣传素材",
     randomRealmOpening: name => `正在打开：${name}`,
     randomRealmOpened: name => `已打开：${name}`,
@@ -1803,6 +1811,14 @@ const i18n = {
     randomRealmSteamworks: "Steamworks",
     randomRealmPublishFolder: "Publish Folder",
     randomRealmProjectFolder: "Unity Project",
+    randomRealmMusicOrderSync: "Sync music order to game",
+    randomRealmMusicOrderSaving: "Saving music order…",
+    randomRealmMusicOrderPending: "Waiting for the game to apply",
+    randomRealmMusicOrderApplied: "Applied",
+    randomRealmMusicOrderRejected: "Not applied by the game; retry",
+    randomRealmMusicOrderSuperseded: "Another sync request exists",
+    randomRealmMusicOrderSaveFailed: "Music order was not saved; retry",
+    randomRealmMusicOrderFailed: message => `Not synced: ${message}`,
     randomRealmPromoFolder: "Promo Assets",
     randomRealmOpening: name => `Opening: ${name}`,
     randomRealmOpened: name => `Opened: ${name}`,
@@ -2180,6 +2196,8 @@ const els = {
   openSteamworks: document.getElementById("openSteamworks"),
   openSteamPublishFolder: document.getElementById("openSteamPublishFolder"),
   openRandomRealmProject: document.getElementById("openRandomRealmProject"),
+  syncRandomRealmMusicOrder: document.getElementById("syncRandomRealmMusicOrder"),
+  randomRealmMusicOrderStatus: document.getElementById("randomRealmMusicOrderStatus"),
   openRandomRealmPromo: document.getElementById("openRandomRealmPromo"),
   steamworkStatusText: document.getElementById("steamworkStatusText"),
   openSteamworkDashboard: document.getElementById("openSteamworkDashboard"),
@@ -2373,6 +2391,14 @@ let musicLyricMarksFlushPromise = null;
 let promotedLibraryTracks = loadPromotedLibraryTracks();
 let musicLibraryPollTimer = null;
 let musicStatePersistTimer = null;
+let musicStatePersistQueue = Promise.resolve(true);
+let musicStateHasQueuedSave = false;
+let randomRealmMusicOrderRequestId = "";
+let randomRealmMusicOrderStatus = "idle";
+let randomRealmMusicOrderPollTimer = null;
+let randomRealmMusicOrderBusy = false;
+let randomRealmMusicOrderStatusInFlight = false;
+let randomRealmMusicOrderGeneration = 0;
 let consoleStatePersistTimer = null;
 let playbackMode = normalizePlaybackMode(localStorage.getItem(storageKeys.playbackMode));
 let musicPlaybackRequestId = 0;
@@ -2837,6 +2863,8 @@ async function loadModuleData(id) {
       return (await loadUnityBridgeStatus()) !== false;
     case "steamwork":
       return hasSteamwork ? (await loadSteamworkAssets()) !== false : true;
+    case "randomrealm":
+      return loadRandomRealmMusicOrderStatus();
     default:
       return true;
   }
@@ -2871,6 +2899,13 @@ function syncRuntimeActivity(options = {}) {
   }
 
   syncLyricsAnimationLoop();
+
+  if (isModuleForeground("randomrealm")) {
+    if (options.resume || options.moduleChanged) void loadRandomRealmMusicOrderStatus();
+    else scheduleRandomRealmMusicOrderPoll();
+  } else {
+    stopRandomRealmMusicOrderPoll();
+  }
 
   if (isModuleForeground("music")) {
     if (hasActiveMusicLibraryGrab() && !musicLibraryPollTimer) {
@@ -7266,17 +7301,30 @@ function musicStatePayload() {
 
 function persistMusicStateNow() {
   saveMusicStateLocal();
-  if (!hasMusic) return;
+  if (!hasMusic) return Promise.resolve(true);
   if (musicStatePersistTimer) {
     window.clearTimeout(musicStatePersistTimer);
     musicStatePersistTimer = null;
   }
-  fetch("/api/music/state", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(musicStatePayload()),
-    keepalive: true
-  }).catch(() => {});
+  const body = JSON.stringify(musicStatePayload());
+  musicStateHasQueuedSave = true;
+  // Serialize snapshots so an older request cannot overwrite a later drag.
+  musicStatePersistQueue = musicStatePersistQueue.then(async () => {
+    try {
+      const response = await fetch("/api/music/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        keepalive: true
+      });
+      if (!response.ok) return false;
+      const result = await response.json();
+      return result.ok === true && result.staleClient !== true;
+    } catch {
+      return false;
+    }
+  });
+  return musicStatePersistQueue;
 }
 
 function persistMusicStateSoon() {
@@ -19267,6 +19315,88 @@ async function openDownloadsFolder() {
   }
 }
 
+function stopRandomRealmMusicOrderPoll() {
+  if (randomRealmMusicOrderPollTimer) window.clearTimeout(randomRealmMusicOrderPollTimer);
+  randomRealmMusicOrderPollTimer = null;
+}
+
+function scheduleRandomRealmMusicOrderPoll() {
+  stopRandomRealmMusicOrderPoll();
+  if (randomRealmMusicOrderStatus !== "pending" || !isModuleForeground("randomrealm")) return;
+  randomRealmMusicOrderPollTimer = window.setTimeout(() => {
+    randomRealmMusicOrderPollTimer = null;
+    void loadRandomRealmMusicOrderStatus();
+  }, 2000);
+}
+
+function renderRandomRealmMusicOrderStatus(result) {
+  randomRealmMusicOrderRequestId = result.requestId || "";
+  randomRealmMusicOrderStatus = result.status || "idle";
+  const keys = {
+    pending: "randomRealmMusicOrderPending",
+    applied: "randomRealmMusicOrderApplied",
+    rejected: "randomRealmMusicOrderRejected",
+    superseded: "randomRealmMusicOrderSuperseded"
+  };
+  if (els.randomRealmMusicOrderStatus) {
+    els.randomRealmMusicOrderStatus.textContent = keys[randomRealmMusicOrderStatus]
+      ? text(keys[randomRealmMusicOrderStatus]) : "";
+  }
+  scheduleRandomRealmMusicOrderPoll();
+}
+
+async function loadRandomRealmMusicOrderStatus() {
+  if (!els.syncRandomRealmMusicOrder || randomRealmMusicOrderBusy || randomRealmMusicOrderStatusInFlight) return true;
+  const generation = randomRealmMusicOrderGeneration;
+  randomRealmMusicOrderStatusInFlight = true;
+  try {
+    const query = randomRealmMusicOrderRequestId ? `?requestId=${encodeURIComponent(randomRealmMusicOrderRequestId)}` : "";
+    const response = await fetch(`/api/randomrealm/music-order-sync${query}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    if (generation === randomRealmMusicOrderGeneration) renderRandomRealmMusicOrderStatus(result);
+    return true;
+  } catch (error) {
+    if (generation === randomRealmMusicOrderGeneration && els.randomRealmMusicOrderStatus) {
+      els.randomRealmMusicOrderStatus.textContent = text("randomRealmMusicOrderFailed", error.message);
+    }
+    scheduleRandomRealmMusicOrderPoll();
+    return false;
+  } finally {
+    randomRealmMusicOrderStatusInFlight = false;
+  }
+}
+
+async function syncRandomRealmMusicOrder() {
+  if (randomRealmMusicOrderBusy) return;
+  randomRealmMusicOrderBusy = true;
+  randomRealmMusicOrderGeneration += 1;
+  stopRandomRealmMusicOrderPoll();
+  els.syncRandomRealmMusicOrder.disabled = true;
+  els.randomRealmMusicOrderStatus.textContent = text("randomRealmMusicOrderSaving");
+  try {
+    // Flush pending sort snapshots, including any newer save queued while waiting.
+    // A RandomRealm-only session has no local edit to save; use current disk state.
+    if (musicStatePersistTimer || musicStateHasQueuedSave) persistMusicStateNow();
+    while (true) {
+      const snapshot = musicStatePersistQueue;
+      const saved = await snapshot;
+      if (musicStatePersistTimer) persistMusicStateNow();
+      if (snapshot !== musicStatePersistQueue) continue;
+      if (!saved) throw new Error(text("randomRealmMusicOrderSaveFailed"));
+      break;
+    }
+    const result = await postJson("/api/randomrealm/music-order-sync", {});
+    renderRandomRealmMusicOrderStatus(result);
+  } catch (error) {
+    els.randomRealmMusicOrderStatus.textContent = text("randomRealmMusicOrderFailed", error.message);
+  } finally {
+    randomRealmMusicOrderBusy = false;
+    els.syncRandomRealmMusicOrder.disabled = false;
+    scheduleRandomRealmMusicOrderPoll();
+  }
+}
+
 function setRandomRealmReleaseStatus(message) {
   const value = message || text("randomRealmOpenReady");
   if (els.randomRealmReleaseStatusText) {
@@ -20804,6 +20934,9 @@ if (els.openRandomRealmPromo) {
 }
 if (els.openRandomRealmProject) {
   els.openRandomRealmProject.addEventListener("click", () => openRandomRealmResource("projectFolder", "randomRealmProjectFolder"));
+}
+if (els.syncRandomRealmMusicOrder) {
+  els.syncRandomRealmMusicOrder.addEventListener("click", syncRandomRealmMusicOrder);
 }
 if (els.openUnityProjectFolder) {
   els.openUnityProjectFolder.addEventListener("click", () => openRandomRealmResource("projectFolder", "randomRealmProjectFolder"));
