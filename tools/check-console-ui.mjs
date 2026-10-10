@@ -2615,6 +2615,8 @@ async function runBrowserChecks(client) {
     renderMusic();
     await loadLyricsForTrack(selectedTrack());
     const art = document.querySelector("#nowPlayingArt");
+    const card = document.querySelector("#nowPlayingCard");
+    if (!card || !art || !card.contains(art)) throw new Error("current playing card does not contain its artwork button");
     const snapshot = () => ({
       language: art?.dataset.lyricsLanguage || "",
       first: musicLyricsLines.find(line => line.text)?.text || "",
@@ -2623,28 +2625,96 @@ async function runBrowserChecks(client) {
     const waitForLanguage = async code => {
       for (let attempt = 0; attempt < 80; attempt += 1) {
         const state = snapshot();
-        if (state.language === code && state.first) return state;
+        if (state.language === code && state.first === variants[code]?.first && state.last === variants[code]?.last) return state;
         await new Promise(resolve => setTimeout(resolve, 40));
       }
       return snapshot();
     };
-    const cycle = async (expectedLanguage, shiftKey = false) => {
-      art.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, shiftKey }));
-      return waitForLanguage(expectedLanguage);
+    const originalCycle = cycleNowPlayingLyricsLanguage;
+    const originalLanguages = item.lyricsLanguages;
+    const originalArtChildren = Array.from(art.childNodes);
+    const originalTimingContext = {
+      lineIndex: lyricsTimingContextLineIndex,
+      clickCount: lyricsTimingContextClickCount,
+      lastAt: lyricsTimingContextLastAt
     };
-    const sequence = [
-      snapshot(),
-      await cycle("en"),
-      await cycle("zh"),
-      await cycle("fr"),
-      await cycle("zh", true)
+    const cover = document.createElement("span");
+    const image = document.createElement("img");
+    image.alt = "Isolated test cover";
+    image.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+    cover.append(image);
+    const targets = [
+      { name: "note button", node: art, cover: false },
+      { name: "cover button", node: art, cover: true },
+      { name: "nested cover image", node: image, cover: true },
+      { name: "song title", node: document.querySelector("#currentTrackName") },
+      { name: "metadata", node: document.querySelector("#currentTrackMeta") },
+      { name: "card blank", node: card }
     ];
-    return {
-      order: (item.lyricsLanguages || []).map(option => option.code),
-      variants,
-      sequence,
-      saved: JSON.parse(localStorage.getItem(storageKeys.lyricsLanguages) || "{}")?.[item.path] || ""
+    const prepareTarget = target => {
+      if (target.cover === true) art.replaceChildren(cover);
+      if (target.cover === false) art.replaceChildren(...originalArtChildren);
+      if (!target.node || !card.contains(target.node)) throw new Error("missing card target: " + target.name);
+      return target.node;
     };
+    let cycleCalls = 0;
+    const bubbling = [], nativeMenus = [], adjacent = [];
+    // Count real calls while keeping the actual language loading and preference logic.
+    // This catches duplicate listeners on the artwork child and its card parent.
+    cycleNowPlayingLyricsLanguage = (...args) => { cycleCalls += 1; return originalCycle(...args); };
+    const cycle = async (expectedLanguage, target = targets[0], shiftKey = false) => {
+      const before = snapshot(), beforeCalls = cycleCalls;
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, shiftKey });
+      const nativeMenuAllowed = prepareTarget(target).dispatchEvent(event);
+      const after = await waitForLanguage(expectedLanguage);
+      bubbling.push({ target: target.name, shiftKey, before: before.language, expectedLanguage, ...after,
+        cycleCalls: cycleCalls - beforeCalls, defaultPrevented: event.defaultPrevented, nativeMenuAllowed });
+      return after;
+    };
+    try {
+      const sequence = [snapshot(), await cycle("en"), await cycle("zh"), await cycle("fr"), await cycle("zh", targets[0], true)];
+      const languages = ["fr", "en", "zh"];
+      for (const shiftKey of [false, true]) for (const target of targets) {
+        const index = languages.indexOf(snapshot().language);
+        const expected = languages[(index + (shiftKey ? -1 : 1) + languages.length) % languages.length];
+        await cycle(expected, target, shiftKey);
+      }
+      for (const options of [[], originalLanguages.slice(0, 1)]) {
+        item.lyricsLanguages = options;
+        for (const shiftKey of [false, true]) for (const target of targets) {
+          const before = snapshot(), beforeCalls = cycleCalls;
+          const preferenceBefore = localStorage.getItem(storageKeys.lyricsLanguages);
+          const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, shiftKey });
+          const nativeMenuAllowed = prepareTarget(target).dispatchEvent(event);
+          nativeMenus.push({ target: target.name, optionCount: options.length, shiftKey,
+            cycleCalls: cycleCalls - beforeCalls, defaultPrevented: event.defaultPrevented, nativeMenuAllowed,
+            lyricsUnchanged: JSON.stringify(before) === JSON.stringify(snapshot()),
+            preferenceUnchanged: preferenceBefore === localStorage.getItem(storageKeys.lyricsLanguages) });
+        }
+      }
+      item.lyricsLanguages = originalLanguages;
+      for (const selector of ["#playPauseTrack", "#trackSeek", "#trackVolume", "#nowPlayingLyricsList", "#nowPlayingLyricsList .music-lyrics-line:not(.rest)", "#nowPlayingLyricsList .lyric-word"]) {
+        const node = document.querySelector(selector);
+        if (!node || card.contains(node)) throw new Error("adjacent control is missing or inside the language card: " + selector);
+        const before = snapshot(), beforeCalls = cycleCalls;
+        const preferenceBefore = localStorage.getItem(storageKeys.lyricsLanguages);
+        node.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+        adjacent.push({ selector, cycleCalls: cycleCalls - beforeCalls,
+          lyricsUnchanged: JSON.stringify(before) === JSON.stringify(snapshot()),
+          preferenceUnchanged: preferenceBefore === localStorage.getItem(storageKeys.lyricsLanguages) });
+      }
+      return {
+        order: originalLanguages.map(option => option.code), variants, sequence, bubbling, nativeMenus, adjacent,
+        saved: JSON.parse(localStorage.getItem(storageKeys.lyricsLanguages) || "{}")?.[item.path] || ""
+      };
+    } finally {
+      cycleNowPlayingLyricsLanguage = originalCycle;
+      item.lyricsLanguages = originalLanguages;
+      art.replaceChildren(...originalArtChildren);
+      lyricsTimingContextLineIndex = originalTimingContext.lineIndex;
+      lyricsTimingContextClickCount = originalTimingContext.clickCount;
+      lyricsTimingContextLastAt = originalTimingContext.lastAt;
+    }
   })()`, true);
   assert(JSON.stringify(roseLyrics?.order) === JSON.stringify(["fr", "en", "zh"]), `lyric language order is incorrect: ${JSON.stringify(roseLyrics)}`);
   assert(Object.values(roseLyrics.variants).every(item => item.synced && item.count === 37), `multilingual lyrics are incomplete: ${JSON.stringify(roseLyrics.variants)}`);
@@ -2654,6 +2724,30 @@ async function runBrowserChecks(client) {
   assert(
     JSON.stringify(roseLyrics.sequence.map(item => item.language)) === JSON.stringify(["fr", "en", "zh", "fr", "zh"]),
     `right-click lyric language cycle is incorrect: ${JSON.stringify(roseLyrics.sequence)}`
+  );
+  assert(
+    roseLyrics.bubbling.length === 16
+      && roseLyrics.bubbling.every(sample => sample.cycleCalls === 1 && sample.defaultPrevented && !sample.nativeMenuAllowed
+        && sample.language === sample.expectedLanguage && sample.language !== sample.before
+        && sample.first === roseLyrics.variants[sample.language]?.first && sample.last === roseLyrics.variants[sample.language]?.last),
+    `card right-click must bubble and switch exactly once to the matching lyrics: ${JSON.stringify(roseLyrics.bubbling)}`
+  );
+  for (const target of ["note button", "cover button", "nested cover image", "song title", "metadata", "card blank"]) {
+    assert(
+      [false, true].every(shiftKey => roseLyrics.bubbling.some(sample => sample.target === target && sample.shiftKey === shiftKey)),
+      `card language cycle did not cover forward/Shift reverse on ${target}`
+    );
+  }
+  assert(
+    roseLyrics.nativeMenus.length === 24
+      && roseLyrics.nativeMenus.every(sample => sample.cycleCalls === 0 && !sample.defaultPrevented && sample.nativeMenuAllowed
+        && sample.lyricsUnchanged && sample.preferenceUnchanged),
+    `zero/single-language cards must preserve the native context menu: ${JSON.stringify(roseLyrics.nativeMenus)}`
+  );
+  assert(
+    roseLyrics.adjacent.length === 6
+      && roseLyrics.adjacent.every(sample => sample.cycleCalls === 0 && sample.lyricsUnchanged && sample.preferenceUnchanged),
+    `playback controls and lyric timing targets must not cycle languages: ${JSON.stringify(roseLyrics.adjacent)}`
   );
   assert(roseLyrics.saved === "zh", `lyric language preference was not saved: ${JSON.stringify(roseLyrics)}`);
   const lyricPanelClick = await evaluate(client, `(async () => {

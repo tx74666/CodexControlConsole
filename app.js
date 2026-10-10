@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.90";
+const consoleUiVersion = "1.0.91";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -810,6 +810,7 @@ const i18n = {
     lyricsUnsynced: "歌词没有时间轴，作为全文显示。",
     lyricsLoadFailed: message => `歌词读取失败：${message}`,
     lyricsButtonLabel: name => `歌词：${name}`,
+    lyricsLanguageSwitchHint: "右键歌曲信息切换歌词语言；Shift + 右键反向切换",
     lyricsFindLabel: name => `查找歌词：${name}`,
     lyricsSeekLabel: line => `跳到歌词：${line}`,
     lyricsMarkArmed: "已选中，直接填开始/结束时间",
@@ -1661,6 +1662,7 @@ const i18n = {
     lyricsUnsynced: "Lyrics have no timeline; showing full text.",
     lyricsLoadFailed: message => `Lyrics failed: ${message}`,
     lyricsButtonLabel: name => `Lyrics: ${name}`,
+    lyricsLanguageSwitchHint: "Right-click the song information to switch lyrics language; Shift + right-click reverses",
     lyricsFindLabel: name => `Find lyrics: ${name}`,
     lyricsSeekLabel: line => `Jump to lyric: ${line}`,
     lyricsMarkArmed: "Selected; enter start/end timing",
@@ -2123,6 +2125,7 @@ const els = {
   musicLibraryCount: document.getElementById("musicLibraryCount"),
   musicDock: document.getElementById("musicDock"),
   musicCount: document.getElementById("musicCount"),
+  nowPlayingCard: document.getElementById("nowPlayingCard"),
   nowPlayingArt: document.getElementById("nowPlayingArt"),
   nowPlayingLyricsPanel: document.getElementById("nowPlayingLyricsPanel"),
   nowPlayingLyricsList: document.getElementById("nowPlayingLyricsList"),
@@ -9529,7 +9532,9 @@ function renderLyricsPanel() {
     els.nowPlayingArt.classList.toggle("has-lyrics", hasCachedLyrics);
     els.nowPlayingArt.classList.toggle("can-find-lyrics", Boolean(selectedPath));
     els.nowPlayingArt.classList.toggle("lyrics-searching", Boolean(selectedPath && musicLyricsLookupPath === selectedPath));
-    els.nowPlayingArt.title = selectedPath ? label : "";
+    const languageHint = activeLanguage ? `${text("lyricsLanguageSwitchHint")} · ${activeLanguage}` : "";
+    els.nowPlayingArt.title = selectedPath ? [label, languageHint].filter(Boolean).join("\n") : "";
+    if (els.nowPlayingCard) els.nowPlayingCard.title = languageHint;
     els.nowPlayingArt.setAttribute("aria-label", label);
     els.nowPlayingArt.setAttribute("aria-expanded", String(isOpen));
     if (activeLanguage) els.nowPlayingArt.dataset.lyricsLanguage = activeLanguage.toLowerCase();
@@ -20705,8 +20710,8 @@ if (hasMusic) els.musicDock.addEventListener("dragleave", handleLocalMusicDragLe
 if (hasMusic) els.musicDock.addEventListener("drop", handleLocalMusicDrop);
 if (hasMusic && els.nowPlayingArt) {
   els.nowPlayingArt.addEventListener("click", handleNowPlayingLyricsClick);
-  els.nowPlayingArt.addEventListener("contextmenu", handleNowPlayingLyricsContextMenu);
 }
+if (hasMusic) (els.nowPlayingCard || els.nowPlayingArt)?.addEventListener("contextmenu", handleNowPlayingLyricsContextMenu);
 if (hasMusic && els.nowPlayingLyricsPanel) {
   els.nowPlayingLyricsPanel.addEventListener("pointerdown", beginLyricsPanelResize);
   els.nowPlayingLyricsPanel.addEventListener("pointermove", setLyricsPanelResizeHover);
