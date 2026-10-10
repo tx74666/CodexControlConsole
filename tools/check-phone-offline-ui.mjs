@@ -375,8 +375,18 @@ await test("the original songs retain their tiers and desktop order", async () =
   const defaults = JSON.parse(readFileSync(new URL("../release-defaults.json", import.meta.url), "utf8")).music;
   const h = harness(); h.ready(); h.api.state.catalog = defaults.order.map(name => ({ name: name.replace(/\.mp3$/, ""), path: `builtin/${name}`, source: `music/${name}`, type: "mp3", size: 9, tier: defaults.tiers[name] }));
   const before = JSON.stringify(h.api.state.catalog); await h.api.loadMusic();
-  assert.deepEqual(h.get("musicTracks").children.filter(section => section.tagName === "SECTION").map(section => [section.dataset.musicTier, h.all(section, "button").filter(button => button.className === "music-track").length]), [["first", 3], ["second", 6], ["third", 7]]);
-  assert.deepEqual(musicRows(h).slice(0, 3).map(button => h.all(button, "span").find(item => item.className === "music-track-name").textContent), ["Outrun", "Redline", "Liquid Roller"]);
+  // Public defaults contain only packaged songs; local additions belong to the separate desktop library.
+  const expected = ["first", "second", "third"].map(tier => [tier, defaults.order.filter(name => {
+    const declared = defaults.tiers[name]; return (declared === "first" || declared === "second" ? declared : "third") === tier;
+  }).map(name => ({ path: `builtin/${name}`, name: name.replace(/\.mp3$/, "") }))]).filter(([, tracks]) => tracks.length);
+  const sections = h.get("musicTracks").children.filter(section => section.tagName === "SECTION");
+  for (const track of h.api.state.catalog) h.api.state.saved.add(track.path);
+  const rendered = sections.map(section => [section.dataset.musicTier, h.all(section, "button").filter(button => button.className === "music-track").map(button => {
+    const name = h.all(button, "span").find(item => item.className === "music-track-name").textContent;
+    button.listeners.get("click")(); // Verify the real row callback targets the declared song, not just its label.
+    return { path: h.api.state.music.selected?.path, name };
+  })]);
+  assert.deepEqual(rendered, expected, "each rendered tier must retain every declared song identity and its desktop order");
   assert.equal(JSON.stringify(h.api.state.catalog), before); assert.equal(h.calls.length, 0);
 });
 await test("tier groups keep stable order and default only the phone display to third", async () => {
