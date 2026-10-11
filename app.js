@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.98";
+const consoleUiVersion = "1.0.99";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -2423,7 +2423,8 @@ let renderTextureNotice = "";
 let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) === "true";
 let tutorialMode = localStorage.getItem(storageKeys.tutorialMode) === "true";
 const requestedConsoleView = new URLSearchParams(window.location.search).get("consoleView");
-let activeConsoleView = normalizeConsoleWorkspaceView(requestedConsoleView);
+const requestedResumeModule = new URLSearchParams(window.location.search).get("resumeModule");
+let activeConsoleView = normalizeConsoleWorkspaceView(requestedConsoleView ?? localStorage.getItem(storageKeys.consoleView));
 let desktopTransferPanel = null;
 let desktopWorkflowPanel = null;
 let desktopCodexWorkPanel = null;
@@ -2693,6 +2694,7 @@ function isModuleForeground(id) {
 
 function moduleUrl(href) {
   const params = new URLSearchParams(window.location.search);
+  params.delete("resumeModule");
   if (consoleEdition === "developer") params.delete("edition");
   else params.set("edition", consoleEdition);
   const search = params.toString();
@@ -2751,8 +2753,10 @@ function initialModuleId() {
   ensureEditionModuleLayout();
   const pageName = currentPageName();
   const unavailable = new Set([...allArchivedModuleIds(), ...deletedModuleIds()]);
+  if (pageName === "index.html" && requestedConsoleView === "work" && ["workflow", "agents"].includes(activeWorkView) && !unavailable.has("workspace")) return "workspace";
+  if (isModuleId(requestedResumeModule) && !unavailable.has(requestedResumeModule)
+      && moduleById(requestedResumeModule).href === pageName) return requestedResumeModule;
   if (pageName === "index.html") {
-    if (requestedConsoleView === "work" && ["workflow", "agents"].includes(activeWorkView) && !unavailable.has("workspace")) return "workspace";
     const saved = lastModuleId();
     if (saved && !unavailable.has(saved)) {
       return saved;

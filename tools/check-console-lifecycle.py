@@ -242,22 +242,131 @@ def check_live_server(*, retire=False):
                     process.wait(timeout=3)
 
 
-def check_device_overview_startup():
+def check_remembered_module_startup():
     import world_console
 
-    saved_state = {"href": "music.html", "lastModule": "music", "order": ["music", "workspace"]}
-    with mock.patch.object(world_console, "read_console_state", return_value=saved_state), \
-            mock.patch.object(world_console, "write_console_state") as write_state:
-        for edition in ("developer", "public"):
-            with mock.patch.dict(world_console.CONSOLE_CONFIG, {"edition": edition}):
-                url = world_console.console_start_url(8898)
-                require("/workspace.html?" in url and "consoleView=work" in url,
-                        f"{edition} daily entry did not open task incubator")
-        with mock.patch.dict(world_console.CONSOLE_CONFIG, {"edition": "lite"}):
-            require("/music.html?edition=lite" in world_console.console_start_url(8898),
-                    "lite edition lost its supported saved module")
-        write_state.assert_not_called()
-        require(saved_state["lastModule"] == "music", "startup overwrote the user's module settings")
+    # Exercise the real state writer in a new isolated file. Startup must read
+    # the persisted choice, including index.html's shared wallpaper module.
+    with tempfile.TemporaryDirectory(prefix="codex-startup-preferences-") as temporary:
+        state_file = Path(temporary) / "console-state.json"
+        with mock.patch.object(world_console, "CONSOLE_STATE_FILE", state_file):
+            for edition in ("developer", "public", "lite"):
+                with mock.patch.dict(world_console.CONSOLE_CONFIG, {"edition": edition}):
+                    query = "" if edition == "developer" else f"?edition={edition}"
+                    for module_id in world_console.console_module_ids():
+                        saved = world_console.write_console_state({
+                            "order": list(world_console.console_module_ids()),
+                            "archive": [], "deepArchive": [], "deleted": [], "lastModule": module_id,
+                        })["state"]
+                        before = state_file.read_bytes()
+                        with mock.patch.object(world_console, "write_console_state") as write_state:
+                            url = world_console.console_start_url(8898)
+                            require(url == f"http://127.0.0.1:8898/{world_console.CONSOLE_MODULE_HREFS[module_id]}{query}{'&' if query else '?'}resumeModule={module_id}",
+                                    f"{edition} startup ignored saved {module_id}: {url}")
+                            write_state.assert_not_called()
+                        require(saved["lastModule"] == module_id and state_file.read_bytes() == before,
+                                "startup changed the persisted module preference")
+
+            for edition in ("developer", "public", "lite"):
+                with mock.patch.dict(world_console.CONSOLE_CONFIG, {"edition": edition}):
+                    query = "" if edition == "developer" else f"?edition={edition}"
+                    cases = [({"order": ["workspace", "music", "wallpaper"], "lastModule": "invalid-module"},
+                              "workspace" if edition != "lite" else "music")]
+                    for hidden_key in ("archive", "deepArchive", "deleted"):
+                        cases.append(({"order": ["music", "workspace", "wallpaper"], "lastModule": "music", hidden_key: ["music"]},
+                                      "workspace" if edition != "lite" else "wallpaper"))
+                    if edition == "lite":
+                        cases.append(({"order": ["wallpaper", "music"], "lastModule": "workspace"}, "wallpaper"))
+                    for raw, fallback in cases:
+                        normalized = world_console.normalize_console_state(raw)
+                        require(normalized["lastModule"] == fallback, "invalid/unavailable state did not choose a visible allowed fallback")
+                        with mock.patch.object(world_console, "read_console_state", return_value=normalized), \
+                                mock.patch.object(world_console, "write_console_state") as write_state:
+                            expected = f"http://127.0.0.1:8898/{world_console.CONSOLE_MODULE_HREFS[fallback]}{query}{'&' if query else '?'}resumeModule={fallback}"
+                            require(world_console.console_start_url(8898) == expected, "startup lost the normalized module fallback")
+                            write_state.assert_not_called()
+                    for href in ("not-a-page.html", "../music.html", "https://invalid.example/music.html"):
+                        with mock.patch.object(world_console, "read_console_state", return_value={"href": href}):
+                            require(world_console.console_start_url(8898) == f"http://127.0.0.1:8898/index.html{query}{'&' if query else '?'}resumeModule=wallpaper",
+                                    "unsafe stored href escaped the startup fallback")
+                    if edition == "lite":
+                        with mock.patch.object(world_console, "read_console_state", return_value={"href": "workspace.html"}):
+                            require(world_console.console_start_url(8898) == "http://127.0.0.1:8898/index.html?edition=lite&resumeModule=wallpaper",
+                                    "lite restored an unavailable module")
+
+
+def check_main_module_startup_routes():
+    import world_console
+
+    for edition in ("developer", "public", "lite"):
+        query = "" if edition == "developer" else f"?edition={edition}"
+        cases = [(module_id, None) for module_id in ("music", "workspace", "wallpaper")
+                 if world_console.console_module_allowed(module_id, edition)]
+        if world_console.console_module_allowed("workspace", edition):
+            cases.append(("music", "isolated-document-entry"))
+        for module_id, document_root in cases:
+            for reuse in (False, True):
+                instance = {"port": 19899, "runtime": {"version": world_console.APP_VERSION}} if reuse else None
+                arguments = ["world_console.py", "--port", "19898", "--edition", edition]
+                if document_root:
+                    arguments.extend(("--document-root", document_root))
+                expected = f"http://127.0.0.1:19899/{world_console.CONSOLE_MODULE_HREFS[module_id]}{query}{'&' if query else '?'}resumeModule={module_id}"
+                if document_root:
+                    expected = f"http://127.0.0.1:19899/workspace.html{query}{'&' if query else '?'}consoleView=document"
+                with ExitStack() as stack:
+                    stack.enter_context(mock.patch.object(sys, "argv", arguments))
+                    stack.enter_context(mock.patch.object(sys, "stdout", io.StringIO()))
+                    stack.enter_context(mock.patch.dict(world_console.CONSOLE_CONFIG, {}, clear=False))
+                    stack.enter_context(mock.patch.object(world_console, "ACTIVE_SERVER", None))
+                    stack.enter_context(mock.patch.object(world_console, "StartupLock"))
+                    stack.enter_context(mock.patch.object(world_console, "read_console_state", return_value={
+                        "href": world_console.CONSOLE_MODULE_HREFS[module_id], "lastModule": module_id,
+                    }))
+                    write_state = stack.enter_context(mock.patch.object(world_console, "write_console_state"))
+                    stack.enter_context(mock.patch.object(world_console, "atomic_write_json"))
+                    stack.enter_context(mock.patch.object(world_console, "find_running_console", return_value=instance))
+                    retire = stack.enter_context(mock.patch.object(world_console, "retire_older_instance"))
+                    choose_port = stack.enter_context(mock.patch.object(world_console, "pick_port", return_value=19899))
+                    server = stack.enter_context(mock.patch.object(world_console, "ConsoleHTTPServer"))
+                    window = stack.enter_context(mock.patch.object(world_console, "open_console_window"))
+                    documents = stack.enter_context(mock.patch.object(world_console, "DOCUMENT_LIBRARY"))
+                    companion = stack.enter_context(mock.patch.object(world_console, "PHONE_COMPANION"))
+                    workflow = stack.enter_context(mock.patch.object(world_console, "WORKFLOW_SERVICE"))
+                    subscription = stack.enter_context(mock.patch.object(world_console, "SUBSCRIPTION_BROKER"))
+                    relay = stack.enter_context(mock.patch.object(world_console, "CHAT_RELAY_BROKER"))
+                    sessions = stack.enter_context(mock.patch.object(world_console, "CONSOLE_WINDOW_SESSIONS"))
+                    thread = stack.enter_context(mock.patch.object(world_console.threading, "Thread"))
+                    backend_thread, restore_thread = mock.Mock(), mock.Mock()
+                    backend_thread.is_alive.return_value = False
+                    def make_thread(*args, **kwargs):
+                        if kwargs.get("target") == server.return_value.serve_forever:
+                            return backend_thread
+                        if kwargs.get("target") == companion.restore:
+                            return restore_thread
+                        raise AssertionError("startup opened an unexpected background thread")
+                    thread.side_effect = make_thread
+                    world_console.main()
+                    window.assert_called_once_with(expected, replace=False)
+                    write_state.assert_not_called()
+                    retire.assert_not_called()
+                    if document_root:
+                        documents.select.assert_called_once_with(document_root)
+                    else:
+                        documents.select.assert_not_called()
+                    if reuse:
+                        choose_port.assert_not_called()
+                        server.assert_not_called()
+                        thread.assert_not_called()
+                        workflow.start.assert_not_called()
+                    else:
+                        choose_port.assert_called_once_with(19898)
+                        server.assert_called_once_with(("127.0.0.1", 19899), world_console.ConsoleHandler)
+                        backend_thread.start.assert_called_once_with()
+                        restore_thread.start.assert_called_once_with()
+                        workflow.start.assert_called_once_with()
+                        subscription.start.assert_called_once_with()
+                        relay.start.assert_called_once_with()
+                        sessions.stop.assert_called_once_with()
 
 
 def check_main_instance_reuse():
@@ -273,6 +382,7 @@ def check_main_instance_reuse():
                 stack.enter_context(mock.patch.object(sys, "argv", arguments))
                 stack.enter_context(mock.patch.object(world_console, "APP_VERSION", "1.0.8"))
                 stack.enter_context(mock.patch.dict(world_console.CONSOLE_CONFIG, {}, clear=False))
+                stack.enter_context(mock.patch.object(world_console, "read_console_state", return_value={"href": "music.html", "lastModule": "music"}))
                 gate = stack.enter_context(mock.patch.object(world_console, "StartupLock"))
                 find = stack.enter_context(mock.patch.object(world_console, "find_running_console", return_value=instance))
                 retire = stack.enter_context(mock.patch.object(world_console, "retire_older_instance"))
@@ -289,7 +399,7 @@ def check_main_instance_reuse():
                 if no_browser:
                     window.assert_not_called()
                 else:
-                    window.assert_called_once_with(world_console.console_start_url(19899), replace=False)
+                    window.assert_called_once_with("http://127.0.0.1:19899/music.html?resumeModule=music", replace=False)
 
 
 def check_main_older_handoff():
@@ -298,11 +408,12 @@ def check_main_older_handoff():
     instance = {"port": 19899, "runtime": {"version": "1.0.7"}}
     for supported in (True, False):
         with ExitStack() as stack:
-            stack.enter_context(mock.patch.object(sys, "argv", ["world_console.py", "--port", "19898"]))
+            stack.enter_context(mock.patch.object(sys, "argv", ["world_console.py", "--port", "19898", "--edition", "developer"]))
             stack.enter_context(mock.patch.object(sys, "stdout", io.StringIO()))
             stack.enter_context(mock.patch.object(world_console, "APP_VERSION", "1.0.8"))
             stack.enter_context(mock.patch.object(world_console, "ACTIVE_SERVER", None))
             stack.enter_context(mock.patch.dict(world_console.CONSOLE_CONFIG, {}, clear=False))
+            stack.enter_context(mock.patch.object(world_console, "read_console_state", return_value={"href": "music.html", "lastModule": "music"}))
             stack.enter_context(mock.patch.object(world_console, "StartupLock"))
             stack.enter_context(mock.patch.object(world_console, "find_running_console", return_value=instance))
             retire = stack.enter_context(mock.patch.object(world_console, "retire_older_instance"))
@@ -314,6 +425,7 @@ def check_main_older_handoff():
             companion = stack.enter_context(mock.patch.object(world_console, "PHONE_COMPANION"))
             workflow = stack.enter_context(mock.patch.object(world_console, "WORKFLOW_SERVICE"))
             subscription = stack.enter_context(mock.patch.object(world_console, "SUBSCRIPTION_BROKER"))
+            stack.enter_context(mock.patch.object(world_console, "CHAT_RELAY_BROKER"))
             backend_thread = mock.Mock()
             backend_thread.is_alive.return_value = False
             restore_thread = mock.Mock()
@@ -340,7 +452,7 @@ def check_main_older_handoff():
             choose_port.assert_not_called()
             if supported:
                 server.assert_called_once_with(("127.0.0.1", 19899), world_console.ConsoleHandler)
-                window.assert_called_once_with(world_console.console_start_url(19899), replace=True)
+                window.assert_called_once_with("http://127.0.0.1:19899/music.html?resumeModule=music", replace=True)
                 require(events == ["retired", "serving", "window"],
                         "handoff opened a window before the old server retired and the new server started")
                 server.return_value.server_close.assert_called_once_with()
@@ -440,7 +552,8 @@ def main():
             "CODEX_CONTROL_DESKTOP_LAYOUT_SCRIPT": str(isolated / "disabled.ps1"),
             "CODEX_CONTROL_DESKTOP_LAYOUT_STARTUP_FILE": str(isolated / "Startup" / "disabled.vbs"),
         }):
-            check_device_overview_startup()
+            check_remembered_module_startup()
+            check_main_module_startup_routes()
             check_main_instance_reuse()
             check_main_older_handoff()
             check_retirement_guards()

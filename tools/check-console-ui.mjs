@@ -309,7 +309,7 @@ function staticChecks() {
       && /<details[^>]+builtin-media-panel[^>]*>/.test(consoleHtml)
       && !/<details[^>]+(?:desktop-layout-panel|builtin-media-panel)[^>]+\bopen\b/.test(consoleHtml)
       && consoleHtml.indexOf('id="documentOverview"') < consoleHtml.indexOf('id="documentInbox"')
-      && appSource.includes('normalizeConsoleWorkspaceView(requestedConsoleView)'),
+      && appSource.includes('normalizeConsoleWorkspaceView(requestedConsoleView ?? localStorage.getItem(storageKeys.consoleView))'),
     "Document entry, report inbox, or collapsed Common panels are missing"
   );
   assert(

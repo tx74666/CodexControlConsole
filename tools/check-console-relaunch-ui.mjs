@@ -85,4 +85,47 @@ assert(!stored.has('draft'), 'submitting/clearing draft must prevent its resurre
 stored.set('draft', '{invalid');
 context.restoreWorkspaceTodoDraft();
 assert.equal(context.els.workspaceTodoInput.value, '');
-console.log('PASS Console relaunch UI version, Work reload gates and to-do draft preservation');
+const initialViewExpression = source.match(/let activeConsoleView = ([^;]+);/)?.[1];
+assert(initialViewExpression, 'missing Console initial view selection');
+for (const [requested, saved, expected] of [
+  [null, 'document', 'document'], [null, 'transfer', 'transfer'],
+  [null, 'collaboration', 'collaboration'], [null, null, 'work'],
+  ['work', 'document', 'work'], ['document', 'transfer', 'document'],
+  ['invalid', 'document', 'work'], [null, 'invalid', 'work']
+]) {
+  const view = runInNewContext(`${extract('normalizeConsoleWorkspaceView')}\n${initialViewExpression}`, {
+    requestedConsoleView: requested,
+    storageKeys: { consoleView: 'console-view' },
+    localStorage: { getItem(key) { assert.equal(key, 'console-view'); return saved; } }
+  });
+  assert.equal(view, expected, 'ordinary reopen must remember its Console section and explicit links must win');
+}
+const moduleHrefs = { wallpaper: 'index.html', music: 'music.html', workspace: 'workspace.html', blender: 'blender.html' };
+for (const [page, saved, resume, archived, requestedView, workView, expected] of [
+  ['music.html', 'workspace', null, [], null, 'workflow', 'music'],
+  ['workspace.html', 'music', null, [], null, 'workflow', 'workspace'],
+  ['index.html', 'music', 'wallpaper', [], null, 'workflow', 'wallpaper'],
+  ['index.html', 'music', null, [], null, 'workflow', 'music'],
+  ['index.html', 'music', 'invalid', [], null, 'workflow', 'music'],
+  ['music.html', 'workspace', 'workspace', [], null, 'workflow', 'music'],
+  ['index.html', 'music', 'wallpaper', ['wallpaper'], null, 'workflow', 'music'],
+  ['index.html', 'music', 'wallpaper', [], 'work', 'agents', 'workspace'],
+  ['blender.html', 'music', 'music', [], null, 'workflow', 'blender']
+]) {
+  const selected = runInNewContext(`${extract('initialModuleId')}\ninitialModuleId()`, {
+    requestedConsoleView: requestedView, requestedResumeModule: resume, activeWorkView: workView,
+    ensureEditionModuleLayout() {}, currentPageName() { return page; },
+    allArchivedModuleIds() { return archived; }, deletedModuleIds() { return []; },
+    isModuleId(id) { return Object.hasOwn(moduleHrefs, id); },
+    moduleById(id) { return { href: moduleHrefs[id] }; }, lastModuleId() { return saved; },
+    moduleIdFromPage(name) { return Object.keys(moduleHrefs).find(id => moduleHrefs[id] === name); },
+    visibleModuleOrder() { return Object.keys(moduleHrefs).filter(id => !archived.includes(id)); }
+  });
+  assert.equal(selected, expected, 'saved launch hint must resolve stale index storage without overriding explicit pages or Work links');
+}
+const nextUrl = runInNewContext(`${extract('moduleUrl')}\nmoduleUrl('music.html')`, {
+  URLSearchParams, consoleEdition: 'public',
+  window: { location: { search: '?edition=public&resumeModule=wallpaper&consoleView=document', hash: '' } }
+});
+assert.equal(nextUrl, 'music.html?edition=public&consoleView=document', 'one-shot launch hint must not leak into later module navigation');
+console.log('PASS Console relaunch UI version, remembered module/section, explicit entry, Work reload gates and to-do draft preservation');

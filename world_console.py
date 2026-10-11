@@ -10039,15 +10039,14 @@ def write_console_state(payload):
 
 
 def console_start_url(port):
-    # The daily launcher opens Work's task incubator. Module order and saved
-    # layouts remain untouched; explicit page links still open their module.
+    # Ordinary launches restore the last visible module. Explicit entry points
+    # (such as --document-root) choose their own URL without replacing this state.
     query = console_edition_query()
-    if console_module_allowed("workspace"):
-        return f"http://127.0.0.1:{port}/workspace.html{query}{'&' if query else '?'}consoleView=work"
     href = read_console_state().get("href") or "index.html"
     if href not in CONSOLE_MODULE_HREFS.values() or not console_module_allowed(console_module_id_from_href(href)):
         href = CONSOLE_MODULE_HREFS["wallpaper"]
-    return f"http://127.0.0.1:{port}/{href}{query}"
+    module_id = console_module_id_from_href(href)
+    return f"http://127.0.0.1:{port}/{href}{query}{'&' if query else '?'}resumeModule={module_id}"
 
 
 def sanitize_string_map(value):
