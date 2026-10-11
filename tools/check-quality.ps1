@@ -72,6 +72,8 @@ $PythonSources = @(
   "blender_github_share.py",
   "console_update.py",
   "console_developer_update.py",
+  "console_repository_publish.py",
+  "console_repository_bindings.py",
   "console_window_session.py",
   "console_instance.py",
   "console_window_launcher.py",
@@ -135,6 +137,9 @@ $PythonChecks = @(
   "tools/check-console-update.py",
   "tools/check-console-developer-update.py",
   "tools/check-console-developer-update-http.py",
+  "tools/check-console-repository-publish.py",
+  "tools/check-console-repository-bindings.py",
+  "tools/check-console-repository-publish-http.py",
   "tools/check-update-manifest.py",
   "tools/check-world-update.py",
   "tools/check-clean-uninstall.py",
@@ -289,6 +294,8 @@ try {
   Invoke-QualityStep "RandomRealm music order synchronization UI" { & $Node tools/check-randomrealm-music-order-ui.mjs }
   Invoke-QualityStep "Developer Update JavaScript syntax" { & $Node --check console-developer-update.js }
   Invoke-QualityStep "Developer Update UI behavior" { & $Node tools/check-console-developer-update-ui.mjs }
+  Invoke-QualityStep "Repository publish UI syntax" { & $Node --check console-repository-publish.js }
+  Invoke-QualityStep "Repository publish UI behavior" { & $Node tools/check-console-repository-publish-ui.mjs }
   Invoke-QualityStep "Desktop Console header control policy" { & $Node tools/check-console-header-controls.mjs }
   Invoke-QualityStep "Lyric word timing and vocal rest playback" { & $Node tools/check-lyrics-playback-timing.mjs }
   Invoke-QualityStep "Dev Room text fields syntax" { & $Node --check dev-room-editor.js }

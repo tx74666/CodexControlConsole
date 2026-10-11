@@ -42,6 +42,8 @@ from blender_github_share import (
 )
 from console_update import ConsoleUpdateService
 from console_developer_update import ConsoleDeveloperUpdateService, DeveloperUpdateError
+from console_repository_publish import RepositoryPublishService, RepositoryPublishError
+from console_repository_bindings import RepositoryBindingDiscovery
 from world_update import WorldUpdateService
 from desktop_layout import DesktopLayoutService
 from feedback_service import FeedbackService, FeedbackServiceError
@@ -749,7 +751,8 @@ def shutdown_active_server():
 
 
 def retire_console_instance(payload):
-    if CONSOLE_DEVELOPER_UPDATE.busy:
+    if (CONSOLE_DEVELOPER_UPDATE.busy
+            or getattr(globals().get("CONSOLE_REPOSITORY_PUBLISH"), "busy", False)):
         raise ValueError("本机代码正在保存或上传，请完成后再更新应用。")
     if payload.get("expectedInstanceId") != RUNTIME_INSTANCE_ID:
         raise ValueError("The running Console changed; launch it again.")
@@ -764,7 +767,8 @@ def retire_console_instance(payload):
 
 def shutdown_if_no_background_work():
     if (PHONE_COMPANION.enabled or WORKFLOW_SERVICE.background_enabled
-            or WORKFLOW_SERVICE.has_pending_jobs() or CONSOLE_DEVELOPER_UPDATE.busy):
+            or WORKFLOW_SERVICE.has_pending_jobs() or CONSOLE_DEVELOPER_UPDATE.busy
+            or getattr(globals().get("CONSOLE_REPOSITORY_PUBLISH"), "busy", False)):
         return
     shutdown_active_server()
 
@@ -781,6 +785,54 @@ CONSOLE_UPDATE = ConsoleUpdateService(
 )
 CONSOLE_DEVELOPER_UPDATE = ConsoleDeveloperUpdateService(
     CACHE_DIR / "developer-update-private", runtime_version=APP_VERSION,
+    allowed=current_console_edition() in {"public", "developer"} and APP_INSTALL_MODE != "store",
+)
+
+
+def repository_publish_work_snapshot():
+    """Read accepted Work ownership without dispatching work or asking a model."""
+    with WORKFLOW_SERVICE._db() as db:
+        projects = WORKFLOW_SERVICE._setting(db, "projects") or []
+        bindings = WORKFLOW_SERVICE._setting(db, "app_work_bindings") or []
+        catalog = WORKFLOW_SERVICE._setting(db, "app_work_catalog") or {}
+        jobs = []
+        for row in db.execute(
+                "SELECT records.project_id,jobs.status,jobs.payload FROM jobs "
+                "LEFT JOIN records ON records.id=jobs.record_id "
+                "WHERE jobs.kind IN ('execute','work') "
+                "AND jobs.status IN ('queued','starting','running','waiting','cancelling','needs_review')"):
+            payload = json.loads(row["payload"])
+            project = next((item for item in projects if item.get("id") == row["project_id"]), {})
+            jobs.append({"status": row["status"], "payload": payload,
+                         "root": project.get("root", "")})
+        dispatches = [{**json.loads(row["snapshot"]), "status": row["status"]} for row in db.execute(
+            "SELECT status,snapshot FROM idea_dispatches WHERE status IN ('pending','claimed','waiting') "
+            "AND json_extract(snapshot,'$.origin')='workflow_work'")]
+    return {"projects": projects, "bindings": bindings, "workspaces": catalog.get("workspaces", []),
+            "jobs": jobs, "nativeDispatches": dispatches}
+
+
+REPOSITORY_BINDING_DISCOVERY = RepositoryBindingDiscovery(
+    blender_store=BLENDER_GITHUB_SHARE._read_store,
+    blender_catalog=BLENDER_GITHUB_SHARE._read_catalog,
+    developer_settings=CONSOLE_DEVELOPER_UPDATE._settings,
+    workflow_snapshot=repository_publish_work_snapshot,
+    known_roots=[RANDOMREALM_PROJECT_DIR, WORLD_CONSOLE_DIR, APP_DIR, *BLENDER_PROJECT_ROOTS,
+                 {"path": "", "repositoryUrl": "https://github.com/tx74666/MyWeb"}],
+)
+
+
+def repository_publish_busy_reason(root):
+    publisher = globals().get("CONSOLE_REPOSITORY_PUBLISH")
+    return REPOSITORY_BINDING_DISCOVERY.busy_reason(
+        root, developer_operation=CONSOLE_DEVELOPER_UPDATE.operation(),
+        owned_developer_lock=bool(publisher and publisher.owns_developer_lock(root)))
+
+
+CONSOLE_REPOSITORY_PUBLISH = RepositoryPublishService(
+    CACHE_DIR / "repository-publish-private",
+    discovery=REPOSITORY_BINDING_DISCOVERY.discover,
+    busy_check=repository_publish_busy_reason,
     allowed=current_console_edition() in {"public", "developer"} and APP_INSTALL_MODE != "store",
 )
 WORLD_UPDATE = WorldUpdateService(
@@ -1631,6 +1683,29 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self._private_phone_path():
             self.send_error(404)
             return
+        if (parsed.path == "/api/console/repository-publish"
+                or parsed.path.startswith("/api/console/repository-publish/")):
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            if current_console_edition() not in {"public", "developer"} or APP_INSTALL_MODE == "store":
+                self.send_json({"allowed": False, "busy": False})
+                return
+            try:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if parsed.path == "/api/console/repository-publish" and not parsed.query:
+                    result = CONSOLE_REPOSITORY_PUBLISH.status()
+                elif (parsed.path == "/api/console/repository-publish/operation"
+                        and not set(query) - {"requestId"}
+                        and all(len(value) == 1 for value in query.values())):
+                    result = CONSOLE_REPOSITORY_PUBLISH.operation(query.get("requestId", [None])[0])
+                else:
+                    raise RepositoryPublishError("仓库提交读取地址无效。")
+                self.send_json(result)
+            except RepositoryPublishError as error:
+                self.send_json({"error": str(error)}, status=400)
+            except (OSError, RuntimeError):
+                self.send_json({"error": "暂时无法读取仓库操作，请核对原请求。"}, status=503)
+            return
         if parsed.path == "/api/randomrealm/music-order-sync":
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
@@ -2107,7 +2182,9 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         try:
             target = Path(self.translate_path(self.path)).resolve()
             return (target.is_relative_to(PHONE_DEVICE_STORE.directory) or target.is_relative_to(WORKFLOW_DATA_DIR)
-                    or target.is_relative_to(CONSOLE_DEVELOPER_UPDATE.state_dir))
+                    or target.is_relative_to(CONSOLE_DEVELOPER_UPDATE.state_dir)
+                    or (globals().get("CONSOLE_REPOSITORY_PUBLISH") is not None
+                        and target.is_relative_to(CONSOLE_REPOSITORY_PUBLISH.state_dir)))
         except (OSError, ValueError):
             return True
 
@@ -2121,6 +2198,42 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if not self.require_trusted_post_context():
             return
         parsed = urllib.parse.urlparse(self.path)
+        if (parsed.path == "/api/console/repository-publish"
+                or parsed.path.startswith("/api/console/repository-publish/")):
+            if not self.require_local_request():
+                return
+            if current_console_edition() not in {"public", "developer"} or APP_INSTALL_MODE == "store":
+                self.send_json({"error": "当前应用不提供本机仓库提交。"}, status=403)
+                return
+            try:
+                if parsed.query:
+                    raise RepositoryPublishError("仓库提交地址无效。")
+                payload = self.read_json_body(max_bytes=128 * 1024)
+                if not isinstance(payload, dict):
+                    raise RepositoryPublishError("仓库提交内容无效。")
+                if parsed.path == "/api/console/repository-publish/config":
+                    if set(payload) != {"settings"} or not isinstance(payload["settings"], dict):
+                        raise RepositoryPublishError("仓库设置无效。")
+                    result = CONSOLE_REPOSITORY_PUBLISH.configure(payload["settings"])
+                elif parsed.path == "/api/console/repository-publish/preview":
+                    if set(payload) - {"repoId"}:
+                        raise RepositoryPublishError("说明预览内容无效。")
+                    result = CONSOLE_REPOSITORY_PUBLISH.preview(payload.get("repoId"))
+                elif parsed.path == "/api/console/repository-publish/run":
+                    if (set(payload) - {"requestId", "repoIds"} or "requestId" not in payload
+                            or not isinstance(payload["requestId"], str)):
+                        raise RepositoryPublishError("提交请求无效。")
+                    result = CONSOLE_REPOSITORY_PUBLISH.run(payload["requestId"], payload.get("repoIds"))
+                else:
+                    raise RepositoryPublishError("仓库提交地址无效。")
+                self.send_json(result)
+            except RequestBodyError as error:
+                self.send_json({"error": str(error)}, status=error.status)
+            except RepositoryPublishError as error:
+                self.send_json({"error": str(error)}, status=400)
+            except (OSError, RuntimeError):
+                self.send_json({"error": "请求回执暂时不明确，请读取同一次请求，勿重复提交。"}, status=503)
+            return
         if parsed.path == "/api/randomrealm/music-order-sync":
             if not self.require_local_request():
                 return
@@ -2628,7 +2741,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/console/update/install":
                 if not self.require_local_request():
                     return
-                if CONSOLE_DEVELOPER_UPDATE.busy:
+                if (CONSOLE_DEVELOPER_UPDATE.busy
+                        or getattr(globals().get("CONSOLE_REPOSITORY_PUBLISH"), "busy", False)):
                     self.send_json({"error": "本机代码正在保存或上传，请完成后再更新应用。",
                         "code": "developer_update_busy"}, status=409)
                     return

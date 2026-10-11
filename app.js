@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.100";
+const consoleUiVersion = "1.0.101";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -92,7 +92,9 @@ function refreshForNewConsoleVersion(version) {
   const next = version.split(".").map(Number);
   const difference = next.findIndex((part, index) => part !== current[index]);
   if (difference < 0 || next[difference] < current[difference]) return;
-  if (desktopCodexWorkPanel?.hasDraft() || desktopCodexWorkPanel && !desktopCodexWorkPanel.canReload() || desktopTransferPanel?.hasDraft() || desktopWorkflowPanel?.hasDraft() || desktopIncubatorPanel?.hasDraft() || desktopConversationsPanel && !desktopConversationsPanel.canReload()) return;
+  if (desktopCodexWorkPanel?.hasDraft() || desktopCodexWorkPanel && !desktopCodexWorkPanel.canReload() || desktopTransferPanel?.hasDraft() || desktopWorkflowPanel?.hasDraft() || desktopIncubatorPanel?.hasDraft() || desktopConversationsPanel && !desktopConversationsPanel.canReload()
+      || window.ConsoleRepositoryPublish?.hasDraft()
+      || window.ConsoleRepositoryPublish && !window.ConsoleRepositoryPublish.canReload()) return;
   saveWorkspaceTodoDraft();
   consoleVersionReloadPending = true;
   window.location.reload();
