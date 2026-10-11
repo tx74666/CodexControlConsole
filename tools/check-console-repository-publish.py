@@ -11,6 +11,7 @@ import time
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "console_repository_publish.py"
+sys.path.insert(0, str(SOURCE.parent))
 spec = importlib.util.spec_from_file_location("repository_publish_under_test", SOURCE)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

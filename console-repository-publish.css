@@ -1,18 +1,35 @@
-.repository-publish-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; min-height: 34px; }
+.repository-publish-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; min-height: 40px; }
 .repository-publish-bar[hidden] { display: none; }
 .repository-publish-bar .ghost-button { min-height: 32px; padding: 5px 11px; font-size: 12px; }
-.repository-publish-primary { color: var(--green, #59d4bb); border-color: color-mix(in srgb, var(--green, #59d4bb) 45%, transparent); }
+.repository-publish-bar .repository-publish-primary { min-height: 40px; padding: 8px 16px; color: var(--bg, #092522); background: var(--status-success, var(--green, #59d4bb)); border-color: var(--status-success, var(--green, #59d4bb)); font-size: 14px; font-weight: 700; }
+.repository-publish-bar .repository-publish-toggle { min-height: 40px; width: 36px; padding: 4px; font-size: 20px; }
+.repository-publish-expanded { margin: 0 0 12px; max-width: 100%; border: 1px solid var(--line, #3b4a5b); border-radius: 10px; background: var(--panel, #182434); overflow: hidden; }
+.repository-publish-expanded[hidden], .repository-publish-repo[hidden], .repository-publish-section[hidden], .repository-publish-form > [hidden] { display: none; }
+.repository-publish-expanded-toolbar { display: flex; justify-content: flex-end; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line, #3b4a5b); }
+.repository-publish-expanded .ghost-button { min-height: 28px; padding: 3px 9px; font-size: 12px; }
+.repository-publish-compact-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(100px, 1.5fr) minmax(60px, .55fr) auto; align-items: center; gap: 12px; min-width: 0; padding: 8px 12px; font-size: 12px; }
+.repository-publish-compact-row + .repository-publish-compact-row { border-top: 1px solid var(--line, #3b4a5b); }
+.repository-publish-compact-name, .repository-publish-compact-version { min-width: 0; overflow-wrap: anywhere; }
+.repository-publish-compact-name { font-weight: 600; color: var(--text, #edf2fa); }
+.repository-publish-compact-version, .repository-publish-compact-status { color: var(--muted, #92a2b5); }
 .repository-publish-status { flex: 1 1 150px; min-width: 0; color: var(--muted, #92a2b5); font-size: 12px; overflow-wrap: anywhere; }
 .repository-publish-status[data-state="error"] { color: var(--status-warning, #d9a170); }
-.repository-publish-dialog { box-sizing: border-box; width: min(680px, calc(100vw - 28px)); max-height: calc(100dvh - 32px); padding: 18px; overflow: auto; border: 1px solid var(--line, #3b4a5b); border-radius: 16px; background: var(--panel, #182434); color: var(--text, #edf2fa); }
+.repository-publish-dialog { box-sizing: border-box; width: min(580px, calc(100vw - 28px)); max-height: calc(100dvh - 32px); padding: 16px; overflow: auto; border: 1px solid var(--line, #3b4a5b); border-radius: 14px; background: var(--solid-popover-bg, #182434); color: var(--text, #edf2fa); }
 .repository-publish-dialog::backdrop { background: rgb(0 0 0 / 48%); }
 .repository-publish-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .repository-publish-header h2 { margin: 0; font-size: 18px; }
 .repository-publish-form { display: grid; gap: 12px; }
 .repository-publish-form > .ghost-button { justify-self: start; }
-.repository-publish-repositories { display: grid; gap: 12px; }
-.repository-publish-repo { min-width: 0; border: 1px solid var(--line, #3b4a5b); border-radius: 10px; padding: 12px; }
-.repository-publish-repo-title { margin: 0 0 10px; font-size: 13px; overflow-wrap: anywhere; }
+.repository-publish-repositories { display: grid; gap: 6px; }
+.repository-publish-repo { min-width: 0; border: 1px solid var(--line, #3b4a5b); border-radius: 8px; padding: 10px; }
+.repository-publish-repo-title { margin: 0; font-size: 13px; font-weight: 600; cursor: pointer; overflow-wrap: anywhere; }
+.repository-publish-repo[open] > .repository-publish-repo-title { margin-bottom: 12px; }
+.repository-publish-plan-box { margin-top: 8px; }
+.repository-publish-plan-heading { margin: 8px 0; font-size: 12px; color: var(--muted, #92a2b5); }
+.repository-publish-plan-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 5px 0; font-size: 12px; }
+.repository-publish-plan-row > span:first-child { flex: 1 1 180px; overflow-wrap: anywhere; }
+.repository-publish-plan-row .ghost-button { min-height: 28px; padding: 4px 8px; font-size: 12px; }
+.repository-publish-plan-reason { flex: 1 1 100%; color: var(--muted, #92a2b5); font-size: 11px; overflow-wrap: anywhere; }
 .repository-publish-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .repository-publish-field { display: grid; align-content: start; gap: 5px; min-width: 0; color: var(--muted, #92a2b5); font-size: 12px; }
 .repository-publish-field:has([data-field="path"]), .repository-publish-field:has([data-field="repositoryUrl"]), .repository-publish-field:has(textarea) { grid-column: 1 / -1; }
@@ -37,6 +54,7 @@
 .repository-publish-result summary { cursor: pointer; color: var(--muted, #92a2b5); }
 .repository-publish-result pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font: inherit; }
 .repository-publish-result .ghost-button { margin-top: 8px; }
-.repository-publish-dialog :disabled { opacity: .55; cursor: default; }
-.repository-publish-dialog :focus-visible, .repository-publish-bar button:focus-visible { outline: 2px solid var(--green, #59d4bb); outline-offset: 3px; }
+.repository-publish-dialog :disabled, .repository-publish-bar :disabled, .repository-publish-expanded :disabled { opacity: .55; cursor: default; }
+.repository-publish-dialog :focus-visible, .repository-publish-bar button:focus-visible, .repository-publish-expanded button:focus-visible { outline: 2px solid var(--green, #59d4bb); outline-offset: 3px; }
+@media (max-width: 620px) { .repository-publish-compact-row { grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; } .repository-publish-compact-name { grid-column: 1; } .repository-publish-compact-version { grid-column: 1; grid-row: 2; } .repository-publish-compact-status { grid-column: 2; grid-row: 2; font-size: 11px; } .repository-publish-row-config { grid-column: 2; grid-row: 1; } }
 @media (max-width: 420px) { .repository-publish-dialog { padding: 12px; } .repository-publish-grid, .repository-publish-version-row { grid-template-columns: minmax(0, 1fr); } }

@@ -44,6 +44,10 @@ class Spy:
         self.calls.append(("preview", repo_id))
         return {"previews": []}
 
+    def version_catalog(self, repo_id=None):
+        self.calls.append(("version_catalog", repo_id))
+        return {"repositories": []}
+
     def run(self, request_id, repo_ids=None):
         self.calls.append(("run", request_id, repo_ids))
         return {"requestId": request_id, "status": "working"}
@@ -144,11 +148,15 @@ def main():
             check(request("GET", base)[0] == 200 and service.calls == [("status",)], "GET must only read")
             check(request("GET", base + "/operation?requestId=one")[0] == 200, "Receipt read failed")
             check(service.calls[-1] == ("operation", "one"), "Receipt identity changed")
+            check(request("GET", base + "/versions")[0] == 200, "Version catalog read failed")
+            check(service.calls[-1] == ("version_catalog", None), "Version catalog invoked a mutation")
+            check(request("GET", base + "/versions?repoId=one")[0] == 200, "Single repository version catalog failed")
+            check(service.calls[-1] == ("version_catalog", "one"), "Version catalog repository identity changed")
             for headers in ({"X-Test-LAN": "1"}, {"Host": "evil.invalid"},
                             {"Origin": "https://evil.invalid"}, {"Sec-Fetch-Site": "cross-site"}):
                 reject("GET", base, headers=headers, code=403)
                 reject("POST", base + "/run", {"requestId": "one"}, headers, 403)
-            for path in ("?command=push", "/operation?requestId=a&requestId=b", "/operation?remote=evil", "/unknown"):
+            for path in ("?command=push", "/operation?requestId=a&requestId=b", "/operation?remote=evil", "/versions?repoId=", "/versions?repoId=a&repoId=b", "/versions?targetVersion=evil", "/unknown"):
                 reject("GET", base + path)
             config = {"repositories": [], "naming": {"preset": "version"}}
             check(request("POST", base + "/config", {"settings": config})[0] == 200, "Config failed")

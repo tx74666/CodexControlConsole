@@ -7,6 +7,7 @@ first resumes the original commit, with its original destination and message.
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import ast
+import base64
 import fnmatch
 import hashlib
 import json
@@ -14,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -21,6 +23,9 @@ import time
 import uuid
 import weakref
 import xml.etree.ElementTree as ET
+from console_repository_versions import (VersionPlanError, catalog as version_catalog_items,
+                                        prepare_updates as prepare_version_updates, source_id as version_source_id,
+                                        MAX_BYTES as VERSION_MAX_BYTES)
 
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\Z")
@@ -51,6 +56,12 @@ def _sha(data):
 
 def _json_sha(value):
     return _sha(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+
+
+def _repo_settings_sha(repo):
+    # Plans have their own frozen journal. Clearing a consumed plan cannot break
+    # the original commit's destination/configuration identity on push retry.
+    return _json_sha({key: value for key, value in repo.items() if key != "versionPlans"})
 
 
 def _now():
@@ -172,6 +183,46 @@ def _read_lease(path):
         yield
     finally:
         kernel.CloseHandle(handle)
+
+
+@contextmanager
+def _version_write_lease(path):
+    """Write through our Windows handle, denying external writers and renames.
+
+    A crash mid-file is retained for manual verification if bytes match neither
+    durable image. It is never repaired by overwriting unknown user content.
+    """
+    if os.name != "nt":
+        with path.open("r+b") as stream:
+            import fcntl
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                if os.fstat(stream.fileno()).st_nlink != 1:
+                    raise RepositoryPublishError("版本文件存在硬链接来源重叠，请手动准备版本；不会改写其他文件。")
+                yield stream
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        return
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                   wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateFileW(str(path), 0x80000000 | 0x40000000, 1, None, 3, 0x08000000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise RepositoryPublishError("版本文件仍在保存或无法锁定，请等待保存完成。")
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+    with os.fdopen(descriptor, "r+b") as stream:
+        if os.fstat(stream.fileno()).st_nlink != 1:
+            raise RepositoryPublishError("版本文件存在硬链接来源重叠，请手动准备版本；不会改写其他文件。")
+        yield stream
 
 
 @contextmanager
@@ -346,6 +397,18 @@ class RepositoryPublishService:
                     raise RepositoryPublishError("版本范围必须是路径或匹配模式。")
                 versions.append({"path": _relative(item.get("path", "")), "kind": str(item.get("kind", "json")),
                                  "key": str(item.get("key", "")), "name": str(item.get("name", "")), "scope": scope})
+            plans = raw.get("versionPlans", [])
+            fields = {"sourceId", "currentVersion", "targetVersion", "expectedSha256", "expectedBytes", "planProof"}
+            if not isinstance(plans, list) or len(plans) > 100 or any(not isinstance(item, dict) or set(item) != fields for item in plans):
+                raise RepositoryPublishError("一次性版本计划格式无效，请重新配置。")
+            seen_plans = set()
+            for item in plans:
+                if (not _ID.fullmatch(str(item["sourceId"])) or item["sourceId"] in seen_plans
+                        or any(not isinstance(item[key], str) or len(item[key]) > 80 for key in ("currentVersion", "targetVersion"))
+                        or any(not re.fullmatch(r"[0-9a-f]{64}", str(item[key])) for key in ("expectedSha256", "planProof"))
+                        or type(item["expectedBytes"]) is not int or not 0 < item["expectedBytes"] <= VERSION_MAX_BYTES):
+                    raise RepositoryPublishError("一次性版本计划身份或文件证明无效，请重新配置。")
+                seen_plans.add(item["sourceId"])
             exclude = raw.get("exclude", [])
             if not isinstance(exclude, list) or any(not isinstance(v, str) or not v for v in exclude):
                 raise RepositoryPublishError("排除范围必须是路径列表。")
@@ -360,7 +423,8 @@ class RepositoryPublishService:
             repositories.append({"id": identifier, "path": location, "repositoryUrl": str(raw.get("repositoryUrl", "")).strip(),
                                  "remote": remote, "branch": branch, "enabled": bool(raw.get("enabled", True)),
                                  "syncFiles": sync, "versionSources": versions, "exclude": exclude,
-                                 "syncError": str(raw.get("syncError", ""))[:1000], "syncManifest": manifest})
+                                 "syncError": str(raw.get("syncError", ""))[:1000], "syncManifest": manifest,
+                                 "versionPlans": json.loads(json.dumps(plans))})
         naming = dict(_DEFAULT_NAMING)
         supplied = payload.get("naming", {})
         if not isinstance(supplied, dict):
@@ -386,6 +450,9 @@ class RepositoryPublishService:
             rediscovered = None
             for repo in settings["repositories"]:
                 old = previous_repos.get(repo["id"], {})
+                if repo.get("versionPlans", []) and repo.get("versionPlans", []) != old.get("versionPlans", []):
+                    context = self._repo(repo)
+                    self._version_updates(repo, context)
                 if old.get("syncError") or old.get("syncManifest"):
                     fresh = None
                     if self._discovery:
@@ -414,6 +481,202 @@ class RepositoryPublishService:
             settings["warnings"] = previous.get("warnings", [])
             _atomic(self._settings_path, settings)
         return self.status()
+
+    def _version_sources(self, repo, root):
+        sources = repo["versionSources"]
+        if not sources:
+            path = next((name for name in ("app-manifest.json", "package.json") if (root / name).is_file()), None)
+            return [{"path": path, "kind": "json", "key": "version", "name": root.name, "scope": ""}] if path else []
+        # The application manifest supersedes package.json, as in commit naming.
+        return [source for source in sources if source["path"] != "package.json"] if any(source["path"] == "app-manifest.json" for source in sources) else sources
+
+    def _version_reader(self, root):
+        def read(relative):
+            path = _safe_path(root / _relative(relative))
+            if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > VERSION_MAX_BYTES:
+                raise RepositoryPublishError("版本文件缺失、超出仓库或过大，请手动准备版本。")
+            with _read_lease(path):
+                before = _stable(path)
+                raw = path.read_bytes()
+                if _stable(path) != before or _sha(raw) != before["sha256"]:
+                    raise RepositoryPublishError("版本文件正在变化，请保存完成后重试。")
+            return raw
+        return read
+
+    def version_catalog(self, repo_id=None):
+        """Read exact current versions; never sync, stage, fetch or change files."""
+        if not self.allowed:
+            raise RepositoryPublishError("当前入口不允许读取版本配置。")
+        rows = self._settings()["repositories"]
+        if repo_id is not None and (not isinstance(repo_id, str) or repo_id not in {row["id"] for row in rows}):
+            raise RepositoryPublishError("仓库编号不存在。")
+        result = []
+        for repo in rows:
+            if repo_id is not None and repo["id"] != repo_id:
+                continue
+            item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "components": [], "message": ""}
+            try:
+                root = self._repo(repo)[0]
+                sources = self._version_sources(repo, root)
+                item["components"] = version_catalog_items(root, sources, self._version_reader(root))
+                by_id = {version_source_id(source): source for source in sources}
+                for component in item["components"]:
+                    source = by_id[component["sourceId"]]
+                    if not component.get("currentVersion"):
+                        component["currentVersion"] = self._versions(root, [source], [])[0].get("version", "")
+                    if component.get("canBump"):
+                        try:
+                            self._version_write_scope(repo, root, component["expectedFiles"])
+                        except (RepositoryPublishError, _GitFailure, OSError) as exc:
+                            component.update(canBump=False, reason=self._error(exc))
+                overlaps = self._version_overlaps(root, [entry for component in item["components"] if component.get("canBump") for entry in component["expectedFiles"]])
+                for component in item["components"]:
+                    if any(entry["path"] in overlaps for entry in component.get("expectedFiles", [])):
+                        component.update(canBump=False, reason="版本文件的实际来源重叠，请手动协调；不会分别改写。")
+                if not sources:
+                    item["message"] = "未找到权威版本来源，请手动准备版本；普通推送仍可使用。"
+            except (RepositoryPublishError, _GitFailure, OSError) as exc:
+                item["message"] = self._error(exc)
+                for component in item["components"]:
+                    component.update(canBump=False, reason=item["message"])
+            result.append(item)
+        return {"repositories": result}
+
+    def _version_overlaps(self, root, files):
+        identities = {}
+        for entry in files:
+            info = _safe_path(root / entry["path"]).stat()
+            identities.setdefault((info.st_dev, info.st_ino), set()).add(entry["path"])
+        return {path for paths in identities.values() if len(paths) > 1 for path in paths}
+
+    def _version_write_scope(self, repo, root, files):
+        paths = [item["path"] for item in files]
+        sync_paths, sync_identities = set(), set()
+        for mapping in repo["syncFiles"]:
+            for location in (mapping["source"], root / mapping["target"]):
+                location = _safe_path(location)
+                sync_paths.add(os.path.normcase(str(location)))
+                if location.exists():
+                    info = location.stat()
+                    sync_identities.add((info.st_dev, info.st_ino))
+        for name in paths:
+            path = _safe_path(root / name)
+            info = path.stat()
+            if info.st_nlink != 1:
+                raise RepositoryPublishError("版本文件存在硬链接来源重叠，请手动准备版本；不会改写其他文件。")
+            if (_excluded(name, repo["exclude"]) or os.path.normcase(str(path)) in sync_paths
+                    or (info.st_dev, info.st_ino) in sync_identities):
+                raise RepositoryPublishError("版本文件属于排除范围或同步来源/目标，请在原来源手动准备版本。")
+        if self._version_overlaps(root, files):
+            raise RepositoryPublishError("版本文件的实际来源重叠，请手动协调；不会分别改写。")
+        tracked = set(self._git(root, "--literal-pathspecs", "ls-files", "-z", "--", *paths).decode("utf-8").split("\0"))
+        if not set(paths) <= tracked:
+            raise RepositoryPublishError("版本文件尚未由 Git 跟踪，请先手动保存并提交该文件。")
+        flags = self._git(root, "--literal-pathspecs", "ls-files", "-v", "-z", "--", *paths).split(b"\0")
+        if any(record and record[:1] != b"H" for record in flags):
+            raise RepositoryPublishError("版本文件设有特殊索引标记，请先处理 skip-worktree 或 assume-unchanged；不会改写。")
+        for name in paths:
+            path = _safe_path(root / name)
+            if not path.stat().st_mode & stat.S_IWRITE:
+                raise RepositoryPublishError("版本文件为只读，请先恢复可写状态或手动准备版本。")
+            with _version_write_lease(path):
+                pass  # Capability preflight, no write; includes all companions.
+
+    def _version_updates(self, repo, context):
+        try:
+            updates, plans = prepare_version_updates(context[0], self._version_sources(repo, context[0]), repo.get("versionPlans", []), self._version_reader(context[0]))
+        except VersionPlanError as exc:
+            raise RepositoryPublishError(str(exc)) from exc
+        self._version_write_scope(repo, context[0], updates)
+        return updates, plans
+
+    def _consume_version_plans(self, repo, pending):
+        used = pending.get("versionPlans", [])
+        if not used or not pending.get("commitSha"):
+            return
+        if pending["commitSha"] == pending["parentSha"]:
+            raise RepositoryPublishError("版本文件未形成实际提交，请检查 Git 过滤器；保留版本计划。")
+        with self._mutex, _file_lock(self.state_dir / "settings.lock"):
+            settings = self._settings()
+            current = next((row for row in settings["repositories"] if row["id"] == repo["id"]), None)
+            if current is not None and _repo_settings_sha(current) == pending["repositorySettingsSha"]:
+                # Full-plan CAS: never remove a newer explicit user selection.
+                remaining = [plan for plan in current.get("versionPlans", []) if plan not in used]
+                if remaining != current.get("versionPlans", []):
+                    current["versionPlans"] = remaining
+                    _atomic(self._settings_path, settings)
+
+    def _version_intent_snapshot(self, repo, context, pending):
+        current = self._snapshot(repo, context)
+        original = pending["versionBaseSnapshot"]
+        if any(current[key] != original[key] for key in ("head", "indexSha", "configSha", "identity")):
+            raise RepositoryPublishError("版本计划开始后仓库、分支或暂存区变化，保留已保存文件。")
+        paths = {update["path"] for update in pending["versionUpdates"]}
+        if [item for item in current["files"] if item["path"] not in paths] != [item for item in original["files"] if item["path"] not in paths]:
+            raise RepositoryPublishError("版本准备期间其他工作文件发生变化，保留一次性计划待核对。")
+        for update in pending["versionUpdates"]:
+            proof = _stable(context[0] / update["path"])
+            if proof["sha256"] not in {update["beforeSha256"], update["afterSha256"]}:
+                raise RepositoryPublishError("版本文件出现其他修改，保留原文和一次性计划待核对。")
+        latest = next((row for row in self._settings()["repositories"] if row["id"] == repo["id"]), None)
+        if (latest is None or _repo_settings_sha(latest) != pending["repositorySettingsSha"]
+                or _json_sha(latest.get("versionPlans", [])) != pending["versionPlansSha"]):
+            raise RepositoryPublishError("版本准备期间配置或版本选择变化，请先核对原计划。")
+        return current
+
+    def _apply_version_intent(self, repo, context, pending, pending_path):
+        root = context[0]
+        self._busy_reason(root)
+        self._version_intent_snapshot(repo, context, pending)
+        self._verify_sync(repo, context, pending.get("syncProofs", []))
+        # Recheck remote before any resumed or first version write.
+        remote = self._remote(repo, root)
+        self._fetch(repo, context, remote)
+        if remote and not self._ancestor(root, remote, pending["parentSha"]):
+            raise RepositoryPublishError("远端领先或分叉，尚未继续版本准备；请先自行整合。")
+        self._version_write_scope(repo, root, pending["versionUpdates"])
+        pending["state"] = "version_applying"
+        _atomic(pending_path, pending)
+        for update in pending["versionUpdates"]:
+            self._busy_reason(root)
+            self._version_intent_snapshot(repo, context, pending)
+            path = _safe_path(root / update["path"])
+            proof = _stable(path)
+            if proof["sha256"] == update["afterSha256"]:
+                continue  # Exact durable target already written; never bump again.
+            raw = base64.b64decode(update["afterBase64"], validate=True)
+            if len(raw) != update["afterBytes"] or _sha(raw) != update["afterSha256"]:
+                raise RepositoryPublishError("版本准备记录损坏，请保留原文件和记录。")
+            self._busy_reason(root)
+            self._version_intent_snapshot(repo, context, pending)
+            with _version_write_lease(path) as stream:
+                before = stream.read(VERSION_MAX_BYTES + 1)
+                if len(before) != update["beforeBytes"] or _sha(before) != update["beforeSha256"]:
+                    raise RepositoryPublishError("版本文件在写入前变化，请保存完成后重试原计划。")
+                baseline = pending["versionBaseSnapshot"]
+                index = context[1] / "index"
+                if (self._repo(repo)[3] != baseline["identity"]
+                        or self._text(root, "rev-parse", "HEAD") != baseline["head"]
+                        or (_sha(index.read_bytes()) if index.exists() else None) != baseline["indexSha"]
+                        or _sha(self._git(root, "config", "--null", "--list")) != baseline["configSha"]):
+                    raise RepositoryPublishError("版本写入前仓库、分支、配置或暂存选择变化，保留原计划。")
+                self._busy_reason(root)
+                if os.fstat(stream.fileno()).st_nlink != 1:
+                    raise RepositoryPublishError("版本文件存在硬链接来源重叠，请手动准备版本；不会改写其他文件。")
+                stream.seek(0)
+                stream.write(raw)
+                stream.truncate()
+                stream.flush()
+                os.fsync(stream.fileno())
+            self._version_intent_snapshot(repo, context, pending)
+        snapshot = self._version_intent_snapshot(repo, context, pending)
+        paths = {update["path"] for update in pending["versionUpdates"]}
+        if not paths <= {item["path"] for item in snapshot["files"]}:
+            raise RepositoryPublishError("版本修改未进入可提交范围，请检查忽略规则并保留计划。")
+        pending["title"], pending["body"], pending["versions"] = self._message(repo, snapshot, pending["naming"])
+        pending.update(state="prepared", snapshot=snapshot, indexReconciled=False)
+        _atomic(pending_path, pending)
+        return snapshot
 
     @property
     def busy(self):
@@ -977,6 +1240,14 @@ class RepositoryPublishService:
     def _pending_path(self, repo_id):
         return self._pending_dir / (repo_id + ".json")
 
+    def _continue_version_intent(self, repo, context, pending, pending_path, receipt, item):
+        self._phase(receipt, item, "version", "核对并继续原一次性版本计划；不会重复递增。")
+        snapshot = self._apply_version_intent(repo, context, pending, pending_path)
+        self._commit(repo, context, snapshot, pending, pending_path)
+        self._consume_version_plans(repo, pending)
+        item.update(commitSha=pending["commitSha"], title=pending["title"], body=pending["body"], versions=pending["versions"])
+        self._push(repo, context, pending, pending_path, receipt, item)
+
     def _run_repo(self, repo, naming, receipt, item):
         self._phase(receipt, item, "check", "核对仓库、分支和活动任务。")
         self._sync_contract(repo)
@@ -988,17 +1259,29 @@ class RepositoryPublishService:
             self._busy_reason(root)
             pending_path = self._pending_path(repo["id"])
             pending = _read(pending_path)
+            if (pending and pending.get("versionUpdates") and not pending.get("commitSha")
+                    and pending.get("state") in {"version_prepared", "version_applying", "prepared", "cancelled_before_commit"}):
+                if pending["identity"] != identity or pending["repositorySettingsSha"] != _repo_settings_sha(repo):
+                    raise RepositoryPublishError("原版本计划的仓库或配置变化，请恢复后重试；不会重新升版。")
+                if pending.get("transportOptionsSha", transport["optionsSha"]) != transport["optionsSha"]:
+                    raise RepositoryPublishError("原版本计划的 LFS 或传输配置已变化，请恢复后重试。")
+                self._continue_version_intent(repo, context, pending, pending_path, receipt, item)
+                return
             if pending and pending.get("state") not in {"delivered", "cancelled_before_commit"}:
-                if pending["identity"] != identity or pending["repositorySettingsSha"] != _json_sha(repo):
+                if pending["identity"] != identity or pending["repositorySettingsSha"] != _repo_settings_sha(repo):
                     raise RepositoryPublishError("原提交的仓库或配置已变化，请恢复原配置后重试；不会推送到新目标。")
                 if pending.get("transportOptionsSha", transport["optionsSha"]) != transport["optionsSha"]:
                     raise RepositoryPublishError("原提交的 LFS 或传输配置已变化，请恢复后重试。")
                 self._phase(receipt, item, "verify", "先核对并继续上次原提交。")
                 pending = self._recover_commit(repo, context, pending, pending_path)
+                if pending.get("state") == "cancelled_before_commit" and pending.get("versionUpdates"):
+                    self._continue_version_intent(repo, context, pending, pending_path, receipt, item)
+                    return
                 if pending.get("state") != "cancelled_before_commit":
                     item.update(commitSha=pending.get("commitSha", ""), title=pending["title"], body=pending["body"])
                     if not pending.get("commitSha"):
                         raise RepositoryPublishError("上次提交结果尚未确认，请核对保留的记录和 Git 锁。")
+                    self._consume_version_plans(repo, pending)
                     self._push(repo, context, pending, pending_path, receipt, item)
                     return
             self._blockers(root, gitdir, common)
@@ -1017,14 +1300,23 @@ class RepositoryPublishService:
             if remote and not self._ancestor(root, remote, snapshot["head"]):
                 raise RepositoryPublishError("远端领先或分叉，请先自行整合；本仓库延期。")
             self._outgoing_safe(root, remote, snapshot["head"], repo)
-            if not snapshot["files"] and remote == snapshot["head"]:
+            if not snapshot["files"] and remote == snapshot["head"] and not repo.get("versionPlans"):
                 item.update(status="noop", phase="complete", message="没有需要提交或推送的文件。")
                 return
             pending = {"state": "prepared", "requestId": receipt["requestId"], "repoId": repo["id"], "identity": identity,
-                       "repositorySettingsSha": _json_sha(repo), "parentSha": snapshot["head"], "snapshot": snapshot,
+                       "repositorySettingsSha": _repo_settings_sha(repo), "parentSha": snapshot["head"], "snapshot": snapshot,
                        "title": title, "body": body, "createdAt": _now(), "commitSha": "", "indexReconciled": not snapshot["files"]}
             pending["transportOptionsSha"] = transport["optionsSha"]
             pending["syncProofs"] = item["syncFiles"]
+            if repo.get("versionPlans"):
+                updates, plans = self._version_updates(repo, context)
+                pending.update(state="version_prepared", versionUpdates=updates, versionPlans=plans,
+                               versionPlansSha=_json_sha(repo["versionPlans"]), versionBaseSnapshot=snapshot, naming=dict(naming))
+                _atomic(pending_path, pending)
+                self._phase(receipt, item, "version", "实际准备已确认的一次性版本文件，再生成真实版本说明。")
+                snapshot = self._apply_version_intent(repo, context, pending, pending_path)
+                title, body, versions = pending["title"], pending["body"], pending["versions"]
+                item.update(title=title, body=body, versions=versions)
             if snapshot["files"]:
                 self._phase(receipt, item, "commit", "暂存已核对文件并执行正常 Git 提交及 hooks。")
                 self._commit(repo, context, snapshot, pending, pending_path)
@@ -1033,6 +1325,7 @@ class RepositoryPublishService:
                 pending["title"] = self._text(root, "show", "-s", "--format=%s", snapshot["head"])
                 pending["body"] = self._text(root, "show", "-s", "--format=%b", snapshot["head"])
                 _atomic(pending_path, pending)
+            self._consume_version_plans(repo, pending)
             item.update(commitSha=pending["commitSha"], title=pending["title"], body=pending["body"])
             self._push(repo, context, pending, pending_path, receipt, item)
 

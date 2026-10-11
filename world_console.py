@@ -1694,6 +1694,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
                 if parsed.path == "/api/console/repository-publish" and not parsed.query:
                     result = CONSOLE_REPOSITORY_PUBLISH.status()
+                elif (parsed.path == "/api/console/repository-publish/versions"
+                        and not set(query) - {"repoId"}
+                        and all(len(value) == 1 and value[0] for value in query.values())):
+                    result = CONSOLE_REPOSITORY_PUBLISH.version_catalog(query.get("repoId", [None])[0])
                 elif (parsed.path == "/api/console/repository-publish/operation"
                         and not set(query) - {"requestId"}
                         and all(len(value) == 1 for value in query.values())):

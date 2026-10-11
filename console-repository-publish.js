@@ -10,7 +10,12 @@
     zh: { run: "提交并推送", config: "配置", close: "关闭", heading: "提交并推送", ready: "已启用 {n} 个仓库", loading: "正在读取…", saving: "正在保存配置…", saved: "配置已保存", saveFailed: "配置未保存，草稿保留", readFailed: "状态读取失败", unknown: "结果待核对，正在追踪原请求", working: "正在提交并推送…", interrupted: "操作中断，请查看详情", complete: "本次操作已完成", unavailable: "此处不可用", empty: "先配置一个仓库", add: "添加仓库", enabled: "启用", path: "本机仓库目录", repositoryUrl: "仓库网址", remote: "远端名称", branch: "分支", currentBranch: "当前分支（读取后保存）", rules: "同步文件与版本规则", sync: "同步文件（每行 来源 -> 目标）", syncHint: "相对本机仓库目录；仅执行提交时同步。", versions: "版本来源", addVersion: "添加版本来源", versionPath: "文件", kind: "格式", key: "字段 / 匹配式", name: "模块名称", scope: "适用范围", remove: "移除", excludes: "排除路径（每行一项）", naming: "提交命名", preset: "命名方式", version: "版本", module_version: "模块 + 版本", fallback: "无版本时的标题", subtitle: "副标题（可选）", notes: "备注（可选）", includeSummary: "包含改动摘要", preview: "预览标题与改动", previewing: "正在预览…", previewFailed: "预览失败，请查看状态", previewHint: "预览不执行文件同步。", details: "状态与详情", refresh: "重新读取", retry: "继续此仓库", noResults: "尚无操作回执", invalidSync: "同步规则需填写：来源 -> 目标", invalidConfig: "请检查未完成的配置", duplicate: "此仓库目录重复，请修改或禁用其中一项", serial: "配置尚未保存，请稍后再提交", noIdentity: "无法创建安全的请求身份", pendingUnavailable: "原请求回执尚未确认", disabledRepo: "未启用", previewTitle: "预览", repo: "仓库", defaultFallback: "更新进度 {datetime}" },
     en: { run: "Commit & push", config: "Configure", close: "Close", heading: "Commit & push", ready: "{n} repositories enabled", loading: "Reading…", saving: "Saving configuration…", saved: "Configuration saved", saveFailed: "Not saved; draft kept", readFailed: "Could not read status", unknown: "Checking the original request", working: "Committing and pushing…", interrupted: "Interrupted; see details", complete: "Operation completed", unavailable: "Unavailable here", empty: "Configure a repository first", add: "Add repository", enabled: "Enabled", path: "Local repository folder", repositoryUrl: "Repository URL", remote: "Remote name", branch: "Branch", currentBranch: "Current branch (read and save)", rules: "Sync files and version rules", sync: "Sync files (one source -> target per line)", syncHint: "Relative to the repository; synced only when running.", versions: "Version sources", addVersion: "Add version source", versionPath: "File", kind: "Format", key: "Key / pattern", name: "Module name", scope: "Scope", remove: "Remove", excludes: "Excluded paths (one per line)", naming: "Commit naming", preset: "Naming", version: "Version", module_version: "Module + version", fallback: "Title when no version is found", subtitle: "Subtitle (optional)", notes: "Notes (optional)", includeSummary: "Include change summary", preview: "Preview title and changes", previewing: "Previewing…", previewFailed: "Preview failed; see status", previewHint: "Preview does not sync files.", details: "Status and details", refresh: "Refresh", retry: "Continue this repository", noResults: "No operation receipt yet", invalidSync: "Use source -> target for each sync rule", invalidConfig: "Check the unfinished configuration", duplicate: "Duplicate repository folder; change or disable one", serial: "Wait for configuration to finish saving", noIdentity: "Could not create a secure request ID", pendingUnavailable: "Original request receipt remains unconfirmed", disabledRepo: "Disabled", previewTitle: "Preview", repo: "Repository", defaultFallback: "更新进度 {datetime}" }
   };
-  copy.en.run = copy.en.heading = "Submit & push";
+  copy.zh.run = copy.zh.heading = "推送到 GitHub";
+  copy.en.run = copy.en.heading = "Push to GitHub";
+  copy.zh.working = "正在推送到 GitHub…"; copy.en.working = "Pushing to GitHub…";
+  copy.zh.repoNoChanges = "无改动"; copy.en.repoNoChanges = "No changes";
+  Object.assign(copy.zh, { expand: "展开仓库", collapse: "收起仓库", configAll: "配置全部", connection: "路径与远端", versionPlan: "版本计划", nextPatch: "使用下一个补丁版本", cancelPlan: "取消计划", noVersion: "未配置版本", versionPending: "版本待读取", versionFailed: "版本读取失败", noVersionChange: "不改版本", repoReady: "就绪", repoDone: "已完成", repoAttention: "需查看", repoWorking: "进行中", component: "组件", planned: "已计划", versionUnsupported: "此版本暂不能自动递增" });
+  Object.assign(copy.en, { expand: "Show repositories", collapse: "Hide repositories", configAll: "Configure all", connection: "Folder and remote", versionPlan: "Version plan", nextPatch: "Use next patch", cancelPlan: "Cancel plan", noVersion: "No version configured", versionPending: "Version not read yet", versionFailed: "Could not read versions", noVersionChange: "Keep version", repoReady: "Ready", repoDone: "Completed", repoAttention: "Needs attention", repoWorking: "In progress", component: "Component", planned: "Planned", versionUnsupported: "Automatic version bump is unavailable" });
   copy.zh.syncHint = "来源为绝对文件路径，目标为仓库内相对路径；仅执行提交时同步。";
   copy.en.syncHint = "Use an absolute source file and a repository-relative target; synced only when running.";
   copy.zh.resumeOriginal = "继续原请求"; copy.en.resumeOriginal = "Continue original request";
@@ -69,6 +74,7 @@
     for (const repo of settings.repositories) {
       repo.syncFiles = Array.isArray(repo.syncFiles) ? repo.syncFiles : [];
       repo.versionSources = Array.isArray(repo.versionSources) ? repo.versionSources : [];
+      repo.versionPlans = Array.isArray(repo.versionPlans) ? repo.versionPlans : [];
       repo.exclude = Array.isArray(repo.exclude) ? repo.exclude : [];
     }
     return settings;
@@ -79,13 +85,18 @@
     const state = { settings: null, warnings: [], allowed: false, serverBusy: false, operation: null, pendingId: storedId(), postBusy: false, readBusy: false, saveBusy: false, previewBusy: false, dirty: false, edit: 0, error: "", notice: "loading", pollTimer: 0, pollDelay: 1200, destroyed: false, invalid: new Set(), localized: [], returnFocus: null };
     const text = key => copy[language()][key] || key;
     state.pendingRequest = storedRequest(); state.notFound = false;
+    state.expanded = false; state.configRepoId = null; state.versionBusy = false; state.versionFailed = false; state.versionEpoch = 0; state.catalog = new Map(); state.savedSources = new Map(); state.plannedRepoIds = new Set();
     const controls = [], resultRetries = [], syncDrafts = new Map(), inputPending = new Set();
+    const compactRefs = new Map(), configCards = new Map(), configSections = new Map(), planBoxes = new Map();
     const managed = item => { item.setAttribute("data-console-management", ""); return item; };
     const bar = managed(node("div", "repository-publish-bar"));
     const runButton = managed(node("button", "ghost-button repository-publish-primary")); runButton.type = "button";
+    const toggleButton = managed(node("button", "ghost-button repository-publish-toggle", "⌄")); toggleButton.type = "button";
     const configButton = managed(node("button", "ghost-button repository-publish-config")); configButton.type = "button";
     const shortStatus = node("span", "repository-publish-status"); shortStatus.setAttribute("role", "status"); shortStatus.setAttribute("aria-live", "polite");
-    bar.append(runButton, configButton, shortStatus);
+    bar.append(runButton, toggleButton, shortStatus);
+    const expanded = managed(node("div", "repository-publish-expanded")), expandedToolbar = node("div", "repository-publish-expanded-toolbar"), compactRows = node("div", "repository-publish-compact-rows");
+    expanded.id = "consoleRepositoryPublish-repositories-" + (uniqueId() || "list"); expanded.hidden = true; expandedToolbar.append(configButton); expanded.append(expandedToolbar, compactRows);
     const dialog = managed(node("dialog", "repository-publish-dialog")); dialog.id = "consoleRepositoryPublish-" + (uniqueId() || "config");
     const header = node("header", "repository-publish-header"), heading = node("h2"), closeButton = managed(node("button", "ghost-button")); closeButton.type = "button";
     header.append(heading, closeButton);
@@ -98,7 +109,7 @@
     const resumeButton = managed(node("button", "ghost-button")); resumeButton.type = "button"; resumeButton.hidden = true;
     const previewHint = node("p", "repository-publish-hint"), previewResult = node("div", "repository-publish-preview");
     detail.append(detailSummary, detailStatus, refreshButton, previewButton, resumeButton, previewHint, previewResult, results);
-    form.append(repositories, addButton, namingDetails, warningDetails, detail); dialog.append(header, form); host.append(bar, dialog);
+    form.append(repositories, addButton, namingDetails, warningDetails, detail); dialog.append(header, form); host.append(bar, expanded, dialog);
     const blocked = () => state.postBusy || state.previewBusy || state.serverBusy || Boolean(state.pendingId) || activeStatuses.has(state.operation?.status);
     const enabled = () => (state.settings?.repositories || []).filter(repo => repo.enabled === true);
     function localize(item, key, property = "textContent") { state.localized.push({ item, key, property }); item[property] = text(key); }
@@ -114,11 +125,13 @@
     }
     function render() {
       bar.hidden = state.allowed !== true; if (!state.allowed && dialog.open) dialog.close();
-      runButton.textContent = text("run"); configButton.textContent = text("config"); heading.textContent = text("heading"); closeButton.textContent = text("close");
+      expanded.hidden = !state.allowed || !state.expanded;
+      runButton.textContent = text("run"); configButton.textContent = text("configAll"); heading.textContent = state.configRepoId ? repoName(state.settings?.repositories.find(repo => repo.id === state.configRepoId)) + " · " + text("config") : text("configAll"); closeButton.textContent = text("close");
+      toggleButton.textContent = state.expanded ? "⌃" : "⌄"; toggleButton.disabled = !state.allowed; toggleButton.setAttribute("aria-label", text(state.expanded ? "collapse" : "expand")); toggleButton.setAttribute("aria-expanded", String(state.expanded)); toggleButton.setAttribute("aria-controls", expanded.id);
       configButton.setAttribute("aria-controls", dialog.id); configButton.setAttribute("aria-expanded", String(dialog.open));
       shortStatus.textContent = statusText(); detailStatus.textContent = statusText(); shortStatus.dataset.state = state.error ? "error" : blocked() ? "working" : "ready";
       runButton.disabled = !state.allowed || !state.settings || !enabled().length || blocked() || state.readBusy || state.saveBusy || state.dirty || state.invalid.size > 0;
-      configButton.disabled = !state.allowed; addButton.disabled = blocked() || state.saveBusy; refreshButton.disabled = state.readBusy || state.postBusy || state.saveBusy;
+      configButton.disabled = !state.allowed; addButton.disabled = blocked() || state.saveBusy || inputPending.size > 0; refreshButton.disabled = state.readBusy || state.postBusy || state.saveBusy;
       previewButton.disabled = blocked() || state.previewBusy || state.saveBusy || state.dirty || !enabled().length;
       resumeButton.textContent = text("resumeOriginal"); resumeButton.hidden = !(state.notFound && state.pendingRequest?.requestId === state.pendingId);
       resumeButton.disabled = state.postBusy || state.serverBusy || state.readBusy || state.saveBusy || state.previewBusy || state.dirty || !state.allowed;
@@ -126,6 +139,78 @@
       for (const retry of resultRetries) retry.disabled = blocked() || state.readBusy || state.saveBusy || state.dirty;
       for (const label of state.localized) label.item[label.property] = text(label.key);
       if (dialog.open) renderWarnings();
+      renderCompactRows(); renderConfigVisibility(); renderVersionPlans();
+    }
+    function repoName(repo) {
+      const url = clean(repo?.repositoryUrl).split(/[?#]/)[0].replace(/\/+$/, ""), match = url.match(/^(?:https:\/\/github\.com\/|git@github\.com:)[^/]+\/([^/]+)$/i);
+      if (match) { try { return clean(decodeURIComponent(match[1].replace(/\.git$/i, "")), 160); } catch { return clean(match[1].replace(/\.git$/i, ""), 160); } }
+      return clean(repo?.name, 160) || clean(repo?.path).split(/[\\/]/).filter(Boolean).pop() || text("repo");
+    }
+    function componentLabel(component, count) { return count > 1 ? (clean(component.name, 80) || clean(component.path, 120) || text("component")) + " " : ""; }
+    function sourceIdentity(repo) { return JSON.stringify([repo.path, repo.versionSources, repo.syncFiles]); }
+    function sourceIdentities(settings) { return new Map(settings.repositories.map(repo => [repo.id, sourceIdentity(repo)])); }
+    function catalogFor(repo) { const catalog = state.catalog.get(repo.id); return catalog?.sourceIdentity === sourceIdentity(repo) ? catalog : null; }
+    function versionSummary(repo) {
+      const components = catalogFor(repo)?.components || [], plans = repo.versionPlans || [];
+      if (!components.length) return plans.length ? plans.map(plan => clean(plan.currentVersion, 80) + " → " + clean(plan.targetVersion, 80)).join(" · ") : text(state.versionFailed ? "versionFailed" : repo.versionSources.length ? "versionPending" : "noVersion");
+      return components.map(component => { const plan = plans.find(item => item.sourceId === component.sourceId); return componentLabel(component, components.length) + (clean(component.currentVersion, 80) || "—") + (plan ? " → " + clean(plan.targetVersion, 80) : ""); }).join(" · ");
+    }
+    function renderCompactRows() {
+      const repos = state.settings?.repositories || [];
+      for (const [id, refs] of compactRefs) if (!repos.some(repo => repo.id === id)) { refs.row.remove(); compactRefs.delete(id); }
+      for (const repo of repos) {
+        let refs = compactRefs.get(repo.id);
+        if (!refs) {
+          const row = node("div", "repository-publish-compact-row"), name = node("strong", "repository-publish-compact-name"), version = node("span", "repository-publish-compact-version"), status = node("span", "repository-publish-compact-status"), configure = managed(node("button", "ghost-button repository-publish-row-config")); configure.type = "button";
+          row.dataset.repoId = repo.id; row.append(name, version, status, configure); compactRows.append(row); refs = { row, name, version, status, configure }; compactRefs.set(repo.id, refs);
+          configure.addEventListener("click", () => open(repo.id));
+        }
+        const result = state.operation?.results.find(item => item.repoId === repo.id);
+        refs.name.textContent = repoName(repo); refs.version.textContent = versionSummary(repo); refs.version.title = refs.version.textContent;
+        refs.status.textContent = repo.enabled !== true ? text("disabledRepo") : result ? text(activeStatuses.has(result.status) ? "repoWorking" : ["noop", "no_changes"].includes(result.status) ? "repoNoChanges" : ["success", "pushed"].includes(result.status) ? "repoDone" : "repoAttention") : text("repoReady");
+        refs.status.title = clean(result?.message, 300); refs.configure.textContent = text("config"); refs.configure.disabled = !state.allowed;
+      }
+    }
+    function renderConfigVisibility() {
+      for (const [id, card] of configCards) { card.children[0].textContent = repoName(state.settings?.repositories.find(repo => repo.id === id)); card.hidden = Boolean(state.configRepoId && id !== state.configRepoId); if (state.configRepoId === id) card.open = true; }
+      addButton.hidden = Boolean(state.configRepoId); namingDetails.hidden = Boolean(state.configRepoId);
+      if (state.configRepoId) warningDetails.hidden = true;
+    }
+    async function readVersions() {
+      if (state.destroyed || !state.allowed || !state.settings || state.versionBusy) return;
+      if (state.dirty || state.saveBusy) { state.needsVersionsRead = true; return; }
+      const sources = sourceIdentities(state.settings), epoch = state.versionEpoch;
+      state.versionBusy = true; state.versionFailed = false; state.needsVersionsRead = false; render();
+      try {
+        const value = await request("/versions"); if (state.destroyed) return;
+        if (state.versionEpoch !== epoch) { state.needsVersionsRead = true; return; }
+        state.catalog = new Map();
+        for (const item of Array.isArray(value.repositories) ? value.repositories : []) {
+          const repo = state.settings.repositories.find(repo => repo.id === item?.repoId);
+          if (plain(item) && repo && sources.get(repo.id) === sourceIdentity(repo)) state.catalog.set(repo.id, { ...clone(item), sourceIdentity: sources.get(repo.id), components: Array.isArray(item.components) ? clone(item.components.filter(plain)) : [] });
+        }
+      } catch { state.versionFailed = true; }
+      finally { state.versionBusy = false; render(); readCompletedSettings(); }
+    }
+    function renderVersionPlans() {
+      for (const repo of state.settings?.repositories || []) {
+        const box = planBoxes.get(repo.id); if (!box) continue;
+        box.replaceChildren(); const heading = node("h4", "repository-publish-plan-heading", text("versionPlan")); box.append(heading);
+        const catalog = catalogFor(repo), components = catalog?.components || [], seen = new Set();
+        for (const component of components) {
+          const plan = repo.versionPlans.find(item => item.sourceId === component.sourceId), row = node("div", "repository-publish-plan-row"), label = node("span"), action = managed(node("button", "ghost-button repository-publish-plan-action")); action.type = "button"; seen.add(component.sourceId);
+          label.textContent = componentLabel(component, components.length) + (clean(component.currentVersion, 80) || "—") + " → " + (plan ? clean(plan.targetVersion, 80) : clean(component.nextVersion, 80) || text("noVersionChange"));
+          action.textContent = text(plan ? "cancelPlan" : "nextPatch"); action.disabled = blocked() || state.saveBusy || inputPending.size > 0 || state.versionBusy || !plan && (component.canBump !== true || typeof component.sourceId !== "string" || !component.sourceId || typeof component.currentVersion !== "string" || typeof component.nextVersion !== "string" || !component.nextVersion || !/^[a-f0-9]{64}$/.test(component.planProof) || !/^[a-f0-9]{64}$/.test(component.expectedSha256) || !Number.isSafeInteger(component.expectedBytes) || component.expectedBytes < 0);
+          action.addEventListener("click", () => { if (action.disabled || blocked() || state.saveBusy || inputPending.size) return; repo.versionPlans = repo.versionPlans.filter(item => item.sourceId !== component.sourceId); if (!plan) repo.versionPlans.push({ sourceId: component.sourceId, currentVersion: component.currentVersion, targetVersion: component.nextVersion, expectedSha256: component.expectedSha256, expectedBytes: component.expectedBytes, planProof: component.planProof }); changed(); });
+          row.append(label, action); if (component.canBump !== true) row.append(node("span", "repository-publish-plan-reason", clean(component.reason, 300) || text("versionUnsupported"))); box.append(row);
+        }
+        for (const plan of repo.versionPlans) if (!seen.has(plan.sourceId)) {
+          const row = node("div", "repository-publish-plan-row"), cancel = managed(node("button", "ghost-button", text("cancelPlan"))); cancel.type = "button"; cancel.disabled = blocked() || state.saveBusy || inputPending.size > 0;
+          row.append(node("span", "", clean(plan.currentVersion, 80) + " → " + clean(plan.targetVersion, 80)), cancel); box.append(row);
+          cancel.addEventListener("click", () => { if (cancel.disabled || blocked() || state.saveBusy || inputPending.size) return; repo.versionPlans = repo.versionPlans.filter(item => item !== plan); changed(); });
+        }
+        if (!components.length && !repo.versionPlans.length) box.append(node("p", "repository-publish-hint", text(state.versionBusy ? "loading" : state.versionFailed ? "versionFailed" : repo.versionSources.length ? "versionPending" : "noVersion")));
+      }
     }
     function renderWarnings() {
       warningSummary.textContent = text("bindingHints"); warningHint.textContent = text("bindingHintSnapshot"); warningRows.replaceChildren();
@@ -157,9 +242,10 @@
       if (!plain(value) || !idOK(value.requestId) || !activeStatuses.has(value.status) && !terminalStatuses.has(value.status) || !Array.isArray(items)) return false;
       if (state.pendingId && value.requestId !== state.pendingId) return false;
       if (state.operation?.requestId === value.requestId && terminalStatuses.has(state.operation.status) && activeStatuses.has(value.status)) return false;
+      const closingPending = state.pendingId === value.requestId || activeStatuses.has(state.operation?.status);
       state.operation = { ...clone(value), results: clone(items) }; state.error = ""; state.notice = ""; state.notFound = false;
       if (activeStatuses.has(value.status)) { state.pendingId = value.requestId; persistId(state.pendingId); schedulePoll(); }
-      else { state.pendingId = ""; state.pendingRequest = null; persistId("", value.requestId); stopPoll(); state.serverBusy = false; state.notice = ["success", "complete"].includes(value.status) ? "complete" : "interrupted"; }
+      else { state.pendingId = ""; state.pendingRequest = null; persistId("", value.requestId); stopPoll(); state.serverBusy = false; state.notice = ["success", "complete"].includes(value.status) ? "complete" : "interrupted"; if (closingPending) { state.needsSettingsRead = true; if (state.plannedRepoIds.size) { for (const id of state.plannedRepoIds) state.catalog.delete(id); state.versionEpoch++; state.needsVersionsRead = true; state.plannedRepoIds.clear(); } } }
       renderResults(); return true;
     }
     async function poll() {
@@ -179,21 +265,27 @@
         else if (!acceptOperation(value.operation || value)) { state.notice = "pendingUnavailable"; state.pollDelay = Math.min(10000, state.pollDelay * 2); }
         else state.pollDelay = 1200;
       } catch { state.notice = "pendingUnavailable"; state.pollDelay = Math.min(10000, state.pollDelay * 2); }
-      finally { state.readBusy = false; render(); schedulePoll(); }
+      finally { state.readBusy = false; render(); schedulePoll(); readCompletedSettings(); }
     }
     async function readStatus() {
       if (state.destroyed || state.readBusy || state.postBusy || state.saveBusy) return;
+      const edit = state.edit;
       state.readBusy = true; render();
       try {
         const value = await request(); if (state.destroyed) return;
         state.allowed = value.allowed === true; state.serverBusy = value.busy === true;
         state.warnings = Array.isArray(value.warnings) ? value.warnings.slice(0, 100) : [];
-        if (!state.dirty && plain(value.settings)) { state.settings = normalized(value.settings); syncDrafts.clear(); state.invalid.clear(); if (dialog.open) renderConfig(); }
+        if (!state.dirty && state.edit === edit && plain(value.settings)) { state.settings = normalized(value.settings); state.savedSources = sourceIdentities(state.settings); if (state.pendingRequest) for (const repo of state.settings.repositories) if (state.pendingRequest.repoIds.includes(repo.id) && repo.versionPlans.length) state.plannedRepoIds.add(repo.id); syncDrafts.clear(); state.invalid.clear(); if (dialog.open) renderConfig(); }
         const accepted = value.operation && acceptOperation(value.operation);
         if (!accepted) { state.error = ""; state.notice = ""; }
         if (state.pendingId) schedulePoll();
       } catch { state.error = "readFailed"; }
-      finally { state.readBusy = false; render(); }
+      finally { state.readBusy = false; render(); readCompletedSettings(); }
+    }
+    function readCompletedSettings() {
+      if (state.destroyed || state.readBusy || state.postBusy || state.saveBusy) return;
+      if (state.needsSettingsRead) { state.needsSettingsRead = false; void readStatus(); return; }
+      if (state.needsVersionsRead && !state.versionBusy && !state.dirty) { state.needsVersionsRead = false; if (state.expanded || dialog.open) void readVersions(); }
     }
     function changed() {
       state.dirty = true; state.edit++; state.error = ""; state.notice = ""; render(); void save();
@@ -215,9 +307,12 @@
       try {
         const value = await request("/config", { settings: payload }); if (state.destroyed) return;
         succeeded = true;
-        if (state.edit === edit) { state.settings = normalized(value.settings || payload); state.dirty = false; state.error = ""; state.notice = "saved"; syncDrafts.clear(); if (dialog.open) renderConfig(); }
+        const saved = normalized(value.settings || payload), sources = sourceIdentities(saved);
+        if (Array.from(sources).some(([id, identity]) => state.savedSources.get(id) !== identity)) { state.versionEpoch++; state.needsVersionsRead = true; }
+        state.savedSources = sources;
+        if (state.edit === edit) { state.settings = saved; state.dirty = false; state.error = ""; state.notice = "saved"; syncDrafts.clear(); if (dialog.open) renderConfig(); }
       } catch { state.error = "saveFailed"; }
-      finally { state.saveBusy = false; render(); if (succeeded && state.edit !== edit) void save(); }
+      finally { state.saveBusy = false; render(); if (succeeded && state.edit !== edit) void save(); else readCompletedSettings(); }
     }
     async function run(repoIds) {
       if (!state.allowed || !state.settings || blocked() || state.readBusy || state.saveBusy || state.dirty || state.invalid.size || !enabled().length) return;
@@ -227,10 +322,11 @@
     }
     async function sendOriginal(original) {
       const requestId = original.requestId;
+      state.plannedRepoIds = new Set(state.settings.repositories.filter(repo => original.repoIds.includes(repo.id) && repo.versionPlans.length).map(repo => repo.id));
       stopPoll(); state.pendingId = requestId; state.notFound = false; state.operation = null; state.postBusy = true; state.error = ""; state.notice = "working"; renderResults(); render();
       try { const value = await request("/run", { requestId, repoIds: original.repoIds }); if (!acceptOperation(value.operation || value)) state.notice = "unknown"; }
       catch { state.notice = "unknown"; }
-      finally { state.postBusy = false; render(); schedulePoll(); }
+      finally { state.postBusy = false; render(); schedulePoll(); readCompletedSettings(); }
     }
     async function resumeOriginal() {
       if (!state.allowed || !state.notFound || !state.pendingRequest || state.pendingRequest.requestId !== state.pendingId || state.postBusy || state.readBusy || state.serverBusy || state.saveBusy || state.previewBusy || state.dirty) return;
@@ -254,14 +350,20 @@
       input.addEventListener("change", () => { if (blocked() || state.destroyed) return; inputPending.delete(input); if (options.required) validate(); change(options.checkbox ? input.checked : input.value, input); changed(); }); return input;
     }
     function renderConfig() {
-      controls.length = 0; state.localized.length = 0; state.invalid.clear(); inputPending.clear(); repositories.replaceChildren(); namingFields.replaceChildren();
+      const previousOpen = new Map(Array.from(configCards, ([id, card]) => [id, { card: card.open, connection: configSections.get(id)?.connection.open, rules: configSections.get(id)?.rules.open }]));
+      controls.length = 0; state.localized.length = 0; state.invalid.clear(); inputPending.clear(); configCards.clear(); configSections.clear(); planBoxes.clear(); repositories.replaceChildren(); namingFields.replaceChildren();
       localize(addButton, "add"); localize(namingSummary, "naming"); localize(detailSummary, "details"); localize(refreshButton, "refresh"); localize(previewButton, "preview"); localize(previewHint, "previewHint");
       for (const repo of state.settings?.repositories || []) {
-        const card = node("section", "repository-publish-repo"), grid = node("div", "repository-publish-grid"), title = node("h3", "repository-publish-repo-title"); title.textContent = clean(repo.path).split(/[\\/]/).filter(Boolean).pop() || text("repo"); card.dataset.repoId = repo.id;
-        card.append(title, grid); repositories.append(card);
+        const card = node("details", "repository-publish-repo"), grid = node("div", "repository-publish-grid"), title = node("summary", "repository-publish-repo-title"); title.textContent = repoName(repo); card.dataset.repoId = repo.id;
+        card.open = previousOpen.get(repo.id)?.card === true;
+        card.append(title, grid); repositories.append(card); configCards.set(repo.id, card);
         field(grid, "enabled", repo.enabled, value => { repo.enabled = value; }, { checkbox: true });
-        for (const key of ["path", "repositoryUrl", "remote", "branch"]) field(grid, key, repo[key], value => { repo[key] = value.trim(); }, key === "branch" ? { placeholder: "currentBranch" } : {});
+        const planBox = node("div", "repository-publish-plan-box"); card.append(planBox); planBoxes.set(repo.id, planBox);
+        const connection = node("details", "repository-publish-section repository-publish-connection"), connectionSummary = node("summary"), connectionGrid = node("div", "repository-publish-grid"); localize(connectionSummary, "connection"); connection.append(connectionSummary, connectionGrid); card.append(connection);
+        connection.open = previousOpen.get(repo.id)?.connection === true;
+        for (const key of ["path", "repositoryUrl", "remote", "branch"]) field(connectionGrid, key, repo[key], value => { repo[key] = value.trim(); }, key === "branch" ? { placeholder: "currentBranch" } : {});
         const rules = node("details", "repository-publish-section"), summary = node("summary"), ruleFields = node("div", "repository-publish-grid"); localize(summary, "rules"); rules.append(summary, ruleFields); card.append(rules);
+        rules.open = previousOpen.get(repo.id)?.rules === true; configSections.set(repo.id, { connection, rules });
         const syncValue = syncDrafts.has(repo.id) ? syncDrafts.get(repo.id) : repo.syncFiles.map(item => clean(item.source) + " -> " + clean(item.target)).join("\n");
         const syncInput = field(ruleFields, "sync", syncValue, (value, input) => {
           syncDrafts.set(repo.id, value);
@@ -308,7 +410,7 @@
     }
     function renderResults() {
       results.replaceChildren(); resultRetries.length = 0;
-      const list = state.operation?.results || [];
+      const list = (state.operation?.results || []).filter(result => !state.configRepoId || result.repoId === state.configRepoId);
       if (!list.length) { const item = node("p", "repository-publish-hint"); localize(item, "noResults"); results.append(item); return; }
       for (const result of list) {
         const card = node("article", "repository-publish-result"), title = node("strong"), summary = node("p"), expanded = node("details"), expandedTitle = node("summary"), content = node("pre");
@@ -333,26 +435,28 @@
       } catch { state.error = "previewFailed"; }
       finally { state.previewBusy = false; render(); if (state.dirty) void save(); }
     }
-    function open() {
+    function open(repoId = null) {
       if (!state.allowed || state.destroyed) return;
+      state.configRepoId = typeof repoId === "string" && state.settings?.repositories.some(repo => repo.id === repoId) ? repoId : null;
       state.returnFocus = document.activeElement; if (state.settings && !dialog.open && !state.dirty) renderConfig();
-      dialog.showModal(); render(); if (state.pendingId) void poll(); else void readStatus();
+      if (!dialog.open) dialog.showModal(); renderResults(); render(); void readVersions(); if (state.pendingId) void poll(); else void readStatus();
     }
-    runButton.addEventListener("click", () => void run()); configButton.addEventListener("click", open); closeButton.addEventListener("click", () => dialog.close());
+    runButton.addEventListener("click", () => void run()); configButton.addEventListener("click", () => open()); closeButton.addEventListener("click", () => dialog.close());
+    toggleButton.addEventListener("click", () => { if (!state.allowed || state.destroyed) return; state.expanded = !state.expanded; render(); if (state.expanded) void readVersions(); });
     dialog.addEventListener("close", () => { render(); state.returnFocus?.focus(); });
     addButton.addEventListener("click", () => {
-      if (!state.settings || blocked() || state.saveBusy) return;
+      if (!state.settings || blocked() || state.saveBusy || inputPending.size) return;
       const id = uniqueId(); if (!id) { state.error = "noIdentity"; render(); return; }
-      state.settings.repositories.push({ id, path: "", repositoryUrl: "", remote: "origin", branch: "", enabled: false, syncFiles: [], versionSources: [], exclude: [] }); renderConfig(); changed();
+      state.settings.repositories.push({ id, path: "", repositoryUrl: "", remote: "origin", branch: "", enabled: false, syncFiles: [], versionSources: [], versionPlans: [], exclude: [] }); renderConfig(); configCards.get(id).open = true; changed();
     });
-    refreshButton.addEventListener("click", () => { if (state.dirty) void save(); else if (state.pendingId) void poll(); else void readStatus(); }); previewButton.addEventListener("click", () => void preview());
+    refreshButton.addEventListener("click", () => { if (state.dirty) void save(); else { void readVersions(); if (state.pendingId) void poll(); else void readStatus(); } }); previewButton.addEventListener("click", () => void preview(state.configRepoId));
     resumeButton.addEventListener("click", () => void resumeOriginal());
     let observer = null;
     if (typeof MutationObserver === "function") { observer = new MutationObserver(() => { render(); }); observer.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] }); }
     function suspend() { stopPoll(); }
     function resume() { if (state.pendingId) schedulePoll(); else void readStatus(); }
     window.addEventListener("pagehide", suspend); window.addEventListener("pageshow", resume);
-    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; stopPoll(); observer?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); bar.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
+    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; stopPoll(); observer?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); bar.remove(); expanded.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
     mounted.set(host, api); instances.add(api); render(); void readStatus(); return api;
   }
   window.ConsoleRepositoryPublish = { mount, hasDraft: () => Array.from(instances).some(item => item.hasDraft()), canReload: () => Array.from(instances).every(item => item.canReload()) };
