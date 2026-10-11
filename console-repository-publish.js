@@ -239,7 +239,11 @@
       const label = node("label", "repository-publish-field"), caption = node("span"), input = node(options.multiline ? "textarea" : options.options ? "select" : "input");
       localize(caption, key);
       if (options.options) for (const choice of options.options) { const option = node("option"); option.value = typeof choice === "string" ? choice : choice.value; if (typeof choice === "string") option.textContent = choice; else localize(option, choice.key); input.append(option); }
-      else { input.type = options.checkbox ? "checkbox" : "text"; input.maxLength = options.maxLength || (options.multiline ? 16000 : 2048); if (options.multiline) input.rows = 3; }
+      else {
+        if (input.tagName === "INPUT") input.type = options.checkbox ? "checkbox" : "text";
+        input.maxLength = options.maxLength || (options.multiline ? 16000 : 2048);
+        if (options.multiline) input.rows = 3;
+      }
       if (options.checkbox) input.checked = value === true; else input.value = clean(String(value ?? ""), 16000);
       if (options.placeholder) localize(input, options.placeholder, "placeholder");
       function validate() { if (options.required && !input.value.trim()) { input.setCustomValidity(text("invalidConfig")); state.invalid.add(input); } else { input.setCustomValidity(""); state.invalid.delete(input); } }

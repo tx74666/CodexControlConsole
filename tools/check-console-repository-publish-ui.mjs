@@ -35,10 +35,12 @@ function harness(options = {}) {
     focus() { document.activeElement = this; }
     set innerHTML(_) { throw new Error("Unsafe HTML assignment"); }
   }
+  // Match the native DOM contract: HTMLTextAreaElement.type is getter-only.
+  class TextAreaElement extends Element { get type() { return "textarea"; } }
   const root = new Element("html"), panel = new Element("section"), host = new Element("div");
   root.lang = options.lang || "zh-CN"; panel.setAttribute("data-module-panel", options.module || "workspace"); host.id = "consoleRepositoryPublishHost"; root.append(panel); panel.append(host);
   const all = (parent = root) => [parent, ...parent.children.flatMap(item => all(item))];
-  document = { documentElement: root, readyState: options.loading ? "loading" : "complete", activeElement: null, createElement: tag => new Element(tag), getElementById: id => all().find(item => item.id === id), addEventListener(type, handler) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(handler); } };
+  document = { documentElement: root, readyState: options.loading ? "loading" : "complete", activeElement: null, createElement: tag => tag.toLowerCase() === "textarea" ? new TextAreaElement(tag) : new Element(tag), getElementById: id => all().find(item => item.id === id), addEventListener(type, handler) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(handler); } };
   const stored = options.storageUnavailable ? { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); }, removeItem() { throw new Error("blocked"); } } : { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   const snapshot = { allowed: true, busy: false, settings: settings(), operation: null, ...(options.snapshot || {}) };
   const window = { crypto: { randomUUID }, localStorage: stored, sessionStorage: stored, setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, addEventListener() {}, removeEventListener() {}, async fetch(url, init) {
@@ -92,6 +94,21 @@ await test("initial binding warnings stay collapsed in config with safe supporte
 });
 await test("configuration opens on demand and close restores compact state", async () => {
   const h = harness(); await h.ready(); await h.open(); assert.equal(h.fields("path")[0].value, "D:/Projects/Music"); assert.equal(h.fields("branch")[0].value, "feature/music"); h.button("关闭").click(); assert.equal(h.byClass("repository-publish-dialog").open, false); assert.equal(h.byClass("repository-publish-config").getAttribute("aria-expanded"), "false");
+});
+await test("native getter-only textarea type opens multiline config and preserves autosaved values", async () => {
+  const h = harness({ snapshot: { settings: settings([repository({ syncFiles: [{ source: "D:/Saved/Builder6.blend", target: "Build.blend" }], exclude: ["private/", "cache/"] })]) } });
+  await h.ready(); await h.open(); assert.equal(h.byClass("repository-publish-dialog").open, true);
+  for (const name of ["sync", "excludes", "notes"]) {
+    const input = h.fields(name)[0], descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "type");
+    assert.equal(input.tagName, "TEXTAREA"); assert.equal(input.type, "textarea"); assert.equal(typeof descriptor.get, "function"); assert.equal(descriptor.set, undefined);
+    assert.throws(() => { input.type = "text"; }, TypeError); assert.equal(Object.hasOwn(input, "type"), false);
+    assert.equal(input.rows, 3); assert.equal(input.maxLength, 16000);
+  }
+  assert.equal(h.fields("sync")[0].value, "D:/Saved/Builder6.blend -> Build.blend"); assert.equal(h.fields("excludes")[0].value, "private/\ncache/");
+  assert.equal(h.fields("enabled")[0].type, "checkbox"); assert.equal(h.fields("path")[0].type, "text");
+  await h.change("notes", "Saved scene only\nNo inferred feature changes"); const payload = h.posts("/config")[0].body.settings;
+  assert.equal(payload.naming.notes, "Saved scene only\nNo inferred feature changes"); assert.deepEqual(payload.repositories[0].syncFiles, [{ source: "D:/Saved/Builder6.blend", target: "Build.blend" }]); assert.deepEqual(payload.repositories[0].exclude, ["private/", "cache/"]);
+  h.button("关闭").click(); await h.open(); assert.equal(h.fields("notes")[0].value, payload.naming.notes); assert.equal(h.posts("/run").length, 0);
 });
 await test("change autosaves exactly the settings schema without prompting", async () => {
   const h = harness(); await h.ready(); await h.open(); await h.change("notes", "optional release note"); assert.equal(h.posts("/config").length, 1); const payload = h.posts("/config")[0].body; assert.deepEqual(Object.keys(payload), ["settings"]); assert.equal(payload.settings.naming.notes, "optional release note"); assert.equal(payload.settings.repositories[0].branch, "feature/music"); assert.equal(h.posts("/run").length, 0);
