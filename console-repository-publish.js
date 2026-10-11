@@ -19,6 +19,7 @@
   copy.zh.bindingHints = "初次绑定提示"; copy.en.bindingHints = "Initial binding notes";
   copy.zh.bindingHintSnapshot = "此清单是初次发现时的快照，不代表当前仍有异常。"; copy.en.bindingHintSnapshot = "This is the initial discovery snapshot; it does not describe current issues.";
   copy.zh.omittedLink = "链接已省略"; copy.en.omittedLink = "Link omitted";
+  copy.zh.scope = "适用范围（每行一项）"; copy.en.scope = "Scope (one pattern per line)";
   const clone = value => JSON.parse(JSON.stringify(value));
   const plain = value => value && typeof value === "object" && !Array.isArray(value);
   const clean = (value, length = 2000) => typeof value === "string" ? value.slice(0, length) : "";
@@ -280,7 +281,17 @@
           versionBox.replaceChildren();
           for (const source of repo.versionSources) {
             const row = node("div", "repository-publish-version-row"); versionBox.append(row);
-            for (const [label, key] of [["versionPath", "path"], ["kind", "kind"], ["key", "key"], ["name", "name"], ["scope", "scope"]]) field(row, label, source[key], value => { source[key] = value.trim(); }, key === "kind" ? { options: ["json", "xml", "unity_yaml", "python_ast", "text"] } : key === "path" ? { required: true } : {});
+            const formats = ["json", "xml", "unity", "unity_yaml", "python_ast", "text"];
+            if (typeof source.kind === "string" && source.kind && !formats.includes(source.kind)) formats.push(source.kind);
+            for (const [label, key] of [["versionPath", "path"], ["kind", "kind"], ["key", "key"], ["name", "name"], ["scope", "scope"]]) {
+              const value = key === "scope" && Array.isArray(source.scope) ? source.scope.join("\n") : source[key];
+              field(row, label, value, next => {
+                if (key === "scope") {
+                  const scopes = next.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+                  source.scope = Array.isArray(source.scope) || scopes.length > 1 ? scopes : scopes[0] || "";
+                } else source[key] = next.trim();
+              }, key === "kind" ? { options: formats } : key === "scope" ? { multiline: true } : key === "path" ? { required: true } : {});
+            }
             const remove = managed(node("button", "ghost-button")); remove.type = "button"; localize(remove, "remove"); controls.push(remove); row.append(remove);
             remove.addEventListener("click", () => { if (blocked()) return; repo.versionSources.splice(repo.versionSources.indexOf(source), 1); versions(); changed(); });
           }

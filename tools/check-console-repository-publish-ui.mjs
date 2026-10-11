@@ -37,10 +37,18 @@ function harness(options = {}) {
   }
   // Match the native DOM contract: HTMLTextAreaElement.type is getter-only.
   class TextAreaElement extends Element { get type() { return "textarea"; } }
+  // A native select does not retain values that have no matching option.
+  class SelectElement extends Element {
+    get type() { return "select-one"; }
+    get value() { return this.children.find(item => item.selected)?.value || ""; }
+    set value(value) { let matched = false; for (const option of this.children) { option.selected = !matched && option.value === String(value); if (option.selected) matched = true; } }
+    get selectedIndex() { return this.children.findIndex(item => item.selected); }
+    append(...items) { super.append(...items); if (!this.children.some(item => item.selected) && this.children.length) this.children[0].selected = true; }
+  }
   const root = new Element("html"), panel = new Element("section"), host = new Element("div");
   root.lang = options.lang || "zh-CN"; panel.setAttribute("data-module-panel", options.module || "workspace"); host.id = "consoleRepositoryPublishHost"; root.append(panel); panel.append(host);
   const all = (parent = root) => [parent, ...parent.children.flatMap(item => all(item))];
-  document = { documentElement: root, readyState: options.loading ? "loading" : "complete", activeElement: null, createElement: tag => tag.toLowerCase() === "textarea" ? new TextAreaElement(tag) : new Element(tag), getElementById: id => all().find(item => item.id === id), addEventListener(type, handler) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(handler); } };
+  document = { documentElement: root, readyState: options.loading ? "loading" : "complete", activeElement: null, createElement: tag => tag.toLowerCase() === "textarea" ? new TextAreaElement(tag) : tag.toLowerCase() === "select" ? new SelectElement(tag) : new Element(tag), getElementById: id => all().find(item => item.id === id), addEventListener(type, handler) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(handler); } };
   const stored = options.storageUnavailable ? { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); }, removeItem() { throw new Error("blocked"); } } : { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   const snapshot = { allowed: true, busy: false, settings: settings(), operation: null, ...(options.snapshot || {}) };
   const window = { crypto: { randomUUID }, localStorage: stored, sessionStorage: stored, setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, addEventListener() {}, removeEventListener() {}, async fetch(url, init) {
@@ -109,6 +117,31 @@ await test("native getter-only textarea type opens multiline config and preserve
   await h.change("notes", "Saved scene only\nNo inferred feature changes"); const payload = h.posts("/config")[0].body.settings;
   assert.equal(payload.naming.notes, "Saved scene only\nNo inferred feature changes"); assert.deepEqual(payload.repositories[0].syncFiles, [{ source: "D:/Saved/Builder6.blend", target: "Build.blend" }]); assert.deepEqual(payload.repositories[0].exclude, ["private/", "cache/"]);
   h.button("关闭").click(); await h.open(); assert.equal(h.fields("notes")[0].value, payload.naming.notes); assert.equal(h.posts("/run").length, 0);
+});
+await test("discovered Unity kind selects a native option and its three scopes round-trip as separate lines", async () => {
+  const scopes = ["Assets/**", "Packages/**", "ProjectSettings/**"], version = { path: "ProjectSettings/ProjectSettings.asset", kind: "unity", key: "bundleVersion", name: "Unity application", scope: scopes };
+  const h = harness({ snapshot: { settings: settings([repository({ versionSources: [version] })]) } }); await h.ready(); await h.open();
+  const kind = h.fields("kind")[0]; assert.equal(kind.tagName, "SELECT"); assert.equal(kind.type, "select-one"); assert.equal(kind.value, "unity"); assert.ok(kind.selectedIndex >= 0);
+  assert.throws(() => { kind.type = "text"; }, TypeError); kind.value = "not-a-version-format"; assert.equal(kind.value, ""); assert.equal(kind.selectedIndex, -1); kind.value = "unity";
+  assert.equal(h.fields("scope")[0].tagName, "TEXTAREA"); assert.equal(h.fields("scope")[0].value, scopes.join("\n")); assert.equal(h.posts("/config").length, 0);
+  await h.change("notes", "Retain discovered version binding"); assert.deepEqual(h.posts("/config").at(-1).body.settings.repositories[0].versionSources[0], version);
+  await h.change("scope", "Assets/**\r\nPackages/**\r\nProjectSettings/**"); assert.deepEqual(h.posts("/config").at(-1).body.settings.repositories[0].versionSources[0].scope, scopes);
+  await h.change("scope", "Assets/**"); assert.deepEqual(h.posts("/config").at(-1).body.settings.repositories[0].versionSources[0].scope, ["Assets/**"]);
+  h.button("关闭").click(); await h.open(); assert.equal(h.fields("kind")[0].value, "unity"); assert.equal(h.fields("scope")[0].value, "Assets/**"); assert.equal(h.posts("/run").length, 0);
+});
+await test("single string version scope keeps its schema until multiple lines are entered", async () => {
+  const version = { path: "package.json", kind: "json", key: "version", name: "Module", scope: "src/**" };
+  const h = harness({ snapshot: { settings: settings([repository({ versionSources: [version] })]) } }); await h.ready(); await h.open(); assert.equal(h.fields("scope")[0].value, "src/**");
+  await h.change("scope", ""); assert.equal(h.posts("/config").at(-1).body.settings.repositories[0].versionSources[0].scope, "");
+  await h.change("scope", "lib/**"); assert.equal(h.posts("/config").at(-1).body.settings.repositories[0].versionSources[0].scope, "lib/**");
+  await h.change("scope", "lib/**\nassets/a,b.blend"); assert.deepEqual(h.posts("/config").at(-1).body.settings.repositories[0].versionSources[0].scope, ["lib/**", "assets/a,b.blend"]);
+  await h.change("scope", ""); assert.deepEqual(h.posts("/config").at(-1).body.settings.repositories[0].versionSources[0].scope, []); assert.equal(h.posts("/run").length, 0);
+});
+await test("existing backend format aliases stay selected and are not rewritten by unrelated edits", async () => {
+  const aliases = ["app-manifest", "package", "yaml", "bl_info", "csproj"], versions = aliases.map((kind, i) => ({ path: `component${i}/version.txt`, kind, key: "version", name: kind, scope: `component${i}/**` }));
+  const h = harness({ snapshot: { settings: settings([repository({ versionSources: versions })]) } }); await h.ready(); await h.open();
+  assert.deepEqual(h.fields("kind").map(input => input.value), aliases); assert.ok(h.fields("kind").every(input => input.selectedIndex >= 0));
+  await h.change("notes", "Keep existing format aliases"); assert.deepEqual(h.posts("/config").at(-1).body.settings.repositories[0].versionSources, versions); assert.equal(h.posts("/run").length, 0);
 });
 await test("change autosaves exactly the settings schema without prompting", async () => {
   const h = harness(); await h.ready(); await h.open(); await h.change("notes", "optional release note"); assert.equal(h.posts("/config").length, 1); const payload = h.posts("/config")[0].body; assert.deepEqual(Object.keys(payload), ["settings"]); assert.equal(payload.settings.naming.notes, "optional release note"); assert.equal(payload.settings.repositories[0].branch, "feature/music"); assert.equal(h.posts("/run").length, 0);
