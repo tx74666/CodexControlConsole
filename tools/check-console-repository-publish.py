@@ -432,7 +432,7 @@ def test_branch_locks_and_no_global_config():
 def test_real_local_lfs_if_available():
     with Fixture() as f:
         root, remote, _ = f.repo()
-        process = subprocess.run([shutil.which("git"), "lfs", "version"], capture_output=True, env=f.env, timeout=10)
+        process = subprocess.run([shutil.which("git"), "lfs", "version"], cwd=root, capture_output=True, env=f.env, timeout=60)
         if process.returncode:
             print("SKIP real LFS: executable unavailable (normal filters still tested)")
             return

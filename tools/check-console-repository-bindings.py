@@ -98,16 +98,21 @@ class BindingTests(unittest.TestCase):
         saved.write_bytes(b"saved scene fixture")
         dep = self.base / "texture.png"
         dep.write_bytes(b"texture")
-        manifest = {"sourceScene": str(saved), "sceneDestination": "Build.blend",
-                    "dependencies": [{"source": str(dep), "destination": "textures/texture.png"}]}
+        # Equivalent input spellings must return the canonical saved-file identity.
+        # Windows CI may also give the temporary root its short 8.3 spelling.
+        saved_alias, dep_alias = self.root / ".." / saved.name, self.root / ".." / dep.name
+        self.assertTrue(saved_alias.samefile(saved))
+        self.assertTrue(dep_alias.samefile(dep))
+        manifest = {"sourceScene": str(saved_alias), "sceneDestination": "Build.blend",
+                    "dependencies": [{"source": str(dep_alias), "destination": "textures/texture.png"}]}
         self.write("tools/build_sources.json", json.dumps(manifest))
         before = saved.stat().st_mtime_ns
         sync = self.discovery().discover()["repositories"][0]["syncFiles"]
-        self.assertEqual(sync, [{"source": str(dep), "target": "textures/texture.png"}, {"source": str(saved), "target": "Build.blend"}])
+        self.assertEqual(sync, [{"source": str(dep.resolve()), "target": "textures/texture.png"}, {"source": str(saved.resolve()), "target": "Build.blend"}])
         self.assertFalse((self.root / "Build.blend").exists())
         self.assertEqual(saved.stat().st_mtime_ns, before)
         manifest_proof = self.discovery().discover()["repositories"][0]["syncManifest"]
-        self.assertEqual(manifest_proof["path"], str(self.root / "tools/build_sources.json"))
+        self.assertEqual(manifest_proof["path"], str((self.root / "tools/build_sources.json").resolve()))
         import hashlib
         self.assertEqual(manifest_proof["sha256"], hashlib.sha256((self.root / "tools/build_sources.json").read_bytes()).hexdigest())
 
