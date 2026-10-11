@@ -2705,7 +2705,7 @@ async function runBrowserChecks(client) {
         }
       }
       item.lyricsLanguages = originalLanguages;
-      for (const selector of ["#playPauseTrack", "#trackSeek", "#trackVolume", "#nowPlayingLyricsList", "#nowPlayingLyricsList .music-lyrics-line:not(.rest)", "#nowPlayingLyricsList .lyric-word"]) {
+      for (const selector of ["#playPauseTrack", "#trackSeek", "#trackVolume", "#nowPlayingLyricsList", "#nowPlayingLyricsList .music-lyrics-line:not(.rest)", "#nowPlayingLyricsList .lyric-sentence-text"]) {
         const node = document.querySelector(selector);
         if (!node || card.contains(node)) throw new Error("adjacent control is missing or inside the language card: " + selector);
         const before = snapshot(), beforeCalls = cycleCalls;

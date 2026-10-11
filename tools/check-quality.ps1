@@ -206,7 +206,8 @@ $PythonChecks = @(
   "tools/check-external-app-launcher.py",
   "tools/check-http-boundary.py",
   "tools/check-runtime-state.py",
-  "tools/check-lyrics-alignment-sidecar.py"
+  "tools/check-lyrics-alignment-sidecar.py",
+  "tools/check-lyrics-sentence-marks.py"
 )
 
 Push-Location $ProjectRoot
@@ -270,6 +271,7 @@ try {
     "tools/check-workspace-plan-persistence-ui.mjs",
     "tools/check-build-version.ps1",
     "tools/check-console-ui.mjs",
+    "tools/check-lyrics-sentence-editor.mjs",
     "tools/check-resource-ui.mjs",
     "services/feedback-relay/src/index.js",
     "services/feedback-relay/test/feedback.test.js"
@@ -299,7 +301,8 @@ try {
   Invoke-QualityStep "Repository publish UI syntax" { & $Node --check console-repository-publish.js }
   Invoke-QualityStep "Repository publish UI behavior" { & $Node tools/check-console-repository-publish-ui.mjs }
   Invoke-QualityStep "Desktop Console header control policy" { & $Node tools/check-console-header-controls.mjs }
-  Invoke-QualityStep "Lyric word timing and vocal rest playback" { & $Node tools/check-lyrics-playback-timing.mjs }
+  Invoke-QualityStep "Whole-line lyric playback and vocal rests" { & $Node tools/check-lyrics-playback-timing.mjs }
+  Invoke-QualityStep "Manual sentence marking editor" { & $Node tools/check-lyrics-sentence-editor.mjs }
   Invoke-QualityStep "Dev Room text fields syntax" { & $Node --check dev-room-editor.js }
   Invoke-QualityStep "Dev Room text preservation and presentation" { & $Node tools/check-dev-room-editor.mjs }
   Invoke-QualityStep "Dev Room bilingual document coverage" { & $Node tools/check-dev-room-translations.mjs }

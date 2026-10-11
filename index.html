@@ -50,14 +50,14 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=console-resume-1.1.0-20261012">
+  <link rel="stylesheet" href="styles.css?v=console-sentences-1.1.1-20261012">
   <link rel="stylesheet" href="transfer-panel.css?v=console-transfer-1.0.93-20261011">
   <link rel="stylesheet" href="workflow-panel.css?v=console-mobile-refresh-1.0.93-20261011">
   <link rel="stylesheet" href="codex-work-panel.css?v=console-mobile-refresh-1.0.93-20261011">
   <link rel="stylesheet" href="conversations-panel.css?v=console-mobile-refresh-1.0.93-20261011">
   <link rel="stylesheet" href="incubator-panel.css?v=console-mobile-refresh-1.0.93-20261011">
   <link rel="stylesheet" href="console-developer-update.css?v=console-developer-update-1.0.93-20261011">
-  <link rel="stylesheet" href="console-repository-publish.css?v=console-repository-publish-1.1.0">
+  <link rel="stylesheet" href="console-repository-publish.css?v=console-repository-publish-1.1.1">
 
 </head>
 <body>
@@ -1328,27 +1328,29 @@
           </label>
 
           <section id="nowPlayingLyricsPanel" class="now-playing-lyrics-panel" hidden>
-            <div id="nowPlayingLyricsList" class="music-lyrics-list"></div>
-            <p id="nowPlayingLyricsStatus" class="music-lyrics-status" data-i18n="lyricsEmpty">这首歌还没有歌词文件。</p>
-            <div id="lyricsTimingEditor" class="lyrics-timing-editor" hidden>
-              <div class="lyrics-timing-head">
-                <span id="lyricsTimingTarget" class="lyrics-timing-target" data-i18n="lyricsTimingPick">Triple right-click the same lyric line to open timing editor (WIP).</span>
-                <button id="lyricsTimingClose" class="lyrics-timing-close" type="button" data-i18n-aria="lyricsTimingClose">x</button>
-              </div>
-              <div class="lyrics-timing-fields">
-                <label>
-                  <span data-i18n="lyricsTimingStartLabel">Start</span>
-                  <input id="lyricsTimingStartInput" type="text" inputmode="decimal" autocomplete="off" data-i18n-placeholder="lyricsTimingTimePlaceholder">
-                </label>
-                <label>
-                  <span data-i18n="lyricsTimingEndLabel">End</span>
-                  <input id="lyricsTimingEndInput" type="text" inputmode="decimal" autocomplete="off" data-i18n-placeholder="lyricsTimingTimePlaceholder">
-                </label>
-              </div>
-              <div class="lyrics-timing-actions">
-                <button type="button" data-lyrics-action="select-line" data-i18n="lyricsTimingSelectLine">Select line</button>
+            <div class="lyrics-sentence-toolbar">
+              <button id="lyricsSentenceToggle" type="button" aria-pressed="false" data-i18n="lyricsSentenceToggle">Mark sentences</button>
+              <span id="lyricsSentenceStatus" class="lyrics-sentence-status" role="status" aria-live="polite"></span>
+              <button id="lyricsSentenceRetry" type="button" hidden data-i18n="lyricsSentenceRetry">Retry saving</button>
+              <button id="lyricsSentenceReload" type="button" hidden data-i18n="lyricsSentenceReload" data-i18n-title="lyricsSentenceReloadHint">Reload saved points</button>
+            </div>
+            <div id="lyricsSentenceControls" class="lyrics-sentence-controls" hidden>
+              <p class="lyrics-sentence-hint" data-i18n="lyricsSentenceHint">Press Insert at the first onset, then at each sentence end.</p>
+              <strong id="lyricsSentenceTarget" class="lyrics-sentence-target"></strong>
+              <div class="lyrics-sentence-actions">
+                <button id="lyricsSentenceMark" type="button">Insert</button>
+                <label><span class="visually-hidden" data-i18n="lyricsSentencePointHint">Point to edit</span><select id="lyricsSentenceRole"><option value="start" data-i18n="lyricsSentenceStart">Start</option><option value="end" data-i18n="lyricsSentenceEnd">End</option></select></label>
+                <input id="lyricsSentenceTime" type="text" inputmode="decimal" autocomplete="off" data-i18n-aria="lyricsTimingTimePlaceholder" data-i18n-placeholder="lyricsTimingTimePlaceholder">
+                <button id="lyricsSentenceApply" type="button" data-i18n="lyricsSentenceApply">Apply time</button>
+                <button id="lyricsSentenceRemove" type="button" data-i18n="lyricsSentenceRemove">Remove point</button>
               </div>
             </div>
+            <div id="lyricsSentenceRail" class="lyrics-sentence-rail" hidden>
+              <div class="lyrics-sentence-track"><div class="lyrics-sentence-ticks"></div><span id="lyricsSentenceCursor" class="lyrics-sentence-cursor"></span></div>
+              <time id="lyricsSentenceClock">0:00.000</time>
+            </div>
+            <div id="nowPlayingLyricsList" class="music-lyrics-list"></div>
+            <p id="nowPlayingLyricsStatus" class="music-lyrics-status" data-i18n="lyricsEmpty">这首歌还没有歌词文件。</p>
           </section>
         </div>
 
@@ -1425,10 +1427,10 @@
 <script src="incubator-panel.js?v=console-mobile-refresh-1.0.93-20261011"></script>
 <script src="dev-room-editor.js?v=dev-room-readable-1"></script>
 
-  <script src="app.js?v=console-resume-1.1.0-20261012"></script>
+  <script src="app.js?v=console-sentences-1.1.1-20261012"></script>
 <script src="phone-pairing.js?v=console-connect-1.0.27"></script>
 <script src="phone-offline-export.js?v=console-connect-1.0.27"></script>
 <script src="console-developer-update.js?v=console-developer-update-1.0.93-20261011"></script>
-<script src="console-repository-publish.js?v=console-repository-publish-1.1.0"></script>
+<script src="console-repository-publish.js?v=console-repository-publish-1.1.1"></script>
 </body>
 </html>

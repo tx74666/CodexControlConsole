@@ -1951,6 +1951,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     "ok": True,
                     "path": music_relative_path(path),
                     "marks": music_lyric_marks_for_path(path),
+                    "lyricsLanguage": normalize_lyrics_language(query.get("language", [""])[0]),
                 })
             except ValueError as error:
                 self.send_json({"error": str(error)}, status=404)
@@ -6854,16 +6855,24 @@ def fetch_music_lyrics(relative_path, force=False, prefer_synced=False):
     }
 
 
-def read_music_lyric_marks():
+def read_music_lyric_marks(strict=False):
     with MUSIC_LYRIC_MARKS_LOCK:
         try:
             payload = json.loads(MUSIC_LYRIC_MARKS_FILE.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except FileNotFoundError:
+            return {"tracks": {}}
+        except (OSError, json.JSONDecodeError) as error:
+            if strict:
+                raise ValueError("lyric marks could not be read; existing data was preserved") from error
             return {"tracks": {}}
         if not isinstance(payload, dict):
+            if strict:
+                raise ValueError("invalid lyric marks store; existing data was preserved")
             return {"tracks": {}}
         tracks = payload.get("tracks")
         if not isinstance(tracks, dict):
+            if strict and "tracks" in payload:
+                raise ValueError("invalid lyric tracks store; existing data was preserved")
             payload["tracks"] = {}
         return payload
 
@@ -6886,14 +6895,19 @@ def music_lyric_marks_for_path(path):
     for mark in marks:
         if not isinstance(mark, dict):
             continue
-        if mark.get("kind") != "boundary":
+        if not isinstance(mark.get("kind"), str) or mark.get("kind") not in {"boundary", "sentence"}:
             continue
         time_value = mark.get("time")
         line_index = mark.get("lineIndex")
         boundary_index = mark.get("boundaryIndex")
-        if not isinstance(time_value, (int, float)) or not isinstance(line_index, int):
+        if (isinstance(time_value, bool) or not isinstance(time_value, (int, float))
+                or not math.isfinite(time_value) or time_value < 0
+                or type(line_index) is not int or line_index < 0):
             continue
-        if not isinstance(boundary_index, int):
+        if mark.get("kind") == "boundary" and type(boundary_index) is not int:
+            continue
+        if mark.get("kind") == "sentence" and (not isinstance(mark.get("role"), str)
+                                               or mark.get("role") not in {"start", "end"}):
             continue
         clean = dict(mark)
         clean["role"] = normalize_music_lyric_mark_role(clean.get("role"))
@@ -6903,11 +6917,19 @@ def music_lyric_marks_for_path(path):
 
 
 def music_lyric_mark_sort_key(item):
+    if not isinstance(item, dict):
+        return (math.inf, "", 2, 0, 0, 0)
+    line = item.get("lineIndex", -1)
+    boundary = item.get("boundaryIndex", item.get("wordIndex", -1))
+    time_value = item.get("time", 0)
     return (
-        item.get("lineIndex", 0),
-        item.get("boundaryIndex", item.get("wordIndex", -1)),
+        line if type(line) is int else -1,
+        str(item.get("lyricsLanguage", "")) if item.get("kind") == "sentence" else "",
+        1 if item.get("kind") == "sentence" else 0,
+        boundary if type(boundary) is int else -1,
         0 if normalize_music_lyric_mark_role(item.get("role")) == "start" else 1,
-        item.get("time", 0),
+        time_value if isinstance(time_value, (int, float)) and not isinstance(time_value, bool)
+        and math.isfinite(time_value) else 0,
     )
 
 
@@ -6916,16 +6938,53 @@ def normalize_music_lyric_mark_role(value):
 
 
 def build_music_lyric_mark(payload):
-    time_value = float(payload.get("time", math.nan))
-    line_index = int(payload.get("lineIndex", -1))
-    raw_boundary_index = payload.get("boundaryIndex")
-    boundary_index = int(raw_boundary_index) if raw_boundary_index is not None else None
-    role = normalize_music_lyric_mark_role(payload.get("role"))
+    kind = payload.get("kind", "boundary")
+    if not isinstance(kind, str) or kind not in {"boundary", "sentence"}:
+        raise ValueError("invalid lyric mark kind")
+    line_index = payload.get("lineIndex", -1)
+    if type(line_index) is not int or line_index < 0:
+        raise ValueError("invalid lyric line")
+    if kind == "sentence":
+        role = payload.get("role")
+        if not isinstance(role, str) or role not in {"start", "end"}:
+            raise ValueError("invalid lyric sentence role")
+        action = payload.get("action", "save")
+        if not isinstance(action, str) or action not in {"save", "remove"}:
+            raise ValueError("invalid lyric sentence action")
+        raw_language = payload.get("lyricsLanguage", "")
+        language = normalize_lyrics_language(raw_language)
+        if not isinstance(raw_language, str) or (raw_language.strip() and not language):
+            raise ValueError("invalid lyric sentence language")
+        mark = {
+            "kind": "sentence", "lineIndex": line_index, "role": role,
+            "lyricsLanguage": language,
+        }
+        if action == "remove":
+            return mark
+    else:
+        if payload.get("action", "save") != "save":
+            raise ValueError("only sentence points can be removed")
+        role = normalize_music_lyric_mark_role(payload.get("role"))
+    raw_time = payload.get("time")
+    if isinstance(raw_time, bool) or not isinstance(raw_time, (int, float)):
+        raise ValueError("invalid lyric mark time")
+    time_value = float(raw_time)
     if not math.isfinite(time_value) or time_value < 0:
         raise ValueError("invalid lyric mark time")
-    if line_index < 0:
-        raise ValueError("invalid lyric line")
-    if boundary_index is None:
+    if kind == "sentence":
+        line_text = payload.get("lineText", "")
+        if not isinstance(line_text, str) or len(line_text) > 16 * 1024:
+            raise ValueError("lyric sentence text must be an exact string of at most 16384 characters")
+        mark.update({
+            "time": round(time_value, 3),
+            "lineText": line_text,
+            "note": str(payload.get("note") or "")[:160],
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        })
+        return mark
+    raw_boundary_index = payload.get("boundaryIndex")
+    boundary_index = raw_boundary_index
+    if type(boundary_index) is not int:
         raise ValueError("invalid lyric boundary")
     if boundary_index is not None and boundary_index < 0:
         boundary_index = 0
@@ -6953,9 +7012,52 @@ def same_music_lyric_mark_slot(item, mark):
         isinstance(item, dict)
         and item.get("lineIndex") == mark["lineIndex"]
         and item.get("kind", "word") == mark["kind"]
-        and item.get("boundaryIndex") == mark["boundaryIndex"]
+        and (normalize_lyrics_language(item.get("lyricsLanguage", "")) == mark.get("lyricsLanguage", "")
+             if mark["kind"] == "sentence" else item.get("boundaryIndex") == mark["boundaryIndex"])
         and normalize_music_lyric_mark_role(item.get("role")) == mark["role"]
     )
+
+
+def music_lyric_mark_expected_time(payload):
+    if "expectedTime" not in payload:
+        return False, None
+    value = payload["expectedTime"]
+    if value is None:
+        return True, None
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 0):
+        raise ValueError("invalid expected lyric sentence time")
+    return True, round(float(value), 3)
+
+
+def apply_music_lyric_mark_operations(marks_payload, parsed):
+    """Validate every compare-and-swap before changing the detached JSON snapshot."""
+    tracks = marks_payload.setdefault("tracks", {})
+    for _path, relative, mark, action, has_expected, expected in parsed:
+        stored = tracks.get(relative, [])
+        if not isinstance(stored, list):
+            raise ValueError("invalid lyric track marks; existing data was preserved")
+        existing = next((item for item in reversed(stored) if same_music_lyric_mark_slot(item, mark)), None)
+        actual = existing.get("time") if existing is not None else None
+        same_result = (existing is None if action == "remove" else existing is not None
+                       and actual == mark.get("time")
+                       and all(existing.get(key, "") == mark.get(key, "") for key in ("lineText", "note")))
+        if mark["kind"] == "sentence" and has_expected and actual != expected and not same_result:
+            raise ValueError("lyric sentence point changed; reload marks before saving")
+    for _path, relative, mark, action, _has_expected, _expected in parsed:
+        stored = tracks.get(relative, [])
+        existing = next((item for item in reversed(stored) if same_music_lyric_mark_slot(item, mark)), None)
+        stored = [item for item in stored if not same_music_lyric_mark_slot(item, mark)]
+        if action == "save":
+            merged = dict(existing) if existing is not None else {}
+            if (mark["kind"] == "sentence" and existing is not None
+                    and all(existing.get(key, "") == mark.get(key, "") for key in ("time", "lineText", "note"))):
+                # A lost response may cause a retry; retain the original mark identity.
+                mark = {**mark, "createdAt": existing.get("createdAt", mark["createdAt"])}
+            merged.update(mark)
+            stored.append(merged)
+        stored.sort(key=music_lyric_mark_sort_key)
+        tracks[relative] = stored
 
 
 def invalidate_music_analysis_cache(path):
@@ -6971,24 +7073,22 @@ def save_music_lyric_mark(payload):
     path = music_path_from_relative(payload.get("path", ""))
     relative = music_relative_path(path)
     mark = build_music_lyric_mark(payload)
+    action = payload.get("action", "save")
+    has_expected, expected = music_lyric_mark_expected_time(payload)
     with MUSIC_LYRIC_MARKS_LOCK:
-        marks_payload = read_music_lyric_marks()
-        tracks = marks_payload.setdefault("tracks", {})
-        marks = tracks.setdefault(relative, [])
-        if not isinstance(marks, list):
-            marks = []
-            tracks[relative] = marks
-        marks = [item for item in marks if not same_music_lyric_mark_slot(item, mark)]
-        marks.append(mark)
-        marks.sort(key=music_lyric_mark_sort_key)
-        tracks[relative] = marks
+        marks_payload = read_music_lyric_marks(strict=True)
+        apply_music_lyric_mark_operations(marks_payload, [(path, relative, mark, action, has_expected, expected)])
         write_music_lyric_marks(marks_payload)
-    invalidate_music_analysis_cache(path)
+        saved_marks = music_lyric_marks_for_path(path)
+        saved_mark = next((item for item in saved_marks if same_music_lyric_mark_slot(item, mark)), mark)
+    if mark["kind"] == "boundary":
+        invalidate_music_analysis_cache(path)
     return {
         "ok": True,
         "path": relative,
-        "mark": mark,
-        "marks": music_lyric_marks_for_path(path),
+        "mark": saved_mark,
+        "removed": action == "remove",
+        "marks": saved_marks,
     }
 
 
@@ -7000,33 +7100,29 @@ def save_music_lyric_marks_batch(payload):
     marks_by_path = {}
     for item in marks:
         if not isinstance(item, dict):
-            continue
+            raise ValueError("invalid lyric mark item")
         path = music_path_from_relative(item.get("path", ""))
         relative = music_relative_path(path)
-        parsed.append((path, relative, build_music_lyric_mark(item)))
+        mark = build_music_lyric_mark(item)
+        has_expected, expected = music_lyric_mark_expected_time(item)
+        parsed.append((path, relative, mark, item.get("action", "save"), has_expected, expected))
 
     changed_paths = {}
     with MUSIC_LYRIC_MARKS_LOCK:
-        marks_payload = read_music_lyric_marks()
-        tracks = marks_payload.setdefault("tracks", {})
-        for path, relative, mark in parsed:
-            stored = tracks.setdefault(relative, [])
-            if not isinstance(stored, list):
-                stored = []
-            stored = [item for item in stored if not same_music_lyric_mark_slot(item, mark)]
-            stored.append(mark)
-            stored.sort(key=music_lyric_mark_sort_key)
-            tracks[relative] = stored
+        marks_payload = read_music_lyric_marks(strict=True)
+        apply_music_lyric_mark_operations(marks_payload, parsed)
+        for path, relative, mark, _action, _has_expected, _expected in parsed:
             changed_paths[relative] = path
 
         if parsed:
             write_music_lyric_marks(marks_payload)
+        for relative, path in changed_paths.items():
+            marks_by_path[relative] = music_lyric_marks_for_path(path)
 
-    for path in changed_paths.values():
-        invalidate_music_analysis_cache(path)
+    for path, _relative, mark, _action, _has_expected, _expected in parsed:
+        if mark["kind"] == "boundary":
+            invalidate_music_analysis_cache(path)
 
-    for relative, path in changed_paths.items():
-        marks_by_path[relative] = music_lyric_marks_for_path(path)
     return {
         "ok": True,
         "count": len(marks),
@@ -9527,6 +9623,33 @@ def has_acoustic_alignment(analysis):
         for line in analysis["lines"]
     )
 
+
+def attach_music_sentence_marks(analysis, marks, language=""):
+    """Overlay manual sentence endpoints without changing acoustic or word timings."""
+    result = copy.deepcopy(analysis)
+    result["lyricsLanguage"] = normalize_lyrics_language(language)
+    result["manualMarks"] = copy.deepcopy(marks)
+    scoped_language = normalize_lyrics_language(language)
+    endpoints = {}
+    for mark in marks:
+        if (not isinstance(mark, dict) or mark.get("kind") != "sentence"
+                or mark.get("role") not in {"start", "end"}
+                or normalize_lyrics_language(mark.get("lyricsLanguage", "")) != scoped_language):
+            continue
+        endpoints.setdefault(mark["lineIndex"], {})[mark["role"]] = mark
+    for line in result.get("lines", []):
+        if not isinstance(line, dict):
+            continue
+        for key in ("sentenceStart", "sentenceEnd", "sentenceMarks"):
+            line.pop(key, None)
+        for role, mark in endpoints.get(line.get("index"), {}).items():
+            if mark.get("lineText") and mark["lineText"] != line.get("text"):
+                continue
+            line["sentenceStart" if role == "start" else "sentenceEnd"] = mark["time"]
+            line.setdefault("sentenceMarks", {})[role] = copy.deepcopy(mark)
+    return result
+
+
 def music_lyrics_analysis(relative_path, language=""):
     path = music_path_from_relative(relative_path)
     lyrics_language = normalize_lyrics_language(language)
@@ -9536,9 +9659,7 @@ def music_lyrics_analysis(relative_path, language=""):
 
     aligned = read_music_alignment_sidecar(path, lyrics_path)
     if aligned is not None:
-        aligned["lyricsLanguage"] = lyrics_language
-        aligned["manualMarks"] = music_lyric_marks_for_path(path)
-        return aligned
+        return attach_music_sentence_marks(aligned, music_lyric_marks_for_path(path), lyrics_language)
 
     cached = read_music_analysis_cache(path, lyrics_path)
     # Precise results are authoritative only while their independent bindings validate.
@@ -9548,8 +9669,7 @@ def music_lyrics_analysis(relative_path, language=""):
         cached = dict(cached)
         if lyrics_language:
             cached["lyricsLanguage"] = lyrics_language
-        cached["manualMarks"] = music_lyric_marks_for_path(path)
-        return cached
+        return attach_music_sentence_marks(cached, music_lyric_marks_for_path(path), lyrics_language)
 
     rows = parsed_timed_lyrics(lyrics_path)
     audio = decoded_music_flux(path)
@@ -9686,8 +9806,7 @@ def music_lyrics_analysis(relative_path, language=""):
     }
     write_music_analysis_cache(path, lyrics_path, analysis)
     analysis = dict(analysis)
-    analysis["manualMarks"] = music_lyric_marks_for_path(path)
-    return analysis
+    return attach_music_sentence_marks(analysis, music_lyric_marks_for_path(path), lyrics_language)
 
 
 def clean_music_stem(stem):

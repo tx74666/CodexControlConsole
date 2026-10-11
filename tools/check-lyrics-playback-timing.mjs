@@ -25,7 +25,9 @@ const playback = between("const lyricsLineSwitchLeadSeconds", "function lyricsCo
 const visuals = between("function lyricsColorMix(", "function lyricsAnimationShouldRun(");
 const names = ["renderLyricsWords", "lyricsBoundaryReferenceTime", "updateLyricsProgress", "lyricsAnimationShouldRun",
   "applyAudioCurrentTime", "seekToLyricsLine", "currentAudioSeekRatio", "updateTrackProgress"];
-const actualFunctions = `${helpers}\n${playback}\n${visuals}\n${names.map(functionSource).join("\n")}`;
+const sentenceDependencies = ["normalizeLyricsLanguageCode", "sentenceLyricsLanguage", "sentenceLyricMark", "sentenceLyricPointTime",
+  "sentenceLyricsRowIndices", "hasSentenceLyricTimeline", "activeSentenceLyricsIndexAt", "sentenceLyricsSessionMatches", "syncSentenceLyricsLineMarkers", "updateSentenceLyricsCursor"];
+const actualFunctions = `${helpers}\n${playback}\n${visuals}\n${[...names, ...sentenceDependencies].map(functionSource).join("\n")}`;
 const playbackClasses = ["word-sung", "word-current", "word-hold", "word-wave-current", "word-phrase-rest",
   "word-strong", "word-valley-break", "word-group-break"];
 const playbackProperties = ["--word-fill", "--word-strength", "--word-current-brightness", "--word-current-saturation",
@@ -56,6 +58,7 @@ function element(tag = "div") {
       throw new Error(`Unhandled DOM query ${selector}`);
     },
     querySelector(selector) {
+      if (selector === ".lyric-sentence-points") return children.find(child => child.classes.has("lyric-sentence-points")) || null;
       const match = selector.match(/^\[data-lyrics-index="(\d+)"\]$/);
       assert.ok(match, `Unhandled DOM selector ${selector}`);
       return children.find(child => child.dataset.lyricsIndex === match[1]) || null;
@@ -83,10 +86,13 @@ function harness(lines = [aligned(0, 1.5, 3.5), aligned(1, 5, 7)], marks = []) {
     musicLyricsTrackPath: "fixture.mp3", selectedTrackPath: "fixture.mp3", musicLyricsSynced: true, musicLyricsActiveIndex: -1,
     hasMusic: true, heldLyricsActiveIndex: -1, heldLyricsActiveUntil: 0, pendingSeekRatio: null, userSeeking: false,
     sessionMusicLyricMarks: new Map(), pendingMusicLyricMarks: new Map(), smoothValueAnimations: new Map(),
+    sentenceLyricsCalibration: null, sentenceLyricsBusy: false,
+    lyricsLanguageCycleOrder: ["fr", "en", "zh"],
     performance: { now: () => 10 }, clamp: (v, min, max) => Math.min(max, Math.max(min, v)), audioDuration: () => 10,
     document: { createElement: element, createTextNode(value) { const node = element("text"); node.textContent = value; return node; } },
     window: { location: { href: "http://fixture/" } }, URL,
     selectedTrack: () => ({ path: "fixture.mp3", url: "fixture.mp3" }),
+    musicTrackWithPreferredLyrics: item => item,
     setSelectedTrackPath(path) { runtime.selectedTrackPath = path; },
     recordTrackSeekChange: (...args) => seekEvents.push(args), formatDuration: String,
     isModuleForeground: () => true, syncLyricsTimingSelection() {}, syncLyricsAnimationLoop() {},

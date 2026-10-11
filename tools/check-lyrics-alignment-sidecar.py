@@ -22,7 +22,7 @@ FUNCTIONS = {
     "music_analysis_cache_meta", "read_music_analysis_cache", "write_music_analysis_cache",
     "invalidate_music_analysis_cache", "lyrics_word_tokens", "clamp_number",
     "music_alignment_sidecar_path", "validate_music_alignment_variant",
-    "read_music_alignment_sidecar", "has_acoustic_alignment", "music_lyrics_analysis",
+    "read_music_alignment_sidecar", "has_acoustic_alignment", "attach_music_sentence_marks", "music_lyrics_analysis",
 }
 
 
