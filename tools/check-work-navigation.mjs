@@ -10,14 +10,21 @@ function extract(name) {
 }
 function harness(search = "", { remembered = "music", archived = [] } = {}) {
   const nodes = new Map(), panels = {}, stores = new Map(), created = [];
+  const modules = [
+    { id: "wallpaper", href: "index.html" },
+    { id: "music", href: "music.html" },
+    { id: "workspace", href: "workspace.html" }
+  ];
   const get = id => { if (!nodes.has(id)) nodes.set(id, { id, hidden: false, open: false, children: [], attributes: {}, listeners: new Map(), append(child) { if (child.parentElement) child.parentElement.children = child.parentElement.children.filter(value => value !== child); this.children.push(child); child.parentElement = this; }, setAttribute(key, value) { this.attributes[key] = String(value); }, addEventListener(name, action) { this.listeners.set(name, action); } }); return nodes.get(id); };
   get("desktopWorkflowDetails").append(get("desktopWorkflowPanel"));
   const tabs = ["ideas", "agents", "conversations", "workflow"].map(value => ({ dataset: { workView: value }, attributes: {}, listeners: new Map(), setAttribute(key, value) { this.attributes[key] = String(value); }, addEventListener(name, action) { this.listeners.set(name, action); } }));
-  const context = { URLSearchParams, runtimeActivityReady: true, activeConsoleView: "work", activeModuleId: "workspace", document: { hidden: false, getElementById: get, querySelectorAll: selector => selector === "#consoleWorkView [data-work-view]" ? tabs : [] }, localStorage: { getItem: key => stores.get(key) || null, setItem: (key, value) => stores.set(key, value) }, window: { location: { search } }, desktopTransferPanel: null, desktopWorkflowPanel: null, desktopIncubatorPanel: null, desktopConversationsPanel: null, desktopCodexWorkPanel: null, ensureEditionModuleLayout() {}, currentPageName: () => "index.html", allArchivedModuleIds: () => archived, deletedModuleIds: () => [], lastModuleId: () => remembered, moduleIdFromPage: () => "workspace", visibleModuleOrder: () => ["music", "workspace"] };
+  const context = { URLSearchParams, modules, moduleMap: new Map(modules.map(module => [module.id, module])), consoleEdition: "developer", editionModules: { developer: modules.map(module => module.id) }, runtimeActivityReady: true, activeConsoleView: "work", activeModuleId: "workspace", document: { hidden: false, getElementById: get, querySelectorAll: selector => selector === "#consoleWorkView [data-work-view]" ? tabs : [] }, localStorage: { getItem: key => stores.get(key) || null, setItem: (key, value) => stores.set(key, value) }, window: { location: { search } }, desktopTransferPanel: null, desktopWorkflowPanel: null, desktopIncubatorPanel: null, desktopConversationsPanel: null, desktopCodexWorkPanel: null, ensureEditionModuleLayout() {}, currentPageName: () => "index.html", allArchivedModuleIds: () => archived, deletedModuleIds: () => [], lastModuleId: () => remembered, visibleModuleOrder: () => ["music", "workspace"] };
   context.isModuleForeground = name => !context.document.hidden && context.activeModuleId === name;
   for (const [name, globalName] of [["workflow", "CodexWorkflowPanel"], ["agents", "CodexWorkPanel"], ["incubator", "CodexIncubatorPanel"], ["conversations", "CodexConversationsPanel"], ["transfer", "CodexTransferPanel"]]) context.window[globalName] = { create(root, options = {}) { created.push({ name, id: root.id }); const panel = { root, options, active: false, activity: [], targets: [], taskOpen: false, taskContext: null, openReady: true, clearReady: true, refreshes: 0, refresh() { this.refreshes++; }, setActive(value) { this.active = Boolean(value); this.activity.push(this.active); }, async useTarget(value) { this.targets.push(value); return true; }, async openTask(value) { if (!this.openReady) return false; this.taskContext = value; return true; }, clearTask() { if (!this.clearReady) return false; this.taskContext = null; return true; }, getTaskContext() { return this.taskContext; }, getWorkSource() { return this.workSource || null; }, hasOpenTask() { return this.taskOpen; }, closeTask() { if (options.onTaskLeave?.() === false) return false; this.taskOpen = false; options.onTaskStateChange?.(); return true; } }; panels[name] = panel; return panel; } };
-  const requested = source.match(/^const requestedConsoleView = .+;$/m)?.[0], view = source.match(/^let activeWorkView = .+;$/m)?.[0]; assert.ok(requested && view, "Use actual URL initialization");
-  runInNewContext(`${requested}\n${view}\n${extract("normalizeConsoleWorkView")}\n${extract("setConsoleWorkView")}\n${extract("syncConsoleTransferActivity")}\n${extract("bindConsoleTransfer")}\n${extract("initialModuleId")}`, context); context.bindConsoleTransfer();
+  const requested = source.match(/^const requestedConsoleView = .+;$/m)?.[0], resume = source.match(/^const requestedResumeModule = .+;$/m)?.[0], view = source.match(/^let activeWorkView = .+;$/m)?.[0]; assert.ok(requested && resume && view, "Use actual URL initialization");
+  // Run the actual module predicates and lookup chain against the isolated module registry.
+  const functions = ["editionModuleIds", "editionModuleSet", "availableModules", "firstAvailableModule", "isKnownModuleId", "isModuleAvailable", "moduleIdFromPage", "isModuleId", "moduleById", "normalizeConsoleWorkView", "setConsoleWorkView", "syncConsoleTransferActivity", "bindConsoleTransfer", "initialModuleId"];
+  runInNewContext(`${requested}\n${resume}\n${view}\n${functions.map(extract).join("\n")}`, context); context.bindConsoleTransfer();
   return { context, nodes, panels, created, get, tabs, stores, click(view) { tabs.find(tab => tab.dataset.workView === view).listeners.get("click")(); } };
 }
 let passed = 0;
@@ -65,6 +72,13 @@ await test("explicit workflow URL opens Work even if the last module was music",
 });
 await test("ordinary navigation keeps prior module preferences and unknown views are safe", () => {
   const h = harness("?consoleView=work&workView=invalid"); assert.equal(h.context.initialModuleId(), "music"); assert.equal(h.panels.incubator.active, true); assert.equal(h.panels.workflow.active, false); assert.equal(h.get("desktopWorkflowDetails").hidden, true); const archived = harness("?consoleView=work&workView=workflow", { archived: ["workspace"] }); assert.equal(archived.context.initialModuleId(), "music");
+});
+await test("a valid one-shot resume hint keeps explicit Work links and module visibility rules", () => {
+  assert.equal(harness("?resumeModule=wallpaper").context.initialModuleId(), "wallpaper");
+  assert.equal(harness("?resumeModule=invalid").context.initialModuleId(), "music");
+  assert.equal(harness("?resumeModule=music", { remembered: "workspace" }).context.initialModuleId(), "workspace");
+  assert.equal(harness("?resumeModule=wallpaper", { archived: ["wallpaper"] }).context.initialModuleId(), "music");
+  assert.equal(harness("?resumeModule=wallpaper&consoleView=work&workView=agents").context.initialModuleId(), "workspace");
 });
 await test("target selection returns to ideas and binds metadata without sending a message", async () => {
   const h = harness(); h.click("conversations"); const target = { id: "original-thread", kind: "codex", title: "原标题" }; await h.panels.conversations.options.onTarget(target); assert.equal(h.panels.incubator.active, true); assert.equal(h.panels.conversations.active, false); assert.equal(h.panels.workflow.active, false); assert.deepEqual(h.panels.incubator.targets, [target]); assert.equal(h.get("desktopWorkIdeas").hidden, false); assert.equal(h.stores.size, 0);
