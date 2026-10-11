@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.0.97";
+const consoleUiVersion = "1.0.98";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -9440,7 +9440,6 @@ function renderLyricsWords(node, rawText) {
     const word = document.createElement("span");
     word.className = "lyric-word";
     word.dataset.wordIndex = String(wordIndex);
-    word.style.setProperty("--word-fill", "0");
     word.textContent = part.text;
     node.appendChild(word);
     wordIndex += 1;
@@ -10372,43 +10371,7 @@ function lyricsWordPlaybackState(index, wordIndex, wordCount, time, spans = lyri
   };
 }
 
-function updateActiveLyricsWordProgress(time = 0) {
-  const list = els.nowPlayingLyricsList;
-  const active = list?.querySelector(".music-lyrics-line.active");
-  if (!list || !active || !musicLyricsSynced || musicLyricsActiveIndex < 0) return;
-  list.querySelectorAll(".music-lyrics-line:not(.active)").forEach(node => resetLyricsWordProgress(node, 0));
-  const wordNodes = Array.from(active.querySelectorAll(".lyric-word"));
-  const spans = lyricsMappedWordSpans(musicLyricsActiveIndex, wordNodes.length);
-  const lineEnd = lyricsLineEndTime(musicLyricsActiveIndex);
-  const resting = Number.isFinite(lineEnd) && time >= lineEnd;
-  active.style.setProperty("--line-progress", String(lyricsLineProgress(musicLyricsActiveIndex, time)));
-  active.style.setProperty("--line-end-soft", "0");
-  active.style.setProperty("--line-rest-progress", resting ? "1" : "0");
-  active.style.setProperty("--line-rest-glow", resting ? "12%" : "28%");
-  active.classList.remove("ending");
-  active.classList.toggle("line-resting", resting);
-  wordNodes.forEach((word, wordIndex) => {
-    const state = lyricsWordPlaybackState(musicLyricsActiveIndex, wordIndex, wordNodes.length, time, spans);
-    word.style.setProperty("--word-fill", String(state.fill));
-    word.style.setProperty("--word-strength", String(state.strength));
-    // The audio clock already interpolates continuously and must also handle backwards seeks.
-    word.style.setProperty("--word-transition", "0ms");
-    word.style.removeProperty("--word-current-brightness");
-    word.style.removeProperty("--word-current-saturation");
-    word.style.removeProperty("--word-valley");
-    word.style.removeProperty("--word-motion");
-    word.style.removeProperty("--word-break-strength");
-    word.style.removeProperty("--word-phrase-rest");
-    word.style.removeProperty("--word-valley-shadow");
-    word.classList.toggle("word-sung", state.fill >= 0.999);
-    word.classList.toggle("word-current", state.current);
-    word.classList.toggle("word-hold", state.hold);
-    word.classList.toggle("word-wave-current", state.wave && state.current);
-    word.classList.remove("word-phrase-rest", "word-strong", "word-valley-break", "word-group-break");
-  });
-}
-
-function resetLyricsWordProgress(node, value = 0) {
+function clearLyricsWordPlaybackStyles(node) {
   if (!node) return;
   node.style.removeProperty("--line-progress");
   node.style.removeProperty("--line-end-soft");
@@ -10416,7 +10379,7 @@ function resetLyricsWordProgress(node, value = 0) {
   node.style.removeProperty("--line-rest-glow");
   node.classList.remove("ending", "line-resting");
   node.querySelectorAll(".lyric-word").forEach(word => {
-    word.style.setProperty("--word-fill", String(value));
+    word.style.removeProperty("--word-fill");
     word.style.removeProperty("--word-strength");
     word.style.removeProperty("--word-current-brightness");
     word.style.removeProperty("--word-current-saturation");
@@ -10426,8 +10389,7 @@ function resetLyricsWordProgress(node, value = 0) {
     word.style.removeProperty("--word-phrase-rest");
     word.style.removeProperty("--word-valley-shadow");
     word.style.removeProperty("--word-transition");
-    word.classList.toggle("word-sung", value >= 1);
-    word.classList.remove("word-current");
+    word.classList.remove("word-sung", "word-current");
     word.classList.remove("word-hold", "word-wave-current", "word-phrase-rest", "word-strong", "word-valley-break", "word-group-break");
   });
 }
@@ -10510,7 +10472,7 @@ function setLyricsLineVisualState(node, index, activeIndex = musicLyricsActiveIn
   const canSeek = Boolean(musicLyricsSynced && line && Number.isFinite(line.time));
   node.classList.toggle("can-seek", canSeek);
   syncManualLyricMarkClasses(node, index);
-  resetLyricsWordProgress(node, 0);
+  clearLyricsWordPlaybackStyles(node);
   if (!musicLyricsSynced) return;
 
   if (activeIndex < 0) {
@@ -10525,7 +10487,6 @@ function setLyricsLineVisualState(node, index, activeIndex = musicLyricsActiveIn
     return;
   }
   node.classList.add(distance < 0 ? "past" : "upcoming");
-  if (distance < 0) resetLyricsWordProgress(node, 0);
   if (Math.abs(distance) === 1) node.classList.add("nearby");
   else if (Math.abs(distance) > 3) node.classList.add("distant");
 }
@@ -10545,7 +10506,6 @@ function syncLyricsLineVisualStates(activeIndex = musicLyricsActiveIndex, option
     active?.scrollIntoView({ block: "center", behavior: options.instant ? "auto" : "smooth" });
   }
   const currentTime = Number.isFinite(els.audioPlayer?.currentTime) ? els.audioPlayer.currentTime : 0;
-  updateActiveLyricsWordProgress(currentTime);
   updateLyricsLineTone(currentTime);
   syncLyricsTimingSelection();
   syncLyricsAnimationLoop();
@@ -10641,7 +10601,6 @@ function seekToLyricsLine(index) {
     heldLyricsActiveIndex = index;
     heldLyricsActiveUntil = performance.now() + 760;
     syncLyricsLineVisualStates(index, { scroll: true });
-    updateActiveLyricsWordProgress(targetTime);
     recordTrackSeekChange(beforeRatio, targetRatio);
     updateTrackProgress();
   };
@@ -12437,13 +12396,11 @@ function updateLyricsProgress(time = 0) {
     }
   }
   if (nextIndex === musicLyricsActiveIndex) {
-    updateActiveLyricsWordProgress(time);
     updateLyricsLineTone(time);
     return;
   }
   musicLyricsActiveIndex = nextIndex;
   syncLyricsLineVisualStates(nextIndex, { scroll: nextIndex >= 0 });
-  updateActiveLyricsWordProgress(time);
 }
 
 function musicLyricsCachePath(item) {

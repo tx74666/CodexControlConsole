@@ -6250,12 +6250,6 @@ body.lyrics-resizing * {
     rgba(12, 25, 39, 0.28);
 }
 
-@property --word-fill {
-  syntax: "<number>";
-  inherits: false;
-  initial-value: 0;
-}
-
 .music-now span,
 .volume-control span,
 .track-body span {
@@ -6324,19 +6318,13 @@ body.lyrics-resizing * {
 }
 
 .now-playing-lyrics-panel .lyric-word {
-  --word-fill: 0;
-  --word-strength: 0.48;
-  --word-valley: 0;
-  --word-motion: 0;
-  --word-break-strength: 0;
-  --word-phrase-rest: 0;
-  --word-valley-shadow: 2px;
-  --word-current-brightness: 1.14;
-  --word-current-saturation: 1.1;
-  --word-transition: 260ms;
   display: inline;
   color: inherit;
-  transition: opacity var(--word-transition) ease, filter var(--word-transition) ease, text-shadow var(--word-transition) ease;
+  background-image: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  filter: none;
+  text-shadow: inherit;
 }
 
 .now-playing-lyrics-panel .music-lyrics-line.can-seek {
@@ -6485,55 +6473,13 @@ body.lyrics-resizing * {
 }
 
 .now-playing-lyrics-panel .music-lyrics-line.active .lyric-word {
-  --word-stop: calc(var(--word-fill) * 100%);
-  color: transparent;
-  background-image:
-    linear-gradient(
-      90deg,
-      var(--lyrics-active-text) 0 var(--word-stop),
-      var(--lyrics-active-pending) var(--word-stop) 100%
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  text-shadow: 0 0 var(--word-valley-shadow) color-mix(in srgb, var(--lyrics-active-glow) var(--line-rest-glow, 28%), transparent);
-}
-
-.now-playing-lyrics-panel .music-lyrics-line.active .lyric-word.word-current {
-  filter: brightness(var(--word-current-brightness)) saturate(var(--word-current-saturation));
-}
-
-.now-playing-lyrics-panel .music-lyrics-line.active .lyric-word.word-sung {
-  filter: brightness(1.1) saturate(1.08);
-}
-
-.now-playing-lyrics-panel .music-lyrics-line.active .lyric-word.word-strong.word-current {
-  text-shadow: 0 0 7px color-mix(in srgb, var(--lyrics-active-glow) 42%, transparent);
-}
-
-.now-playing-lyrics-panel .music-lyrics-line.active .lyric-word.word-wave-current {
-  text-shadow: 0 0 calc(4px + var(--word-motion) * 7px) color-mix(in srgb, var(--lyrics-active-glow) 38%, transparent);
-}
-
-.now-playing-lyrics-panel .music-lyrics-line.active .lyric-word.word-hold {
-  filter: brightness(1.08) saturate(1.06);
-}
-
-.now-playing-lyrics-panel .music-lyrics-line.active .lyric-word.word-current.word-hold {
-  filter: brightness(calc(var(--word-current-brightness) - 0.08)) saturate(calc(var(--word-current-saturation) - 0.06));
-  text-shadow: 0 0 3px color-mix(in srgb, var(--lyrics-active-glow) 24%, transparent);
-}
-
-.now-playing-lyrics-panel .music-lyrics-line.active .lyric-word.word-group-break {
-  margin-right: calc(0.03em + var(--word-break-strength) * 0.06em);
-}
-
-.now-playing-lyrics-panel .music-lyrics-line.active .lyric-word.word-phrase-rest {
-  filter: brightness(calc(1.05 - var(--word-phrase-rest) * 0.04)) saturate(calc(1.05 - var(--word-phrase-rest) * 0.03));
-  text-shadow: 0 0 calc(2px + var(--word-phrase-rest) * 3px) color-mix(in srgb, var(--lyrics-active-glow) 24%, transparent);
-}
-
-.now-playing-lyrics-panel .music-lyrics-line.active .lyric-word.word-valley-break.word-hold {
-  text-shadow: 0 0 var(--word-valley-shadow) color-mix(in srgb, var(--lyrics-active-glow) 36%, transparent);
+  /* Playback highlights the complete sentence; word spans remain editing targets. */
+  color: inherit;
+  background-image: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  filter: none;
+  text-shadow: inherit;
 }
 
 .now-playing-lyrics-panel .music-lyrics-line.past .lyric-word {
@@ -6546,16 +6492,6 @@ body.lyrics-resizing * {
   font-size: 15px;
   font-weight: 650;
   line-height: 1.34;
-}
-
-:root[data-theme="light"] .now-playing-lyrics-panel .music-lyrics-line.active .lyric-word {
-  background-image:
-    linear-gradient(
-      90deg,
-      var(--lyrics-active-text) 0 var(--word-stop),
-      var(--lyrics-active-pending) var(--word-stop) 100%
-    );
-  text-shadow: none;
 }
 
 .now-playing-lyrics-panel .music-lyrics-status {
