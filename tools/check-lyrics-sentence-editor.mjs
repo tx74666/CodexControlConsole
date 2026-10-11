@@ -52,6 +52,64 @@ let checks = 0;
 async function check(name, callback) { await callback(); checks += 1; console.log(`PASS ${name}`); }
 const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} != ${expected}`);
 
+// Resolve custom-property dependencies from the actual desktop theme roots.
+// This catches invalid-at-computed-value declarations without pretending the DOM VM renders CSS.
+function desktopThemeProperties(source, theme) {
+  const properties = new Map();
+  const clean = source.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const rule of clean.matchAll(/:root(?:\[data-theme=(["'])(light|dark)\1\])?\s*\{([^{}]*)\}/g)) {
+    if (rule[2] && rule[2] !== theme) continue;
+    for (const declaration of rule[3].matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      properties.set(declaration[1], declaration[2].trim());
+    }
+  }
+  assert.ok(properties.size, `Missing actual desktop ${theme} root variables`);
+  return properties;
+}
+function resolveCssVariables(value, properties, stack = new Set()) {
+  let result = "", offset = 0;
+  for (let start = value.indexOf("var("); start >= 0; start = value.indexOf("var(", offset)) {
+    result += value.slice(offset, start);
+    let depth = 1, end = start + 4, comma = -1;
+    for (; end < value.length && depth; end += 1) {
+      const char = value[end];
+      if (char === "(") depth += 1;
+      else if (char === ")") depth -= 1;
+      else if (char === "," && depth === 1 && comma < 0) comma = end;
+    }
+    if (depth) return null;
+    const name = value.slice(start + 4, comma < 0 ? end - 1 : comma).trim();
+    if (!/^--[\w-]+$/.test(name) || stack.has(name)) return null;
+    const nextStack = new Set(stack); nextStack.add(name);
+    let replacement = properties.has(name) ? resolveCssVariables(properties.get(name), properties, nextStack) : null;
+    if (replacement == null && comma >= 0) replacement = resolveCssVariables(value.slice(comma + 1, end - 1).trim(), properties, stack);
+    if (replacement == null || !replacement.trim()) return null;
+    result += replacement; offset = end;
+  }
+  return result + value.slice(offset);
+}
+
+await check("sentence CSS variables resolve against actual light and dark desktop roots or usable fallbacks", () => {
+  const start = css.indexOf(".lyrics-sentence-toolbar {");
+  const end = css.indexOf(".now-playing-lyrics-panel .music-lyrics-line {", start);
+  assert.ok(start >= 0 && end > start, "Missing actual sentence style block");
+  const declarations = [...css.slice(start, end).matchAll(/\{([^{}]*)\}/g)]
+    .flatMap(rule => [...rule[1].matchAll(/(?:^|;)\s*([\w-]+)\s*:\s*([^;]*)(?=;|$)/g)])
+    .filter(match => match[2].includes("var("));
+  assert.ok(declarations.length >= 6, "Sentence declarations must be checked, not an empty selector range");
+  for (const theme of ["light", "dark"]) {
+    const properties = desktopThemeProperties(css, theme);
+    for (const [, property, value] of declarations) {
+      assert.notEqual(resolveCssVariables(value, properties), null, `${theme} sentence ${property} has an unresolved CSS variable: ${value}`);
+    }
+    // Negative controls reproduce the original invisible cursor and reject an unusable fallback.
+    assert.equal(resolveCssVariables("var(--undefined-sentence-accent)", properties), null);
+    assert.equal(resolveCssVariables("var(--undefined-sentence-accent, var(--also-undefined))", properties), null);
+    assert.equal(resolveCssVariables("var(--undefined-sentence-accent, rgba(12, 34, 56, .8))", properties), "rgba(12, 34, 56, .8)");
+    assert.equal(resolveCssVariables("var(--undefined-sentence-accent, var(--text))", properties), properties.get("--text"));
+  }
+});
+
 // Deliberately wrong old times and a caption rest: calibration must follow audio and line order.
 const fixtureLines = () => [{ text: "First, unchanged sentence.", time: 70 }, { text: "", time: 71, rest: true },
   { text: "Second sentence?", time: 72 }, { text: "第三句！", time: 73 }];

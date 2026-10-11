@@ -6314,8 +6314,8 @@ body.lyrics-resizing * {
 
 .lyrics-sentence-toolbar button[aria-pressed="true"],
 #lyricsSentenceMark {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--green);
+  color: var(--green);
 }
 
 .lyrics-sentence-status,
@@ -6337,7 +6337,7 @@ body.lyrics-resizing * {
 }
 
 .lyrics-sentence-target {
-  color: var(--accent);
+  color: var(--green);
   font-size: 12px;
   font-weight: 600;
 }
@@ -6377,8 +6377,8 @@ body.lyrics-resizing * {
   top: -7px;
   width: 2px;
   height: 16px;
-  background: var(--accent);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--green);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--green) 35%, transparent);
 }
 
 .lyrics-sentence-tick {
@@ -6392,7 +6392,7 @@ body.lyrics-resizing * {
 }
 
 .now-playing-lyrics-panel .music-lyrics-line.sentence-calibration-target {
-  outline: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--green) 70%, transparent);
   outline-offset: -1px;
 }
 
