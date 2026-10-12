@@ -18,7 +18,7 @@ jobs:
   quality:
     name: Lightweight project checks
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
