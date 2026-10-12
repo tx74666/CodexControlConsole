@@ -16,6 +16,14 @@
   copy.zh.repoNoChanges = "无改动"; copy.en.repoNoChanges = "No changes";
   Object.assign(copy.zh, { expand: "展开仓库", collapse: "收起仓库", configAll: "配置全部", connection: "路径与远端", versionPlan: "版本计划", nextPatch: "使用下一个补丁版本", cancelPlan: "取消计划", noVersion: "未配置版本", versionPending: "版本待读取", versionFailed: "版本读取失败", noVersionChange: "不改版本", repoReady: "就绪", repoDone: "已完成", repoAttention: "需查看", repoWorking: "进行中", component: "组件", planned: "已计划", versionUnsupported: "此版本暂不能自动递增" });
   Object.assign(copy.en, { expand: "Show repositories", collapse: "Hide repositories", configAll: "Configure all", connection: "Folder and remote", versionPlan: "Version plan", nextPatch: "Use next patch", cancelPlan: "Cancel plan", noVersion: "No version configured", versionPending: "Version not read yet", versionFailed: "Could not read versions", noVersionChange: "Keep version", repoReady: "Ready", repoDone: "Completed", repoAttention: "Needs attention", repoWorking: "In progress", component: "Component", planned: "Planned", versionUnsupported: "Automatic version bump is unavailable" });
+  Object.assign(copy.zh, { versionSummary: "Summary · 版本摘要", changeUnknown: "变化未核对", localChanges: "有待提交改动", outgoing: "有提交待推送", localAndOutgoing: "改动与提交待推送", actualVersionChange: "已修改版本", keepCurrent: "本次保留当前版本", planUnverified: "计划待核对", planTarget: "计划目标", gitCommitVersion: "提交版本", gitCommitHint: "来自提交记录，不修改版本文件", candidateVersion: "可选下一版", pushOnly: "仅推送已有提交，保留原说明", planKept: "计划保留，本次不改版本", syncRecheck: "同步后再核对提交与版本计划", planApplyUnknown: "版本计划执行待核对" });
+  Object.assign(copy.en, { versionSummary: "Summary · Versions", changeUnknown: "Changes not checked", localChanges: "Changes to commit", outgoing: "Commits to push", localAndOutgoing: "Changes and commits to push", actualVersionChange: "Version changed", keepCurrent: "Keep the current version", planUnverified: "Plan needs checking", planTarget: "Planned target", gitCommitVersion: "Commit version", gitCommitHint: "Read from commit history; no version file is changed", candidateVersion: "Optional next version", pushOnly: "Push existing commits with their original messages", planKept: "Keep the plan; no version change this time", syncRecheck: "Recheck commits and version plans after file sync", planApplyUnknown: "Version plan execution is not confirmed" });
+  copy.zh.autoBump = "有改动自动升下一版"; copy.en.autoBump = "Automatically bump versions with changes";
+  copy.zh.automaticVersion = "自动升版，提交时复核"; copy.en.automaticVersion = "Automatic version bump; rechecked when committing";
+  copy.zh.configConflict = "另一处已修改配置；此处草稿保留，请重新核对"; copy.en.configConflict = "Configuration changed elsewhere; this draft is kept for review";
+  copy.zh.reloadConfig = "重新读取配置（放弃此配置草稿）"; copy.en.reloadConfig = "Reload configuration (discard this configuration draft)";
+  copy.zh.syncChanges = "有工作文件待同步"; copy.en.syncChanges = "Saved work files to sync";
+  copy.zh.authorityMissing = "无版本 · 备用标题"; copy.en.authorityMissing = "No version · fallback title";
   copy.zh.syncHint = "来源为绝对文件路径，目标为仓库内相对路径；仅执行提交时同步。";
   copy.en.syncHint = "Use an absolute source file and a repository-relative target; synced only when running.";
   copy.zh.resumeOriginal = "继续原请求"; copy.en.resumeOriginal = "Continue original request";
@@ -70,7 +78,7 @@
   function normalized(value) {
     const settings = plain(value) ? clone(value) : {};
     settings.repositories = Array.isArray(settings.repositories) ? settings.repositories : [];
-    settings.naming = { preset: "version", fallbackTitle: "更新进度 {datetime}", subtitle: "", notes: "", includeSummary: true, ...(plain(settings.naming) ? settings.naming : {}) };
+    settings.naming = { preset: "version", fallbackTitle: "更新进度 {datetime}", subtitle: "", notes: "", includeSummary: true, autoBump: true, ...(plain(settings.naming) ? settings.naming : {}) };
     for (const repo of settings.repositories) {
       repo.syncFiles = Array.isArray(repo.syncFiles) ? repo.syncFiles : [];
       repo.versionSources = Array.isArray(repo.versionSources) ? repo.versionSources : [];
@@ -80,12 +88,13 @@
     return settings;
   }
   function mount({ host } = {}) {
-    if (!host || !host.closest('[data-module-panel="workspace"]')) return null;
+    const workspacePanel = host?.closest('[data-module-panel="workspace"]');
+    if (!workspacePanel) return null;
     if (mounted.has(host)) return mounted.get(host);
-    const state = { settings: null, warnings: [], allowed: false, serverBusy: false, operation: null, pendingId: storedId(), postBusy: false, readBusy: false, saveBusy: false, previewBusy: false, dirty: false, edit: 0, error: "", notice: "loading", pollTimer: 0, pollDelay: 1200, destroyed: false, invalid: new Set(), localized: [], returnFocus: null };
+    const state = { settings: null, settingsSha: "", configConflict: false, warnings: [], allowed: false, serverBusy: false, operation: null, pendingId: storedId(), postBusy: false, readBusy: false, saveBusy: false, previewBusy: false, dirty: false, edit: 0, error: "", notice: "loading", pollTimer: 0, pollDelay: 1200, destroyed: false, invalid: new Set(), localized: [], returnFocus: null };
     const text = key => copy[language()][key] || key;
     state.pendingRequest = storedRequest(); state.notFound = false;
-    state.expanded = false; state.configRepoId = null; state.versionBusy = false; state.versionFailed = false; state.versionEpoch = 0; state.catalog = new Map(); state.savedSources = new Map(); state.plannedRepoIds = new Set();
+    state.expanded = false; state.configRepoId = null; state.versionBusy = false; state.versionFailed = false; state.versionEpoch = 0; state.catalog = new Map(); state.savedSources = new Map(); state.operatedRepoIds = new Set();
     const controls = [], resultRetries = [], syncDrafts = new Map(), inputPending = new Set();
     const compactRefs = new Map(), configCards = new Map(), configSections = new Map(), planBoxes = new Map();
     const managed = item => { item.setAttribute("data-console-management", ""); return item; };
@@ -114,6 +123,7 @@
     const enabled = () => (state.settings?.repositories || []).filter(repo => repo.enabled === true);
     function localize(item, key, property = "textContent") { state.localized.push({ item, key, property }); item[property] = text(key); }
     function statusText() {
+      if (state.configConflict) return text("configConflict");
       if (state.error) return text(state.error);
       if (state.previewBusy) return text("previewing");
       if (inputPending.size) return text(state.invalid.size ? "invalidConfig" : "editing");
@@ -138,6 +148,7 @@
       for (const input of controls) input.disabled = blocked();
       for (const retry of resultRetries) retry.disabled = blocked() || state.readBusy || state.saveBusy || state.dirty;
       for (const label of state.localized) label.item[label.property] = text(label.key);
+      refreshButton.textContent = text(state.configConflict ? "reloadConfig" : "refresh");
       if (dialog.open) renderWarnings();
       renderCompactRows(); renderConfigVisibility(); renderVersionPlans();
     }
@@ -147,13 +158,49 @@
       return clean(repo?.name, 160) || clean(repo?.path).split(/[\\/]/).filter(Boolean).pop() || text("repo");
     }
     function componentLabel(component, count) { return count > 1 ? (clean(component.name, 80) || clean(component.path, 120) || text("component")) + " " : ""; }
-    function sourceIdentity(repo) { return JSON.stringify([repo.path, repo.versionSources, repo.syncFiles]); }
-    function sourceIdentities(settings) { return new Map(settings.repositories.map(repo => [repo.id, sourceIdentity(repo)])); }
+    function sourceIdentity(repo, naming = state.settings?.naming) { return JSON.stringify([repo.path, repo.repositoryUrl, repo.remote, repo.branch, repo.versionSources, repo.syncFiles, repo.exclude, repo.versionPlans, naming?.autoBump]); }
+    function sourceIdentities(settings) { return new Map(settings.repositories.map(repo => [repo.id, sourceIdentity(repo, settings.naming)])); }
     function catalogFor(repo) { const catalog = state.catalog.get(repo.id); return catalog?.sourceIdentity === sourceIdentity(repo) ? catalog : null; }
+    function repoChangeState(catalog) {
+      if (!catalog || typeof catalog.hasChanges !== "boolean") return "unknown";
+      const expected = catalog.hasChanges ? "changed" : "unchanged";
+      return catalog.changeState === expected ? expected : "unknown";
+    }
+    function changeHint(catalog) {
+      const status = repoChangeState(catalog);
+      if (status === "unknown") return text("changeUnknown");
+      if (status === "unchanged") return text("repoNoChanges");
+      if (Number.isSafeInteger(catalog.outgoingCommits) && catalog.outgoingCommits > 0) return text(catalog.worktreeChanged === true || catalog.syncChanged === true ? "localAndOutgoing" : "outgoing");
+      if (catalog.syncChanged === true && catalog.worktreeChanged === false) return text("syncChanges");
+      return text("localChanges");
+    }
+    function componentTransition(component, catalog) {
+      const transition = component?.transition;
+      if (!plain(transition) || !["planned", "working", "auto"].includes(transition.kind)
+        || !clean(component.currentVersion, 80) || !clean(transition.fromVersion, 80)
+        || !clean(transition.toVersion, 80) || transition.fromVersion === transition.toVersion) return null;
+      if (transition.kind === "planned" && (component.planState !== "valid"
+        || transition.fromVersion !== component.currentVersion || transition.toVersion !== component.plannedVersion)) return null;
+      if (transition.kind === "working" && (component.versionChanged !== true
+        || transition.fromVersion !== component.headVersion || transition.toVersion !== component.currentVersion)) return null;
+      if (transition.kind === "auto" && (state.settings?.naming?.autoBump !== true
+        || repoChangeState(catalog) !== "changed" || catalog.worktreeChanged !== true
+        || component.worktreeChanged !== true || component.canBump !== true || component.autoPlan?.state !== "eligible"
+        || component.autoPlan.fromVersion !== component.currentVersion || transition.fromVersion !== component.currentVersion
+        || transition.toVersion !== component.autoPlan.targetVersion)) return null;
+      return transition;
+    }
+    function componentVersionText(component, count, catalog) {
+      const transition = componentTransition(component, catalog);
+      return componentLabel(component, count) + (transition
+        ? clean(transition.fromVersion, 80) + " → " + clean(transition.toVersion, 80)
+        : clean(component.currentVersion, 80) || text("versionFailed"));
+    }
     function versionSummary(repo) {
-      const components = catalogFor(repo)?.components || [], plans = repo.versionPlans || [];
-      if (!components.length) return plans.length ? plans.map(plan => clean(plan.currentVersion, 80) + " → " + clean(plan.targetVersion, 80)).join(" · ") : text(state.versionFailed ? "versionFailed" : repo.versionSources.length ? "versionPending" : "noVersion");
-      return components.map(component => { const plan = plans.find(item => item.sourceId === component.sourceId); return componentLabel(component, components.length) + (clean(component.currentVersion, 80) || "—") + (plan ? " → " + clean(plan.targetVersion, 80) : ""); }).join(" · ");
+      const catalog = catalogFor(repo), components = catalog?.components || [];
+      if (!components.length && catalog?.versionState === "missing") return text("authorityMissing");
+      if (!components.length) return text(state.versionBusy ? "loading" : state.versionFailed || catalog?.message ? "versionFailed" : catalog ? "noVersion" : "versionPending");
+      return components.map(component => componentVersionText(component, components.length, catalog)).join(" · ");
     }
     function renderCompactRows() {
       const repos = state.settings?.repositories || [];
@@ -166,8 +213,13 @@
           configure.addEventListener("click", () => open(repo.id));
         }
         const result = state.operation?.results.find(item => item.repoId === repo.id);
-        refs.name.textContent = repoName(repo); refs.version.textContent = versionSummary(repo); refs.version.title = refs.version.textContent;
-        refs.status.textContent = repo.enabled !== true ? text("disabledRepo") : result ? text(activeStatuses.has(result.status) ? "repoWorking" : ["noop", "no_changes"].includes(result.status) ? "repoNoChanges" : ["success", "pushed"].includes(result.status) ? "repoDone" : "repoAttention") : text("repoReady");
+        const catalog = catalogFor(repo), changeState = repoChangeState(catalog);
+        refs.name.textContent = repoName(repo); refs.version.textContent = versionSummary(repo); refs.version.dataset.changeState = changeState;
+        refs.version.title = [refs.version.textContent, changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
+        refs.status.textContent = repo.enabled !== true ? text("disabledRepo") : result && activeStatuses.has(result.status) ? text("repoWorking")
+          : result && !["noop", "no_changes", "success", "pushed"].includes(result.status) ? text("repoAttention")
+            : catalog ? changeHint(catalog) : text(state.versionBusy ? "loading" : "changeUnknown");
+        refs.status.dataset.changeState = changeState;
         refs.status.title = clean(result?.message, 300); refs.configure.textContent = text("config"); refs.configure.disabled = !state.allowed;
       }
     }
@@ -177,10 +229,10 @@
       if (state.configRepoId) warningDetails.hidden = true;
     }
     async function readVersions() {
-      if (state.destroyed || !state.allowed || !state.settings || state.versionBusy) return;
+      if (state.destroyed || !state.allowed || !state.settings || state.versionBusy || workspacePanel.hidden || blocked()) return;
       if (state.dirty || state.saveBusy) { state.needsVersionsRead = true; return; }
       const sources = sourceIdentities(state.settings), epoch = state.versionEpoch;
-      state.versionBusy = true; state.versionFailed = false; state.needsVersionsRead = false; render();
+      state.versionBusy = true; state.versionFailed = false; state.needsVersionsRead = false; state.catalog.clear(); render();
       try {
         const value = await request("/versions"); if (state.destroyed) return;
         if (state.versionEpoch !== epoch) { state.needsVersionsRead = true; return; }
@@ -195,21 +247,27 @@
     function renderVersionPlans() {
       for (const repo of state.settings?.repositories || []) {
         const box = planBoxes.get(repo.id); if (!box) continue;
-        box.replaceChildren(); const heading = node("h4", "repository-publish-plan-heading", text("versionPlan")); box.append(heading);
+        box.replaceChildren(); const heading = node("h4", "repository-publish-plan-heading", text("versionSummary")); box.append(heading);
         const catalog = catalogFor(repo), components = catalog?.components || [], seen = new Set();
         for (const component of components) {
           const plan = repo.versionPlans.find(item => item.sourceId === component.sourceId), row = node("div", "repository-publish-plan-row"), label = node("span"), action = managed(node("button", "ghost-button repository-publish-plan-action")); action.type = "button"; seen.add(component.sourceId);
-          label.textContent = componentLabel(component, components.length) + (clean(component.currentVersion, 80) || "—") + " → " + (plan ? clean(plan.targetVersion, 80) : clean(component.nextVersion, 80) || text("noVersionChange"));
-          action.textContent = text(plan ? "cancelPlan" : "nextPatch"); action.disabled = blocked() || state.saveBusy || inputPending.size > 0 || state.versionBusy || !plan && (component.canBump !== true || typeof component.sourceId !== "string" || !component.sourceId || typeof component.currentVersion !== "string" || typeof component.nextVersion !== "string" || !component.nextVersion || !/^[a-f0-9]{64}$/.test(component.planProof) || !/^[a-f0-9]{64}$/.test(component.expectedSha256) || !Number.isSafeInteger(component.expectedBytes) || component.expectedBytes < 0);
+          const transition = componentTransition(component, catalog), hint = node("span", "repository-publish-plan-reason");
+          label.textContent = componentVersionText(component, components.length, catalog);
+          label.title = [clean(component.path, 200), clean(component.key, 120), clean(component.versionCommitSha, 40), clean(component.sourceHeadSha, 40)].filter(Boolean).join(" · ");
+          hint.textContent = transition ? text(transition.kind === "planned" ? "planned" : transition.kind === "auto" ? "automaticVersion" : "actualVersionChange")
+            : plan ? text("planUnverified") + " · " + text("planTarget") + " " + clean(plan.targetVersion, 80) : text("keepCurrent");
+          if (!plan && !transition && component.canBump === true && clean(component.currentVersion, 80) && clean(component.nextVersion, 80)) hint.textContent += " · " + text("candidateVersion") + " " + clean(component.nextVersion, 80);
+          if (component.kind === "git_commit") hint.textContent += " · " + text("gitCommitHint");
+          action.textContent = text(plan ? "cancelPlan" : "nextPatch"); action.disabled = blocked() || state.saveBusy || inputPending.size > 0 || state.versionBusy || !plan && (component.canBump !== true || typeof component.sourceId !== "string" || !component.sourceId || typeof component.currentVersion !== "string" || !component.currentVersion || typeof component.nextVersion !== "string" || !component.nextVersion || !/^[a-f0-9]{64}$/.test(component.planProof) || !/^[a-f0-9]{64}$/.test(component.expectedSha256) || !Number.isSafeInteger(component.expectedBytes) || component.expectedBytes < 0);
           action.addEventListener("click", () => { if (action.disabled || blocked() || state.saveBusy || inputPending.size) return; repo.versionPlans = repo.versionPlans.filter(item => item.sourceId !== component.sourceId); if (!plan) repo.versionPlans.push({ sourceId: component.sourceId, currentVersion: component.currentVersion, targetVersion: component.nextVersion, expectedSha256: component.expectedSha256, expectedBytes: component.expectedBytes, planProof: component.planProof }); changed(); });
-          row.append(label, action); if (component.canBump !== true) row.append(node("span", "repository-publish-plan-reason", clean(component.reason, 300) || text("versionUnsupported"))); box.append(row);
+          row.append(label, action, hint); if (component.canBump !== true) row.append(node("span", "repository-publish-plan-reason", clean(component.reason, 300) || text("versionUnsupported"))); box.append(row);
         }
         for (const plan of repo.versionPlans) if (!seen.has(plan.sourceId)) {
           const row = node("div", "repository-publish-plan-row"), cancel = managed(node("button", "ghost-button", text("cancelPlan"))); cancel.type = "button"; cancel.disabled = blocked() || state.saveBusy || inputPending.size > 0;
-          row.append(node("span", "", clean(plan.currentVersion, 80) + " → " + clean(plan.targetVersion, 80)), cancel); box.append(row);
+          row.append(node("span", "", text("planUnverified") + " · " + text("planTarget") + " " + clean(plan.targetVersion, 80)), cancel); box.append(row);
           cancel.addEventListener("click", () => { if (cancel.disabled || blocked() || state.saveBusy || inputPending.size) return; repo.versionPlans = repo.versionPlans.filter(item => item !== plan); changed(); });
         }
-        if (!components.length && !repo.versionPlans.length) box.append(node("p", "repository-publish-hint", text(state.versionBusy ? "loading" : state.versionFailed ? "versionFailed" : repo.versionSources.length ? "versionPending" : "noVersion")));
+        if (!components.length && !repo.versionPlans.length) { const hint = node("p", "repository-publish-hint", versionSummary(repo)); hint.title = clean(catalog?.message, 300); box.append(hint); }
       }
     }
     function renderWarnings() {
@@ -227,7 +285,10 @@
       try {
         const response = await window.fetch(BASE + path, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", referrerPolicy: "same-origin", headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal });
         const value = await response.json();
-        if (!response.ok || !plain(value) && !(value === null && body === undefined && path.startsWith("/operation?"))) throw new Error("request_failed");
+        if (!response.ok || !plain(value) && !(value === null && body === undefined && path.startsWith("/operation?"))) {
+          const error = new Error(path === "/config" && (response.status === 409 || value?.code === "settings_changed") ? "configConflict" : "request_failed");
+          throw error;
+        }
         return value;
       } finally { window.clearTimeout(timer); }
     }
@@ -245,7 +306,7 @@
       const closingPending = state.pendingId === value.requestId || activeStatuses.has(state.operation?.status);
       state.operation = { ...clone(value), results: clone(items) }; state.error = ""; state.notice = ""; state.notFound = false;
       if (activeStatuses.has(value.status)) { state.pendingId = value.requestId; persistId(state.pendingId); schedulePoll(); }
-      else { state.pendingId = ""; state.pendingRequest = null; persistId("", value.requestId); stopPoll(); state.serverBusy = false; state.notice = ["success", "complete"].includes(value.status) ? "complete" : "interrupted"; if (closingPending) { state.needsSettingsRead = true; if (state.plannedRepoIds.size) { for (const id of state.plannedRepoIds) state.catalog.delete(id); state.versionEpoch++; state.needsVersionsRead = true; state.plannedRepoIds.clear(); } } }
+      else { state.pendingId = ""; state.pendingRequest = null; persistId("", value.requestId); stopPoll(); state.serverBusy = false; state.notice = ["success", "complete"].includes(value.status) ? "complete" : "interrupted"; if (closingPending) { state.needsSettingsRead = true; for (const id of state.operatedRepoIds) state.catalog.delete(id); state.versionEpoch++; state.needsVersionsRead = true; state.operatedRepoIds.clear(); } }
       renderResults(); return true;
     }
     async function poll() {
@@ -267,7 +328,7 @@
       } catch { state.notice = "pendingUnavailable"; state.pollDelay = Math.min(10000, state.pollDelay * 2); }
       finally { state.readBusy = false; render(); schedulePoll(); readCompletedSettings(); }
     }
-    async function readStatus() {
+    async function readStatus(reloadDraft = false) {
       if (state.destroyed || state.readBusy || state.postBusy || state.saveBusy) return;
       const edit = state.edit;
       state.readBusy = true; render();
@@ -275,9 +336,17 @@
         const value = await request(); if (state.destroyed) return;
         state.allowed = value.allowed === true; state.serverBusy = value.busy === true;
         state.warnings = Array.isArray(value.warnings) ? value.warnings.slice(0, 100) : [];
-        if (!state.dirty && state.edit === edit && plain(value.settings)) { state.settings = normalized(value.settings); state.savedSources = sourceIdentities(state.settings); if (state.pendingRequest) for (const repo of state.settings.repositories) if (state.pendingRequest.repoIds.includes(repo.id) && repo.versionPlans.length) state.plannedRepoIds.add(repo.id); syncDrafts.clear(); state.invalid.clear(); if (dialog.open) renderConfig(); }
+        if ((!state.dirty || reloadDraft) && state.edit === edit) {
+          if (!plain(value.settings) || !/^[a-f0-9]{64}$/.test(value.settingsSha)) throw new Error("settings_receipt_missing");
+          const saved = normalized(value.settings), sources = sourceIdentities(saved);
+          if (state.settings && Array.from(sources).some(([id, identity]) => state.savedSources.get(id) !== identity)) { state.versionEpoch++; state.catalog.clear(); state.needsVersionsRead = true; previewResult.replaceChildren(); }
+          state.settings = saved; state.settingsSha = value.settingsSha; state.savedSources = sources;
+          state.dirty = false; state.configConflict = false; inputPending.clear();
+          if (state.pendingRequest) for (const repo of state.settings.repositories) if (state.pendingRequest.repoIds.includes(repo.id)) state.operatedRepoIds.add(repo.id);
+          syncDrafts.clear(); state.invalid.clear(); if (dialog.open) renderConfig();
+        }
         const accepted = value.operation && acceptOperation(value.operation);
-        if (!accepted) { state.error = ""; state.notice = ""; }
+        if (!accepted && !state.dirty) { state.error = ""; state.notice = ""; }
         if (state.pendingId) schedulePoll();
       } catch { state.error = "readFailed"; }
       finally { state.readBusy = false; render(); readCompletedSettings(); }
@@ -288,7 +357,7 @@
       if (state.needsVersionsRead && !state.versionBusy && !state.dirty) { state.needsVersionsRead = false; if (state.expanded || dialog.open) void readVersions(); }
     }
     function changed() {
-      state.dirty = true; state.edit++; state.error = ""; state.notice = ""; render(); void save();
+      state.dirty = true; state.edit++; state.error = state.configConflict ? "configConflict" : ""; state.notice = ""; render(); void save();
     }
     function checkDuplicates() {
       const paths = new Set();
@@ -299,19 +368,21 @@
       return false;
     }
     async function save() {
-      if (!state.dirty || state.saveBusy || state.destroyed || blocked() || inputPending.size) return;
+      if (!state.dirty || state.saveBusy || state.destroyed || blocked() || inputPending.size || state.configConflict) return;
+      if (!/^[a-f0-9]{64}$/.test(state.settingsSha)) { state.error = "readFailed"; render(); return; }
       if (state.invalid.size) { state.error = "invalidConfig"; render(); return; }
       if (checkDuplicates()) { state.error = "duplicate"; render(); return; }
       const edit = state.edit, payload = clone(state.settings); state.saveBusy = true; render();
       let succeeded = false;
       try {
-        const value = await request("/config", { settings: payload }); if (state.destroyed) return;
+        const value = await request("/config", { settings: payload, expectedSettingsSha: state.settingsSha }); if (state.destroyed) return;
+        if (!plain(value.settings) || !/^[a-f0-9]{64}$/.test(value.settingsSha)) throw new Error("settings_receipt_missing");
         succeeded = true;
-        const saved = normalized(value.settings || payload), sources = sourceIdentities(saved);
-        if (Array.from(sources).some(([id, identity]) => state.savedSources.get(id) !== identity)) { state.versionEpoch++; state.needsVersionsRead = true; }
-        state.savedSources = sources;
+        const saved = normalized(value.settings), sources = sourceIdentities(saved);
+        if (Array.from(sources).some(([id, identity]) => state.savedSources.get(id) !== identity)) { state.versionEpoch++; state.needsVersionsRead = true; previewResult.replaceChildren(); }
+        state.savedSources = sources; state.settingsSha = value.settingsSha;
         if (state.edit === edit) { state.settings = saved; state.dirty = false; state.error = ""; state.notice = "saved"; syncDrafts.clear(); if (dialog.open) renderConfig(); }
-      } catch { state.error = "saveFailed"; }
+      } catch (error) { if (error?.message === "configConflict") state.configConflict = true; state.error = state.configConflict ? "configConflict" : "saveFailed"; }
       finally { state.saveBusy = false; render(); if (succeeded && state.edit !== edit) void save(); else readCompletedSettings(); }
     }
     async function run(repoIds) {
@@ -322,7 +393,7 @@
     }
     async function sendOriginal(original) {
       const requestId = original.requestId;
-      state.plannedRepoIds = new Set(state.settings.repositories.filter(repo => original.repoIds.includes(repo.id) && repo.versionPlans.length).map(repo => repo.id));
+      state.operatedRepoIds = new Set(original.repoIds);
       stopPoll(); state.pendingId = requestId; state.notFound = false; state.operation = null; state.postBusy = true; state.error = ""; state.notice = "working"; renderResults(); render();
       try { const value = await request("/run", { requestId, repoIds: original.repoIds }); if (!acceptOperation(value.operation || value)) state.notice = "unknown"; }
       catch { state.notice = "unknown"; }
@@ -346,7 +417,7 @@
       function validate() { if (options.required && !input.value.trim()) { input.setCustomValidity(text("invalidConfig")); state.invalid.add(input); } else { input.setCustomValidity(""); state.invalid.delete(input); } }
       if (options.required) { input.required = true; validate(); }
       input.dataset.field = key; label.append(caption, input); parent.append(label); controls.push(input);
-      input.addEventListener("input", () => { if (blocked() || state.destroyed) return; if (options.required) validate(); change(options.checkbox ? input.checked : input.value, input); inputPending.add(input); state.dirty = true; state.edit++; state.error = ""; state.notice = ""; render(); });
+      input.addEventListener("input", () => { if (blocked() || state.destroyed) return; if (options.required) validate(); change(options.checkbox ? input.checked : input.value, input); inputPending.add(input); state.dirty = true; state.edit++; state.error = state.configConflict ? "configConflict" : ""; state.notice = ""; render(); });
       input.addEventListener("change", () => { if (blocked() || state.destroyed) return; inputPending.delete(input); if (options.required) validate(); change(options.checkbox ? input.checked : input.value, input); changed(); }); return input;
     }
     function renderConfig() {
@@ -383,17 +454,31 @@
           versionBox.replaceChildren();
           for (const source of repo.versionSources) {
             const row = node("div", "repository-publish-version-row"); versionBox.append(row);
-            const formats = ["json", "xml", "unity", "unity_yaml", "python_ast", "text"];
+            const formats = ["json", "xml", "unity", "unity_yaml", "python_ast", "text", "git_commit"];
             if (typeof source.kind === "string" && source.kind && !formats.includes(source.kind)) formats.push(source.kind);
+            const inputs = new Map(), originHint = node("p", "repository-publish-hint repository-publish-version-origin");
+            function sourceKindChanged() {
+              const commit = source.kind === "git_commit";
+              for (const [key, fixed] of [["path", "HEAD"], ["key", "subject"]]) {
+                const input = inputs.get(key); if (!input) continue;
+                input.readOnly = commit;
+                if (commit) { source[key] = fixed; input.value = fixed; input.setCustomValidity(""); state.invalid.delete(input); inputPending.delete(input); }
+              }
+              originHint.hidden = !commit; originHint.textContent = text("gitCommitHint");
+            }
             for (const [label, key] of [["versionPath", "path"], ["kind", "kind"], ["key", "key"], ["name", "name"], ["scope", "scope"]]) {
               const value = key === "scope" && Array.isArray(source.scope) ? source.scope.join("\n") : source[key];
-              field(row, label, value, next => {
+              const input = field(row, label, value, next => {
+                if (source.kind === "git_commit" && ["path", "key"].includes(key)) { sourceKindChanged(); return; }
                 if (key === "scope") {
                   const scopes = next.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
                   source.scope = Array.isArray(source.scope) || scopes.length > 1 ? scopes : scopes[0] || "";
                 } else source[key] = next.trim();
-              }, key === "kind" ? { options: formats } : key === "scope" ? { multiline: true } : key === "path" ? { required: true } : {});
+                if (key === "kind") sourceKindChanged();
+              }, key === "kind" ? { options: formats.map(kind => kind === "git_commit" ? { value: kind, key: "gitCommitVersion" } : kind) } : key === "scope" ? { multiline: true } : key === "path" ? { required: true } : {});
+              inputs.set(key, input);
             }
+            row.append(originHint); localize(originHint, "gitCommitHint"); sourceKindChanged();
             const remove = managed(node("button", "ghost-button")); remove.type = "button"; localize(remove, "remove"); controls.push(remove); row.append(remove);
             remove.addEventListener("click", () => { if (blocked()) return; repo.versionSources.splice(repo.versionSources.indexOf(source), 1); versions(); changed(); });
           }
@@ -403,6 +488,7 @@
       if (state.settings) {
         const naming = state.settings.naming;
         field(namingFields, "preset", naming.preset, value => { naming.preset = value; }, { options: [{ value: "version", key: "version" }, { value: "module_version", key: "module_version" }] });
+        field(namingFields, "autoBump", naming.autoBump, value => { naming.autoBump = value; }, { checkbox: true });
         for (const [label, key] of [["fallback", "fallbackTitle"], ["subtitle", "subtitle"], ["notes", "notes"]]) field(namingFields, label, naming[key], value => { naming[key] = value; }, { multiline: key === "notes" });
         field(namingFields, "includeSummary", naming.includeSummary, value => { naming.includeSummary = value; }, { checkbox: true });
       }
@@ -424,12 +510,36 @@
     }
     async function preview(repoId) {
       if (blocked() || state.previewBusy || state.saveBusy || state.dirty || !enabled().length) return;
-      state.previewBusy = true; state.notice = "previewing"; render();
+      const sources = sourceIdentities(state.settings), epoch = state.versionEpoch, selected = state.configRepoId;
+      state.previewBusy = true; state.notice = "previewing"; previewResult.replaceChildren(); render();
       try {
-        const value = await request("/preview", repoId ? { repoId } : {}); previewResult.replaceChildren();
+        const value = await request("/preview", repoId ? { repoId } : {});
+        if (state.destroyed || epoch !== state.versionEpoch || selected !== state.configRepoId) return;
         for (const result of Array.isArray(value.previews) ? value.previews : Array.isArray(value.results) ? value.results : Array.isArray(value.repositories) ? value.repositories : []) {
+          const repo = state.settings.repositories.find(item => item.id === result?.repoId);
+          if (!repo || sources.get(repo.id) !== sourceIdentity(repo) || selected && repo.id !== selected) continue;
           const versions = (Array.isArray(result.versions) ? result.versions : []).map(item => [clean(item.name), clean(item.version)].filter(Boolean).join(" · ")).filter(Boolean).join("\n");
-          const card = node("article", "repository-publish-result"), title = node("strong"), content = node("pre"); title.textContent = clean(result.name || result.repoId || result.id, 200); content.textContent = [versions || clean(result.version), clean(result.title), clean(result.body, 16000), clean(result.message, 500)].filter(Boolean).join("\n\n"); card.append(title, content); previewResult.append(card);
+          const card = node("article", "repository-publish-result"), title = node("strong"), summary = node("div", "repository-publish-preview-summary"), content = node("pre");
+          title.textContent = clean(result.name || result.repoId || result.id, 200);
+          const components = Array.isArray(result.components) ? result.components.filter(plain) : [];
+          if (components.length) {
+            summary.append(node("h4", "repository-publish-plan-heading", text("versionSummary")));
+            for (const component of components) {
+              const proposed = componentTransition(component, result), applies = result.planWillApply === true && result.action === "commit";
+              const pendingTransition = ["planned", "auto"].includes(proposed?.kind);
+              const shown = pendingTransition && !applies ? { ...component, transition: null } : component;
+              const transition = componentTransition(shown, result), row = node("p", "repository-publish-preview-version", componentVersionText(shown, components.length, result));
+              const hint = pendingTransition && !applies ? result.action === "sync_pending" ? "syncRecheck" : result.planWillApply === false ? "planKept" : "planApplyUnknown"
+                : transition ? transition.kind === "planned" ? "planned" : transition.kind === "auto" ? "automaticVersion" : "actualVersionChange" : "keepCurrent";
+              row.dataset.transition = transition?.kind || "none";
+              row.append(node("span", "repository-publish-preview-version-hint", " · " + text(hint)));
+              summary.append(row);
+            }
+          } else if (result.versionState === "missing") {
+            summary.append(node("h4", "repository-publish-plan-heading", text("versionSummary")), node("p", "repository-publish-preview-version", text("authorityMissing")));
+          }
+          if (result.action === "push_only" || result.action === "sync_pending") summary.append(node("p", "repository-publish-preview-version-hint", text(result.action === "push_only" ? "pushOnly" : "syncRecheck")));
+          content.textContent = [components.length ? "" : versions || clean(result.version), clean(result.title), clean(result.body, 16000), clean(result.message, 500)].filter(Boolean).join("\n\n"); card.append(title, summary, content); previewResult.append(card);
         }
         state.notice = ""; state.error = "";
       } catch { state.error = "previewFailed"; }
@@ -437,7 +547,9 @@
     }
     function open(repoId = null) {
       if (!state.allowed || state.destroyed) return;
-      state.configRepoId = typeof repoId === "string" && state.settings?.repositories.some(repo => repo.id === repoId) ? repoId : null;
+      const selected = typeof repoId === "string" && state.settings?.repositories.some(repo => repo.id === repoId) ? repoId : null;
+      if (selected !== state.configRepoId) previewResult.replaceChildren();
+      state.configRepoId = selected;
       state.returnFocus = document.activeElement; if (state.settings && !dialog.open && !state.dirty) renderConfig();
       if (!dialog.open) dialog.showModal(); renderResults(); render(); void readVersions(); if (state.pendingId) void poll(); else void readStatus();
     }
@@ -449,14 +561,34 @@
       const id = uniqueId(); if (!id) { state.error = "noIdentity"; render(); return; }
       state.settings.repositories.push({ id, path: "", repositoryUrl: "", remote: "origin", branch: "", enabled: false, syncFiles: [], versionSources: [], versionPlans: [], exclude: [] }); renderConfig(); configCards.get(id).open = true; changed();
     });
-    refreshButton.addEventListener("click", () => { if (state.dirty) void save(); else { void readVersions(); if (state.pendingId) void poll(); else void readStatus(); } }); previewButton.addEventListener("click", () => void preview(state.configRepoId));
+    refreshButton.addEventListener("click", () => { if (state.configConflict) void readStatus(true); else if (state.dirty) void save(); else { void readVersions(); if (state.pendingId) void poll(); else void readStatus(); } }); previewButton.addEventListener("click", () => void preview(state.configRepoId));
     resumeButton.addEventListener("click", () => void resumeOriginal());
     let observer = null;
     if (typeof MutationObserver === "function") { observer = new MutationObserver(() => { render(); }); observer.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] }); }
+    let visibilityObserver = null, wasHidden = workspacePanel.hidden, recheckBusy = false;
+    function canRecheckVisible() {
+      return !state.destroyed && !workspacePanel.hidden && (state.expanded || dialog.open) && state.allowed && state.settings
+        && !blocked() && !state.dirty && !state.invalid.size && !inputPending.size && !state.saveBusy && !state.readBusy && !state.versionBusy;
+    }
+    async function recheckVisible() {
+      if (recheckBusy || !canRecheckVisible()) return;
+      recheckBusy = true; state.versionEpoch++; state.catalog.clear(); render();
+      try {
+        await readStatus();
+        if (canRecheckVisible() && !state.error) await readVersions();
+      } finally { recheckBusy = false; }
+    }
+    if (typeof MutationObserver === "function") {
+      visibilityObserver = new MutationObserver(() => {
+        const hidden = workspacePanel.hidden; if (hidden === wasHidden) return; wasHidden = hidden;
+        if (hidden) { state.versionEpoch++; } else void recheckVisible();
+      });
+      visibilityObserver.observe(workspacePanel, { attributes: true, attributeFilter: ["hidden"] });
+    }
     function suspend() { stopPoll(); }
-    function resume() { if (state.pendingId) schedulePoll(); else void readStatus(); }
-    window.addEventListener("pagehide", suspend); window.addEventListener("pageshow", resume);
-    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; stopPoll(); observer?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); bar.remove(); expanded.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
+    function resume() { if (workspacePanel.hidden || state.destroyed) return; if (state.pendingId) schedulePoll(); else void recheckVisible(); }
+    window.addEventListener("pagehide", suspend); window.addEventListener("pageshow", resume); window.addEventListener("focus", recheckVisible);
+    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; stopPoll(); observer?.disconnect(); visibilityObserver?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); window.removeEventListener("focus", recheckVisible); bar.remove(); expanded.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
     mounted.set(host, api); instances.add(api); render(); void readStatus(); return api;
   }
   window.ConsoleRepositoryPublish = { mount, hasDraft: () => Array.from(instances).some(item => item.hasDraft()), canReload: () => Array.from(instances).every(item => item.canReload()) };

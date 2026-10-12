@@ -2217,9 +2217,17 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 if not isinstance(payload, dict):
                     raise RepositoryPublishError("仓库提交内容无效。")
                 if parsed.path == "/api/console/repository-publish/config":
-                    if set(payload) != {"settings"} or not isinstance(payload["settings"], dict):
+                    if (set(payload) - {"settings", "expectedSettingsSha"}
+                            or not isinstance(payload.get("settings"), dict)):
                         raise RepositoryPublishError("仓库设置无效。")
-                    result = CONSOLE_REPOSITORY_PUBLISH.configure(payload["settings"])
+                    if "expectedSettingsSha" in payload:
+                        if (not isinstance(payload["expectedSettingsSha"], str)
+                                or not re.fullmatch(r"[0-9a-f]{64}", payload["expectedSettingsSha"])):
+                            raise RepositoryPublishError("仓库设置身份无效。")
+                        result = CONSOLE_REPOSITORY_PUBLISH.configure(
+                            payload["settings"], expected_settings_sha=payload["expectedSettingsSha"])
+                    else:
+                        result = CONSOLE_REPOSITORY_PUBLISH.configure(payload["settings"])
                 elif parsed.path == "/api/console/repository-publish/preview":
                     if set(payload) - {"repoId"}:
                         raise RepositoryPublishError("说明预览内容无效。")
@@ -2235,7 +2243,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             except RequestBodyError as error:
                 self.send_json({"error": str(error)}, status=error.status)
             except RepositoryPublishError as error:
-                self.send_json({"error": str(error)}, status=400)
+                if getattr(error, "code", "") == "settings_changed":
+                    self.send_json({"error": str(error), "code": "settings_changed"}, status=409)
+                else:
+                    self.send_json({"error": str(error)}, status=400)
             except (OSError, RuntimeError):
                 self.send_json({"error": "请求回执暂时不明确，请读取同一次请求，勿重复提交。"}, status=503)
             return

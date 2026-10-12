@@ -11,6 +11,7 @@ import re
 import sqlite3
 import stat
 import subprocess
+from console_repository_versions import VersionPlanError, parse_commit_history
 
 _URL = re.compile(r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 _VERSION = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
@@ -62,12 +63,14 @@ def _url(value):
 
 
 class ReadOnlyGit:
-    """Only metadata commands; never status, filters, hooks, fetch, or lazy fetch."""
+    """Only fixed metadata/history commands; no status, hooks or network fetch."""
     def __call__(self, root, *args):
         allowed = (args in (("rev-parse", "--show-toplevel"), ("rev-parse", "--git-common-dir"),
                             ("symbolic-ref", "--short", "HEAD"))
                    or args in (("remote", "get-url", "--all", "origin"),
-                               ("remote", "get-url", "--push", "--all", "origin")))
+                               ("remote", "get-url", "--push", "--all", "origin"),
+                               ("rev-parse", "HEAD"),
+                               ("log", "--first-parent", "--max-count=64", "--format=%H%x00%s", "HEAD")))
         if not allowed:
             raise ValueError("non_metadata_git_command")
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -299,7 +302,7 @@ class RepositoryBindingDiscovery:
                     continue
                 ident = url.rsplit("/", 1)[-1][:50] + "-" + hashlib.sha256(key.encode()).hexdigest()[:12]
                 sync, sync_warnings, sync_manifest = self._sync_files(root)
-                versions = self._version_sources(root)
+                versions = self._version_sources(root, self.git)
                 warnings.extend(sync_warnings)
                 if not versions:
                     warnings.append({"code": "authoritative_version_source_missing", "path": str(root)})
@@ -361,7 +364,7 @@ class RepositoryBindingDiscovery:
             return [], [{"code": "saved_sync_manifest_invalid", "path": str(manifest)}], None
 
     @staticmethod
-    def _version_sources(root):
+    def _version_sources(root, git_reader=None):
         sources = []
         def add(path, kind, key, name, scope, value):
             if isinstance(value, (tuple, list)) and all(type(x) is int for x in value):
@@ -383,7 +386,24 @@ class RepositoryBindingDiscovery:
             try:
                 match = re.search(r"^\s*bundleVersion:\s*([^\r\n]+)$", _unredirected(unity).read_text(encoding="utf-8-sig"), re.M)
                 if match:
-                    add(unity, "unity", "bundleVersion", "Unity application", ["Assets/**", "Packages/**", "ProjectSettings/**"], match[1].strip())
+                    current = match[1].strip()
+                    # Repository progress versions can differ from Unity's
+                    # packaging version. Only an exact local version subject
+                    # supplies this alternative; never guess from filenames.
+                    commit_version = None
+                    if git_reader is not None:
+                        try:
+                            head = git_reader(root, "rev-parse", "HEAD")
+                            history = git_reader(root, "log", "--first-parent", "--max-count=64", "--format=%H%x00%s", "HEAD")
+                            commit_version = parse_commit_history(head, history)
+                            if git_reader(root, "rev-parse", "HEAD") != head:
+                                raise VersionPlanError("Repository HEAD changed during discovery.")
+                        except (ValueError, OSError, subprocess.SubprocessError):
+                            commit_version = None
+                    if commit_version and commit_version["version"] != current:
+                        sources.append({"path": "HEAD", "kind": "git_commit", "key": "subject", "name": "Repository commit", "scope": "**"})
+                    else:
+                        add(unity, "unity", "bundleVersion", "Unity application", ["Assets/**", "Packages/**", "ProjectSettings/**"], current)
             except (OSError, ValueError):
                 pass
         for p in sorted((root / "addons").glob("*/__init__.py")):

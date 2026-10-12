@@ -21,7 +21,9 @@ spec.loader.exec_module(fixture)
 
 
 class RepositoryPublishError(ValueError):
-    pass
+    def __init__(self, message, *, code=""):
+        super().__init__(message)
+        self.code = code
 
 
 class Spy:
@@ -36,8 +38,10 @@ class Spy:
         self.calls.append(("operation", request_id))
         return {"requestId": request_id, "status": "working"}
 
-    def configure(self, settings):
-        self.calls.append(("configure", settings))
+    def configure(self, settings, *, expected_settings_sha=None):
+        self.calls.append(("configure", settings) if expected_settings_sha is None else ("configure", settings, expected_settings_sha))
+        if expected_settings_sha == "b" * 64:
+            raise RepositoryPublishError("Configuration changed", code="settings_changed")
         return self.status()
 
     def preview(self, repo_id=None):
@@ -161,6 +165,15 @@ def main():
             config = {"repositories": [], "naming": {"preset": "version"}}
             check(request("POST", base + "/config", {"settings": config})[0] == 200, "Config failed")
             check(("configure", config) in service.calls, "Settings changed en route")
+            settings_sha = "a" * 64
+            check(request("POST", base + "/config", {"settings": config, "expectedSettingsSha": settings_sha})[0] == 200, "Config CAS forwarding failed")
+            check(("configure", config, settings_sha) in service.calls, "Config CAS identity changed en route")
+            conflict_code, conflict_body = request("POST", base + "/config", {
+                "settings": config, "expectedSettingsSha": "b" * 64})
+            check(conflict_code == 409 and json.loads(conflict_body).get("code") == "settings_changed",
+                  "CAS conflict must preserve a structured reload-required result")
+            for malformed in (None, "", "not-a-sha", [], "A" * 64):
+                reject("POST", base + "/config", {"settings": config, "expectedSettingsSha": malformed})
             check(request("POST", base + "/preview", {"repoId": "one"})[0] == 200, "Preview failed")
             check(service.calls[-1] == ("preview", "one"), "Preview invoked run")
             check(request("POST", base + "/run", {"requestId": "one", "repoIds": ["one"]})[0] == 200, "Run failed")

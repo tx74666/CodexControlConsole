@@ -14,6 +14,10 @@ class VersionPlanError(ValueError):
     pass
 
 
+class _CompanionVersionError(VersionPlanError):
+    pass
+
+
 def _hash(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -31,10 +35,49 @@ def next_patch(value):
     if not match:
         raise VersionPlanError("此版本不是明确的三段数字版本，请手动准备版本。")
     prefix, major, minor, patch = match.groups()
-    following = str(int(patch) + 1)
-    if len(patch) > 1 and patch.startswith("0"):
-        following = following.zfill(len(patch))
-    return f"{prefix}{major}.{minor}.{following}"
+    original = (major, minor, patch)
+    following = [int(major), int(minor), int(patch) + 1]
+    for index in (2, 1):
+        if following[index] >= 100:
+            following[index] = 0
+            following[index - 1] += 1
+    parts = [str(number).zfill(len(old)) if len(old) > 1 and old.startswith("0") else str(number)
+             for number, old in zip(following, original)]
+    return prefix + ".".join(parts)
+
+
+def parse_commit_history(head, raw):
+    """Parse fixed first-parent `%H%x00%s` lines, never run Git or project code."""
+    if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(head)):
+        raise VersionPlanError("提交版本的 HEAD 身份无法确认。")
+    if isinstance(raw, bytes):
+        if len(raw) > MAX_BYTES:
+            raise VersionPlanError("提交版本历史超出读取范围。")
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeError as exc:
+            raise VersionPlanError("提交版本历史不是完整 UTF-8 回执。") from exc
+    if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_BYTES:
+        raise VersionPlanError("提交版本历史无法读取。")
+    lines = raw.splitlines()
+    if any(line.count("\0") != 1 for line in lines):
+        raise VersionPlanError("提交版本历史回执不完整。")
+    rows = [tuple(part.strip() for part in line.split("\0")) for line in lines]
+    if not 1 <= len(rows) <= 64 or rows[0][0] != head:
+        raise VersionPlanError("提交版本历史不属于固定 HEAD 或超过 64 条。")
+    if any(not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit) for commit, _ in rows):
+        raise VersionPlanError("提交版本历史包含未确认的提交身份。")
+    pattern = r"([vV]?\d+\.\d+\.\d+)(?:\s*(?:→|->)\s*([vV]?\d+\.\d+\.\d+))?"
+    for depth, (commit, subject) in enumerate(rows, 1):
+        match = re.fullmatch(pattern, subject)
+        if match:
+            version = match.group(2) or match.group(1)
+            if len(version) > 80:
+                raise VersionPlanError("提交版本号超出显示范围。")
+            return {"sourceHeadSha": head, "versionCommitSha": commit, "versionSubject": subject,
+                    "version": version, "currentVersion": version, "historyDepth": depth,
+                    "versionOrigin": "git_commit_first_parent"}
+    raise VersionPlanError("最近 64 条 first-parent 提交中没有明确版本；不会使用其他版本来源代替。")
 
 
 def _decode(raw):
@@ -98,6 +141,8 @@ def _ast_offsets(text, node):
 
 def _python_span(text, key):
     parts = (key or "bl_info.version").split(".")
+    if parts == ["bl_info"]:
+        parts.append("version")  # Preserve the existing legacy bl_info source alias.
     assignments = [node.value for node in ast.parse(text).body
                    if isinstance(node, (ast.Assign, ast.AnnAssign)) and
                    any(isinstance(target, ast.Name) and target.id == parts[0]
@@ -118,8 +163,10 @@ def _python_span(text, key):
     literal = ast.literal_eval(node)
     if isinstance(literal, (list, tuple)) and len(literal) == 3 and all(type(item) is int and item >= 0 for item in literal):
         current = ".".join(map(str, literal))
-        start, end = _ast_offsets(text, node.elts[2])
-        return current, (start, end, str(literal[2] + 1))
+        following = tuple(map(int, next_patch(current).split(".")))
+        spans = [(*_ast_offsets(text, element), str(value))
+                 for element, previous, value in zip(node.elts, literal, following) if previous != value]
+        return current, spans
     if isinstance(literal, str):
         start, end = _ast_offsets(text, node)
         token = text[start:end]
@@ -129,7 +176,7 @@ def _python_span(text, key):
 
 
 def _simple_span(text, kind, key):
-    key = key or ("bundleVersion" if kind in {"unity", "unity_yaml"} else "version")
+    key = key or ("bundleVersion" if kind in {"unity", "unity_yaml"} else "Version" if kind in {"xml", "csproj"} else "version")
     if kind in {"xml", "csproj"}:
         if "<!DOCTYPE" in text.upper():
             raise VersionPlanError("XML 声明不适合自动编辑，请手动准备版本。")
@@ -178,7 +225,7 @@ def _one(raw, source):
     return current, (bom, text, edit)
 
 
-def _console_files(root, source, reader, current):
+def _console_files(root, source, reader, current, console_reader=None):
     edits = {}
     raw = reader("app-manifest.json")
     _, parsed = _decode(raw)
@@ -188,6 +235,25 @@ def _console_files(root, source, reader, current):
         raise VersionPlanError("Console 版本须使用 app-manifest.json 的权威版本字段。")
     if not re.fullmatch(r"\d+\.\d+\.\d+", current):
         raise VersionPlanError("Console 发布要求三段数字版本，请先按发布流程协调。")
+    evidence = []
+    if console_reader is not None:
+        for name in ("console-repository-publish.js", "console-repository-publish.css"):
+            head, previous, git_changed = console_reader(name)
+            if (not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(head)) or type(git_changed) is not bool
+                    or previous is not None and (not isinstance(previous, bytes) or len(previous) > MAX_BYTES)):
+                raise VersionPlanError("Console 独立资源的固定 HEAD 证明无效。")
+            current_raw = reader(name)
+            if not isinstance(current_raw, bytes) or len(current_raw) > MAX_BYTES:
+                raise VersionPlanError("Console 独立资源超出读取范围。")
+            evidence.append({"path": name, "headSha": head, "headMissing": previous is None,
+                             "headSha256": _hash(previous) if previous is not None else None,
+                             "headBytes": len(previous) if previous is not None else None,
+                             "expectedSha256": _hash(current_raw), "expectedBytes": len(current_raw),
+                             "gitChanged": git_changed, "changed": previous is None or git_changed and
+                             previous.replace(b"\r\n", b"\n") != current_raw.replace(b"\r\n", b"\n")})
+        if len({entry["headSha"] for entry in evidence}) != 1:
+            raise VersionPlanError("Console 独立资源读取期间 HEAD 已变化。")
+    changed_resources = {entry["path"] for entry in evidence if entry["changed"]}
     edits["app-manifest.json"] = (raw, _one(raw, source)[1])
     for name in ("app.js", "index.html", "music.html", "workspace.html", "phone/version.json"):
         raw = reader(name)
@@ -205,7 +271,7 @@ def _console_files(root, source, reader, current):
             match = matches[0]
             spans = [(match.start("version"), match.end("version"), next_patch(current))]
         else:
-            expected = ("styles.css", "app.js") + (("console-repository-publish.css", "console-repository-publish.js") if name == "index.html" else ())
+            expected = ("styles.css", "app.js")
             for asset in expected:
                 matches = list(re.finditer(r'\b(?:href|src)\s*=\s*(["\'])(?P<url>' + re.escape(asset) + r'\?v=[^"\'<>]+)\1', text))
                 if len(matches) != 1:
@@ -216,32 +282,106 @@ def _console_files(root, source, reader, current):
                     raise VersionPlanError("Console 缓存版本不一致，请先按发布流程协调。")
                 offset = match.start("url") + versions[0].start()
                 spans.append((offset, offset + len(current), next_patch(current)))
+            # Preserve an unchanged independently cached module. A changed
+            # resource gets a fresh query only with fixed HEAD byte evidence.
+            if name == "index.html":
+                for asset in ("console-repository-publish.css", "console-repository-publish.js"):
+                    matches = list(re.finditer(r'\b(?:href|src)\s*=\s*(["\'])(?P<url>' + re.escape(asset) + r'\?v=console-repository-publish-(?P<cache>[vV]?\d+\.\d+\.\d+))\1', text))
+                    if len(matches) != 1:
+                        raise VersionPlanError("Console 独立仓库模块缓存引用不唯一，请按发布流程协调。")
+                    if asset in changed_resources:
+                        match = matches[0]
+                        spans.append((match.start("cache"), match.end("cache"), next_patch(current)))
         edits[name] = (raw, (bom, text, spans))
-    return edits
+    return edits, evidence
 
 
-def _inspect(root, source, reader):
+def read_current_version(raw, source):
+    """Read one exact source value without companion writes or imports."""
+    return _one(raw, source)[0]
+
+
+def _strict_blender_manifest(raw, current):
+    try:
+        import tomllib
+        _, text = _decode(raw)
+        manifest = tomllib.loads(text)
+        if not isinstance(manifest.get("version"), str) or manifest["version"] != current:
+            raise ValueError("manifest root version does not match declaration")
+    except (UnicodeError, ValueError, KeyError, TypeError) as exc:
+        raise _CompanionVersionError("固定 Blender manifest 不是完整、唯一且一致的 TOML 版本声明，请协调后重试。") from exc
+
+
+def _blender_companion(root, source, reader, current, primary_raw):
+    path = Path(source["path"])
+    if path.name == "blender_manifest.toml":
+        _strict_blender_manifest(primary_raw, current)
+    companion = None
+    if source.get("kind") in {"python_ast", "bl_info"} and (root / path.parent / "blender_manifest.toml").exists():
+        if path.name != "__init__.py" or (source.get("key") or "bl_info.version") not in {"bl_info", "bl_info.version"}:
+            raise _CompanionVersionError("同目录 Blender manifest 与此 Python 版本归属不明确，请手动协调。")
+        companion = {"path":(path.parent / "blender_manifest.toml").as_posix(), "kind":"text", "key":"version"}
+    elif path.name == "blender_manifest.toml" and (root / path.parent / "__init__.py").exists():
+        if source.get("kind") != "text" or (source.get("key") or "version") != "version":
+            raise _CompanionVersionError("Blender manifest 权威版本字段不明确，请手动协调。")
+        companion = {"path":(path.parent / "__init__.py").as_posix(), "kind":"python_ast", "key":"bl_info.version"}
+    if companion is None:
+        return None
+    try:
+        raw = reader(companion["path"])
+        previous, edit = _one(raw, companion)
+        if Path(companion["path"]).name == "blender_manifest.toml":
+            _strict_blender_manifest(raw, previous)
+        if previous != current:
+            raise _CompanionVersionError("同一 Blender 插件的 blender_manifest.toml 与 bl_info 版本不同，请协调一致；不会分别升版。")
+        return companion, raw, edit
+    except _CompanionVersionError:
+        raise
+    except (OSError, UnicodeError, ValueError, SyntaxError, KeyError, TypeError, ET.ParseError) as exc:
+        raise _CompanionVersionError("同一 Blender 插件的另一版本声明缺失或不唯一，请协调一致；不会导入插件代码。") from exc
+
+
+def _inspect(root, source, reader, git_reader=None, console_reader=None):
+    if source.get("kind") == "git_commit":
+        if source.get("path") != "HEAD" or source.get("key") != "subject" or git_reader is None:
+            raise VersionPlanError("提交版本仅允许固定 HEAD / subject 来源。")
+        evidence = git_reader(source)
+        current = evidence["version"]
+        raw = json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        public = {"sourceId": source_id(source), **{key: source.get(key, "") for key in ("path", "kind", "key", "name", "scope")},
+                  "currentVersion": current, "nextVersion": next_patch(current), "canBump": True, "reason": "",
+                  "expectedSha256": _hash(raw), "expectedBytes": len(raw), "expectedFiles": [], **evidence}
+        public["planProof"] = _proof({"sourceId": public["sourceId"], "currentVersion": current,
+                                      "targetVersion": public["nextVersion"], "files": [], "gitEvidence": evidence})
+        return public, {}
     path = source["path"]
     raw = reader(path)
     current, edit = _one(raw, source)
     edits = {path: (raw, edit)}
+    evidence = []
     if path == "app-manifest.json":
-        companion = _console_files(root, source, reader, current)
+        companion = _console_files(root, source, reader, current, console_reader)
         if companion:
-            edits = companion
-    if source.get("kind") in {"python_ast", "bl_info"} and (root / Path(path).parent / "blender_manifest.toml").exists():
-        raise VersionPlanError("此插件还有 blender_manifest.toml，请手动协调同一插件的版本文件。")
-    if Path(path).name == "blender_manifest.toml" and (root / Path(path).parent / "__init__.py").exists():
-        raise VersionPlanError("此插件还声明 Python bl_info，请手动协调同一插件的版本文件。")
+            edits, evidence = companion
+    paired = _blender_companion(root, source, reader, current, raw)
+    if paired:
+        companion, companion_raw, companion_edit = paired
+        edits[companion["path"]] = (companion_raw, companion_edit)
     files = [{"path": name, "expectedSha256": _hash(item[0]), "expectedBytes": len(item[0])} for name, item in sorted(edits.items())]
     public = {"sourceId": source_id(source), **{key: source.get(key, "") for key in ("path", "kind", "key", "name", "scope")},
               "currentVersion": current, "nextVersion": next_patch(current), "canBump": True, "reason": "",
               "expectedSha256": _hash(raw), "expectedBytes": len(raw), "expectedFiles": files}
-    public["planProof"] = _proof({"sourceId": public["sourceId"], "currentVersion": current, "targetVersion": public["nextVersion"], "files": files})
+    if paired:
+        public.update(pairedCompanion=paired[0], companionState="paired")
+    proof = {"sourceId": public["sourceId"], "currentVersion": current, "targetVersion": public["nextVersion"], "files": files}
+    if evidence:
+        public["consoleResourceEvidence"] = evidence
+        proof["consoleResourceEvidence"] = evidence
+    public["planProof"] = _proof(proof)
     return public, edits
 
 
-def catalog(root, sources, reader):
+def catalog(root, sources, reader, git_reader=None, console_reader=None):
     items, seen = [], set()
     for source in sources:
         ident = source_id(source)
@@ -249,22 +389,33 @@ def catalog(root, sources, reader):
             continue
         seen.add(ident)
         try:
-            item, _ = _inspect(root, source, reader)
+            item, _ = _inspect(root, source, reader, git_reader, console_reader)
         except (VersionPlanError, OSError, UnicodeError, ValueError, SyntaxError, KeyError, TypeError, ET.ParseError) as exc:
             item = {"sourceId": ident, **{key: source.get(key, "") for key in ("path", "kind", "key", "name", "scope")},
                     "currentVersion": "", "nextVersion": "", "canBump": False, "reason": str(exc) if isinstance(exc, VersionPlanError) else "版本来源缺失、变化或无法唯一读取，请手动准备版本。"}
+            if isinstance(exc, _CompanionVersionError):
+                item["companionState"] = "blocked"
         items.append(item)
+    for item in items:
+        paths = {entry["path"] for entry in item.get("expectedFiles", [])}
+        if paths and any(other is not item and (item.get("pairedCompanion") or other.get("pairedCompanion")) and
+                         paths & {entry["path"] for entry in other.get("expectedFiles", [])} for other in items):
+            item.update(canBump=False, companionState="blocked", reason="同一 Blender 插件的双版本来源被重复配置，修改范围重叠；请保留一个权威来源。")
     return items
 
 
-def prepare_updates(root, sources, plans, reader):
+def prepare_updates(root, sources, plans, reader, git_reader=None, console_reader=None):
     by_id = {source_id(source): source for source in sources}
-    combined, proofs = {}, []
+    combined, proofs, paired_paths = {}, [], set()
     for plan in plans:
         source = by_id.get(plan["sourceId"])
         if source is None:
             raise VersionPlanError("版本来源已改变，请重新配置一次性版本计划。")
-        item, edits = _inspect(root, source, reader)
+        item, edits = _inspect(root, source, reader, git_reader, console_reader)
+        if set(edits) & paired_paths or item.get("pairedCompanion") and set(edits) & combined.keys():
+            raise VersionPlanError("同一 Blender 插件的双版本来源被重复配置，修改范围重叠；请保留一个权威来源。")
+        if item.get("pairedCompanion"):
+            paired_paths.update(edits)
         expected = {"sourceId": item["sourceId"], "currentVersion": item["currentVersion"], "targetVersion": item["nextVersion"],
                     "expectedSha256": item["expectedSha256"], "expectedBytes": item["expectedBytes"], "planProof": item["planProof"]}
         if plan != expected:

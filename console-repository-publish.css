@@ -4,6 +4,8 @@
 .repository-publish-bar .repository-publish-primary { min-height: 40px; padding: 8px 16px; color: var(--bg, #092522); background: var(--status-success, var(--green, #59d4bb)); border-color: var(--status-success, var(--green, #59d4bb)); font-size: 14px; font-weight: 700; }
 .repository-publish-bar .repository-publish-toggle { min-height: 40px; width: 36px; padding: 4px; font-size: 20px; }
 .repository-publish-expanded { margin: 0 0 12px; max-width: 100%; border: 1px solid var(--line, #3b4a5b); border-radius: 10px; background: var(--panel, #182434); overflow: hidden; }
+.repository-publish-expanded, .repository-publish-dialog { --repository-publish-change: #087a4e; }
+:root[data-theme="dark"] .repository-publish-expanded, :root[data-theme="dark"] .repository-publish-dialog { --repository-publish-change: #69dfa7; }
 .repository-publish-expanded[hidden], .repository-publish-repo[hidden], .repository-publish-section[hidden], .repository-publish-form > [hidden] { display: none; }
 .repository-publish-expanded-toolbar { display: flex; justify-content: flex-end; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line, #3b4a5b); }
 .repository-publish-expanded .ghost-button { min-height: 28px; padding: 3px 9px; font-size: 12px; }
@@ -11,7 +13,10 @@
 .repository-publish-compact-row + .repository-publish-compact-row { border-top: 1px solid var(--line, #3b4a5b); }
 .repository-publish-compact-name, .repository-publish-compact-version { min-width: 0; overflow-wrap: anywhere; }
 .repository-publish-compact-name { font-weight: 600; color: var(--text, #edf2fa); }
-.repository-publish-compact-version, .repository-publish-compact-status { color: var(--muted, #92a2b5); }
+.repository-publish-compact-version { color: var(--text, #edf2fa); }
+.repository-publish-compact-version[data-change-state="changed"] { color: var(--repository-publish-change, #69dfa7); }
+.repository-publish-compact-version[data-change-state="unknown"], .repository-publish-compact-status[data-change-state="unknown"] { color: var(--status-warning, #d9a170); }
+.repository-publish-compact-status { color: var(--muted, #92a2b5); }
 .repository-publish-status { flex: 1 1 150px; min-width: 0; color: var(--muted, #92a2b5); font-size: 12px; overflow-wrap: anywhere; }
 .repository-publish-status[data-state="error"] { color: var(--status-warning, #d9a170); }
 .repository-publish-dialog { box-sizing: border-box; width: min(580px, calc(100vw - 28px)); max-height: calc(100dvh - 32px); padding: 16px; overflow: auto; border: 1px solid var(--line, #3b4a5b); border-radius: 14px; background: var(--solid-popover-bg, #182434); color: var(--text, #edf2fa); }
@@ -30,6 +35,10 @@
 .repository-publish-plan-row > span:first-child { flex: 1 1 180px; overflow-wrap: anywhere; }
 .repository-publish-plan-row .ghost-button { min-height: 28px; padding: 4px 8px; font-size: 12px; }
 .repository-publish-plan-reason { flex: 1 1 100%; color: var(--muted, #92a2b5); font-size: 11px; overflow-wrap: anywhere; }
+.repository-publish-version-origin { grid-column: 1 / -1; }
+.repository-publish-preview-summary { margin-top: 7px; }
+.repository-publish-result .repository-publish-preview-version { margin: 3px 0; color: var(--text, #edf2fa); }
+.repository-publish-preview-version-hint { color: var(--muted, #92a2b5); font-size: 11px; }
 .repository-publish-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .repository-publish-field { display: grid; align-content: start; gap: 5px; min-width: 0; color: var(--muted, #92a2b5); font-size: 12px; }
 .repository-publish-field:has([data-field="path"]), .repository-publish-field:has([data-field="repositoryUrl"]), .repository-publish-field:has(textarea) { grid-column: 1 / -1; }

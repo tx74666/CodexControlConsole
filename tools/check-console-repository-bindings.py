@@ -93,6 +93,46 @@ class BindingTests(unittest.TestCase):
         self.assertEqual([(v["kind"], v["key"]) for v in versions], [("text", "version")])
         self.assertIn("configuration_unreadable", [w["code"] for w in result["warnings"]])
 
+    def test_unity_progress_version_uses_verified_local_commit_history(self):
+        self.write("ProjectSettings/ProjectSettings.asset", "PlayerSettings:\n  bundleVersion: 0.1.0\n")
+        head, previous = "a" * 40, "b" * 40
+        original_git = self.git
+        def git(root, *args):
+            if args == ("rev-parse", "HEAD"):
+                return head
+            if args == ("log", "--first-parent", "--max-count=64", "--format=%H%x00%s", "HEAD"):
+                return head + "\0Fix saved scene metadata\n" + previous + "\0" + "1.6.43\n"
+            return original_git(root, *args)
+        d = RepositoryBindingDiscovery(git_reader=git, known_roots=[self.root])
+        sources = d.discover()["repositories"][0]["versionSources"]
+        self.assertEqual(sources, [{"path": "HEAD", "kind": "git_commit", "key": "subject", "name": "Repository commit", "scope": "**"}])
+
+    def test_unity_commit_history_is_not_inferred_from_arbitrary_subjects(self):
+        self.write("ProjectSettings/ProjectSettings.asset", "PlayerSettings:\n  bundleVersion: 0.1.0\n")
+        head = "a" * 40
+        original_git = self.git
+        def git(root, *args):
+            if args == ("rev-parse", "HEAD"):
+                return head
+            if args == ("log", "--first-parent", "--max-count=64", "--format=%H%x00%s", "HEAD"):
+                return head + "\0Fix 1.6.43 bug\n"
+            return original_git(root, *args)
+        sources = RepositoryBindingDiscovery(git_reader=git, known_roots=[self.root]).discover()["repositories"][0]["versionSources"]
+        self.assertEqual([(s["kind"], s["key"]) for s in sources], [("unity", "bundleVersion")])
+
+    def test_unity_discovery_does_not_use_a_changed_head(self):
+        self.write("ProjectSettings/ProjectSettings.asset", "PlayerSettings:\n  bundleVersion: 0.1.0\n")
+        heads = iter(["a" * 40, "b" * 40])
+        original_git = self.git
+        def git(root, *args):
+            if args == ("rev-parse", "HEAD"):
+                return next(heads)
+            if args == ("log", "--first-parent", "--max-count=64", "--format=%H%x00%s", "HEAD"):
+                return "a" * 40 + "\0" + "1.6.43\n"
+            return original_git(root, *args)
+        sources = RepositoryBindingDiscovery(git_reader=git, known_roots=[self.root]).discover()["repositories"][0]["versionSources"]
+        self.assertEqual([(s["kind"], s["key"]) for s in sources], [("unity", "bundleVersion")])
+
     def test_reuse_explicit_saved_build_mapping_dependencies_before_scene(self):
         saved = self.base / "Builder6.blend"
         saved.write_bytes(b"saved scene fixture")

@@ -25,6 +25,7 @@ import weakref
 import xml.etree.ElementTree as ET
 from console_repository_versions import (VersionPlanError, catalog as version_catalog_items,
                                         prepare_updates as prepare_version_updates, source_id as version_source_id,
+                                        read_current_version, parse_commit_history,
                                         MAX_BYTES as VERSION_MAX_BYTES)
 
 
@@ -36,12 +37,16 @@ _PRIVATE_PARTS = {".git", ".venv", "venv", "node_modules", "__pycache__", "cache
 _PRIVATE_NAMES = {".env", ".npmrc", ".pypirc", "credentials.json", "secrets.json",
                   "installation.json", "local-store-identity.json", "publisher-state.json"}
 _DEFAULT_NAMING = {"preset": "version", "fallbackTitle": "更新进度 {datetime}",
-                   "subtitle": "", "notes": "", "includeSummary": True}
+                   "subtitle": "", "notes": "", "includeSummary": True, "autoBump": True}
 _LIVE = {}
 
 
 class RepositoryPublishError(ValueError):
     """A sanitized, user-facing validation error."""
+
+    def __init__(self, message, *, code=""):
+        super().__init__(message)
+        self.code = code
 
 
 class _GitFailure(Exception):
@@ -397,6 +402,8 @@ class RepositoryPublishService:
                     raise RepositoryPublishError("版本范围必须是路径或匹配模式。")
                 versions.append({"path": _relative(item.get("path", "")), "kind": str(item.get("kind", "json")),
                                  "key": str(item.get("key", "")), "name": str(item.get("name", "")), "scope": scope})
+                if versions[-1]["kind"] == "git_commit" and (versions[-1]["path"] != "HEAD" or versions[-1]["key"] != "subject"):
+                    raise RepositoryPublishError("提交版本仅允许固定 HEAD / subject 来源，不能指定命令或模式。")
             plans = raw.get("versionPlans", [])
             fields = {"sourceId", "currentVersion", "targetVersion", "expectedSha256", "expectedBytes", "planProof"}
             if not isinstance(plans, list) or len(plans) > 100 or any(not isinstance(item, dict) or set(item) != fields for item in plans):
@@ -435,17 +442,29 @@ class RepositoryPublishService:
         for key in ("fallbackTitle", "subtitle", "notes"):
             naming[key] = str(naming[key])[:16000]
         naming["includeSummary"] = bool(naming["includeSummary"])
+        if not isinstance(naming["autoBump"], bool):
+            raise RepositoryPublishError("自动升版设置必须为开关。")
         return {"repositories": repositories, "naming": naming}
 
     def _settings(self):
         return _read(self._settings_path)
 
-    def configure(self, payload):
+    def configure(self, payload, *, expected_settings_sha=None):
         if not self.allowed:
             raise RepositoryPublishError("当前入口不允许提交推送。")
         with self._mutex, _file_lock(self.state_dir / "settings.lock"):
-            settings = self._normalize(payload)
             previous = self._settings()
+            current_normalized = self._normalize(previous)
+            settings = self._normalize(payload)
+            if expected_settings_sha is not None:
+                if not isinstance(expected_settings_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_settings_sha):
+                    raise RepositoryPublishError("配置比较证明无效，请重新读取配置。")
+                if _json_sha(current_normalized) != expected_settings_sha:
+                    raise RepositoryPublishError("仓库配置已被另一处修改，请重新读取；保留现有选择，不覆盖。", code="settings_changed")
+            elif previous.get("casRequired") is True:
+                if settings != current_normalized:
+                    raise RepositoryPublishError("此仓库配置已启用比较保护；旧草稿没有当前证明，保留现有选择，不覆盖。", code="settings_changed")
+                return self.status()  # Exact legacy no-op leaves server metadata and bytes intact.
             previous_repos = {r["id"]: r for r in previous["repositories"]}
             rediscovered = None
             for repo in settings["repositories"]:
@@ -479,6 +498,8 @@ class RepositoryPublishService:
                             targets.add(os.path.normcase(str(destination)))
                         repo.update(syncError="", syncManifest=None)
             settings["warnings"] = previous.get("warnings", [])
+            if previous.get("casRequired") is True or expected_settings_sha is not None:
+                settings["casRequired"] = True  # Server-owned seal, never taken from the payload.
             _atomic(self._settings_path, settings)
         return self.status()
 
@@ -503,42 +524,244 @@ class RepositoryPublishService:
             return raw
         return read
 
+    def _git_version_reader(self, root):
+        def read(source):
+            if source.get("kind") != "git_commit" or source.get("path") != "HEAD" or source.get("key") != "subject":
+                raise VersionPlanError("提交版本仅允许固定 HEAD / subject 来源。")
+            head = self._text(root, "rev-parse", "HEAD")
+            raw = self._git(root, "log", "--first-parent", "--max-count=64", "--format=%H%x00%s", "HEAD")
+            result = parse_commit_history(head, raw)
+            if self._text(root, "rev-parse", "HEAD") != head:
+                raise VersionPlanError("读取提交版本时 HEAD 已变化，请重新读取。")
+            return result
+        return read
+
+    def _console_resource_reader(self, root):
+        def read(name):
+            if name not in {"console-repository-publish.js", "console-repository-publish.css"}:
+                raise VersionPlanError("Console 资源证明只允许固定仓库模块文件。")
+            head = self._text(root, "rev-parse", "HEAD")
+            names = self._git(root, "--literal-pathspecs", "ls-tree", "--name-only", "-z", head, "--", name).split(b"\0")
+            blob = self._git(root, "show", head + ":" + name) if name.encode("utf-8") in names else None
+            status = self._git(root, "--literal-pathspecs", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--", name)
+            if blob is not None and len(blob) > VERSION_MAX_BYTES:
+                raise VersionPlanError("Console 独立资源的 HEAD 文件超出读取范围。")
+            if self._text(root, "rev-parse", "HEAD") != head:
+                raise VersionPlanError("读取 Console 独立资源期间 HEAD 已变化。")
+            return head, blob, bool(status)
+        return read
+
+    def _saved_sync_changes(self, repo, root):
+        result = {"syncChanged": False, "syncState": "none", "syncReason": "", "syncDifferences": []}
+        try:
+            self._sync_contract(repo)
+            if not repo["syncFiles"]:
+                return result
+            records = self._sync_preflight(repo, root)
+            for mapping, source, target, proof in records:
+                target_proof = _stable(target) if target.exists() else None
+                if _stable(source) != proof:
+                    raise RepositoryPublishError("同步来源正在写入，请保存后重试。")
+                if target_proof != proof:
+                    result["syncDifferences"].append(mapping["target"])
+            result.update(syncChanged=bool(result["syncDifferences"]),
+                          syncState="changed" if result["syncDifferences"] else "unchanged",
+                          syncReason="已保存工作文件与仓库快照不同；执行时先同步再确定本次版本。" if result["syncDifferences"] else "已保存工作文件与仓库快照相同。")
+        except (RepositoryPublishError, OSError) as exc:
+            result.update(syncChanged=None, syncState="unknown", syncReason=self._error(exc), syncDifferences=[])
+        return result
+
+    def _local_changes(self, repo, context):
+        """Display-only Git state; no fetch, synchronization, staging or locks."""
+        root = context[0]
+        result = {"hasChanges": None, "changeState": "unknown", "worktreeChanged": None,
+                  "outgoingCommits": None, "remoteReference": "", "changesReason": "", "changedFiles": [], "headSha": "",
+                  "outgoingBaselineSha": "", "outgoingBaselineSource": "", "deliveryVerifiedAt": "",
+                  "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
+        try:
+            head = self._text(root, "rev-parse", "HEAD")
+            result["headSha"] = head
+            status = self._git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames")
+            records = [record for record in status.split(b"\0") if record]
+            if any(len(record) < 4 or record[2:3] != b" " for record in records):
+                raise RepositoryPublishError("工作树状态回执不完整。")
+            result["changedFiles"] = [{"path": record[3:].decode("utf-8", "surrogateescape"), "status": record[:2].decode("ascii")}
+                                      for record in records if not _excluded(record[3:].decode("utf-8", "surrogateescape"), repo["exclude"])]
+            result["worktreeChanged"] = bool(result["changedFiles"])
+            reference = "refs/remotes/" + repo["remote"] + "/" + repo["branch"]
+            result["remoteReference"] = reference
+            baseline, baseline_source = "", ""
+            try:
+                baseline = self._text(root, "show-ref", "--verify", "--hash", reference)
+                if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", baseline):
+                    raise RepositoryPublishError("本地远端引用身份无法确认。")
+                baseline_source = "tracking_ref"
+            except _GitFailure:
+                result["changesReason"] = "尚无可确认的本地远端引用；这里不会自动 fetch。"
+            # Private transport preserves the user's tracking refs. A verified
+            # delivery journal can establish a newer local acknowledgement,
+            # without writing those refs or pretending to query today's remote.
+            pending = _read(self._pending_path(repo["id"]))
+            if (pending and pending.get("state") == "delivered" and pending.get("identity") == context[3]
+                    and pending.get("repositorySettingsSha") == _repo_settings_sha(repo)
+                    and pending.get("transportOptionsSha") == _json_sha(self._remote_options(repo, root))
+                    and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(pending.get("commitSha", "")))
+                    and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(pending.get("verifiedRemote", "")))
+                    and pending.get("verifiedAt") and self._ancestor(root, pending["commitSha"], head)
+                    and self._ancestor(root, pending["commitSha"], pending["verifiedRemote"])):
+                acknowledged = pending["commitSha"]
+                if not baseline or not self._ancestor(root, acknowledged, baseline):
+                    baseline, baseline_source = acknowledged, "verified_delivery"
+                    result.update(deliveryVerifiedAt=pending["verifiedAt"], changesReason="待推数量依据本仓库最近核验成功的回执；执行时会重新核验实际远端。")
+            if baseline:
+                outgoing = self._text(root, "rev-list", "--count", baseline + "..HEAD")
+                if not re.fullmatch(r"\d+", outgoing):
+                    raise RepositoryPublishError("待推提交数量无法确认。")
+                result.update(outgoingCommits=int(outgoing), outgoingBaselineSha=baseline, outgoingBaselineSource=baseline_source)
+            result.update(self._saved_sync_changes(repo, root))
+            if self._text(root, "rev-parse", "HEAD") != head or self._git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames") != status:
+                raise RepositoryPublishError("读取差异期间工作树或 HEAD 已变化。")
+            if result["worktreeChanged"] or result["syncChanged"] is True or result["outgoingCommits"] is not None and result["outgoingCommits"] > 0:
+                result.update(hasChanges=True, changeState="changed")
+            elif result["outgoingCommits"] == 0 and result["syncChanged"] is False:
+                result.update(hasChanges=False, changeState="unchanged")
+            if not result["changesReason"]:
+                result["changesReason"] = "待推数量依据已保存的本地远端引用；执行时会重新核验实际远端。"
+            if result["syncState"] in {"changed", "unknown"}:
+                result["changesReason"] += " " + result["syncReason"]
+        except (RepositoryPublishError, _GitFailure, OSError) as exc:
+            result.update(hasChanges=None, changeState="unknown", worktreeChanged=None, changedFiles=[], changesReason=self._error(exc))
+        return result
+
+    def _version_details(self, repo, context):
+        root = context[0]
+        sources = self._version_sources(repo, root)
+        head = self._text(root, "rev-parse", "HEAD")
+        components = version_catalog_items(root, sources, self._version_reader(root), self._git_version_reader(root), self._console_resource_reader(root))
+        by_id = {version_source_id(source): source for source in sources}
+        plans = {plan["sourceId"]: plan for plan in repo.get("versionPlans", [])}
+        for component in components:
+            source = by_id[component["sourceId"]]
+            component.update(repositoryHeadSha=head, headVersion="", headSourceMissing=None, versionChanged=None,
+                             planState="none", plannedVersion="", transition=None)
+            primary = Path(source["path"])
+            companion_name = ("blender_manifest.toml" if primary.name == "__init__.py" and source["kind"] in {"python_ast", "bl_info"}
+                              else "__init__.py" if primary.name == "blender_manifest.toml" else None)
+            if companion_name and not (root / primary.parent / companion_name).exists():
+                companion_path = (primary.parent / companion_name).as_posix()
+                names = self._git(root, "--literal-pathspecs", "ls-tree", "--name-only", "-z", head, "--", companion_path).split(b"\0")
+                if companion_path.encode("utf-8") in names:
+                    component.update(canBump=False, companionState="blocked", reason="原 Blender 插件的另一版本声明已缺失，请协调一致；不会只升剩下的一份。")
+            if any(entry["headSha"] != head for entry in component.get("consoleResourceEvidence", [])):
+                raise RepositoryPublishError("读取 Console 资源和版本期间 HEAD 已变化。")
+            if not component.get("currentVersion") and source["kind"] != "git_commit":
+                try:
+                    component["currentVersion"] = read_current_version(self._version_reader(root)(source["path"]), source)
+                except (VersionPlanError, OSError, ValueError, UnicodeError, SyntaxError, KeyError, TypeError):
+                    pass  # Missing or ambiguous authorities remain unknown.
+            if source["kind"] == "git_commit" and component.get("sourceHeadSha") not in (None, head):
+                raise RepositoryPublishError("提交版本读取期间 HEAD 已变化，请重新读取。")
+            if component.get("canBump") and component.get("expectedFiles"):
+                try:
+                    self._version_write_scope(repo, root, component["expectedFiles"])
+                except (RepositoryPublishError, _GitFailure, OSError) as exc:
+                    component.update(canBump=False, reason=self._error(exc))
+            if component.get("currentVersion"):
+                try:
+                    if source["kind"] == "git_commit":
+                        previous = component["currentVersion"]
+                    else:
+                        paths = self._git(root, "--literal-pathspecs", "ls-tree", "--name-only", "-z", head, "--", source["path"]).split(b"\0")
+                        component["headSourceMissing"] = source["path"].encode("utf-8") not in paths
+                        previous = None if component["headSourceMissing"] else read_current_version(
+                            self._git(root, "show", head + ":" + source["path"]), source)
+                    if previous is None:
+                        component["versionChanged"] = None
+                    else:
+                        component.update(headVersion=previous, versionChanged=previous != component["currentVersion"])
+                    if component["versionChanged"]:
+                        component["transition"] = {"kind": "working", "fromVersion": previous, "toVersion": component["currentVersion"]}
+                except (VersionPlanError, _GitFailure, ValueError, UnicodeError):
+                    pass  # Unknown history is never claimed unchanged.
+            if component.get("pairedCompanion"):
+                companion = component["pairedCompanion"]
+                component.update(companionHeadVersion="", companionVersionChanged=None, headCompanionMissing=None)
+                try:
+                    names = self._git(root, "--literal-pathspecs", "ls-tree", "--name-only", "-z", head, "--", companion["path"]).split(b"\0")
+                    missing = companion["path"].encode("utf-8") not in names
+                    component["headCompanionMissing"] = missing
+                    if missing:
+                        component["companionVersionChanged"] = True
+                    else:
+                        previous = read_current_version(self._git(root, "show", head + ":" + companion["path"]), companion)
+                        component.update(companionHeadVersion=previous, companionVersionChanged=previous != component["currentVersion"])
+                except (VersionPlanError, _GitFailure, ValueError, UnicodeError):
+                    pass
+            plan = plans.get(component["sourceId"])
+            if plan:
+                expected = {key: component.get(key) for key in ("sourceId", "currentVersion", "expectedSha256", "expectedBytes", "planProof")}
+                expected["targetVersion"] = component.get("nextVersion")
+                component["planState"] = "valid" if component.get("canBump") and plan == expected else "stale"
+                if component["planState"] == "valid":
+                    component["plannedVersion"] = plan["targetVersion"]
+                    component["transition"] = {"kind": "planned", "fromVersion": plan["currentVersion"], "toVersion": plan["targetVersion"]}
+        overlaps = self._version_overlaps(root, [entry for component in components if component.get("canBump") for entry in component.get("expectedFiles", [])])
+        for component in components:
+            if any(entry["path"] in overlaps for entry in component.get("expectedFiles", [])):
+                component.update(canBump=False, reason="版本文件的实际来源重叠，请手动协调；不会分别改写。")
+                if component["planState"] == "valid":
+                    component.update(planState="stale", plannedVersion="", transition=None)
+        if self._text(root, "rev-parse", "HEAD") != head:
+            raise RepositoryPublishError("版本读取期间 HEAD 已变化，请重新读取。")
+        return components
+
     def version_catalog(self, repo_id=None):
         """Read exact current versions; never sync, stage, fetch or change files."""
         if not self.allowed:
             raise RepositoryPublishError("当前入口不允许读取版本配置。")
-        rows = self._settings()["repositories"]
+        settings = self._settings()
+        rows = settings["repositories"]
         if repo_id is not None and (not isinstance(repo_id, str) or repo_id not in {row["id"] for row in rows}):
             raise RepositoryPublishError("仓库编号不存在。")
         result = []
         for repo in rows:
             if repo_id is not None and repo["id"] != repo_id:
                 continue
-            item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "components": [], "message": ""}
+            item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "components": [], "message": "",
+                    "hasChanges": None, "changeState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
+                    "planState": "none", "versionChanged": None, "versionState": "unknown",
+                    "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
             try:
-                root = self._repo(repo)[0]
+                context = self._repo(repo)
+                root = context[0]
                 sources = self._version_sources(repo, root)
-                item["components"] = version_catalog_items(root, sources, self._version_reader(root))
-                by_id = {version_source_id(source): source for source in sources}
-                for component in item["components"]:
-                    source = by_id[component["sourceId"]]
-                    if not component.get("currentVersion"):
-                        component["currentVersion"] = self._versions(root, [source], [])[0].get("version", "")
-                    if component.get("canBump"):
-                        try:
-                            self._version_write_scope(repo, root, component["expectedFiles"])
-                        except (RepositoryPublishError, _GitFailure, OSError) as exc:
-                            component.update(canBump=False, reason=self._error(exc))
-                overlaps = self._version_overlaps(root, [entry for component in item["components"] if component.get("canBump") for entry in component["expectedFiles"]])
-                for component in item["components"]:
-                    if any(entry["path"] in overlaps for entry in component.get("expectedFiles", [])):
-                        component.update(canBump=False, reason="版本文件的实际来源重叠，请手动协调；不会分别改写。")
+                item["components"] = self._version_details(repo, context)
+                item.update(self._local_changes(repo, context))
+                if any(component["repositoryHeadSha"] != item["headSha"] for component in item["components"]):
+                    raise RepositoryPublishError("读取仓库差异和版本期间 HEAD 已变化，请重新读取。")
+                self._planned_versions(repo, context, item["components"], item["changedFiles"], settings["naming"],
+                                       sync_pending=bool(repo["syncFiles"]), changes_known=item["worktreeChanged"] is not None)
+                states = {component["planState"] for component in item["components"]}
+                if any(plan["sourceId"] not in {component["sourceId"] for component in item["components"]} for plan in repo.get("versionPlans", [])):
+                    states.add("stale")
+                item["planState"] = "stale" if "stale" in states else "valid" if "valid" in states else "none"
+                differences = [component["versionChanged"] for component in item["components"]]
+                item["versionChanged"] = True if True in differences else None if not differences or None in differences else False
+                known = [bool(component.get("currentVersion")) for component in item["components"]]
+                item["versionState"] = "missing" if not known else "known" if all(known) else "partial" if any(known) else "unknown"
                 if not sources:
-                    item["message"] = "未找到权威版本来源，请手动准备版本；普通推送仍可使用。"
+                    item["message"] = "此仓库没有独立版本来源，使用已配置的进度标题；不会创建版本文件。"
+                if item.get("syncState") == "unknown":
+                    item["message"] = item["syncReason"]
             except (RepositoryPublishError, _GitFailure, OSError) as exc:
                 item["message"] = self._error(exc)
+                item.update(hasChanges=None, changeState="unknown", worktreeChanged=None)
                 for component in item["components"]:
                     component.update(canBump=False, reason=item["message"])
+                    if (component.get("transition") or {}).get("kind") == "auto":
+                        component["transition"] = None
+                    component["autoPlan"] = {"state":"unknown", "fromVersion":component.get("currentVersion", ""),
+                                             "targetVersion":"", "reason":item["message"]}
             result.append(item)
         return {"repositories": result}
 
@@ -550,6 +773,8 @@ class RepositoryPublishService:
         return {path for paths in identities.values() if len(paths) > 1 for path in paths}
 
     def _version_write_scope(self, repo, root, files):
+        if not files:
+            return  # Git-subject plans have no writable authority files.
         paths = [item["path"] for item in files]
         sync_paths, sync_identities = set(), set()
         for mapping in repo["syncFiles"]:
@@ -582,13 +807,101 @@ class RepositoryPublishService:
             with _version_write_lease(path):
                 pass  # Capability preflight, no write; includes all companions.
 
-    def _version_updates(self, repo, context):
+    def _version_updates(self, repo, context, plans=None):
         try:
-            updates, plans = prepare_version_updates(context[0], self._version_sources(repo, context[0]), repo.get("versionPlans", []), self._version_reader(context[0]))
+            updates, plans = prepare_version_updates(context[0], self._version_sources(repo, context[0]),
+                                                     repo.get("versionPlans", []) if plans is None else plans,
+                                                     self._version_reader(context[0]), self._git_version_reader(context[0]), self._console_resource_reader(context[0]))
         except VersionPlanError as exc:
             raise RepositoryPublishError(str(exc)) from exc
         self._version_write_scope(repo, context[0], updates)
         return updates, plans
+
+    @staticmethod
+    def _affected_sources(sources, files):
+        selected = set()
+        for file in files:
+            matching = [source for source in sources if file["path"] == source["path"] or _matches(file["path"], source["scope"])]
+            def specificity(source):
+                if file["path"] == source["path"]:
+                    return len(file["path"]) + 10000
+                scopes = source["scope"] if isinstance(source["scope"], list) else [source["scope"]]
+                return max((len(re.split(r"[*?\[]", value)[0].strip("/")) for value in scopes if _matches(file["path"], value)), default=0)
+            best = max((specificity(source) for source in matching), default=-1)
+            selected.update(version_source_id(source) for source in matching if specificity(source) == best)
+        return selected
+
+    def _planned_versions(self, repo, context, components, files, naming, *, sync_pending=False, changes_known=True, strict=False):
+        """Read-only candidates. Only the locked, synchronized worker freezes them."""
+        sources = self._version_sources(repo, context[0])
+        affected = self._affected_sources(sources, files)
+        shared_paths = {source["path"] for source in sources if sum(other["path"] == source["path"] for other in sources) > 1}
+        by_id = {version_source_id(source): source for source in sources}
+        explicit = {plan["sourceId"]: plan for plan in repo.get("versionPlans", [])}
+        effective, automatic, blocked = [], [], []
+        for component in components:
+            ident = component["sourceId"]
+            state, reason, target = "none", "", ""
+            component["worktreeChanged"] = ident in affected if changes_known else None
+            hidden_resources = [entry["path"] for entry in component.get("consoleResourceEvidence", [])
+                                if entry["changed"] and entry["path"] not in {file["path"] for file in files}]
+            if hidden_resources and not sync_pending:
+                component.update(canBump=False, reason="Console 改动资源未进入实际 Git 变化范围，请处理忽略或特殊索引标记：" + ", ".join(hidden_resources))
+                if component["planState"] == "valid":
+                    component.update(planState="stale", plannedVersion="", transition=None)
+            file_paths = {file["path"] for file in files}
+            hidden_versions = [component["path"]] if (component["versionChanged"] is True or component.get("headSourceMissing") is True) and component["path"] not in file_paths else []
+            if (component.get("pairedCompanion") and component.get("companionVersionChanged") is not False
+                    and component["pairedCompanion"]["path"] not in file_paths):
+                hidden_versions.append(component["pairedCompanion"]["path"])
+            if component.get("companionState") == "blocked" and ident in affected:
+                state, reason = "blocked", component.get("reason") or "同一插件的双版本声明无法一致确认。"
+            elif hidden_versions and ident in affected:
+                state, reason = "blocked", "手动或新增版本声明未进入实际 Git 变化范围，请处理排除或特殊索引标记；不会冒称提交了目标版本：" + ", ".join(hidden_versions)
+            elif ident in explicit:
+                if component["planState"] == "valid":
+                    effective.append(explicit[ident])
+                elif files:
+                    blocked.append("一次性版本计划已过期，请重新配置。" + component.get("reason", ""))
+                reason = "已配置的一次性计划优先。"
+            elif not naming.get("autoBump", True):
+                reason = "自动升版已关闭。"
+            elif sync_pending:
+                state, reason = "sync_pending", "先同步已保存工作文件，再核对改动组件和版本。"
+                if (component.get("transition") or {}).get("kind") == "auto":
+                    component["transition"] = None
+            elif not changes_known:
+                state, reason = "unknown", "真实工作树变化尚未确认。"
+            elif ident not in affected:
+                reason = "此组件没有待提交文件变化；已有提交保留原版本。"
+            elif component["versionChanged"] is True:
+                state, reason = "manual_version", "版本已手动改变，保留当前版本，不再次递增。"
+            elif component["path"] in shared_paths and not any(file["path"] != component["path"] and
+                                                               _matches(file["path"], by_id[ident]["scope"]) for file in files):
+                reason = "共享版本文件的载体变化不代表此组件有改动；版本未变的字段保留。"
+                component["worktreeChanged"] = False if component["versionChanged"] is False else None
+            elif component.get("headSourceMissing") is True and component.get("currentVersion"):
+                state, reason = "initial_version", "新版本来源保留声明的初始版本。"
+            elif component["versionChanged"] is None:
+                state, reason = "blocked", "无法确认 HEAD 权威版本，不自动猜测下一版。"
+            elif not component.get("canBump") or not component.get("currentVersion"):
+                state, reason = "blocked", component.get("reason") or "权威版本无法安全准备。"
+            else:
+                state, target = "eligible", component["nextVersion"]
+                candidate = {key: component[key] for key in ("sourceId", "currentVersion", "expectedSha256", "expectedBytes", "planProof")}
+                candidate["targetVersion"] = target
+                effective.append(candidate)
+                automatic.append(ident)
+                component["transition"] = {"kind": "auto", "fromVersion": component["currentVersion"], "toVersion": target}
+                reason = "根据当前已保存变化预览；同步和提交前会重新核对。"
+            component["autoPlan"] = {"state": state, "fromVersion": component.get("currentVersion", ""), "targetVersion": target, "reason": reason}
+            if state == "blocked":
+                blocked.append((component.get("name") or component["path"]) + ": " + reason)
+        if explicit.keys() - {component["sourceId"] for component in components} and files:
+            blocked.append("一次性版本来源已改变，请重新配置。")
+        if strict and blocked:
+            raise RepositoryPublishError("自动升版暂缓本仓库：" + "；".join(dict.fromkeys(blocked)))
+        return effective, automatic, blocked
 
     def _consume_version_plans(self, repo, pending):
         used = pending.get("versionPlans", [])
@@ -622,7 +935,18 @@ class RepositoryPublishService:
         if (latest is None or _repo_settings_sha(latest) != pending["repositorySettingsSha"]
                 or _json_sha(latest.get("versionPlans", [])) != pending["versionPlansSha"]):
             raise RepositoryPublishError("版本准备期间配置或版本选择变化，请先核对原计划。")
+        self._verify_version_evidence(context[0], pending)
         return current
+
+    def _verify_version_evidence(self, root, pending):
+        for entry in pending.get("versionReadEvidence", []):
+            if (entry.get("path") not in {"console-repository-publish.js", "console-repository-publish.css"}
+                    or entry.get("headSha") != pending["parentSha"]
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(entry.get("expectedSha256", "")))
+                    or type(entry.get("expectedBytes")) is not int or not 0 <= entry["expectedBytes"] <= VERSION_MAX_BYTES):
+                raise RepositoryPublishError("Console 资源版本证明损坏，请保留原文件和记录。")
+            if _stable(root / entry["path"]) != {"sha256":entry["expectedSha256"], "bytes":entry["expectedBytes"]}:
+                raise RepositoryPublishError("Console 资源在版本准备期间变化，保留原计划和文件；不会生成错误缓存版本。")
 
     def _apply_version_intent(self, repo, context, pending, pending_path):
         root = context[0]
@@ -673,7 +997,9 @@ class RepositoryPublishService:
         paths = {update["path"] for update in pending["versionUpdates"]}
         if not paths <= {item["path"] for item in snapshot["files"]}:
             raise RepositoryPublishError("版本修改未进入可提交范围，请检查忽略规则并保留计划。")
-        pending["title"], pending["body"], pending["versions"] = self._message(repo, snapshot, pending["naming"])
+        pending["title"], pending["body"], pending["versions"] = self._message(
+            repo, snapshot, pending["naming"], version_plans=pending["versionPlans"],
+            automatic_source_ids=pending.get("automaticSourceIds", []))
         pending.update(state="prepared", snapshot=snapshot, indexReconciled=False)
         _atomic(pending_path, pending)
         return snapshot
@@ -687,7 +1013,10 @@ class RepositoryPublishService:
 
     def status(self):
         settings = self._settings()
+        normalized = self._normalize(settings)
         return {"settings": settings, "warnings": settings.get("warnings", []), "operation": self.operation(),
+                "normalizedSettings": normalized, "settingsSha": _json_sha(normalized),
+                "casRequired": settings.get("casRequired") is True,
                 "warningsSource": "initial_discovery", "allowed": self.allowed, "busy": self.busy}
 
     def operation(self, request_id=None):
@@ -835,27 +1164,24 @@ class RepositoryPublishService:
         result["fingerprint"] = _json_sha(result)
         return result
 
-    def _versions(self, root, sources, files):
+    def _versions(self, root, sources, files, *, required_ids=(), head="HEAD"):
         result = []
         # Two root manifests describe one application. The application manifest
         # is authoritative; package.json is only its fallback.
         if any(s["path"] == "app-manifest.json" for s in sources):
             sources = [s for s in sources if s["path"] != "package.json"]
+        shared_paths = {source["path"] for source in sources if sum(other["path"] == source["path"] for other in sources) > 1}
         if files:
-            selected = set()
-            for file in files:
-                matching = [(i, s) for i, s in enumerate(sources) if _matches(file["path"], s["scope"])]
-                def specificity(source):
-                    scopes = source["scope"] if isinstance(source["scope"], list) else [source["scope"]]
-                    return max((len(re.split(r"[*?\[]", v)[0].strip("/")) for v in scopes if _matches(file["path"], v)), default=0)
-                best = max((specificity(s) for _, s in matching), default=-1)
-                selected.update(i for i, s in matching if specificity(s) == best)
-            sources = [s for i, s in enumerate(sources) if i in selected]
+            selected = self._affected_sources(sources, files) | set(required_ids)
+            sources = [source for source in sources if version_source_id(source) in selected]
         for source in sources:
-            if files and not any(_matches(f["path"], source["scope"]) for f in files):
-                continue
-            item = {"name": source["name"] or Path(source["path"]).stem, "path": source["path"], "version": "", "scope": source["scope"]}
+            item = {"sourceId": version_source_id(source), "name": source["name"] or Path(source["path"]).stem,
+                    "path": source["path"], "version": "", "scope": source["scope"], "kind": source["kind"]}
             try:
+                if source["kind"] == "git_commit":
+                    item.update(self._git_version_reader(root)(source))
+                    result.append(item)
+                    continue
                 location = _safe_path(root / source["path"])
                 stable = _stable(location)
                 text = location.read_text(encoding="utf-8-sig")
@@ -898,28 +1224,84 @@ class RepositoryPublishService:
                 if _stable(location) != stable:
                     raise ValueError("source changed")
                 item["version"] = str(value)
-            except (OSError, ValueError, KeyError, TypeError, SyntaxError, RepositoryPublishError, ET.ParseError):
+                if (source["path"] in shared_paths and files and item["sourceId"] not in required_ids
+                        and not any(file["path"] != source["path"] and _matches(file["path"], source["scope"]) for file in files)):
+                    try:
+                        previous = read_current_version(self._git(root, "show", head + ":" + source["path"]), source)
+                        if previous == item["version"]:
+                            continue  # An unchanged key is not an independently changed component.
+                    except (VersionPlanError, _GitFailure, ValueError, UnicodeError):
+                        pass
+            except (OSError, ValueError, KeyError, TypeError, SyntaxError, RepositoryPublishError, _GitFailure, ET.ParseError):
                 item["message"] = "版本来源缺失、变化或无法唯一读取，使用进度标题。"
             result.append(item)
         return result
 
-    def _message(self, repo, snapshot, naming):
+    def _message(self, repo, snapshot, naming, *, version_plans=None, automatic_source_ids=()):
         root = Path(snapshot["identity"]["root"])
         sources = repo["versionSources"]
         if not sources:
             first = next((p for p in ("app-manifest.json", "package.json") if (root / p).is_file()), None)
             sources = [{"path": first, "kind": "json", "key": "version", "name": root.name, "scope": ""}] if first else []
-        versions = self._versions(root, sources, snapshot["files"])
+        if version_plans is None:
+            version_plans = []
+            if repo.get("versionPlans"):
+                try:
+                    _, version_plans = prepare_version_updates(root, self._version_sources(repo, root), repo["versionPlans"],
+                                                              self._version_reader(root), self._git_version_reader(root), self._console_resource_reader(root))
+                except VersionPlanError as exc:
+                    raise RepositoryPublishError(str(exc)) from exc
+        planned = {plan["sourceId"]: plan for plan in version_plans}
+        versions = self._versions(root, sources, snapshot["files"], required_ids=planned, head=snapshot["head"])
         valid = [v for v in versions if v["version"]]
+        for item in versions:
+            if item["version"] and snapshot["files"] and item["kind"] != "git_commit":
+                source = next(source for source in sources if version_source_id(source) == item["sourceId"])
+                try:
+                    previous = read_current_version(self._git(root, "show", snapshot["head"] + ":" + source["path"]), source)
+                    if previous != item["version"]:
+                        item["transition"] = {"kind": "working", "fromVersion": previous, "toVersion": item["version"]}
+                except (VersionPlanError, _GitFailure, ValueError, UnicodeError):
+                    pass
+            plan = planned.get(item["sourceId"])
+            if plan:
+                item["transition"] = {"kind": "auto" if item["sourceId"] in automatic_source_ids else "planned",
+                                      "fromVersion": plan["currentVersion"], "toVersion": plan["targetVersion"]}
+                item["plannedVersion"] = plan["targetVersion"]
+        def label(item, include_name=False):
+            transition = item.get("transition")
+            value = transition["fromVersion"] + " → " + transition["toVersion"] if transition else item["version"]
+            return (item["name"] + " " if include_name else "") + value
         title = naming["fallbackTitle"].replace("{datetime}", datetime.now().strftime("%Y-%m-%d %H:%M"))
         if naming["preset"] == "version" and len(versions) == 1 and len(valid) == 1:
-            title = valid[0]["version"]
+            title = label(valid[0])
         elif naming["preset"] == "module_version" and valid and len(valid) == len(versions):
-            title = " / ".join(v["name"] + " " + v["version"] for v in valid)
+            title = " / ".join(label(item, True) for item in valid)
+        if planned and len(versions) == 1 and valid and valid[0]["kind"] == "git_commit":
+            # A Git-only authority must produce the same strict subject shape
+            # it can subsequently read, irrespective of a global module preset.
+            title = label(valid[0])
         title = " ".join(title.replace("\0", "").splitlines()).strip()[:240] or "更新进度"
         paragraphs = [naming[k].strip() for k in ("subtitle", "notes") if naming[k].strip()]
         if versions:
             paragraphs.append("版本来源：\n" + "\n".join("- " + v["name"] + ": " + (v["version"] or "未确认") + " (" + v["path"] + ")" for v in versions))
+        if any(item.get("transition") for item in versions):
+            paragraphs.append("版本核对与本次计划：\n" + "\n".join("- " + label(item, True) +
+                              ("（已手动改变，保留当前版本）" if item["transition"]["kind"] == "working" else
+                               "（有改动自动升版）" if item["transition"]["kind"] == "auto" else "（显式计划）")
+                              for item in versions if item.get("transition")))
+        elif valid and snapshot["files"]:
+            changes = []
+            for item in valid:
+                source = next(source for source in sources if version_source_id(source) == item["sourceId"])
+                try:
+                    previous = item["version"] if source["kind"] == "git_commit" else read_current_version(
+                        self._git(root, "show", snapshot["head"] + ":" + source["path"]), source)
+                    changes.append("- " + item["name"] + ": " + (previous + " → " + item["version"] if previous != item["version"] else "版本未变 " + item["version"]))
+                except (VersionPlanError, _GitFailure, ValueError, UnicodeError):
+                    pass
+            if changes:
+                paragraphs.append("版本核对：\n" + "\n".join(changes))
         if naming["includeSummary"] and snapshot["files"]:
             lines = ["文件变更："]
             for item in snapshot["files"][:300]:
@@ -938,7 +1320,10 @@ class RepositoryPublishService:
         results = []
         commons = {}
         for repo in selected:
-            item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "title": "", "body": "", "versions": [], "files": []}
+            item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "title": "", "body": "", "versions": [], "files": [],
+                    "components": [], "versionTransitions": [], "hasChanges": None, "changeState": "unknown", "planWillApply": None, "action": "unknown",
+                    "versionState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
+                    "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
             try:
                 self._sync_contract(repo)
                 context = self._repo(repo)
@@ -947,8 +1332,37 @@ class RepositoryPublishService:
                     raise RepositoryPublishError("重复仓库或共享 Git 目录，请只配置一个入口。")
                 commons[key] = repo["id"]
                 snapshot = self._snapshot(repo, context)
-                item["title"], item["body"], item["versions"] = self._message(repo, snapshot, settings["naming"])
+                components = self._version_details(repo, context)
+                item["components"] = components
+                known = [bool(component.get("currentVersion")) for component in components]
+                item["versionState"] = "missing" if not known else "known" if all(known) else "partial" if any(known) else "unknown"
+                item.update(self._local_changes(repo, context))
+                if item["headSha"] != snapshot["head"] or any(component["repositoryHeadSha"] != snapshot["head"] for component in components):
+                    raise RepositoryPublishError("预览期间 HEAD 已变化，请重新读取。")
+                effective, automatic, blocked = self._planned_versions(repo, context, components, snapshot["files"], settings["naming"],
+                                                                      sync_pending=bool(repo["syncFiles"]))
+                item["planWillApply"] = bool(effective) and bool(snapshot["files"])
+                item["action"] = "sync_pending" if repo["syncFiles"] else "commit" if snapshot["files"] else "push_only" if item["outgoingCommits"] else "noop" if item["outgoingCommits"] == 0 else "unknown"
+                if item["action"] == "sync_pending":
+                    item["planWillApply"] = None
+                if blocked:
+                    item["planWillApply"] = False
+                selected_plans = effective if item["planWillApply"] else []
+                item["title"], item["body"], item["versions"] = self._message(
+                    repo, snapshot, settings["naming"], version_plans=selected_plans, automatic_source_ids=automatic)
+                if item["action"] == "push_only":
+                    item["title"] = self._text(context[0], "show", "-s", "--format=%s", snapshot["head"])
+                    item["body"] = self._text(context[0], "show", "-s", "--format=%b", snapshot["head"])
+                item["versionTransitions"] = [{"sourceId": component["sourceId"], "name": component["name"], "path": component["path"], **component["transition"]}
+                                             for component in components if component.get("transition") and
+                                             (component["transition"]["kind"] not in {"planned", "auto"} or item["planWillApply"] is True)]
                 item.update(files=snapshot["files"], fingerprint=snapshot["fingerprint"], status="ready", message="预览已保存文件；提交时会重新核对。")
+                if blocked:
+                    item.update(status="deferred", message="自动升版暂缓本仓库：" + "；".join(blocked))
+                elif item["action"] == "sync_pending":
+                    item["message"] = "先同步已保存工作文件，再确定实际改动及本次版本。"
+                elif item["action"] == "push_only" and repo.get("versionPlans"):
+                    item["message"] = "计划保留，仅推已有提交；保留原说明和版本。"
                 if not repo["enabled"]:
                     item.update(status="disabled", message="该仓库未启用，请先启用再提交。")
             except (RepositoryPublishError, _GitFailure, OSError) as exc:
@@ -1243,6 +1657,8 @@ class RepositoryPublishService:
     def _continue_version_intent(self, repo, context, pending, pending_path, receipt, item):
         self._phase(receipt, item, "version", "核对并继续原一次性版本计划；不会重复递增。")
         snapshot = self._apply_version_intent(repo, context, pending, pending_path)
+        if not snapshot["files"]:
+            raise RepositoryPublishError("原版本标题计划尚无实际可提交变化；保留计划，不创建空提交。")
         self._commit(repo, context, snapshot, pending, pending_path)
         self._consume_version_plans(repo, pending)
         item.update(commitSha=pending["commitSha"], title=pending["title"], body=pending["body"], versions=pending["versions"])
@@ -1259,7 +1675,7 @@ class RepositoryPublishService:
             self._busy_reason(root)
             pending_path = self._pending_path(repo["id"])
             pending = _read(pending_path)
-            if (pending and pending.get("versionUpdates") and not pending.get("commitSha")
+            if (pending and (pending.get("versionUpdates") or pending.get("versionPlans")) and not pending.get("commitSha")
                     and pending.get("state") in {"version_prepared", "version_applying", "prepared", "cancelled_before_commit"}):
                 if pending["identity"] != identity or pending["repositorySettingsSha"] != _repo_settings_sha(repo):
                     raise RepositoryPublishError("原版本计划的仓库或配置变化，请恢复后重试；不会重新升版。")
@@ -1274,7 +1690,7 @@ class RepositoryPublishService:
                     raise RepositoryPublishError("原提交的 LFS 或传输配置已变化，请恢复后重试。")
                 self._phase(receipt, item, "verify", "先核对并继续上次原提交。")
                 pending = self._recover_commit(repo, context, pending, pending_path)
-                if pending.get("state") == "cancelled_before_commit" and pending.get("versionUpdates"):
+                if pending.get("state") == "cancelled_before_commit" and (pending.get("versionUpdates") or pending.get("versionPlans")):
                     self._continue_version_intent(repo, context, pending, pending_path, receipt, item)
                     return
                 if pending.get("state") != "cancelled_before_commit":
@@ -1291,7 +1707,13 @@ class RepositoryPublishService:
             item["syncFiles"] = self._sync(repo, context)
             self._save(receipt)
             snapshot = self._snapshot(repo, context)
-            title, body, versions = self._message(repo, snapshot, naming)
+            components = self._version_details(repo, context)
+            if any(component["repositoryHeadSha"] != snapshot["head"] for component in components):
+                raise RepositoryPublishError("同步后读取版本期间 HEAD 已变化，请重新核对。")
+            effective, automatic, _ = self._planned_versions(repo, context, components, snapshot["files"], naming, strict=True)
+            apply_plans = bool(effective) and bool(snapshot["files"])
+            title, body, versions = self._message(repo, snapshot, naming, version_plans=effective if apply_plans else [],
+                                                  automatic_source_ids=automatic)
             item.update(title=title, body=body, versions=versions)
             self._phase(receipt, item, "remote", "核对远端分支及待推送历史。")
             remote = self._remote(repo, root)
@@ -1300,18 +1722,21 @@ class RepositoryPublishService:
             if remote and not self._ancestor(root, remote, snapshot["head"]):
                 raise RepositoryPublishError("远端领先或分叉，请先自行整合；本仓库延期。")
             self._outgoing_safe(root, remote, snapshot["head"], repo)
-            if not snapshot["files"] and remote == snapshot["head"] and not repo.get("versionPlans"):
-                item.update(status="noop", phase="complete", message="没有需要提交或推送的文件。")
+            if not snapshot["files"] and remote == snapshot["head"] and not apply_plans:
+                item.update(status="noop", phase="complete", message="没有需要提交或推送的文件；一次性标题计划保留。" if repo.get("versionPlans") else "没有需要提交或推送的文件。")
                 return
             pending = {"state": "prepared", "requestId": receipt["requestId"], "repoId": repo["id"], "identity": identity,
                        "repositorySettingsSha": _repo_settings_sha(repo), "parentSha": snapshot["head"], "snapshot": snapshot,
                        "title": title, "body": body, "createdAt": _now(), "commitSha": "", "indexReconciled": not snapshot["files"]}
             pending["transportOptionsSha"] = transport["optionsSha"]
             pending["syncProofs"] = item["syncFiles"]
-            if repo.get("versionPlans"):
-                updates, plans = self._version_updates(repo, context)
+            if apply_plans:
+                updates, plans = self._version_updates(repo, context, effective)
                 pending.update(state="version_prepared", versionUpdates=updates, versionPlans=plans,
-                               versionPlansSha=_json_sha(repo["versionPlans"]), versionBaseSnapshot=snapshot, naming=dict(naming))
+                               versionPlansSha=_json_sha(repo.get("versionPlans", [])), versionBaseSnapshot=snapshot, naming=dict(naming),
+                               automaticSourceIds=automatic,
+                               versionReadEvidence=[entry for component in components if component["sourceId"] in {plan["sourceId"] for plan in plans}
+                                                    for entry in component.get("consoleResourceEvidence", [])])
                 _atomic(pending_path, pending)
                 self._phase(receipt, item, "version", "实际准备已确认的一次性版本文件，再生成真实版本说明。")
                 snapshot = self._apply_version_intent(repo, context, pending, pending_path)
@@ -1333,6 +1758,7 @@ class RepositoryPublishService:
         root, gitdir, common, identity = context
         self._busy_reason(root)
         self._verify_sync(repo, context, pending.get("syncProofs", []))
+        self._verify_version_evidence(root, pending)
         if self._repo(repo)[3] != identity or self._snapshot(repo, context)["fingerprint"] != snapshot["fingerprint"]:
             raise RepositoryPublishError("文件或仓库在提交前变化，请重新预览后重试。")
         lock_path = gitdir / "index.lock"
@@ -1354,6 +1780,7 @@ class RepositoryPublishService:
                 raise RepositoryPublishError("文件在暂存期间变化，保留工作文件；本仓库延期。")
             self._busy_reason(root)
             self._verify_sync(repo, context, pending.get("syncProofs", []))
+            self._verify_version_evidence(root, pending)
             pending["treeSha"] = self._text(root, "write-tree", index=temp_index)
             if pending["treeSha"] == self._text(root, "rev-parse", snapshot["head"] + "^{tree}"):
                 # Clean filters may normalize a worktree edit to the original tree.
@@ -1387,6 +1814,7 @@ class RepositoryPublishService:
             _atomic(pending_path, pending)
             self._reconcile(context, pending, pending_path)
             self._verify_sync(repo, context, pending.get("syncProofs", []))
+            self._verify_version_evidence(root, pending)
             after = self._snapshot(repo, context)
             # Normalization by filters is permitted; a hook changing source bytes
             # is retained but postpones pushing the created commit.

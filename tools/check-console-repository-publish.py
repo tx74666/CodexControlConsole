@@ -403,6 +403,7 @@ def test_versions_scopes_and_nonimport():
         require(preview["title"].startswith("更新进度"))
         settings = service.status()["settings"]
         settings["naming"]["preset"] = "module_version"
+        settings["naming"]["autoBump"] = False  # This fixture isolates naming/scope behavior.
         service.configure(settings)
         require("Alpha 2.4.1" in service.preview()["previews"][0]["title"])
         result = f.run(service)
