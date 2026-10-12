@@ -284,6 +284,9 @@ try {
     "tools/check-build-version.ps1",
     "tools/check-console-ui.mjs",
     "tools/check-lyrics-sentence-editor.mjs",
+    "lyrics-sentence-timeline.js",
+    "tools/check-lyrics-sentence-timeline.mjs",
+    "tools/check-lyrics-timeline-integration.mjs",
     "tools/check-resource-ui.mjs",
     "services/feedback-relay/src/index.js",
     "services/feedback-relay/test/feedback.test.js"
@@ -337,6 +340,9 @@ finally:
   Invoke-QualityStep "Desktop Console header control policy" { & $Node tools/check-console-header-controls.mjs }
   Invoke-QualityStep "Whole-line lyric playback and vocal rests" { & $Node tools/check-lyrics-playback-timing.mjs }
   Invoke-QualityStep "Manual sentence marking editor" { & $Node tools/check-lyrics-sentence-editor.mjs }
+  Invoke-QualityStep "Sentence timeline JavaScript syntax" { & $Node --check lyrics-sentence-timeline.js }
+  Invoke-QualityStep "Sentence timeline drafts, markers and zoom" { & $Node tools/check-lyrics-sentence-timeline.mjs }
+  Invoke-QualityStep "Sentence timeline CAS and song isolation" { & $Node tools/check-lyrics-timeline-integration.mjs }
   Invoke-QualityStep "Dev Room text fields syntax" { & $Node --check dev-room-editor.js }
   Invoke-QualityStep "Dev Room text preservation and presentation" { & $Node tools/check-dev-room-editor.mjs }
   Invoke-QualityStep "Dev Room bilingual document coverage" { & $Node tools/check-dev-room-translations.mjs }

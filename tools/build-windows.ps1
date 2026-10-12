@@ -306,6 +306,7 @@ if ($BuildApplication) {
   @{ Source = "phone-offline-export.js"; Destination = "." },
   @{ Source = "styles.css"; Destination = "." },
     @{ Source = "app.js"; Destination = "." },
+    @{ Source = "lyrics-sentence-timeline.js"; Destination = "." },
     @{ Source = "dev-room-editor.js"; Destination = "." },
     @{ Source = "dev-room-translations.json"; Destination = "." },
     @{ Source = "unity\Editor\DevRoomConsoleBridge.cs"; Destination = "unity\Editor" },

@@ -12,7 +12,7 @@
   <link rel="icon" type="image/png" sizes="48x48" href="codex-resource-icon-48.png?v=console-connect-1.0.27">
   <link rel="icon" type="image/png" sizes="32x32" href="codex-resource-icon-32.png?v=console-connect-1.0.27">
   <link rel="manifest" href="site.webmanifest?v=console-connect-1.0.27">
-  <link rel="stylesheet" href="styles.css?v=console-content-sync-1.1.5-20261012">
+  <link rel="stylesheet" href="styles.css?v=console-content-sync-1.1.6-20261012">
 </head>
 <body>
   <main class="app-shell music-shell">
@@ -94,22 +94,24 @@
 
           <section id="nowPlayingLyricsPanel" class="now-playing-lyrics-panel" hidden>
             <div class="lyrics-sentence-toolbar">
-              <button id="lyricsSentenceToggle" type="button" aria-pressed="false" data-i18n="lyricsSentenceToggle">Mark sentences</button>
+              <button id="lyricsSentenceToggle" type="button" aria-pressed="false" data-i18n="lyricsSentenceToggle">LRC points</button>
               <span id="lyricsSentenceStatus" class="lyrics-sentence-status" role="status" aria-live="polite"></span>
               <button id="lyricsSentenceRetry" type="button" hidden data-i18n="lyricsSentenceRetry">Retry saving</button>
               <button id="lyricsSentenceReload" type="button" hidden data-i18n="lyricsSentenceReload" data-i18n-title="lyricsSentenceReloadHint">Reload saved points</button>
             </div>
             <div id="lyricsSentenceControls" class="lyrics-sentence-controls" hidden>
-              <p class="lyrics-sentence-hint" data-i18n="lyricsSentenceHint">Press Insert at the first onset, then at each sentence end.</p>
               <strong id="lyricsSentenceTarget" class="lyrics-sentence-target"></strong>
               <div class="lyrics-sentence-actions">
                 <button id="lyricsSentenceMark" type="button">Insert</button>
+                <details class="lyrics-sentence-advanced"><summary data-i18n="lyricsSentenceMore">More</summary><div class="lyrics-sentence-actions">
                 <label><span class="visually-hidden" data-i18n="lyricsSentencePointHint">Point to edit</span><select id="lyricsSentenceRole"><option value="start" data-i18n="lyricsSentenceStart">Start</option><option value="end" data-i18n="lyricsSentenceEnd">End</option></select></label>
                 <input id="lyricsSentenceTime" type="text" inputmode="decimal" autocomplete="off" data-i18n-aria="lyricsTimingTimePlaceholder" data-i18n-placeholder="lyricsTimingTimePlaceholder">
-                <button id="lyricsSentenceApply" type="button" data-i18n="lyricsSentenceApply">Apply time</button>
+                <button id="lyricsSentenceApply" type="button" data-i18n="lyricsSentenceApply">Preview time</button>
                 <button id="lyricsSentenceRemove" type="button" data-i18n="lyricsSentenceRemove">Remove point</button>
+                </div></details>
               </div>
             </div>
+            <div id="lyricsSentenceTimeline" class="lyrics-sentence-timeline" hidden></div>
             <div id="lyricsSentenceRail" class="lyrics-sentence-rail" hidden>
               <div class="lyrics-sentence-track"><div class="lyrics-sentence-ticks"></div><span id="lyricsSentenceCursor" class="lyrics-sentence-cursor"></span></div>
               <time id="lyricsSentenceClock">0:00.000</time>
@@ -149,6 +151,7 @@
 
 <script src="/api/release-defaults.js"></script>
 <script src="/api/workspace-plan.js"></script>
-  <script src="app.js?v=console-content-sync-1.1.5-20261012"></script>
+  <script src="lyrics-sentence-timeline.js?v=1.1.6"></script>
+  <script src="app.js?v=console-content-sync-1.1.6-20261012"></script>
 </body>
 </html>
