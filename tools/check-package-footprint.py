@@ -86,6 +86,8 @@ def main():
             require(package.get("subscriptionRuntime"), "the packaged subscription signing runtime cannot load")
             require(package.get("jwtVersion") == "2.15.1", "the packaged PyJWT version differs from the release pin")
             require(package.get("cryptographyVersion") == "50.0.1", "the packaged cryptography version differs from the release pin")
+            require(package.get("devRoomRuntime"), "the packaged Dev Room content runtime cannot load")
+            require(package.get("pyYamlVersion") == "6.0.3", "the packaged PyYAML version differs from the release pin")
         finally:
             if process.poll() is None:
                 process.terminate()

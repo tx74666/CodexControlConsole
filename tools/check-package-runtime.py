@@ -31,11 +31,13 @@ class Digest:
 def load_route(fail_import=None, fail_hash=None, fail_signature=None, frozen=True,
                missing_surface=False, missing_signature=False,
                missing_certifi_surface=False, fail_certificate=None,
-               fail_challenge_scripts=None, empty_challenge_script=False):
+               fail_challenge_scripts=None, empty_challenge_script=False,
+               py_yaml_version="6.0.3", fail_yaml=None, invalid_yaml=False,
+               missing_yaml_surface=False, missing_dev_room_surface=None):
     imports = []
 
     def must_not_run(*args, **kwargs):
-        raise AssertionError("The diagnostic must not create a broker or send inference")
+        raise AssertionError("The diagnostic must not create services, read Unity/media, write requests or send inference")
 
     def make_hash(*args):
         if fail_hash:
@@ -61,6 +63,17 @@ def load_route(fail_import=None, fail_hash=None, fail_signature=None, frozen=Tru
             raise fail_challenge_scripts(SECRET)
         return "" if empty_challenge_script else "fixture-JS-script"
 
+    def safe_yaml_fixture(payload):
+        assert payload == "console: dev-room\nschema: 2\n"
+        if fail_yaml:
+            raise fail_yaml(SECRET)
+        return SECRET if invalid_yaml else {"console": "dev-room", "schema": 2}
+
+    class SyncServiceFixture:
+        __init__ = must_not_run
+        preview = status = import_documents = document_state = save_document = must_not_run
+        upload_media = draft_media = media = push_intent = receipt = must_not_run
+
     modules = {
         "certifi": SimpleNamespace() if missing_certifi_surface else SimpleNamespace(where=lambda: SECRET),
         "ssl": SimpleNamespace(SSLContext=CertificateContext, PROTOCOL_TLS_CLIENT="fixture-TLS-client"),
@@ -73,7 +86,21 @@ def load_route(fail_import=None, fail_hash=None, fail_signature=None, frozen=Tru
         "workflow_subscription": SimpleNamespace(SubscriptionBroker=None if missing_surface else must_not_run),
         "workflow_subscription_delivery": SimpleNamespace(SubscriptionDeliveryMixin=must_not_run),
         "workflow_subscription_stream": SimpleNamespace(run_response=must_not_run),
+        "yaml": SimpleNamespace(__version__=py_yaml_version, safe_load=None if missing_yaml_surface else safe_yaml_fixture),
+        "unity_dev_room_documents": SimpleNamespace(
+            read_inventory=must_not_run, read_bound_document=must_not_run, read_explicit_inventory=must_not_run,
+            document_to_markdown=must_not_run, markdown_to_document=must_not_run,
+            document_content_revision=must_not_run, document_structure_revision=must_not_run,
+            document_media_revision=must_not_run,
+        ),
+        "dev_room_media": SimpleNamespace(inspect_image=must_not_run, decode_upload=must_not_run,
+                                          object_name=must_not_run, store_object=must_not_run, read_object=must_not_run),
+        "dev_room_sync": SimpleNamespace(DevRoomSyncService=SyncServiceFixture),
     }
+    if missing_dev_room_surface:
+        module, member = missing_dev_room_surface
+        target = SyncServiceFixture if module == "DevRoomSyncService" else modules[module]
+        setattr(target, member, None)
 
     def import_fixture(name, *args, **kwargs):
         imports.append(name)
@@ -145,8 +172,82 @@ class PackageRuntimeTests(unittest.TestCase):
         self.assertEqual(result["ejsVersion"], "0.8.0")
         self.assertTrue(result["subscriptionModules"])
         self.assertTrue(result["subscriptionRuntime"])
+        self.assertTrue(result["devRoomRuntime"])
+        self.assertEqual(result["pyYamlVersion"], "6.0.3")
         self.assertEqual(result["errors"], [])
-        self.assertEqual(len(imports), 11)
+        self.assertEqual(len(imports), 15)
+
+    def test_missing_dev_room_dependency_fails_frozen_check_safely(self):
+        for module in ("yaml", "unity_dev_room_documents", "dev_room_media", "dev_room_sync"):
+            with self.subTest(module=module):
+                namespace, _ = load_route(fail_import=(module, ModuleNotFoundError))
+                status, result = http_result(namespace)
+                self.assertEqual(status, 200)
+                self.assertFalse(result["ok"])
+                self.assertFalse(result["devRoomRuntime"])
+                self.assertTrue(result["subscriptionRuntime"])
+                self.assertTrue(result["ytDlp"])
+                self.assertEqual(result["errors"], [
+                    {"component": "dev_room", "stage": "import", "code": "ModuleNotFoundError"},
+                ])
+                self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_wrong_yaml_version_fails_before_adapter_import(self):
+        for version in ("6.0.2", ""):
+            with self.subTest(version=version):
+                namespace, imports = load_route(py_yaml_version=version)
+                _, result = http_result(namespace)
+                self.assertFalse(result["ok"])
+                self.assertFalse(result["devRoomRuntime"])
+                self.assertEqual(result["pyYamlVersion"], version)
+                self.assertEqual(result["errors"], [
+                    {"component": "dev_room", "stage": "yaml_version", "code": "ValueError"},
+                ])
+                self.assertNotIn("unity_dev_room_documents", imports)
+                self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_missing_dev_room_surfaces_fail_without_invoking_them(self):
+        for missing in (("unity_dev_room_documents", "read_bound_document"),
+                        ("dev_room_media", "inspect_image"),
+                        ("dev_room_sync", "DevRoomSyncService"),
+                        ("DevRoomSyncService", "upload_media")):
+            with self.subTest(missing=missing):
+                namespace, _ = load_route(missing_dev_room_surface=missing)
+                _, result = http_result(namespace)
+                self.assertFalse(result["ok"])
+                self.assertFalse(result["devRoomRuntime"])
+                self.assertEqual(result["errors"], [
+                    {"component": "dev_room", "stage": "module_surface", "code": "Unavailable"},
+                ])
+                self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_yaml_parse_and_unusual_exceptions_are_safe(self):
+        unusual = type("fixture_private_exception_name", (Exception,), {})
+        for options, code in (({"missing_yaml_surface": True}, "AttributeError"),
+                              ({"invalid_yaml": True}, "ValueError"),
+                              ({"fail_yaml": ValueError}, "ValueError"),
+                              ({"fail_yaml": unusual}, "Exception")):
+            with self.subTest(options=options):
+                namespace, _ = load_route(**options)
+                _, result = http_result(namespace)
+                self.assertFalse(result["ok"])
+                self.assertFalse(result["devRoomRuntime"])
+                self.assertEqual(result["errors"], [
+                    {"component": "dev_room", "stage": "yaml_parse", "code": code},
+                ])
+                self.assertNotIn(SECRET, json.dumps(result))
+                self.assertNotIn("fixture_private_exception_name", json.dumps(result))
+
+    def test_missing_dev_room_runtime_preserves_source_compatibility(self):
+        namespace, _ = load_route(fail_import=("yaml", ModuleNotFoundError), frozen=False)
+        status, result = http_result(namespace)
+        self.assertEqual(status, 200)
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["devRoomRuntime"])
+        self.assertEqual(result["errors"], [
+            {"component": "dev_room", "stage": "import", "code": "ModuleNotFoundError"},
+        ])
+        self.assertNotIn(SECRET, json.dumps(result))
 
     def test_missing_and_empty_challenge_scripts_fail_without_network(self):
         for case, expected_code in (

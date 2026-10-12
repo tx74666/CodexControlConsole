@@ -4,6 +4,7 @@ All mutations target TemporaryDirectory fixtures. Optional --inventory-workspace
 reads only the existing bounded source inventory and reports its real image pins.
 """
 import argparse
+import ast
 import base64
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -134,6 +135,138 @@ class SyncChecks(unittest.TestCase):
         self.sync.status(str(self.root), 'en')
         self.assertEqual(before, list(self.root.rglob('*')))
         self.assertFalse((self.workspace / '.codex').exists())
+
+    def test_production_source_connection_is_explicitly_deferred(self):
+        tree = ast.parse(Path(__file__).resolve().parents[1].joinpath('world_console.py').read_text(encoding='utf-8-sig'))
+        assignments = [node for node in tree.body if isinstance(node, ast.Assign)
+                       and any(isinstance(target, ast.Name) and target.id == 'DEV_ROOM_SYNC' for target in node.targets)]
+        self.assertEqual(len(assignments), 1)
+        keywords = {keyword.arg: keyword.value for keyword in assignments[0].value.keywords}
+        self.assertIs(keywords['source_sync_enabled'].value, False)
+
+    def test_deferred_constructor_and_reads_do_not_resolve_or_read_game(self):
+        identifier = str(uuid.uuid4())
+        self.dev.save({'expectedRoot': str(self.root), 'id': identifier, 'title': 'Local note',
+                       'body': 'Keep local text', 'expectedRevision': '', 'language': 'en'})
+        local_before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        game_before = {str(p): p.read_bytes() for p in self.workspace.rglob('*') if p.is_file()}
+        with patch.object(Path, 'resolve', side_effect=AssertionError('deferred constructor resolved game path')):
+            dormant = DevRoomSyncService(self.library, self.workspace, dev_room=self.dev, source_sync_enabled=False)
+        self.assertIsNone(dormant.sources)
+        with patch.object(source, 'read_inventory', side_effect=AssertionError('source read')) as read_source, \
+                patch.object(source, 'read_explicit_inventory', side_effect=AssertionError('explicit source read')) as read_explicit, \
+                patch.object(dormant, '_check_workspace', side_effect=AssertionError('game check')) as check_game:
+            original = self.dev.state(str(self.root), identifier, 'en')
+            state = dormant.document_state(str(self.root), identifier, 'en')
+            self.assertEqual(state['document'], original['document'])
+            self.assertEqual(state['documents'], original['documents'])
+            self.assertEqual(state['sourceConnection'], {'state': 'deferred', 'enabled': False})
+            self.assertNotIn('mediaSlots', state['document']); self.assertNotIn('syncSource', state['document'])
+            status = dormant.status(str(self.root), 'en')
+            self.assertFalse(status['enabled']); self.assertEqual(status['sourceConnection'], state['sourceConnection'])
+            self.assertEqual(status['sourceDocumentCount'], 0); self.assertEqual(status['bindings'], []); self.assertEqual(status['pending'], [])
+            self.assertEqual(read_source.call_count + read_explicit.call_count + check_game.call_count, 0)
+        self.assertEqual(local_before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+        self.assertEqual(game_before, {str(p): p.read_bytes() for p in self.workspace.rglob('*') if p.is_file()})
+
+    def test_deferred_source_actions_reject_before_io_and_preserve_pending_records(self):
+        binding, doc = self.selected(); doc = self.save_edit(doc)
+        self.enable_fixture_bridge(); payload = self.push_payload(binding, doc); self.sync.push_intent(payload)
+        dormant = DevRoomSyncService(self.library, self.workspace, dev_room=self.dev, source_sync_enabled=False)
+        local_before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        game_before = {str(p): p.read_bytes() for p in self.workspace.rglob('*') if p.is_file()}
+        calls = [lambda: dormant.preview(str(self.root), 'en'), lambda: dormant.import_documents({}),
+                 lambda: dormant.push_intent(payload), lambda: dormant.upload_media({}),
+                 lambda: dormant.media(str(self.root), doc['id'], 0, doc['revision'], 'en'),
+                 lambda: dormant.draft_media(str(self.root), doc['id'], 0, doc['revision'], 'a' * 64 + '.png', 'en'),
+                 lambda: dormant.receipt(str(self.root), payload['requestId'])]
+        with patch.object(dormant, '_inventory', side_effect=AssertionError('source inventory')) as inventory, \
+                patch.object(dormant, '_bridge_path', side_effect=AssertionError('game mailbox')) as mailbox, \
+                patch.object(dormant, '_reserve', side_effect=AssertionError('reserve request')) as reserve:
+            for call in calls:
+                with self.assertRaises(DevRoomSyncConflict) as caught:
+                    call()
+                self.assertEqual(caught.exception.code, 'source_not_connected'); self.assertFalse(caught.exception.accepted)
+            self.assertEqual(inventory.call_count + mailbox.call_count + reserve.call_count, 0)
+        self.assertEqual(local_before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+        self.assertEqual(game_before, {str(p): p.read_bytes() for p in self.workspace.rglob('*') if p.is_file()})
+
+    def test_deferred_local_save_preserves_opaque_media_canonical_and_history(self):
+        from dev_room_http import dev_room_post
+        binding, doc = self.selected()
+        uploaded = self.sync.upload_media({'expectedRoot': str(self.root), 'id': doc['id'], 'language': 'en',
+             'expectedRevision': doc['revision'], 'section': 0, 'filename': 'example.png', 'mimeType': 'image/png',
+             'base64': base64.b64encode(image_bytes('red')).decode()})
+        baseline = next(d for d in self.adapter.inventory['documents'] if d['guid'] == binding['unityGuid'])
+        parsed = source.markdown_to_document(doc['body'], baseline)
+        parsed['sections'][0]['image'] = {k: v for k, v in uploaded['image'].items() if k not in {'section', 'imageCaption'}}
+        doc = self.save_edit(doc, source.document_to_markdown(parsed, include_media=True))
+        dormant = DevRoomSyncService(self.library, self.workspace, dev_room=self.dev, source_sync_enabled=False)
+        local = dormant.document_state(str(self.root), doc['id'], 'en')['document']
+        token_line = next(line for line in local['body'].splitlines() if line.startswith(source.MEDIA_MARKER))
+        canonical_path = self.root.joinpath(*DEV_ROOM_PARTS, doc['id'] + '.md'); canonical_before = canonical_path.read_bytes()
+        index_before = self.root.joinpath(*INDEX_PARTS).read_bytes()
+        locale_before = self.root.joinpath(*DEV_ROOM_PARTS, '.locales', doc['id'] + '.json').read_bytes()
+        game_before = {str(p): p.read_bytes() for p in self.workspace.rglob('*') if p.is_file()}
+        local_before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        removed = local['body'].replace(token_line + '\n', '')
+        changed = local['body'].replace(token_line, token_line.replace('Original caption', 'Unapproved caption'))
+        moved = removed.replace('<!-- rr-dev-room:summary-end -->', token_line + '\n<!-- rr-dev-room:summary-end -->')
+        with patch.object(source, 'read_inventory', side_effect=AssertionError('source read')) as read_source, \
+                patch.object(dormant, '_check_workspace', side_effect=AssertionError('game check')) as check_game, \
+                patch.object(media, 'read_object', side_effect=AssertionError('opaque image read')) as image_read:
+            for body in (removed, changed, moved):
+                with self.assertRaisesRegex(ValueError, '图片元数据'):
+                    dev_room_post(self.dev, dormant, 'save', {'expectedRoot': str(self.root), 'id': local['id'],
+                         'title': local['title'], 'body': body, 'expectedRevision': local['revision'], 'language': 'en'})
+                self.assertEqual(local_before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+            saved = dev_room_post(self.dev, dormant, 'save', {'expectedRoot': str(self.root), 'id': local['id'], 'title': local['title'],
+                 'body': local['body'].replace('Existing body', 'Locally revised body'), 'expectedRevision': local['revision'], 'language': 'en'})['document']
+            self.assertIn('Locally revised body', saved['body']); self.assertIn(token_line, saved['body'])
+            self.assertEqual(read_source.call_count + check_game.call_count + image_read.call_count, 0)
+        self.assertEqual(canonical_before, canonical_path.read_bytes()); self.assertEqual(index_before, self.root.joinpath(*INDEX_PARTS).read_bytes())
+        history = self.root.joinpath(*DEV_ROOM_PARTS, '.history', doc['id'])
+        self.assertIn(locale_before, [p.read_bytes() for p in history.rglob('*') if p.is_file()])
+        # A missing selected language has an empty display body. Its local source
+        # comment still supplies the immutable opaque metadata to retain.
+        canonical = self.dev._read(self.root, doc['id'])[0]
+        self.dev.save({'expectedRoot': str(self.root), 'id': doc['id'], 'title': saved['title'],
+                       'body': saved['body'], 'expectedRevision': canonical['revision']})
+        missing = dormant.document_state(str(self.root), doc['id'], 'zh')['document']
+        self.assertTrue(missing['translationMissing']); self.assertEqual(missing['body'], '')
+        with self.assertRaisesRegex(ValueError, '图片元数据'):
+            dev_room_post(self.dev, dormant, 'save', {'expectedRoot': str(self.root), 'id': doc['id'], 'title': saved['title'],
+                 'body': missing['sourceBody'].replace(token_line + '\n', ''), 'expectedRevision': missing['revision'], 'language': 'zh'})
+        translated = dev_room_post(self.dev, dormant, 'save', {'expectedRoot': str(self.root), 'id': doc['id'], 'title': saved['title'],
+             'body': missing['sourceBody'].replace('Locally revised body', '本地文字'), 'expectedRevision': missing['revision'], 'language': 'zh'})['document']
+        self.assertIn(token_line, translated['body'])
+        self.assertEqual(game_before, {str(p): p.read_bytes() for p in self.workspace.rglob('*') if p.is_file()})
+
+    def test_deferred_bound_save_preserves_local_structure_and_unbound_contract(self):
+        binding, _ = self.selected()
+        dormant = DevRoomSyncService(self.library, self.workspace, dev_room=self.dev, source_sync_enabled=False)
+        doc = dormant.document_state(str(self.root), binding['documentId'], 'en')['document']
+        before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        invalid = [doc['body'].replace(binding['unityGuid'], '1' * 32), 'Replace the entire template',
+                   doc['body'].replace('section 0 -->', 'section 1 -->').replace('section-end 0 -->', 'section-end 1 -->'),
+                   doc['body'].split('<!-- rr-dev-room:section 0 -->')[0],
+                   doc['body'] + '<!-- rr-dev-room:section 1 -->\n## Extra\nExtra body\n<!-- rr-dev-room:section-end 1 -->\n\n']
+        for body in invalid:
+            with self.assertRaises(ValueError):
+                dormant.save_document({'expectedRoot': str(self.root), 'id': doc['id'], 'title': doc['title'],
+                     'body': body, 'expectedRevision': doc['revision'], 'language': 'en'})
+        self.assertEqual(before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+        empty_summary = doc['body'].replace('Existing content summary', '')
+        cleared = dormant.save_document({'expectedRoot': str(self.root), 'id': doc['id'], 'title': doc['title'],
+             'body': empty_summary, 'expectedRevision': doc['revision'], 'language': 'en'})['document']
+        self.assertEqual(cleared['body'], empty_summary)
+        self.assertIn('<!-- rr-dev-room:summary -->\n\n<!-- rr-dev-room:summary-end -->', cleared['body'])
+        ordinary = str(uuid.uuid4())
+        created = dormant.save_document({'expectedRoot': str(self.root), 'id': ordinary, 'title': 'Free local note',
+             'body': 'First local body', 'expectedRevision': '', 'language': 'en'})['document']
+        saved = dormant.save_document({'expectedRoot': str(self.root), 'id': ordinary, 'title': 'Revised local note',
+             'body': 'Any local structure', 'expectedRevision': created['revision'], 'language': 'en'})['document']
+        self.assertEqual(saved['title'], 'Revised local note'); self.assertEqual(saved['body'], 'Any local structure')
 
     def test_verified_generated_navigation_is_readable_without_guessing_authored_languages(self):
         self.import_all()

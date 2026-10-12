@@ -97,6 +97,7 @@ def package_runtime_status(version, frozen=False):
         "mediaChallengeScripts": False, "ejsVersion": "",
         "subscriptionRuntime": False, "subscriptionModules": False,
         "jwtVersion": "", "cryptographyVersion": "", "errors": [],
+        "devRoomRuntime": False, "pyYamlVersion": "",
     }
 
     def failed(component, stage, error=None):
@@ -175,9 +176,51 @@ def package_runtime_status(version, frozen=False):
     except Exception as error:
         failed("subscription", stage, error)
 
+    stage = "import"
+    try:
+        import yaml
+
+        stage = "yaml_version"
+        result["pyYamlVersion"] = str(getattr(yaml, "__version__", ""))
+        if result["pyYamlVersion"] != "6.0.3":
+            raise ValueError("PyYAML differs from the release pin")
+        stage = "yaml_parse"
+        if not callable(getattr(yaml, "safe_load", None)):
+            raise AttributeError("PyYAML safe_load is unavailable")
+        if yaml.safe_load("console: dev-room\nschema: 2\n") != {"console": "dev-room", "schema": 2}:
+            raise ValueError("PyYAML cannot parse the diagnostic fixture")
+
+        # Imports and callable checks only: never construct a service or invoke
+        # any source/media operation, resolve a Unity path, or create a request.
+        stage = "import"
+        import unity_dev_room_documents
+        import dev_room_media
+        import dev_room_sync
+
+        stage = "module_surface"
+        adapter_ready = all(callable(getattr(unity_dev_room_documents, name, None)) for name in (
+            "read_inventory", "read_bound_document", "read_explicit_inventory",
+            "document_to_markdown", "markdown_to_document", "document_content_revision",
+            "document_structure_revision", "document_media_revision",
+        ))
+        media_ready = all(callable(getattr(dev_room_media, name, None)) for name in (
+            "inspect_image", "decode_upload", "object_name", "store_object", "read_object",
+        ))
+        service = getattr(dev_room_sync, "DevRoomSyncService", None)
+        sync_ready = callable(service) and all(callable(getattr(service, name, None)) for name in (
+            "preview", "status", "import_documents", "document_state", "save_document",
+            "upload_media", "draft_media", "media", "push_intent", "receipt",
+        ))
+        result["devRoomRuntime"] = adapter_ready and media_ready and sync_ready
+        if not result["devRoomRuntime"]:
+            failed("dev_room", stage)
+    except Exception as error:
+        failed("dev_room", stage, error)
+
     result["ok"] = (
         result["ytDlp"] and result["mediaCertificates"] and result["mediaChallengeScripts"]
         and (result["subscriptionRuntime"] or not frozen)
+        and (result["devRoomRuntime"] or not frozen)
     )
     return result
 
@@ -563,7 +606,7 @@ BLENDER_LIVE_SELECTION_MAX_AGE_SECONDS = 8
 NATIVE_FILE_DRAG_SOURCE = APP_DIR / "tools" / "NativeFileDrag.cs"
 NATIVE_FILE_DRAG_EXE = APP_DIR / "tools" / "NativeFileDrag.exe"
 RANDOMREALM_PROJECT_DIR = Path(os.environ.get("CODEX_CONTROL_RANDOMREALM_PROJECT_DIR", r"D:\Unity Projects\RandomRealm2"))
-DEV_ROOM_SYNC = DevRoomSyncService(DOCUMENT_LIBRARY, RANDOMREALM_PROJECT_DIR, dev_room=DEV_ROOM)
+DEV_ROOM_SYNC = DevRoomSyncService(DOCUMENT_LIBRARY, RANDOMREALM_PROJECT_DIR, dev_room=DEV_ROOM, source_sync_enabled=False)
 RANDOMREALM_MUSIC_CATALOG_FILE = RANDOMREALM_PROJECT_DIR / "Assets" / "Resources" / "ConsoleMusic" / "catalog.json"
 RANDOMREALM_MUSIC_STATE_DIR = Path(os.environ.get(
     "CODEX_CONTROL_RANDOMREALM_MUSIC_STATE_DIR",

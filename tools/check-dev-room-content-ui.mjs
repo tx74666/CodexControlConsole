@@ -16,7 +16,7 @@ model.title = "战斗与人工智能"; model.summary = "战斗的共同规则。
 model.sections[0].title = "概述"; model.sections[0].body = "瞄准并命中。"; model.sections[1].title = "参考资料";
 const chinese = editor.serialize(original, model);
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-const response = (value, status = 200) => ({ ok: status < 400, status, async json() { return structuredClone(value); } });
+const response = (value, status = 200) => ({ ok: status < 400, status, async json() { const result = structuredClone(value); if (result.documents && !result.sourceConnection) result.sourceConnection = { state: "connected", enabled: true }; return result; } });
 const settle = async () => { for (let n = 0; n < 12; n++) await new Promise(resolve => setImmediate(resolve)); };
 function harness(options = {}) {
   let document, hook = null, failStorage = false, failRead = false;
@@ -65,15 +65,17 @@ function harness(options = {}) {
   const ui = name => nodes.get("devRoom" + name);
   ui("Agent").append(ui("AgentContent"));
   document = { documentElement: { lang: options.language || "zh-CN" }, activeElement: panel, createElement: tag => new Element(tag), createTextNode: text => { const node = new Element("#text"); node.textContent = text; return node; }, getElementById: name => nodes.get(name) || panel.querySelectorAll("input, textarea").find(item => item.id === name) };
-  const englishModel = editor.parse(original); englishModel.sections[0].media = media;
-  const texts = { zh: { title: "战斗与人工智能", body: chinese }, en: { title: "Combat & AI", body: editor.serialize(original, englishModel) } };
+  const fixtureMedia = { ...media, imageCaption: options.caption ?? media.imageCaption };
+  const englishModel = editor.parse(original); englishModel.sections[0].media = fixtureMedia;
+  const chineseModel = editor.parse(chinese); chineseModel.sections[0].media = fixtureMedia;
+  const texts = { zh: { title: "战斗与人工智能", body: editor.serialize(chinese, chineseModel) }, en: { title: "Combat & AI", body: editor.serialize(original, englishModel) } };
   let revision = "a".repeat(64);
   function state(language, selected = "overview") {
     const overview = { id: "overview", title: language === "zh" ? "总案" : "Overview", body: language === "zh" ? "## 玩法\n- [战斗与人工智能](" + id + ".md)\n" : "## Gameplay\n- [Combat & AI](" + id + ".md)\n", revision, updatedAt: "", language, sourceBody: "", translationMissing: false };
     const image = editor.parse(texts[language].body).sections[0].media || media;
-    const combat = { id, ...texts[language], revision, language, sourceBody: original, updatedAt: "", translationMissing: Boolean(options.missing), mediaSlots: [{ section: 0, index: 0, caption: image.imageCaption, image, hasImage: true, editable: true }] };
+    const combat = { id, ...texts[language], revision, language, sourceBody: original, updatedAt: "", translationMissing: Boolean(options.missing), ...(!options.deferred ? { mediaSlots: [{ section: 0, index: 0, caption: image.imageCaption, image, hasImage: true, editable: true }], syncSource: { sourceRevision: "c".repeat(64), fixedSectionCount: 2 } } : {}) };
     if (options.missing) { combat.title = language === "zh" ? "待翻译文档" : "Translation needed"; combat.body = ""; }
-    return { root, documents: [overview, combat].map(item => ({ id: item.id, title: item.title, language, updatedAt: "" })), document: selected === id ? combat : selected === "overview" ? overview : null };
+    return { root, sourceConnection: { state: options.deferred ? "deferred" : "connected", enabled: !options.deferred }, documents: [overview, combat].map(item => ({ id: item.id, title: item.title, language, updatedAt: "" })), document: selected === id ? combat : selected === "overview" ? overview : null };
   }
   const runtime = {
     document, URLSearchParams, crypto: { randomUUID }, MutationObserver: class { constructor(callback) { this.callback = callback; observers.push(this); } observe(target) { this.target = target; } },
@@ -117,11 +119,11 @@ await test("media content round-trips without exposing its token in the text fie
   parsed.sections[0].media.section = 1; assert.throws(() => editor.serialize(chinese, parsed)); parsed.sections[0].media.section = 0;
   parsed.sections[0].media.imageCaption = "--> broken"; assert.throws(() => editor.serialize(chinese, parsed));
 });
-await test("text-only browsing preserves pixels, captions, body and all writes", async () => {
+await test("text-only browsing preserves pixels and opaque caption metadata without displaying captions", async () => {
   const h = harness(); await h.open(); const before = h.ui("BodyInput").value, count = h.calls.filter(call => call.method === "POST").length;
-  assert.ok(h.ui("Read").querySelector("img")); assert.match(h.ui("Read").textContent, /Original image/);
+  assert.ok(h.ui("Read").querySelector("img")); assert.doesNotMatch(h.ui("Read").textContent, /Original image/); assert.equal(h.ui("Read").querySelector("figcaption"), null);
   h.ui("ViewText").click(); assert.equal(h.panel.dataset.devRoomView, "text"); assert.equal(h.ui("ViewText").attributes["aria-pressed"], "true");
-  assert.equal(h.ui("BodyInput").value, before); assert.match(h.ui("Read").textContent, /Original image/); assert.ok(h.ui("Read").querySelector("img"));
+  assert.equal(h.ui("BodyInput").value, before); assert.doesNotMatch(h.ui("Read").textContent, /Original image/); assert.ok(h.ui("Read").querySelector("img"));
   assert.equal(h.calls.filter(call => call.method === "POST").length, count); assert.equal(h.storage.get("codex-console-dev-room-view-v1"), "text");
   h.change("en"); await settle(); assert.equal(h.panel.dataset.devRoomView, "text"); h.ui("ViewImages").click(); assert.equal(h.panel.dataset.devRoomView, "images");
 });
@@ -133,7 +135,7 @@ await test("fixed imported sections expose an image slot and hide structural add
   h.ui("List").querySelectorAll("button").find(item => item.textContent === "总案").click(); await settle(); assert.equal(h.ui("New").hidden, false);
 });
 await test("real replacement upload creates a recoverable draft before any game sync", async () => {
-  const h = harness(); await h.open(); h.ui("Edit").click(); editField(h, "ImageCaption0", "替换图片说明"); await upload(h);
+  const h = harness({ caption: "替换图片说明" }); await h.open(); h.ui("Edit").click(); assert.equal(h.document.getElementById("devRoomImageCaption0"), undefined); await upload(h);
   const sent = h.calls.find(call => call.url === "/api/dev-room/media/upload").payload;
   assert.deepEqual(Object.keys(sent).sort(), ["expectedRoot", "id", "language", "expectedRevision", "section", "filename", "mimeType", "base64"].sort());
   assert.equal(sent.language, "zh"); assert.equal(sent.section, 0); assert.equal(sent.expectedRoot, root); assert.equal(sent.id, id);
@@ -197,7 +199,7 @@ await test("damaged sync storage cannot enable a duplicate submission", async ()
   h.ui("SyncPush").click(); assert.equal(h.calls.filter(call => call.url === "/api/dev-room/sync/push").length, 0);
 });
 await test("a conflict text copy keeps the original image draft and never inherits its game identity", async () => {
-  const h = harness(); await h.open(); h.ui("Edit").click(); editField(h, "ImageCaption0", "保留这张替换图"); await upload(h);
+  const h = harness({ caption: "保留这张替换图" }); await h.open(); h.ui("Edit").click(); await upload(h);
   const originalDraft = h.draft("zh")[id];
   h.hook(call => {
     if (call.url !== "/api/dev-room/save") return undefined;
@@ -208,7 +210,7 @@ await test("a conflict text copy keeps the original image draft and never inheri
   });
   h.ui("Save").click(); await settle(); assert.equal(h.ui("Copy").textContent, "保存文字副本"); assert.match(h.ui("Status").textContent, /图片和替换图片的草稿保留在原文档/);
   h.ui("Copy").click(); await settle(); const copied = h.calls.filter(call => call.url === "/api/dev-room/save").at(-1).payload;
-  assert.notEqual(copied.id, id); assert.doesNotMatch(copied.body, /rr-dev-room:|codex-dev-room-media|stagingName|assetPath/); assert.match(copied.body, /保留这张替换图/);
+  assert.notEqual(copied.id, id); assert.doesNotMatch(copied.body, /rr-dev-room:|codex-dev-room-media|stagingName|assetPath|保留这张替换图/);
   const kept = h.draft("zh")[id]; for (const field of ["id", "title", "body", "expectedRevision", "language"]) assert.equal(kept[field], originalDraft[field]);
   assert.equal(editor.parse(kept.body).sections[0].media.sha256, "e".repeat(64)); assert.equal(h.ui("SyncPush").disabled, true);
 });
@@ -225,19 +227,19 @@ await test("a missing English overview retains seventeen bound documents in game
     const overview = { id: "overview", title: "Overview", language: "en", body: "", sourceBody: "# Dev Room\n\nNew game index", translationMissing: true, revision: "a".repeat(64), updatedAt: "" };
     return response({ root, documents: [overview, ...local, ...docs.slice().reverse()], document: query.get("id") === "overview" ? overview : docs.find(doc => doc.id === query.get("id")) });
   });
-  await settle(); h.ui("Reload").click(); await settle();
+  await settle(); h.ui("Reload").click(); await settle(); h.ui("SyncPull").click(); await settle();
   const titles = h.ui("List").querySelectorAll("button").map(node => node.textContent);
   assert.deepEqual(titles, ["Overview · Translation needed", ...expected, ...local.map(doc => doc.title)]); assert.match(h.ui("List").textContent, /Device displays/); assert.doesNotMatch(h.ui("List").textContent, /设备私有展示/);
 });
 await test("a replacement draft requests guarded pixels after losing its memory preview without another upload", async () => {
-  const originalWindow = harness(); await originalWindow.open(); originalWindow.ui("Edit").click(); editField(originalWindow, "ImageCaption0", "恢复图片和说明"); await upload(originalWindow);
+  const originalWindow = harness({ caption: "恢复图片和说明" }); await originalWindow.open(); originalWindow.ui("Edit").click(); await upload(originalWindow);
   const recovered = harness({ storage: [...originalWindow.storage] }); await settle();
   recovered.ui("List").querySelectorAll("button").find(node => node.textContent.startsWith("战斗与人工智能")).click(); await settle();
   const pixels = recovered.ui("Fields").querySelector("img"), url = new URL(pixels.src, "http://console.fixture");
   assert.equal(url.pathname, "/api/dev-room/media/draft"); assert.equal(url.searchParams.get("expectedRoot"), root); assert.equal(url.searchParams.get("id"), id);
   assert.equal(url.searchParams.get("language"), "zh"); assert.equal(url.searchParams.get("section"), "0"); assert.equal(url.searchParams.get("revision"), "a".repeat(64));
   assert.equal(url.searchParams.get("stagingName"), "e".repeat(64) + ".png"); assert.equal(recovered.ui("Editor").hidden, false);
-  assert.match(recovered.ui("Fields").textContent, /恢复图片和说明/); assert.equal(recovered.calls.filter(call => call.method === "POST").length, 0);
+  assert.doesNotMatch(recovered.ui("Fields").textContent, /恢复图片和说明/); assert.equal(editor.parse(recovered.draft("zh")[id].body).sections[0].media.imageCaption, "恢复图片和说明"); assert.equal(recovered.calls.filter(call => call.method === "POST").length, 0);
   recovered.ui("ViewText").click(); assert.equal(recovered.ui("Fields").querySelector("img"), pixels); assert.equal(recovered.panel.dataset.devRoomView, "text");
   const kept = recovered.draft("zh")[id].body; recovered.change("en"); await settle(); pixels.fire("error");
   assert.equal(recovered.ui("TitleInput").value, "Combat & AI"); assert.equal(recovered.draft("zh")[id].body, kept); assert.deepEqual(recovered.draft("en"), {});
@@ -304,8 +306,8 @@ await test("an applied receipt flags saved edits made after submission as local 
   assert.equal(h.calls.filter(call => call.url === "/api/dev-room/sync/push").length, 1);
 });
 await test("an applied receipt keeps later unsaved text and image drafts without claiming they were synced", async () => {
-  const h = harness(); await h.open(); h.ui("SyncPush").click(); await settle(); const intent = h.intent();
-  h.ui("Edit").click(); h.input("TitleInput", "提交后未保存的新标题"); editField(h, "ImageCaption0", "后来的图片说明"); await upload(h); const draft = h.draft("zh")[id];
+  const h = harness({ caption: "后来的图片说明" }); await h.open(); h.ui("SyncPush").click(); await settle(); const intent = h.intent();
+  h.ui("Edit").click(); h.input("TitleInput", "提交后未保存的新标题"); await upload(h); const draft = h.draft("zh")[id];
   h.hook(call => call.url.startsWith("/api/dev-room/sync/receipt?") ? response({ root, language: "zh", requestId: intent.requestId, documentId: id, status: "applied", localChangedSincePush: false }) : undefined);
   h.ui("SyncReceipt").click(); await settle();
   assert.match(h.ui("SyncStatus").textContent, /本次提交版本已写回；后来的本地修改尚未同步/); assert.equal(h.ui("Editor").hidden, false); assert.equal(h.ui("TitleInput").value, "提交后未保存的新标题");
@@ -323,6 +325,7 @@ await test("stale translations are marked for review even when another status cl
       return response(result);
     });
     await settle(); h.ui("List").querySelectorAll("button").find(node => node.textContent.startsWith("Combat & AI")).click(); await settle();
+    h.ui("SyncPull").click(); await settle();
     assert.match(h.ui("List").textContent, /Translation needs review/); assert.equal(h.ui("SyncStatus").textContent, "Translation needs review"); assert.doesNotMatch(h.ui("SyncStatus").textContent, /synced|confirmed|Both versions match/i);
   }
 });
@@ -332,5 +335,26 @@ await test("missing empty translations show their label and cannot push through 
   await settle(); h.ui("List").querySelectorAll("button").find(node => node.textContent.startsWith("待翻译文档")).click(); await settle();
   assert.match(h.ui("List").textContent, /待翻译/); assert.equal(h.ui("SyncStatus").textContent, "待翻译"); assert.equal(h.ui("SyncPush").disabled, true); assert.equal(h.ui("BodyInput").value, "");
   h.ui("SyncPush").fire("click"); await settle(); assert.equal(h.intent(), null); assert.equal(h.calls.filter(call => call.url === "/api/dev-room/sync/push").length, 0);
+});
+await test("deferred production keeps local history and caption metadata without reading or writing a source", async () => {
+  const h = harness({ deferred: true, caption: "历史字段保留但不显示" }); await h.open(); h.ui("Reload").click(); await settle();
+  assert.match(h.ui("Read").textContent, /瞄准并命中/); assert.equal(h.ui("Read").querySelector("img"), null); assert.equal(h.ui("Read").querySelector("figcaption"), null);
+  assert.match(h.ui("SyncStatus").textContent, /当前模板与内容尚未连接/); assert.equal(h.ui("SyncPull").disabled, true); assert.equal(h.ui("SyncPush").disabled, true); assert.equal(h.ui("SyncApply").disabled, true);
+  for (const action of ["SyncPull", "SyncPush", "SyncApply", "SyncReceipt"]) h.ui(action).fire("click"); await settle();
+  assert.equal(h.calls.filter(call => /\/sync\/|\/media/.test(call.url)).length, 0); assert.equal(h.intent(), null);
+  h.ui("Edit").click(); assert.equal(h.document.getElementById("devRoomImageCaption0"), undefined); assert.equal(h.document.getElementById("devRoomImageFile0"), undefined);
+  assert.doesNotMatch(h.ui("Fields").textContent, /历史字段保留但不显示/); h.input("TitleInput", "本地历史记录"); h.ui("Save").click(); await settle();
+  const saved = h.calls.find(call => call.url === "/api/dev-room/save").payload;
+  assert.equal(editor.parse(saved.body).sections[0].media.imageCaption, "历史字段保留但不显示"); assert.equal(h.calls.filter(call => /\/sync\/|\/media/.test(call.url)).length, 0);
+});
+await test("deferred text editing preserves legacy media comment whitespace and Unicode escapes exactly", async () => {
+  const h = harness({ deferred: true });
+  const literal = '<!-- codex-dev-room-media { "section" : 0, "imageCaption" : "\\u003ccompat\\u003e", "sha256" : "", "stagingName" : "", "resourcePath" : "fixture/image", "guid" : "' + "d".repeat(32) + '", "fileID" : 2800000, "type" : 3, "assetPath" : "Assets/fixture/image.png" } -->  \t';
+  h.texts.zh.body = h.texts.zh.body.replace(/^<!-- codex-dev-room-media [^\r\n]*/m, literal);
+  await h.open(); h.ui("Edit").click(); editField(h, "SectionBody0", "Local text changed only");
+  assert.ok(h.draft("zh")[id].body.includes(literal)); assert.doesNotMatch(h.ui("Fields").textContent, /compat|图片说明/);
+  h.ui("Save").click(); await settle(); const saved = h.calls.find(call => call.url === "/api/dev-room/save").payload;
+  assert.ok(saved.body.includes(literal)); assert.ok(h.texts.zh.body.includes(literal)); assert.equal(editor.parse(saved.body).sections[0].media.imageCaption, "<compat>");
+  assert.equal(h.calls.filter(call => /\/sync\/|\/media/.test(call.url)).length, 0);
 });
 console.log(count + " Dev Room content-controller checks passed.");

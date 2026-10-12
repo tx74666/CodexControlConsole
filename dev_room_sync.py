@@ -61,6 +61,49 @@ def _valid_document_file_id(value):
     return type(value) is int and value != 0 and -(2 ** 63) <= value <= 2 ** 63 - 1
 
 
+def _unique_json(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('Dev Room 本地记录包含重复字段。')
+        result[key] = value
+    return result
+
+
+def _local_template(body):
+    """Check the local fixed-slot grammar without resolving any source/media."""
+    marker = '<!-- rr-dev-room:'
+    first, separator, remainder = body.partition('\n')
+    first = first.rstrip('\r')
+    if not separator or not first.startswith(marker + 'v1 ') or not first.endswith(' -->'):
+        raise ValueError('请保留本地模板顶部的来源注释。')
+    identity = json.loads(first[len(marker + 'v1 '):-4], object_pairs_hook=_unique_json)
+    if (not isinstance(identity, dict) or set(identity) != {'id', 'guid'}
+            or not isinstance(identity['id'], str) or not _GUID.fullmatch(str(identity['guid']))):
+        raise ValueError('本地模板来源身份无效。')
+    newline = r'\r?\n'
+    prefix = re.match(r'\A# ([^\r\n]+)' + newline * 2 + re.escape(marker + 'summary -->') + newline
+                      + r'(.*?)' + newline + re.escape(marker + 'summary-end -->') + newline * 2, remainder, re.S)
+    if not prefix:
+        raise ValueError('请保留本地模板的标题和摘要结构。')
+    fields = [prefix.group(1), prefix.group(2)]; remainder = remainder[prefix.end():]
+    count = 0; opaque_media = []
+    while remainder and count < 128:
+        match = re.match(re.escape(marker + f'section {count} -->') + newline + r'## ([^\r\n]+)' + newline
+                         + r'(.*?)' + newline + re.escape(marker + f'section-end {count} -->') + newline * 2, remainder, re.S)
+        if not match:
+            raise ValueError('请保留本地模板既有章节的数量和顺序。')
+        fields.extend((match.group(1), match.group(2)))
+        # These comments are hidden local metadata while disconnected. Keep
+        # their literal payload per slot; do not parse paths or image identities.
+        opaque_media.append(tuple(line for line in match.group(2).splitlines()
+                                  if '<!-- codex-dev-room-media' in line))
+        count += 1; remainder = remainder[match.end():]
+    if not count or remainder or any(marker in value for value in fields):
+        raise ValueError('本地模板章节结构或保留注释无效。')
+    return identity, count, prefix.group(1), tuple(opaque_media)
+
+
 def content_revision(document):
     """v2 content revision includes captions, references and actual pixels."""
     import unity_dev_room_documents
@@ -81,20 +124,34 @@ def text_revision(document):
 
 
 class DevRoomSyncService:
-    def __init__(self, document_library, workspace, *, dev_room=None, source_adapter=None, source_bindings=None):
+    def __init__(self, document_library, workspace, *, dev_room=None, source_adapter=None, source_bindings=None,
+                 source_sync_enabled=True):
+        if type(source_sync_enabled) is not bool:
+            raise ValueError('游戏来源连接开关须为布尔值。')
+        self.source_sync_enabled = source_sync_enabled
         self.library = document_library
         self.dev_room = dev_room or DevRoomService(document_library)
         self.configured_workspace = Path(workspace)
         if not self.configured_workspace.is_absolute():
             raise ValueError('Unity 工作区须为完整路径。')
-        self.workspace = self.configured_workspace.resolve()
-        if source_adapter is None:
+        # A deferred production connection must not even resolve/check the live
+        # project path. Only explicitly enabled source fixtures/connections do so.
+        self.workspace = self.configured_workspace.resolve() if source_sync_enabled else self.configured_workspace
+        if source_adapter is None and source_sync_enabled:
             import unity_dev_room_documents
             source_adapter = unity_dev_room_documents
         self.sources = source_adapter
         self.source_bindings = deepcopy(source_bindings)
 
+    def _source_connection(self):
+        return {'state': 'connected' if self.source_sync_enabled else 'deferred', 'enabled': self.source_sync_enabled}
+
+    def _require_source_sync(self):
+        if not self.source_sync_enabled:
+            raise DevRoomSyncConflict('游戏来源尚未连接；当前仅保存本地内容。', 'source_not_connected', accepted=False)
+
     def _check_workspace(self):
+        self._require_source_sync()
         for component in (self.configured_workspace, *self.configured_workspace.parents):
             info = component.lstat()
             if component.is_symlink() or getattr(info, 'st_file_attributes', 0) & 0x400:
@@ -112,7 +169,7 @@ class DevRoomSyncService:
         if len(raw) > maximum:
             raise ValueError('Dev Room 同步记录超过读取限制。')
         try:
-            value = json.loads(raw.decode('utf-8'), object_pairs_hook=self.sources._unique_json)
+            value = json.loads(raw.decode('utf-8'), object_pairs_hook=self.sources._unique_json if self.sources else _unique_json)
         except (ValueError, UnicodeError) as exc:
             raise ValueError('Dev Room 同步记录有误，原记录已保留。') from exc
         if not isinstance(value, dict):
@@ -235,6 +292,7 @@ class DevRoomSyncService:
     # v2 methods below replace legacy text-only operations while preserving the
     # original IDs, index file, history and stable operation storage.
     def _inventory(self):
+        self._require_source_sync()
         self._check_workspace()
         inventory = (self.sources.read_inventory(self.workspace) if self.source_bindings is None else
                      self.sources.read_explicit_inventory(self.workspace, self.source_bindings))
@@ -394,6 +452,7 @@ class DevRoomSyncService:
                 'canImport': not any(c['action'] == 'conflict' for c in changes)}, catalog_body
 
     def preview(self, expectedRoot, language='zh'):
+        self._require_source_sync()
         language = self.dev_room._language(language)
         with self.dev_room._scope(expectedRoot) as root:
             inventory = self._inventory()
@@ -436,6 +495,11 @@ class DevRoomSyncService:
     def status(self, expectedRoot, language='zh'):
         language = self.dev_room._language(language)
         with self.dev_room._scope(expectedRoot) as root:
+            if not self.source_sync_enabled:
+                self.dev_room._check_current_root(root)
+                return {'root': str(root), 'language': language, 'enabled': False,
+                        'sourceConnection': self._source_connection(), 'sourceDocumentCount': 0,
+                        'bindings': [], 'pending': []}
             inventory = self._inventory()
             index, revision = self._index(root, inventory)
             bindings = []
@@ -466,6 +530,7 @@ class DevRoomSyncService:
                 bindings.append({**public, 'status': state, 'lastSync': state, 'language': language})
             self.dev_room._check_current_root(root)
             return {'root': str(root), 'workspace': str(self.workspace), 'projectId': inventory['projectId'],
+                    'enabled': True, 'sourceConnection': self._source_connection(),
                     'language': language, 'library': inventory['library'], 'indexRevision': revision,
                     'sourceDocumentCount': len(inventory['documents']), 'bindings': sorted(bindings,
                     key=lambda b: (b['categoryOrder'], b['order'], b['unityDocumentId'])), 'pending': self._operations(root)}
@@ -572,6 +637,7 @@ class DevRoomSyncService:
         return self.dev_room._read(root, identifier)[0]
 
     def import_documents(self, payload):
+        self._require_source_sync()
         self._payload(payload, ('requestId', 'expectedRoot', 'planSha256', 'expectedIndexRevision', 'draftIds', 'language'))
         if not _SHA.fullmatch(str(payload['planSha256'])):
             raise ValueError('导入预览版本无效。')
@@ -629,6 +695,9 @@ class DevRoomSyncService:
 
     def document_state(self, expectedRoot, id='overview', language='zh'):
         result = self.dev_room.state(expectedRoot, id, language)
+        result['sourceConnection'] = self._source_connection()
+        if not self.source_sync_enabled:
+            return result
         document = result.get('document')
         with self.dev_room._scope(expectedRoot) as root:
             try:
@@ -684,6 +753,23 @@ class DevRoomSyncService:
             binding = index.get('bindings', {}).get(identifier) if index else None
             if not binding:
                 return
+            if not self.source_sync_enabled:
+                canonical = self.dev_room._read(root, identifier)[0]
+                if not canonical:
+                    raise ValueError('本地模板来源已不存在，原绑定已保留。')
+                before, count, _, canonical_media = _local_template(canonical['body'])
+                after, changed_count, title, changed_media = _local_template(self.dev_room._body(payload.get('body')))
+                if before != after or count != changed_count or title != payload.get('title'):
+                    raise ValueError('请保留本地模板的来源身份、章节数量和顺序。')
+                original_media = canonical_media
+                if 'language' in payload:
+                    language = self.dev_room._language(payload['language'])
+                    current = self._localized(root, identifier, language)
+                    local_body = current['body'] or current['sourceBody']
+                    original_media = _local_template(local_body)[3]
+                if original_media != changed_media:
+                    raise ValueError('游戏来源尚未连接，请保留每个章节已有的图片元数据。')
+                return
             language = self.dev_room._language(payload.get('language'))
             current = self._localized(root, identifier, language)
             baseline = binding.get('lastDocument')
@@ -715,6 +801,7 @@ class DevRoomSyncService:
         return self.document_state(payload['expectedRoot'], payload['id'], payload.get('language', 'zh'))
 
     def upload_media(self, payload):
+        self._require_source_sync()
         if not isinstance(payload, dict) or set(payload) != {'expectedRoot', 'id', 'language', 'expectedRevision',
                                                            'section', 'filename', 'mimeType', 'base64'}:
             raise ValueError('图片上传请求字段无效。')
@@ -755,6 +842,7 @@ class DevRoomSyncService:
 
     def draft_media(self, expectedRoot, id, section, revision, stagingName, language='zh'):
         """Read a registered unsaved image after reload, without committing it."""
+        self._require_source_sync()
         identifier, language = self.dev_room._id(id), self.dev_room._language(language)
         name = media_store.object_name(stagingName)
         if not _SHA.fullmatch(str(revision)):
@@ -790,6 +878,7 @@ class DevRoomSyncService:
                     'size': metadata['size'], 'sha256': metadata['sha256']}
 
     def media(self, expectedRoot, id, section, revision, language='zh'):
+        self._require_source_sync()
         identifier, language = self.dev_room._id(id), self.dev_room._language(language)
         if not _SHA.fullmatch(str(revision)):
             raise ValueError('图片文档版本无效。')
@@ -830,6 +919,7 @@ class DevRoomSyncService:
                     'size': metadata['size'], 'sha256': metadata['sha256']}
 
     def _bridge_path(self, *parts, create=False):
+        self._require_source_sync()
         self._check_workspace()
         path = self.workspace
         components = ('.codex', 'console-content-sync', 'v2', *parts)
@@ -905,6 +995,7 @@ class DevRoomSyncService:
             self._bridge_path('media', image['stagingName'])
 
     def push_intent(self, payload):
+        self._require_source_sync()
         self._payload(payload, ('requestId', 'expectedRoot', 'documentId', 'expectedRevision',
                                'expectedUnityRevision', 'draftIds', 'language'), push=True)
         identifier, language = self.dev_room._id(payload['documentId']), payload['language']
@@ -1029,6 +1120,7 @@ class DevRoomSyncService:
         return before, self._local_versions(root, identifier, language), sorted(stale)
 
     def receipt(self, expectedRoot, requestId):
+        self._require_source_sync()
         _request_id(requestId)
         with self.dev_room._scope(expectedRoot) as root:
             operation = self._operation(root, requestId)
