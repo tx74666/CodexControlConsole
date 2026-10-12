@@ -281,7 +281,8 @@
     }
     async function request(path = "", body) {
       const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), body === undefined ? 10000 : 20000);
+      const timeoutMs = body === undefined ? path === "/versions" ? 60000 : 10000 : 20000;
+      const timer = window.setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await window.fetch(BASE + path, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", referrerPolicy: "same-origin", headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal });
         const value = await response.json();

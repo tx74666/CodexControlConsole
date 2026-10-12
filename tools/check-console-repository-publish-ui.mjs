@@ -111,6 +111,42 @@ await test("strict allowed gate keeps missing or false authorization hidden", as
 await test("DOMContentLoaded auto-mount is idempotent and idle performs one read", async () => {
   const h = harness({ loading: true }); assert.equal(h.host.children.length, 0); await h.ready(); const api = h.api; assert.equal(h.api, api); assert.equal(h.host.children.length, 3); assert.equal(h.calls.length, 1); assert.equal(h.posts().length, 0);
 });
+await test("ordinary GET retains its ten-second deadline and clears the exact timer after completion", async () => {
+  const pending = deferred(); const h = harness({ hook(call) { if (call.url === BASE) return pending.promise; } });
+  await h.ready(); assert.equal(h.calls.length, 1);
+  const [[timerId, timer]] = h.timers; assert.equal(h.timers.size, 1); assert.equal(timer.delay, 10000);
+  assert.equal(h.calls[0].options.signal.aborted, false);
+  pending.resolve(response(h.snapshot)); await settle();
+  assert.equal(h.timers.has(timerId), false); assert.equal(h.timers.size, 0); assert.equal(h.posts().length, 0);
+});
+await test("slow version catalog has a separate sixty-second deadline without a leftover generic abort", async () => {
+  const pending = deferred(); const h = harness({ hook(call) { if (call.url === BASE + "/versions") return pending.promise; } });
+  await h.ready(); await h.expand();
+  const versions = h.calls.filter(call => call.url === BASE + "/versions"); assert.equal(versions.length, 1);
+  const [[timerId, timer]] = h.timers; assert.equal(h.timers.size, 1); assert.equal(timer.delay, 60000);
+  assert.equal([...h.timers.values()].some(item => item.delay === 10000), false, "the catalog must have no generic ten-second timer");
+  assert.equal(versions[0].options.signal.aborted, false);
+  pending.resolve(response({ repositories: [{ repoId: "repository-001", hasChanges: false, changeState: "unchanged", components: [component()] }] }));
+  await settle(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4");
+  assert.equal(h.timers.has(timerId), false); assert.equal(h.timers.size, 0); assert.equal(h.posts().length, 0);
+});
+await test("version deadline still aborts at sixty seconds without mutation or automatic resend", async () => {
+  const h = harness({ hook(call) { if (call.url === BASE + "/versions") return new Promise((resolve, reject) =>
+    call.options.signal.addEventListener("abort", () => reject(new Error("synthetic catalog deadline")), { once: true })); } });
+  await h.ready(); await h.expand();
+  const [[timerId, timer]] = h.timers; assert.equal(timer.delay, 60000); timer.fn(); await settle();
+  const versions = h.calls.filter(call => call.url === BASE + "/versions"); assert.equal(versions.length, 1);
+  assert.equal(versions[0].options.signal.aborted, true); assert.equal(h.timers.has(timerId), false);
+  assert.match(h.byClass("repository-publish-compact-version").textContent, /读取失败/); assert.equal(h.posts().length, 0);
+});
+await test("configuration POST keeps its twenty-second deadline and clears the timer after acknowledgement", async () => {
+  const pending = deferred(); const h = harness({ hook(call) { if (call.url === BASE + "/config") return pending.promise; } });
+  await h.ready(); await h.open(); await h.change("notes", "preserve POST deadline");
+  const [[timerId, timer]] = h.timers; assert.equal(h.timers.size, 1); assert.equal(timer.delay, 20000);
+  h.snapshot.settings = h.posts("/config")[0].body.settings; h.snapshot.settingsSha = settingsSha(h.snapshot.settings);
+  pending.resolve(response(configReceipt(h.snapshot.settings))); await settle();
+  assert.equal(h.timers.has(timerId), false); assert.equal(h.timers.size, 0); assert.equal(h.posts("/config").length, 1); assert.equal(h.posts("/run").length, 0);
+});
 await test("closed default is three compact controls with no resident form", async () => {
   const h = harness(); await h.ready(); const bar = h.byClass("repository-publish-bar"); assert.equal(bar.children.length, 3); assert.equal(h.byClass("repository-publish-dialog").open, false); assert.equal(h.fields("path").length, 0); assert.equal(h.byClass("repository-publish-primary").disabled, false); assert.match(css, /\.repository-publish-bar\[hidden\]/);
   assert.ok(bar.children.slice(0, 2).every(item => item.getAttribute("data-console-management") === ""));
