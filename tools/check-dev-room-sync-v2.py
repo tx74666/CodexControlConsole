@@ -21,7 +21,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dev_room import DevRoomService, DEV_ROOM_PARTS
 from document_library import DocumentLibraryService
-from dev_room_sync import DevRoomSyncService, DevRoomSyncConflict, INDEX_PARTS, _json_bytes, _sha
+from dev_room_sync import DevRoomSyncService, DevRoomSyncConflict, INDEX_PARTS, NAMESPACE, _json_bytes, _sha
 import dev_room_media as media
 import unity_dev_room_documents as source
 
@@ -283,6 +283,72 @@ class SyncChecks(unittest.TestCase):
         bound['localFileId'] += 1
         with self.assertRaises(ValueError):
             source.read_explicit_inventory(self.workspace, [bound])
+
+    def test_negative_int64_owned_document_import_save_and_push_preserve_identity(self):
+        original = next(d for d in self.adapter.inventory['documents'] if d['scope'] == 'displayContent')
+        asset_path = self.workspace / original['path']
+        negative = -(2 ** 63)
+        asset_path.write_bytes(asset_path.read_bytes().replace(str(original['localFileId']).encode(), str(negative).encode()))
+        self.adapter.inventory = source.read_inventory(self.workspace)
+        actual = next(d for d in self.adapter.inventory['documents'] if d['scope'] == 'displayContent')
+        self.assertEqual(actual['localFileId'], negative)
+        bound = {k: actual[k] for k in ('path', 'guid', 'localFileId', 'expectedLibrary')}
+        explicit = source.read_explicit_inventory(self.workspace, [bound])['documents'][0]
+        self.assertEqual(explicit['localFileId'], negative)
+        self.assertEqual(explicit['structureRevision'], actual['structureRevision'])
+        binding, doc = self.selected()
+        self.assertEqual(binding['localFileId'], negative)
+        identity_fields = [self.adapter.inventory['projectId'], self.adapter.inventory['library']['guid'], actual['guid'], str(negative)]
+        self.assertEqual(doc['id'], str(uuid.uuid5(NAMESPACE, '\n'.join(identity_fields))))
+        self.assertEqual(doc['syncSource']['localFileId'], negative)
+        game_before = {str(p): p.read_bytes() for p in (self.workspace / 'Assets').rglob('*') if p.is_file()}
+        result = self.sync.save_document({'expectedRoot': str(self.root), 'id': doc['id'], 'language': 'en',
+             'title': doc['title'], 'body': doc['body'].replace('Existing body', 'Negative identity edited body'),
+             'expectedRevision': doc['revision']})
+        saved = result['document']
+        self.assertEqual(saved['syncSource']['localFileId'], negative)
+        self.enable_fixture_bridge(); payload = self.push_payload(binding, saved)
+        self.assertEqual(self.sync.push_intent(payload)['status'], 'pending')
+        request = json.loads(self.sync._bridge_path('requests', payload['requestId'] + '.json').read_bytes())
+        self.assertIs(type(request['document']['localFileId']), int)
+        self.assertEqual(request['document']['localFileId'], negative)
+        self.assertEqual(request['document']['structureRevision'], actual['structureRevision'])
+        self.assertEqual(request['documentId'], doc['id'])
+        self.assertEqual(game_before, {str(p): p.read_bytes() for p in (self.workspace / 'Assets').rglob('*') if p.is_file()})
+
+    def test_document_local_id_rejects_null_and_outside_signed_int64(self):
+        original = next(d for d in self.adapter.inventory['documents'] if d['scope'] == 'displayContent')
+        asset_path = self.workspace / original['path']; original_raw = asset_path.read_bytes()
+        bound = {k: original[k] for k in ('path', 'guid', 'localFileId', 'expectedLibrary')}
+        for invalid in (0, -(2 ** 63) - 1, 2 ** 63, True, 1.0):
+            with self.subTest(localFileId=invalid):
+                with self.assertRaises(source.UnityDocumentError):
+                    source.read_bound_document(self.workspace, original['path'], original['guid'], invalid)
+                with self.assertRaises(source.UnityDocumentError):
+                    source.read_explicit_inventory(self.workspace, [{**bound, 'localFileId': invalid}])
+                asset_path.write_bytes(original_raw.replace(str(original['localFileId']).encode(), str(invalid).encode()))
+                with self.assertRaises(source.UnityDocumentError):
+                    source.read_inventory(self.workspace)
+                asset_path.write_bytes(original_raw)
+        self.assertEqual(source.read_inventory(self.workspace)['documents'][-1]['localFileId'], original['localFileId'])
+
+    def test_sync_inventory_and_saved_index_validate_signed_document_ids(self):
+        binding, doc = self.selected()
+        inventory = deepcopy(self.adapter.inventory)
+        index_path = self.root.joinpath(*INDEX_PARTS); original_raw = index_path.read_bytes()
+        index = json.loads(original_raw)
+        for invalid in (0, -(2 ** 63) - 1, 2 ** 63, True, 1.0):
+            with self.subTest(localFileId=invalid):
+                self.adapter.inventory['documents'][-1]['localFileId'] = invalid
+                with self.assertRaises(ValueError):
+                    self.sync.status(str(self.root), 'en')
+                self.adapter.inventory = deepcopy(inventory)
+                index['bindings'][doc['id']]['localFileId'] = invalid
+                index_path.write_bytes(_json_bytes(index))
+                with self.assertRaises(ValueError):
+                    self.sync.status(str(self.root), 'en')
+                index_path.write_bytes(original_raw)
+        self.assertEqual(self.sync.document_state(str(self.root), doc['id'], 'en')['document']['syncSource']['localFileId'], binding['localFileId'])
 
     def test_v1_media_migration_preserves_catalog_language_and_original_hash(self):
         bindings = self.import_all()

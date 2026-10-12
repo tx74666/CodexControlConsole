@@ -79,6 +79,14 @@ def _integer(value, label, minimum=0, maximum=2 ** 63 - 1):
     return value
 
 
+def _document_file_id(value, label):
+    """Unity document subassets use signed Int64 identities; zero is null."""
+    value = _integer(value, label, minimum=-(2 ** 63))
+    if value == 0:
+        raise UnityDocumentError(f'{label}无效。')
+    return value
+
+
 def _text(value, label, *, maximum=MAX_BODY_BYTES, empty=True, heading=False):
     if value is None and empty:
         value = ''
@@ -690,14 +698,14 @@ def read_bound_document(workspace, relative, guid, local_file_id=11400000, image
     if not _relative(relative).parts[0] == 'Assets' or not relative.endswith('.asset'):
         raise UnityDocumentError('显式文档来源必须是 Assets 内的 .asset。')
     expected_guid = _guid(guid, '文档 GUID')
-    _integer(local_file_id, '文档 local fileID', minimum=1)
+    _document_file_id(local_file_id, '文档 local fileID')
     actual_guid, meta_revision = _meta(root, relative + '.meta')
     if expected_guid != actual_guid:
         raise UnitySourceConflict('显式文档 GUID 已改变。')
     raw, revision = _read(root, relative, MAX_ASSET_BYTES)
     try:
         text = raw.decode('utf-8-sig')
-        blocks = re.split(r'^--- !u!(\d+) &(\d+)\r?\n', text, flags=re.M)
+        blocks = re.split(r'^--- !u!(\d+) &(-?\d+)\r?\n', text, flags=re.M)
         matches = []
         for offset in range(1, len(blocks), 3):
             if blocks[offset] != '114' or int(blocks[offset + 1]) != local_file_id:
@@ -755,7 +763,7 @@ def read_owned_display_documents(root, *, resolve_media=True):
         raw, revision = _read(root, relative, MAX_ASSET_BYTES)
         try:
             text = raw.decode('utf-8-sig')
-            blocks = re.split(r'^--- !u!(\d+) &(\d+)\r?\n', text, flags=re.M)
+            blocks = re.split(r'^--- !u!(\d+) &(-?\d+)\r?\n', text, flags=re.M)
             parents = []
             for offset in range(1, len(blocks), 3):
                 if blocks[offset] == '114' and int(blocks[offset + 1]) == 11400000:
@@ -777,7 +785,7 @@ def read_owned_display_documents(root, *, resolve_media=True):
             reference = tab.get('m_Document') if isinstance(tab, dict) else None
             if not isinstance(reference, dict) or set(reference) != {'fileID'}:
                 raise UnityDocumentError('设备私有标签必须引用本bundle子文档。')
-            file_id = _integer(reference['fileID'], '设备文档 local fileID', minimum=1)
+            file_id = _document_file_id(reference['fileID'], '设备文档 local fileID')
             key = (guid, file_id)
             if key in seen:
                 raise UnityDocumentError('设备标签包含重复文档绑定。')
@@ -813,6 +821,7 @@ def read_explicit_inventory(workspace, bindings):
     for binding in bindings:
         if not isinstance(binding, dict) or not {'path', 'guid', 'localFileId', 'expectedLibrary'} <= set(binding):
             raise UnityDocumentError('显式文档来源绑定字段无效。')
+        _document_file_id(binding['localFileId'], '显式文档 local fileID')
         parent = binding['expectedLibrary']
         if (not isinstance(parent, dict) or set(parent) != {'kind', 'path', 'guid', 'revision', 'metaRevision'}
                 or parent['kind'] not in {'devRoomLibrary', 'displayContent'}):
@@ -830,7 +839,7 @@ def read_explicit_inventory(workspace, bindings):
                              and r.get('fileID') == binding['localFileId'] for r in asset.get('m_Documents', []))
         else:
             try:
-                blocks = re.split(r'^--- !u!(\d+) &(\d+)\r?\n', raw.decode('utf-8-sig'), flags=re.M)
+                blocks = re.split(r'^--- !u!(\d+) &(-?\d+)\r?\n', raw.decode('utf-8-sig'), flags=re.M)
                 parents = []
                 for offset in range(1, len(blocks), 3):
                     if blocks[offset] == '114' and int(blocks[offset + 1]) == 11400000:

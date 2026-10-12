@@ -57,6 +57,10 @@ def _request_id(value):
     return value
 
 
+def _valid_document_file_id(value):
+    return type(value) is int and value != 0 and -(2 ** 63) <= value <= 2 ** 63 - 1
+
+
 def content_revision(document):
     """v2 content revision includes captions, references and actual pixels."""
     import unity_dev_room_documents
@@ -131,6 +135,7 @@ class DevRoomSyncService:
             self.dev_room._id(identifier)
             if (not isinstance(binding, dict) or binding.get('documentId') != identifier
                     or not _GUID.fullmatch(str(binding.get('unityGuid', '')))
+                    or not _valid_document_file_id(binding.get('localFileId', 11400000))
                     or not isinstance(binding.get('unityDocumentId'), str)
                     or any(not isinstance(binding.get(key), str) for key in
                            ('assetPath', 'categoryTitle', 'sourceUpdatedAt', 'lastSyncedAt'))
@@ -240,7 +245,7 @@ class DevRoomSyncService:
         seen = set()
         for document in inventory['documents']:
             key = (document.get('guid'), document.get('localFileId'))
-            if (key in seen or not _GUID.fullmatch(str(key[0])) or type(key[1]) is not int or key[1] < 1
+            if (not _valid_document_file_id(key[1]) or key in seen or not _GUID.fullmatch(str(key[0]))
                     or not isinstance(document.get('expectedLibrary'), dict)
                     or any(not _SHA.fullmatch(str(document.get(k, ''))) for k in
                            ('revision', 'metaRevision', 'contentRevision', 'structureRevision', 'mediaRevision'))):

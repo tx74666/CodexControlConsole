@@ -50,11 +50,24 @@ def vectors():
                 'structureRevision': source.document_structure_revision(document),
                 'mediaRevision': source.document_media_revision(document)}
     assert expected == observed, (expected, observed)
+    # A document identity is a signed Int64, framed as its invariant decimal
+    # string. Use the minimum value to catch sign removal or float conversion.
+    negative_document = dict(document, localFileId=-(2 ** 63))
+    negative_structure = b''.join(text(value) for value in (
+        negative_document['id'], negative_document['guid'], '-9223372036854775808',
+        str(negative_document['category']), str(negative_document['order']))) + count
+    for section in sections:
+        negative_structure += text(str(section['index'])) + text('section')
+    negative_sha = hashlib.sha256(negative_structure).hexdigest()
+    assert source.document_structure_revision(negative_document) == negative_sha
+    assert negative_sha != expected['structureRevision']
     cs = Path(__file__).resolve().parents[1].joinpath('unity', 'Editor', 'DevRoomConsoleBridge.cs').read_text(encoding='utf-8-sig')
     assert 'WriteText(stream, Number(localId))' in cs
     assert 'WriteText(stream, section.imageCaption); WriteText(stream, section.image?.resourcePath); WriteText(stream, section.image?.sha256)' in cs
     assert 'WriteText(stream, image?.sha256); WriteText(stream, image?.metaRevision)' in cs
     assert 'public long localFileId' in cs and 'public long fileID' in cs
+    assert 'static string Number(long value) => value.ToString(CultureInfo.InvariantCulture);' in cs
+    assert 'request.document.localFileId != 0' in cs
     staged = {'section': 0, 'imageCaption': 'Replace pixels', 'guid': '', 'fileID': 0, 'type': 3,
               'sha256': 'c' * 64, 'stagingName': 'c' * 64 + '.png',
               'resourcePath': 'UI/DevsRealm/ConsoleMedia/' + 'c' * 64,
@@ -66,6 +79,7 @@ def vectors():
     legacy = dict(staged, assetPath='')
     assert source.validate_image_edit(legacy, sections[0])['assetPath'] == planned['assetPath']
     return {'schemaVersion': 2, 'purpose': 'Non-executing C#/Python framing vector', 'document': document,
+            'negativeInt64Vector': {'document': negative_document, 'structureRevision': negative_sha},
             'expected': expected, 'framing': 'UTF-8 BE32 length prefixes; BE32 section count; exact whitespace'}
 
 
@@ -75,4 +89,6 @@ if __name__ == '__main__':
     if args.write_fixture:
         path = Path(args.write_fixture); path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    print(json.dumps({'status': 'passed', 'hashes': result['expected'], 'longFileId': result['document']['localFileId']}))
+    print(json.dumps({'status': 'passed', 'hashes': result['expected'], 'longFileId': result['document']['localFileId'],
+                      'negativeLocalFileId': result['negativeInt64Vector']['document']['localFileId'],
+                      'negativeStructureRevision': result['negativeInt64Vector']['structureRevision']}))
