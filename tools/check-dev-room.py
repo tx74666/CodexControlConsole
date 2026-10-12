@@ -161,6 +161,15 @@ class DevRoomChecks(unittest.TestCase):
         self.assertEqual(list(self.storage.rglob('*.tmp')), [])
 
     def test_rejected_ids_sizes_and_payloads_create_no_document(self):
+        from dev_room_sync import DevRoomSyncService
+        sync = DevRoomSyncService(self.library, self.base, dev_room=self.service, source_sync_enabled=False)
+        with patch.object(self.service, '_scope', side_effect=AssertionError('invalid request reached library scope')) as scope, \
+                patch.object(sync, '_read_json', side_effect=AssertionError('invalid request read index')) as index, \
+                patch.object(sync, '_inventory', side_effect=AssertionError('invalid request read source')) as source:
+            for payload in (None, [], 'not an object'):
+                with self.subTest(payload=payload), self.assertRaises(ValueError):
+                    sync.save_document(payload)
+            self.assertEqual(scope.call_count + index.call_count + source.call_count, 0)
         for id in ('../outside', '..', 'C:\\outside', 'overview/other', 'a.md', 1):
             with self.subTest(id=id), self.assertRaises(ValueError):
                 self.service.save(self.payload(id=id))
@@ -227,7 +236,7 @@ class DevRoomChecks(unittest.TestCase):
                 'CODEX_CONTROL_TEMP_DIR': str(self.base / 'server-temp')}):
             import world_console
         from dev_room_sync import DevRoomSyncService
-        sync = DevRoomSyncService(self.library, self.base, dev_room=self.service)
+        sync = DevRoomSyncService(self.library, self.base, dev_room=self.service, source_sync_enabled=False)
         with patch.object(world_console, 'DEV_ROOM', self.service), patch.object(world_console, 'DEV_ROOM_SYNC', sync):
             server = world_console.ConsoleHTTPServer(('127.0.0.1', 0), world_console.ConsoleHandler)
             worker = threading.Thread(target=server.serve_forever, daemon=True)

@@ -789,6 +789,8 @@ class DevRoomSyncService:
 
     def save_document(self, payload):
         """Keep media baseline pinned until the existing locale save completes."""
+        if not isinstance(payload, dict):
+            raise ValueError('Dev Room 保存请求无效。')
         with self.dev_room._scope(payload.get('expectedRoot')) as root:
             index, _ = self._read_json(root, INDEX_PARTS)
             bound = index and payload.get('id') in index.get('bindings', {})
@@ -798,7 +800,7 @@ class DevRoomSyncService:
                     self.dev_room.save(payload)
             else:
                 self.dev_room.save(payload)
-        return self.document_state(payload['expectedRoot'], payload['id'], payload.get('language', 'zh'))
+        return self.document_state(payload['expectedRoot'], payload['id'], payload.get('language'))
 
     def upload_media(self, payload):
         self._require_source_sync()
