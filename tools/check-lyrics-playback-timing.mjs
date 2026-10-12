@@ -51,6 +51,7 @@ function element(tag = "div") {
       toggle(name, enabled) { if (enabled) this.add(name); else this.remove(name); }
     },
     appendChild(child) { children.push(child); return child; },
+    replaceChildren(...items) { children.splice(0, children.length, ...items); },
     querySelectorAll(selector) {
       const all = children.flatMap(child => [child, ...(child.querySelectorAll?.(selector) || [])]);
       if (selector === ".music-lyrics-line") return all.filter(child => child.classes.has("music-lyrics-line"));
@@ -95,6 +96,7 @@ function harness(lines = [aligned(0, 1.5, 3.5), aligned(1, 5, 7)], marks = []) {
     musicTrackWithPreferredLyrics: item => item,
     setSelectedTrackPath(path) { runtime.selectedTrackPath = path; },
     recordTrackSeekChange: (...args) => seekEvents.push(args), formatDuration: String,
+    text: key => key, formatLyricsEditorTime: String,
     isModuleForeground: () => true, syncLyricsTimingSelection() {}, syncLyricsAnimationLoop() {},
     updateLyricsTimingWavePlayhead() {}, trackSeekRatio: () => 0,
     els: { nowPlayingLyricsList: list, nowPlayingLyricsPanel: panel,
@@ -197,6 +199,17 @@ check("manual first/end sentence marks retain exact times and analysis origin", 
   assert.equal(JSON.stringify(h.runtime.musicLyricsAnalysis), before);
   const ordinary = aligned(0, 1.5, 3.5); delete ordinary.alignment;
   near(harness([ordinary], marks).lyricsLineWordStartTime(0), 1.7, "ordinary v88 manual origin retained");
+});
+check("end-only sentence timeline lights each entire line from implicit zero and overrides stale caption and word timing", () => {
+  const lines = [aligned(0, 70, 73, "Alpha Beta"), aligned(1, 80, 83, "甲乙丙")];
+  const marks = [[0, "start", 0], [0, "end", 4], [1, "start", 4], [1, "end", 8]]
+    .map(([lineIndex, role, time]) => ({ kind: "sentence", path: "fixture.mp3", lineIndex, role, time,
+      lineText: lines[lineIndex].text, lyricsLanguage: "" }));
+  const h = harness(lines, marks), before = JSON.stringify(h.runtime.musicLyricsAnalysis);
+  for (const [time, active] of [[0, 0], [3.999, 0], [4, 1], [7.999, 1], [8, -1]]) { h.paint(time); h.assertLine(active); }
+  h.runtime.els.audioPlayer.paused = true; h.seekToLyricsLine(0); h.paint(0); h.assertLine(0);
+  assert.equal(h.runtime.els.audioPlayer.paused, true);
+  assert.equal(JSON.stringify(h.runtime.musicLyricsAnalysis), before, "word spans and source text stay unchanged");
 });
 check("a click hold cannot retain an acoustic or manual-ended sentence after its end", () => {
   for (const manual of [false, true]) {

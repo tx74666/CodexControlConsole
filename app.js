@@ -808,7 +808,7 @@ const i18n = {
     lyricsSentenceMarkStart: "标起唱点 · Insert",
     lyricsSentenceMarkEnd: "标换行点 · Insert",
     lyricsSentenceTarget: (number, line) => `待标第 ${number} 句：${line}`,
-    lyricsSentenceHint: "先在第一句开唱时按 Insert；以后每句结束再按 Insert。点歌词选择要修正的句子。",
+    lyricsSentenceHint: "每句结束按 Insert，立即应用并换到下一句；不用另标第一句起点。点歌词可修正句界。",
     lyricsSentencePointHint: "红点是音频时间；在标句子模式点该句可以修正",
     lyricsSentenceApply: "应用时间",
     lyricsSentenceRemove: "删除点",
@@ -1688,7 +1688,7 @@ const i18n = {
     lyricsSentenceMarkStart: "Mark first onset · Insert",
     lyricsSentenceMarkEnd: "Mark line change · Insert",
     lyricsSentenceTarget: (number, line) => `Mark sentence ${number}: ${line}`,
-    lyricsSentenceHint: "Press Insert when the first sentence begins, then whenever a sentence ends. Click a lyric to correct that sentence.",
+    lyricsSentenceHint: "Press Insert at each sentence end to apply it and advance immediately. No first-onset tap is needed. Click a lyric to correct its timing.",
     lyricsSentencePointHint: "Red dots mark audio time; select this sentence in marking mode to edit",
     lyricsSentenceApply: "Apply time",
     lyricsSentenceRemove: "Remove point",
@@ -9696,9 +9696,9 @@ function setSentenceLyricsCalibration(enabled, lineIndex = null) {
   sentenceLyricsCalibration = {
     path: musicLyricsTrackPath, source: sentenceLyricsSource(), loadToken: musicLyricsLoadToken,
     lineIndex: selectedIndex, lineText: lyricsLineText(selectedIndex),
-    role: Number.isFinite(sentenceLyricPointTime(selectedIndex, "start")) ? "end" : "start"
+    role: "end"
   };
-  sentenceLyricsOperation = null;
+  if (!pendingMusicLyricMarks.size) sentenceLyricsOperation = null;
   renderSentenceLyricsControls();
   syncLyricsLineVisualStates(musicLyricsActiveIndex);
   els.nowPlayingLyricsList?.querySelector(`[data-lyrics-index="${selectedIndex}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -9719,11 +9719,15 @@ function sentenceLyricsTransitionPoints(target, time) {
   const rows = sentenceLyricsRowIndices();
   const position = rows.indexOf(target.lineIndex);
   if (position < 0) return null;
-  const start = sentenceLyricPointTime(target.lineIndex, "start");
+  let start = sentenceLyricPointTime(target.lineIndex, "start");
   const end = sentenceLyricPointTime(target.lineIndex, "end");
+  const implicitStart = target.role === "end" && !Number.isFinite(start)
+    ? position === 0 ? 0 : sentenceLyricPointTime(rows[position - 1], "end") : NaN;
+  if (Number.isFinite(implicitStart)) start = implicitStart;
   if ((target.role === "end" && (!Number.isFinite(start) || time <= start))
     || (target.role === "start" && Number.isFinite(end) && time >= end)) return null;
-  const points = [sentenceLyricsPoint(target.lineIndex, target.role, time)];
+  const points = Number.isFinite(implicitStart) ? [sentenceLyricsPoint(target.lineIndex, "start", implicitStart)] : [];
+  points.push(sentenceLyricsPoint(target.lineIndex, target.role, time));
   if (target.role === "end" && position + 1 < rows.length) {
     const next = rows[position + 1];
     const nextStart = sentenceLyricPointTime(next, "start");
@@ -9746,10 +9750,11 @@ function sentenceLyricsTransitionPoints(target, time) {
 
 function stageSentenceLyricsPoints(points) {
   for (const point of points) stagePendingMusicLyricMark(point);
-  persistPendingSentenceLyricsMarks();
+  const journaled = persistPendingSentenceLyricsMarks();
   renderSentenceLyricsControls();
   syncLyricsLineVisualStates(musicLyricsActiveIndex);
   updateLyricsProgress(Number(els.audioPlayer?.currentTime) || 0);
+  return journaled;
 }
 
 function persistPendingSentenceLyricsMarks() {
@@ -9757,8 +9762,10 @@ function persistPendingSentenceLyricsMarks() {
     const marks = Array.from(pendingMusicLyricMarks.values()).filter(mark => mark.kind === "sentence");
     if (marks.length) localStorage.setItem(sentenceLyricsPendingStorageKey, JSON.stringify({ schema: 1, marks }));
     else localStorage.removeItem(sentenceLyricsPendingStorageKey);
+    return true;
   } catch {
     sentenceLyricsSaveError = text("lyricsSentenceJournalFailed");
+    return false;
   }
 }
 
@@ -9777,31 +9784,52 @@ function restorePendingSentenceLyricsMarks() {
   } catch { sentenceLyricsSaveError = text("lyricsSentenceJournalFailed"); }
 }
 
+function sentenceLyricsOperationMatchesSource(operation) {
+  const target = operation?.target;
+  return Boolean(target && target.path === musicLyricsTrackPath && target.path === selectedTrackPath
+    && target.source === sentenceLyricsSource() && target.loadToken === musicLyricsLoadToken);
+}
+
+function advanceSentenceLyricsOperation(operation) {
+  if (!operation?.advance || operation.advanced || !sentenceLyricsOperationMatchesSource(operation)
+    || sentenceLyricsCalibration !== operation.target) return;
+  const rows = sentenceLyricsRowIndices();
+  const next = rows[rows.indexOf(operation.target.lineIndex) + 1];
+  sentenceLyricsCalibration = next == null ? null : {
+    ...operation.target, lineIndex: next, lineText: lyricsLineText(next), role: "end"
+  };
+  operation.advanced = true;
+  renderSentenceLyricsControls();
+  syncLyricsLineVisualStates(musicLyricsActiveIndex);
+}
+
 async function saveSentenceLyricsOperation(operation) {
   if (sentenceLyricsBusy) return false;
+  if (!persistPendingSentenceLyricsMarks()) { renderSentenceLyricsControls(); return false; }
+  advanceSentenceLyricsOperation(operation);
   sentenceLyricsBusy = true;
   sentenceLyricsSaveError = "";
   renderSentenceLyricsControls();
-  const result = await flushPendingMusicLyricMarks();
+  let result;
+  // The existing flush snapshots its marks and removes only acknowledged identities.
+  // Drain later Insert points serially; a late receipt never moves the marking cursor.
+  do {
+    if (!persistPendingSentenceLyricsMarks()) { result = { ok: false, error: sentenceLyricsSaveError }; break; }
+    advanceSentenceLyricsOperation(sentenceLyricsOperation);
+    result = await flushPendingMusicLyricMarks();
+  } while (result?.ok !== false && pendingMusicLyricMarks.size);
   sentenceLyricsBusy = false;
   if (result?.ok === false) {
-    if (!operation || (sentenceLyricsCalibration === operation.target && sentenceLyricsSessionMatches())) {
+    if (!operation || sentenceLyricsOperationMatchesSource(operation)) {
       sentenceLyricsSaveError = result.error || text("lyricsSentenceSaveFailed");
     }
     renderSentenceLyricsControls();
     return false;
   }
-  if (operation && sentenceLyricsOperation === operation && sentenceLyricsCalibration === operation.target && sentenceLyricsSessionMatches()) {
+  if (sentenceLyricsOperation && sentenceLyricsOperationMatchesSource(operation)
+    && sentenceLyricsOperationMatchesSource(sentenceLyricsOperation)) {
     sentenceLyricsOperation = null;
-    if (operation.advance) {
-      if (operation.target.role === "start") operation.target.role = "end";
-      else {
-        const rows = sentenceLyricsRowIndices();
-        const next = rows[rows.indexOf(operation.target.lineIndex) + 1];
-        if (next == null) sentenceLyricsCalibration = null;
-        else { operation.target.lineIndex = next; operation.target.lineText = lyricsLineText(next); operation.target.role = "end"; }
-      }
-    }
+    sentenceLyricsSaveError = "";
   }
   renderSentenceLyricsControls();
   syncLyricsLineVisualStates(musicLyricsActiveIndex);
@@ -9810,15 +9838,19 @@ async function saveSentenceLyricsOperation(operation) {
 }
 
 function markSentenceLyricsNow() {
-  if (sentenceLyricsBusy || sentenceLyricsOperation || !sentenceLyricsAudioMatches()) return false;
+  if (!sentenceLyricsAudioMatches() || (sentenceLyricsOperation && !sentenceLyricsBusy)
+    || (sentenceLyricsBusy && (!sentenceLyricsOperation?.advance || !sentenceLyricsOperation.advanced))) return false;
   const target = sentenceLyricsCalibration;
   const time = Number(els.audioPlayer.currentTime);
-  const points = sentenceLyricsTransitionPoints(target, time);
+  // Insert always closes a sentence, even when the correction editor has Start selected.
+  const endTarget = target.role === "end" ? target : { ...target, role: "end" };
+  const points = sentenceLyricsTransitionPoints(endTarget, time);
   if (!points) { sentenceLyricsSaveError = text("lyricsSentenceOrderInvalid"); renderSentenceLyricsControls(); return false; }
-  const operation = { target, advance: true, points };
+  const operation = { target, advance: true, advanced: false, points };
   sentenceLyricsOperation = operation;
-  stageSentenceLyricsPoints(points);
-  void saveSentenceLyricsOperation(operation);
+  if (!stageSentenceLyricsPoints(points)) return false;
+  advanceSentenceLyricsOperation(operation);
+  if (!sentenceLyricsBusy) void saveSentenceLyricsOperation(operation);
   return true;
 }
 
@@ -9883,7 +9915,8 @@ function updateSentenceLyricsCursor(time = 0) {
   const ratio = duration > 0 ? clamp(time / duration, 0, 1) : 0;
   if (els.lyricsSentenceCursor) els.lyricsSentenceCursor.style.left = `${ratio * 100}%`;
   if (els.lyricsSentenceClock) els.lyricsSentenceClock.textContent = formatLyricsEditorTime(Math.max(0, time));
-  if (els.lyricsSentenceMark && sentenceLyricsSessionMatches()) els.lyricsSentenceMark.disabled = sentenceLyricsBusy || Boolean(sentenceLyricsOperation) || !sentenceLyricsAudioMatches();
+  if (els.lyricsSentenceMark && sentenceLyricsSessionMatches()) els.lyricsSentenceMark.disabled = !sentenceLyricsAudioMatches()
+    || Boolean(sentenceLyricsOperation && (!sentenceLyricsBusy || !sentenceLyricsOperation.advance || !sentenceLyricsOperation.advanced));
 }
 
 function renderSentenceLyricsControls() {
@@ -9910,8 +9943,9 @@ function renderSentenceLyricsControls() {
   if (!active) return;
   const target = sentenceLyricsCalibration;
   els.lyricsSentenceTarget.textContent = text("lyricsSentenceTarget", sentenceLyricsRowIndices().indexOf(target.lineIndex) + 1, target.lineText);
-  els.lyricsSentenceMark.textContent = target.role === "start" ? text("lyricsSentenceMarkStart") : text("lyricsSentenceMarkEnd");
-  els.lyricsSentenceMark.disabled = sentenceLyricsBusy || Boolean(sentenceLyricsOperation) || !sentenceLyricsAudioMatches();
+  els.lyricsSentenceMark.textContent = text("lyricsSentenceMarkEnd");
+  els.lyricsSentenceMark.disabled = !sentenceLyricsAudioMatches()
+    || Boolean(sentenceLyricsOperation && (!sentenceLyricsBusy || !sentenceLyricsOperation.advance || !sentenceLyricsOperation.advanced));
   els.lyricsSentenceRole.value = target.role;
   const pointTime = sentenceLyricPointTime(target.lineIndex, target.role);
   if (document.activeElement !== els.lyricsSentenceTime) els.lyricsSentenceTime.value = formatLyricsEditorTime(pointTime);

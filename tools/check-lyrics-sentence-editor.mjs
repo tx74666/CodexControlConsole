@@ -219,6 +219,14 @@ async function markAndAcknowledge(h, time) {
   const request = h.requests.at(-1); assert.ok(request, "actual mark must request persistence");
   h.replySuccess(request); await tick(); await tick(); return request;
 }
+async function onsetAndAcknowledge(h, time) {
+  h.runtime.sentenceLyricsCalibration.role = "start";
+  h.runtime.els.lyricsSentenceTime.value = String(time);
+  assert.equal(h.api.editSentenceLyricsPoint(), true);
+  const request = h.requests.at(-1); h.replySuccess(request); await tick(); await tick();
+  h.runtime.sentenceLyricsCalibration.role = "end";
+  return request;
+}
 const sentenceMark = (index, role, time, language = "en", lineText = fixtureLines()[index]?.text) => ({
   kind: "sentence", path: "fixture.mp3", lineIndex: index, role, time, lyricsLanguage: language, lineText
 });
@@ -227,37 +235,122 @@ await check("arming selects a sentence cursor independently of incorrect LRC and
   const h = harness(), original = copy(h.runtime.musicLyricsLines);
   h.time(73); h.api.setSentenceLyricsCalibration(true);
   assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 0);
-  assert.equal(h.runtime.sentenceLyricsCalibration.role, "start");
+  assert.equal(h.runtime.sentenceLyricsCalibration.role, "end");
   assert.deepEqual(copy(h.runtime.musicLyricsLines), original);
   assert.equal(h.requests.length, 0);
 });
-await check("first Insert captures exact audio onset, then end-next-start pairs skip rest rows", async () => {
+await check("first Insert closes the sentence with implicit zero onset and immediately advances past rest rows", async () => {
   const h = harness(); h.api.setSentenceLyricsCalibration(true);
-  let request = await markAndAcknowledge(h, 1.234);
-  assert.deepEqual(request.payload.marks.map(mark => [mark.lineIndex, mark.role, mark.time]), [[0, "start", 1.234]]);
-  assert.equal(h.runtime.sentenceLyricsCalibration.role, "end");
-  request = await markAndAcknowledge(h, 4.567);
-  assert.deepEqual(request.payload.marks.map(mark => [mark.lineIndex, mark.role, mark.time]), [[0, "end", 4.567], [2, "start", 4.567]]);
+  const request = await markAndAcknowledge(h, 4.567);
+  assert.deepEqual(request.payload.marks.map(mark => [mark.lineIndex, mark.role, mark.time]), [[0, "start", 0], [0, "end", 4.567], [2, "start", 4.567]]);
   assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 2);
   assert.equal(h.runtime.sentenceLyricsCalibration.role, "end");
-  assert.equal(h.api.activeLyricsIndexAt(1.233), -1);
+  assert.equal(h.api.activeLyricsIndexAt(0), 0);
   assert.equal(h.api.activeLyricsIndexAt(4.566), 0);
   assert.equal(h.api.activeLyricsIndexAt(4.567), 2);
   assert.equal(h.api.activeLyricsIndexAt(72), 2, "uncalibrated old LRC cannot prematurely take over");
 });
 await check("final end closes the last sentence and disarms the cursor", async () => {
   const h = harness(); h.api.setSentenceLyricsCalibration(true);
-  for (const time of [1, 4, 8]) await markAndAcknowledge(h, time);
+  for (const time of [4, 8]) await markAndAcknowledge(h, time);
   const request = await markAndAcknowledge(h, 12);
   assert.deepEqual(request.payload.marks.map(mark => [mark.lineIndex, mark.role]), [[3, "end"]]);
   assert.equal(h.runtime.sentenceLyricsCalibration, null);
   assert.equal(h.api.activeLyricsIndexAt(11.999), 3);
   assert.equal(h.api.activeLyricsIndexAt(12), -1);
 });
+await check("existing first onset is preserved while Insert closes the first sentence without another onset tap", async () => {
+  const h = harness({ marks: [sentenceMark(0, "start", 2)] }); h.api.setSentenceLyricsCalibration(true);
+  const request = await markAndAcknowledge(h, 4);
+  assert.deepEqual(request.payload.marks.map(mark => [mark.lineIndex, mark.role, mark.time]), [[0, "end", 4], [2, "start", 4]]);
+  near(h.api.sentenceLyricPointTime(0, "start"), 2);
+  assert.equal(h.api.activeLyricsIndexAt(1.99), -1);
+});
+await check("consecutive sentence ends advance immediately and drain serially behind a slow acknowledgement", async () => {
+  const h = harness(); h.api.setSentenceLyricsCalibration(true); h.api.renderLyricsPanel();
+  h.time(4); assert.equal(h.api.markSentenceLyricsNow(), true);
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 2);
+  assert.equal(h.runtime.musicLyricsActiveIndex, 2);
+  assert.ok(h.runtime.els.nowPlayingLyricsList.querySelector('[data-lyrics-index="2"]').classes.has("active"));
+  h.time(8); assert.equal(h.api.markSentenceLyricsNow(), true);
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 3);
+  h.time(12); assert.equal(h.api.markSentenceLyricsNow(), true);
+  assert.equal(h.runtime.sentenceLyricsCalibration, null);
+  assert.equal(h.requests.length, 1, "only one request is in flight");
+  assert.equal(h.runtime.pendingMusicLyricMarks.size, 6);
+  h.replySuccess(h.requests[0]); await tick(); await tick();
+  assert.equal(h.requests.length, 2);
+  assert.deepEqual(h.requests[1].payload.marks.map(mark => [mark.lineIndex, mark.role, mark.time]),
+    [[2, "end", 8], [3, "start", 8], [3, "end", 12]]);
+  assert.equal(h.runtime.sentenceLyricsCalibration, null, "late receipt does not reopen a completed cursor");
+  h.replySuccess(h.requests[1]); await tick(); await tick();
+  assert.equal(h.runtime.pendingMusicLyricMarks.size, 0); assert.equal(h.runtime.sentenceLyricsOperation, null);
+  assert.equal(h.storage.size, 0); assert.equal(h.api.activeLyricsIndexAt(8), 3); assert.equal(h.api.activeLyricsIndexAt(12), -1);
+});
+await check("queued sentence save failure retries its original times without undoing immediate cursor advancement", async () => {
+  const h = harness(); h.api.setSentenceLyricsCalibration(true);
+  h.time(4); h.api.markSentenceLyricsNow(); h.time(8); h.api.markSentenceLyricsNow();
+  h.replySuccess(h.requests[0]); await tick(); await tick();
+  const failed = h.requests[1]; failed.reject(new Error("queued synthetic disk failure")); await tick(); await tick();
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 3);
+  assert.equal(h.runtime.pendingMusicLyricMarks.size, 2); assert.match(h.runtime.sentenceLyricsSaveError, /queued synthetic disk failure/);
+  h.time(90); assert.equal(h.api.markSentenceLyricsNow(), false, "failed pending work must be retried, not retimed");
+  const retry = h.api.saveSentenceLyricsOperation(h.runtime.sentenceLyricsOperation);
+  assert.deepEqual(h.requests.at(-1).payload, failed.payload);
+  h.replySuccess(); assert.equal(await retry, true);
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 3);
+  near(h.api.sentenceLyricPointTime(2, "end"), 8); assert.equal(h.runtime.pendingMusicLyricMarks.size, 0);
+});
+await check("a local journal failure keeps the cursor until the same end point can be journaled and retried", async () => {
+  const h = harness(); h.api.setSentenceLyricsCalibration(true);
+  const store = h.runtime.localStorage.setItem;
+  h.runtime.localStorage.setItem = () => { throw new Error("synthetic full local storage"); };
+  h.time(4); assert.equal(h.api.markSentenceLyricsNow(), false);
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 0); assert.equal(h.requests.length, 0);
+  assert.equal(h.runtime.pendingMusicLyricMarks.size, 3); assert.match(h.runtime.sentenceLyricsSaveError, /JournalFailed/);
+  h.runtime.localStorage.setItem = store; h.time(90);
+  const retry = h.api.saveSentenceLyricsOperation(h.runtime.sentenceLyricsOperation);
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 2);
+  assert.ok(h.runtime.els.nowPlayingLyricsList.querySelector('[data-lyrics-index="2"]').classes.has("sentence-calibration-target"), "Retry paints its advanced target before network acknowledgement");
+  assert.deepEqual(h.requests[0].payload.marks.map(mark => [mark.lineIndex, mark.role, mark.time]),
+    [[0, "start", 0], [0, "end", 4], [2, "start", 4]]);
+  h.replySuccess(); assert.equal(await retry, true);
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 2);
+});
+await check("middle sentence marking derives only a known preceding end and never guesses an unmarked gap", async () => {
+  const h = harness({ marks: [sentenceMark(0, "start", 0), sentenceMark(0, "end", 4)] });
+  h.api.setSentenceLyricsCalibration(true, 2);
+  const request = await markAndAcknowledge(h, 8);
+  assert.deepEqual(request.payload.marks.map(mark => [mark.lineIndex, mark.role, mark.time]), [[2, "start", 4], [2, "end", 8], [3, "start", 8]]);
+  const gap = harness(); gap.api.setSentenceLyricsCalibration(true, 2); gap.time(8);
+  assert.equal(gap.api.markSentenceLyricsNow(), false); assert.equal(gap.requests.length, 0);
+});
+await check("Insert remains an end-only action when Start is selected for precise correction", async () => {
+  const h = harness({ marks: [sentenceMark(0, "start", 2)] }); h.api.setSentenceLyricsCalibration(true);
+  h.runtime.sentenceLyricsCalibration.role = "start";
+  const request = await markAndAcknowledge(h, 4);
+  assert.deepEqual(request.payload.marks.map(mark => [mark.lineIndex, mark.role, mark.time]), [[0, "end", 4], [2, "start", 4]]);
+  near(h.api.sentenceLyricPointTime(0, "start"), 2); assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 2);
+});
+await check("a journal failure during an in-flight save holds the newer cursor and resumes once protected", async () => {
+  const h = harness(); h.api.setSentenceLyricsCalibration(true); h.time(4); h.api.markSentenceLyricsNow();
+  const store = h.runtime.localStorage.setItem;
+  h.runtime.localStorage.setItem = () => { throw new Error("synthetic later journal failure"); };
+  h.time(8); assert.equal(h.api.markSentenceLyricsNow(), false);
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 2);
+  h.replySuccess(h.requests[0]); await tick(); await tick();
+  assert.equal(h.requests.length, 1); assert.equal(h.runtime.sentenceLyricsBusy, false);
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 2);
+  h.runtime.localStorage.setItem = store;
+  const retry = h.api.saveSentenceLyricsOperation(h.runtime.sentenceLyricsOperation);
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 3);
+  assert.deepEqual(h.requests.at(-1).payload.marks.map(mark => [mark.lineIndex, mark.role, mark.time]), [[2, "end", 8], [3, "start", 8]]);
+  h.replySuccess(); assert.equal(await retry, true); assert.equal(h.runtime.sentenceLyricsSaveError, "");
+});
 await check("old sentence word boundaries and word spans survive sentence saves", async () => {
   const legacy = { kind: "boundary", path: "fixture.mp3", lineIndex: 0, boundaryIndex: 1, role: "end", time: 80, note: "preserve" };
   const h = harness({ marks: [legacy] }), original = copy(h.runtime.musicLyricsAnalysis.lines);
-  h.api.setSentenceLyricsCalibration(true); await markAndAcknowledge(h, 1);
+  h.api.setSentenceLyricsCalibration(true); await onsetAndAcknowledge(h, 1);
   assert.deepEqual(copy(h.runtime.musicLyricsAnalysis.lines), original);
   assert.deepEqual(copy(h.runtime.musicLyricsAnalysis.manualMarks.find(mark => mark.kind === "boundary")), legacy);
   assert.equal(h.api.activeLyricsIndexAt(2), 0, "legacy words cannot choose the calibration cursor");
@@ -265,7 +358,7 @@ await check("old sentence word boundaries and word spans survive sentence saves"
 await check("plaintext lyrics with no LRC timestamps support manual sentence playback and paused seek", async () => {
   const lines = fixtureLines().map(line => ({ ...line, time: null }));
   const h = harness({ lines, synced: false }); h.api.setSentenceLyricsCalibration(true);
-  await markAndAcknowledge(h, 1); await markAndAcknowledge(h, 4);
+  await onsetAndAcknowledge(h, 1); await markAndAcknowledge(h, 4);
   h.runtime.els.audioPlayer.paused = true;
   h.api.seekToLyricsLine(0); near(h.runtime.els.audioPlayer.currentTime, 1);
   assert.equal(h.runtime.els.audioPlayer.paused, true);
@@ -290,12 +383,13 @@ await check("a held key or repeated click cannot submit the same operation twice
   const first = h.key(); assert.equal(h.api.handleSentenceLyricsMarkKeydown(first), true); assert.equal(first.prevented, true);
   assert.equal(h.api.markSentenceLyricsNow(), false); assert.equal(h.api.handleSentenceLyricsMarkKeydown(h.key({ repeat: true })), false);
   assert.equal(h.requests.length, 1);
-  assert.equal(h.runtime.sentenceLyricsCalibration.role, "start", "cursor waits for acknowledgement");
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 2, "cursor advances before acknowledgement");
+  assert.equal(h.api.activeLyricsIndexAt(1), 2, "whole next line uses the staged sentence timeline immediately");
   h.replySuccess(); await tick(); await tick();
   assert.equal(h.runtime.sentenceLyricsCalibration.role, "end");
 });
 await check("pause and backward seek keep the independent cursor; an end before onset is rejected", async () => {
-  const h = harness(); h.api.setSentenceLyricsCalibration(true); await markAndAcknowledge(h, 1);
+  const h = harness(); h.api.setSentenceLyricsCalibration(true); await onsetAndAcknowledge(h, 1);
   const target = h.runtime.sentenceLyricsCalibration; h.runtime.els.audioPlayer.paused = true;
   h.api.seekToLyricsLine(2); assert.equal(h.runtime.sentenceLyricsCalibration, target);
   h.time(.5); assert.equal(h.api.markSentenceLyricsNow(), false); assert.equal(h.requests.length, 1);
@@ -305,7 +399,7 @@ await check("pause and backward seek keep the independent cursor; an end before 
 });
 await check("saved endpoint correction updates its paired boundary with compare-and-set and no cursor advance", async () => {
   const h = harness(); h.api.setSentenceLyricsCalibration(true);
-  await markAndAcknowledge(h, 1); await markAndAcknowledge(h, 4);
+  await onsetAndAcknowledge(h, 1); await markAndAcknowledge(h, 4);
   h.api.setSentenceLyricsCalibration(true, 2); h.runtime.sentenceLyricsCalibration.role = "start";
   h.runtime.els.lyricsSentenceTime.value = "0:03.500";
   assert.equal(h.api.editSentenceLyricsPoint(), true);
@@ -319,7 +413,7 @@ await check("saved endpoint correction updates its paired boundary with compare-
 await check("point removal deletes only the linked sentence endpoints while preserving words and text", async () => {
   const legacy = { kind: "boundary", path: "fixture.mp3", lineIndex: 0, boundaryIndex: 1, role: "end", time: 80 };
   const h = harness({ marks: [legacy] }); h.api.setSentenceLyricsCalibration(true);
-  await markAndAcknowledge(h, 1); await markAndAcknowledge(h, 4);
+  await onsetAndAcknowledge(h, 1); await markAndAcknowledge(h, 4);
   const textBefore = copy(h.runtime.musicLyricsLines), spansBefore = copy(h.runtime.musicLyricsAnalysis.lines);
   h.api.setSentenceLyricsCalibration(true, 0); h.runtime.sentenceLyricsCalibration.role = "end";
   assert.equal(h.api.removeSentenceLyricsPoint(), true); const request = h.requests.at(-1);
@@ -331,12 +425,13 @@ await check("point removal deletes only the linked sentence endpoints while pres
   assert.deepEqual(copy(h.runtime.musicLyricsLines), textBefore); assert.deepEqual(copy(h.runtime.musicLyricsAnalysis.lines), spansBefore);
   assert.deepEqual(copy(h.runtime.musicLyricsAnalysis.manualMarks.find(mark => mark.kind === "boundary")), legacy);
 });
-await check("failed persistence retains the exact point and cursor, and Retry acknowledges the original audio time", async () => {
+await check("failed persistence retains the exact point and advanced cursor, and Retry acknowledges the original audio time", async () => {
   const h = harness(); h.api.setSentenceLyricsCalibration(true); h.time(1.234);
   assert.equal(h.api.markSentenceLyricsNow(), true); const first = h.requests.at(-1);
   first.reject(new Error("synthetic disk failure")); await tick(); await tick();
-  assert.equal(h.runtime.sentenceLyricsCalibration.role, "start");
-  assert.equal(h.runtime.pendingMusicLyricMarks.size, 1); assert.equal(h.runtime.sentenceLyricsBusy, false);
+  assert.equal(h.runtime.sentenceLyricsCalibration.role, "end");
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 2);
+  assert.equal(h.runtime.pendingMusicLyricMarks.size, 3); assert.equal(h.runtime.sentenceLyricsBusy, false);
   assert.match(h.runtime.sentenceLyricsSaveError, /synthetic disk failure/);
   assert.equal(h.runtime.els.lyricsSentenceRetry.hidden, false);
   assert.equal(h.api.markSentenceLyricsNow(), false, "do not replace the failed point with a later clock value");
@@ -344,7 +439,7 @@ await check("failed persistence retains the exact point and cursor, and Retry ac
   assert.deepEqual(h.requests.at(-1).payload, first.payload);
   h.replySuccess(); assert.equal(await retry, true);
   assert.equal(h.runtime.sentenceLyricsCalibration.role, "end");
-  near(h.api.sentenceLyricPointTime(0, "start"), 1.234);
+  near(h.api.sentenceLyricPointTime(0, "end"), 1.234);
   assert.equal(h.runtime.pendingMusicLyricMarks.size, 0); assert.equal(h.storage.size, 0);
 });
 await check("pending journal survives reload and beacon queueing is never reported as persistence", async () => {
@@ -353,12 +448,12 @@ await check("pending journal survives reload and beacon queueing is never report
   h.requests.at(-1).reject(new Error("offline")); await tick(); await tick();
   const journal = h.storage.get("codexControl.sentenceLyricPending.v1"); assert.ok(journal);
   const restored = harness(); restored.storage.set("codexControl.sentenceLyricPending.v1", journal);
-  restored.api.restorePendingSentenceLyricsMarks(); assert.equal(restored.runtime.pendingMusicLyricMarks.size, 1);
-  near(restored.api.sentenceLyricPointTime(0, "start"), 1);
+  restored.api.restorePendingSentenceLyricsMarks(); assert.equal(restored.runtime.pendingMusicLyricMarks.size, 3);
+  near(restored.api.sentenceLyricPointTime(0, "start"), 0);
   restored.runtime.navigator.sendBeacon = () => true;
   const result = await restored.api.flushPendingMusicLyricMarks({ beacon: true });
   assert.equal(result.ok, false); assert.equal(result.pending, true);
-  assert.equal(restored.runtime.pendingMusicLyricMarks.size, 1);
+  assert.equal(restored.runtime.pendingMusicLyricMarks.size, 3);
   assert.ok(restored.storage.has("codexControl.sentenceLyricPending.v1"));
 });
 await check("stale song acknowledgement cannot advance a new cursor or replace its analysis", async () => {
@@ -369,7 +464,7 @@ await check("stale song acknowledgement cannot advance a new cursor or replace i
   const before = copy(h.runtime.musicLyricsAnalysis); h.ready(); h.api.setSentenceLyricsCalibration(true);
   h.replySuccess(request); await tick(); await tick();
   assert.deepEqual(copy(h.runtime.musicLyricsAnalysis), before);
-  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 0); assert.equal(h.runtime.sentenceLyricsCalibration.role, "start");
+  assert.equal(h.runtime.sentenceLyricsCalibration.lineIndex, 0); assert.equal(h.runtime.sentenceLyricsCalibration.role, "end");
   assert.equal(h.cachedWrites.length, 0);
 });
 await check("stale language acknowledgement cannot overwrite the active translation or its calibration", async () => {
@@ -380,7 +475,7 @@ await check("stale language acknowledgement cannot overwrite the active translat
   const before = copy(h.runtime.musicLyricsAnalysis); h.ready(); h.api.setSentenceLyricsCalibration(true);
   h.replySuccess(request); await tick(); await tick();
   assert.deepEqual(copy(h.runtime.musicLyricsAnalysis), before);
-  assert.equal(h.runtime.sentenceLyricsCalibration.role, "start"); assert.equal(h.cachedWrites.length, 0);
+  assert.equal(h.runtime.sentenceLyricsCalibration.role, "end"); assert.equal(h.cachedWrites.length, 0);
   assert.ok(Number.isNaN(h.api.sentenceLyricPointTime(0, "start")));
 });
 await check("sentence identity rejects another translation and edited line text at the same ordinal", () => {
@@ -467,10 +562,10 @@ await check("a late error for the old song does not put a failure banner on the 
   assert.equal(h.runtime.musicLyricsStatus, "new-song-status");
   assert.equal(h.runtime.sentenceLyricsSaveError, "", "old save must not put its error in the new sentence controls");
 });
-await check("invalid acknowledgement cannot discard a pending point or advance the calibration cursor", async () => {
+await check("invalid acknowledgement cannot discard pending points or move the already advanced calibration cursor", async () => {
   const h = harness(); h.api.setSentenceLyricsCalibration(true); h.time(1); h.api.markSentenceLyricsNow();
   h.requests.at(-1).resolve({ ok: false, error: "synthetic rejected receipt" }); await tick(); await tick();
-  assert.equal(h.runtime.sentenceLyricsCalibration.role, "start"); assert.equal(h.runtime.pendingMusicLyricMarks.size, 1);
+  assert.equal(h.runtime.sentenceLyricsCalibration.role, "end"); assert.equal(h.runtime.pendingMusicLyricMarks.size, 3);
   assert.ok(h.storage.has("codexControl.sentenceLyricPending.v1")); assert.ok(h.runtime.sentenceLyricsOperation);
 });
 await check("successful-looking receipts without the exact sentence point remain pending and retryable", async () => {
@@ -480,7 +575,7 @@ await check("successful-looking receipts without the exact sentence point remain
       .map(patch => ({ ok: true, marksByPath: { "fixture.mp3": [wrong(patch)] } }))]) {
     const h = harness(); h.api.setSentenceLyricsCalibration(true); h.time(1); h.api.markSentenceLyricsNow();
     h.requests.at(-1).resolve(result); await tick(); await tick();
-    assert.equal(h.runtime.sentenceLyricsCalibration.role, "start"); assert.equal(h.runtime.pendingMusicLyricMarks.size, 1);
+    assert.equal(h.runtime.sentenceLyricsCalibration.role, "end"); assert.equal(h.runtime.pendingMusicLyricMarks.size, 3);
     assert.ok(h.storage.has("codexControl.sentenceLyricPending.v1")); assert.ok(h.runtime.sentenceLyricsOperation);
   }
 });
@@ -544,7 +639,7 @@ await check("closing calibration keeps the saved whole-sentence playback and rem
 });
 await check("late acoustic response accepts fresh word detail without replacing acknowledged sentence corrections or browser cache", async () => {
   const h = harness(); h.api.setSentenceLyricsCalibration(true);
-  await markAndAcknowledge(h, 1); await markAndAcknowledge(h, 4);
+  await onsetAndAcknowledge(h, 1); await markAndAcknowledge(h, 4);
   h.api.setSentenceLyricsCalibration(true, 0); h.runtime.sentenceLyricsCalibration.role = "start";
   h.runtime.els.lyricsSentenceTime.value = "0:01.500"; assert.equal(h.api.editSentenceLyricsPoint(), true);
   h.replySuccess(); await tick(); await tick();
