@@ -22174,7 +22174,7 @@ scheduleClockTick();
   if (!panel) return;
   const modulePanel = panel.closest("[data-module-panel]");
   const byId = id => document.getElementById(`devRoom${id}`);
-  const ui = Object.fromEntries(["List", "Title", "SavedAt", "Read", "Editor", "TitleInput", "BodyInput", "BodyLabel", "Fields", "Agent", "AgentContent", "Edit", "Save", "Copy", "New", "Reload", "Status"].map(id => [id, byId(id)]));
+  const ui = Object.fromEntries(["List", "Title", "SavedAt", "Read", "Editor", "TitleInput", "BodyInput", "BodyLabel", "Fields", "Agent", "AgentContent", "Edit", "Save", "Copy", "New", "Reload", "Status", "ViewImages", "ViewText", "ViewNote", "Sync", "SyncHeading", "StructureNote", "SyncPull", "SyncPush", "SyncReceipt", "SyncStatus", "SyncPreview", "SyncPreviewTitle", "SyncChanges", "SyncApply", "SyncDismiss"].map(id => [id, byId(id)]));
   const copy = {
     zh: { badge: "文档", intro: "给 Dev 的文档，在这里查看和修改。", documents: "全部文档", newDocument: "＋ 新建", edit: "编辑", preview: "查看", save: "保存", titleLabel: "文档名称", bodyLabel: "正文", reload: "重新读取", placeholder: "在这里写下文档内容……", empty: "文档，从这里开始。", emptyBody: "这份总案先留空。点「编辑」写下内容，也可以新建其他文档。", loading: "正在读取文档……", ready: "保存在当前资料库 · Project Nexus / Dev Room", draft: "草稿已保留，点击保存后更新文档。", draftError: "草稿暂时无法保留，请先复制正文。", saved: "已保存到资料库。", saving: "正在保存……", conflict: "文档或资料库已改变，当前草稿已保留。可以保存为副本，保留两份内容。", failed: "文档暂时无法读取，请重试。", saveFailed: "保存失败，草稿已保留。", untitled: "未命名文档", overview: "总案", pending: "尚未填写", recovered: "已恢复未保存的草稿。", updated: "最后保存", dirty: " · 草稿" },
     en: { badge: "Documents", intro: "Documents for Dev. Read and edit them here.", documents: "All documents", newDocument: "+ New", edit: "Edit", preview: "View", save: "Save", titleLabel: "Document name", bodyLabel: "Content", reload: "Reload", placeholder: "Write your document here…", empty: "Start your document here.", emptyBody: "The overview is blank for now. Choose Edit to write, or create another document.", loading: "Loading documents…", ready: "Saved in the selected library · Project Nexus / Dev Room", draft: "Draft kept. Choose Save to update the document.", draftError: "The draft could not be kept. Copy your text before leaving.", saved: "Saved to the document library.", saving: "Saving…", conflict: "The document or library changed. Your draft is kept. Save as a copy to keep both versions.", failed: "Documents could not be loaded. Please retry.", saveFailed: "Save failed. Your draft is kept.", untitled: "Untitled document", overview: "Overview", pending: "Not yet written", recovered: "Unsaved draft restored.", updated: "Last saved", dirty: " · Draft" }
@@ -22184,14 +22184,71 @@ scheduleClockTick();
   copy.en.fieldError = "The text cannot be saved yet. Keep this page open and check the title and content.";
   copy.zh.structureReview = "这份文档的结构需要核对，原文和已有草稿已保留。";
   copy.en.structureReview = "The document structure needs review. The original and any existing draft are kept.";
+  copy.zh.conflict = "文档或资料库已改变，当前草稿已保留。可保存文字副本；图片和替换图片的草稿保留在原文档。";
+  copy.en.conflict = "The document or library changed. Your draft is kept. You can save a text copy; images and replacement-image drafts stay with the original document.";
+  copy.zh.saveCopy = "保存文字副本"; copy.en.saveCopy = "Save a text copy";
   let root = "", documents = [], current = null, editing = false, busy = false, sequence = 0;
   const selectedLanguage = () => document.documentElement.lang.startsWith("zh") ? "zh" : "en";
   let activeLanguage = selectedLanguage(), legacyDraft = null, requestedDocumentId = "overview";
   Object.assign(copy.zh, { intro: "面向开发者的文档，在这里查看和修改。", ready: "保存在当前资料库 · 项目枢纽／开发文档室", missing: "这份文档还没有中文版本。可点击「编辑」补充中文内容。", legacy: "旧格式草稿", legacyNote: "旧格式草稿已完整保留，可展开代理资料查看。", switching: "正在读取中文版本……" });
   Object.assign(copy.en, { missing: "The English version is not ready yet. Choose Edit to write it.", legacy: "Legacy draft", legacyNote: "The legacy draft is kept in Agent details for review.", switching: "Loading the English version…" });
-  let catalog = [], fieldModel = null, fieldSource = "", canonicalBody = "", fieldInvalid = false, listedSelection = null;
+  let catalog = [], catalogManaged = false, fieldModel = null, fieldSource = "", canonicalBody = "", fieldInvalid = false, listedSelection = null;
+  let syncState = null, syncPlan = null, syncIntent = null, syncMessage = "", uploadBusy = false, syncRecordBlocked = false, importDraftBlocked = false;
+  const stagedPreviews = new Map();
+  const viewKey = "codex-console-dev-room-view-v1";
+  let viewMode = "images";
+  try { if (localStorage.getItem(viewKey) === "text") viewMode = "text"; } catch { /* Reading is still available. */ }
+  function applyViewMode(mode, persist = false) {
+    viewMode = mode === "text" ? "text" : "images";
+    panel.dataset.devRoomView = viewMode;
+    ui.ViewImages?.setAttribute("aria-pressed", String(viewMode === "images"));
+    ui.ViewText?.setAttribute("aria-pressed", String(viewMode === "text"));
+    if (persist) try { localStorage.setItem(viewKey, viewMode); } catch { /* Keep the selected mode for this window. */ }
+  }
+  const imageFields = ["sha256", "stagingName", "resourcePath", "guid", "fileID", "type", "assetPath"];
+  const syncKey = (library = root, language = activeLanguage) => `codex-console-dev-room-sync-request-v2:${library}:${language}`;
+  const currentBinding = () => syncState?.bindings?.find(item => item.documentId === current?.id);
+  const gameDocument = () => Boolean(currentBinding() || current?.syncSource);
+  const managedNavigation = () => current?.id === "overview" && current.generatedNavigation === true;
+  function translationState(item = current) {
+    const binding = syncState?.bindings?.find(value => value.documentId === item?.id);
+    if (item?.translationStale || binding?.translationStale || binding?.status === "translation_stale") return "stale";
+    if (item?.translationMissing || binding?.translationMissing || binding?.status === "translation_missing") return "missing";
+    return "";
+  }
+  const translationLabel = state => state === "stale" ? text("需要重新核对译稿", "Translation needs review") : text("待翻译", "Translation needed");
+  const currentPushBlocked = () => busy || editing || !current?.revision || !currentBinding() || managedNavigation() || Boolean(drafts()[current?.id]) || Boolean(syncIntent) || syncRecordBlocked || Boolean(translationState() && !bodyValue().trim());
+  const mediaSlot = index => current?.mediaSlots?.find(slot => Number(slot.section ?? slot.index) === index);
+  const mediaPreviewKey = (library, language, id, section) => JSON.stringify([library, language, id, section]);
+  const currentIdentity = value => value.root === root && value.language === activeLanguage && selectedLanguage() === value.language && value.id === current?.id && value.sequence === sequence;
+  const sameDocumentIdentity = value => value.root === root && value.language === activeLanguage && selectedLanguage() === value.language && value.id === current?.id;
+  function setSyncMessage(zh, en) {
+    syncMessage = { zh, en };
+    if (ui.SyncStatus) ui.SyncStatus.textContent = text(zh, en);
+  }
+  function restoreSyncIntent() {
+    syncIntent = null; syncRecordBlocked = false;
+    try {
+      const value = JSON.parse(localStorage.getItem(syncKey()) || "null");
+      if (value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.requestId) && value.root === root && value.language === activeLanguage && ["import", "push"].includes(value.kind) && typeof value.documentId === "string") syncIntent = value;
+      else if (value !== null) syncRecordBlocked = true;
+    } catch { syncRecordBlocked = true; }
+  }
+  function clearSyncIntent(saved) {
+    try { localStorage.removeItem(syncKey(saved.root, saved.language)); }
+    catch { return false; }
+    if (root === saved.root && activeLanguage === saved.language && syncIntent?.requestId === saved.requestId) syncIntent = null;
+    return true;
+  }
   const bodyValue = () => fieldModel ? canonicalBody : ui.BodyInput.value;
   const text = (zh, en) => document.documentElement.lang.startsWith("zh") ? zh : en;
+  const navigationCategories = {
+    "设备私有展示": ["设备私有展示", "Device displays"], "Device displays": ["设备私有展示", "Device displays"],
+    "Project Overview": ["项目概览", "Project Overview"], "项目概览": ["项目概览", "Project Overview"],
+    Gameplay: ["玩法", "Gameplay"], "玩法": ["玩法", "Gameplay"], Systems: ["系统", "Systems"], "系统": ["系统", "Systems"],
+    Content: ["内容", "Content"], "内容": ["内容", "Content"], Technical: ["技术", "Technical"], "技术": ["技术", "Technical"]
+  };
+  const navigationCategory = value => navigationCategories[value] ? text(...navigationCategories[value]) : value;
   const imported = () => /^<!-- rr-dev-room:/.test(ui.BodyInput.value);
   function updateFields() {
     if (!fieldModel) return true;
@@ -22209,6 +22266,12 @@ scheduleClockTick();
       try {
         fieldSource = source; canonicalBody = source;
         fieldModel = window.CodexDevRoomEditor.parse(fieldSource);
+        // The server identifies the existing Unity image fields. Missing target
+        // language text keeps the same slots without importing source prose.
+        for (const section of fieldModel.sections) {
+          const slot = mediaSlot(section.index);
+          if (!section.media && slot?.image) section.media = { section: section.index, imageCaption: String(slot.caption || ""), ...Object.fromEntries(imageFields.filter(key => Object.hasOwn(slot.image, key)).map(key => [key, slot.image[key]])) };
+        }
         const field = (parent, id, label, value, multiline, changed) => {
           const title = document.createElement("label"); title.htmlFor = id; title.textContent = label;
           title.dataset.devRoomFieldLabel = id;
@@ -22230,6 +22293,7 @@ scheduleClockTick();
           const group = document.createElement("section"); group.className = "dev-room-section-edit";
           field(group, `devRoomSectionTitle${section.index}`, text(`第 ${section.index + 1} 节标题`, `Section ${section.index + 1} title`), section.title, false, value => { section.title = value; });
           field(group, `devRoomSectionBody${section.index}`, text("正文", "Content"), section.body, true, value => { section.body = value; });
+          if (mediaSlot(section.index)?.editable) group.appendChild(mediaEditor(section));
           (technicalIndexes.has(section.index) ? technical : ui.Fields).appendChild(group);
         }
         if (technical.childElementCount > 1) ui.Fields.appendChild(technical);
@@ -22252,7 +22316,89 @@ scheduleClockTick();
   function drafts() { return readDrafts(draftKey()); }
   function legacyDrafts() { return readDrafts("codex-console-dev-room-drafts-v1:" + root); }
   function setStatus(key) { statusKey = key; ui.Status.textContent = words()[key]; }
-  function appendDevRoomInline(parent, source, depth = 0) {
+  function imageFigure(section, index) {
+    const slot = mediaSlot(index), image = section?.media || slot?.image;
+    const caption = String(section?.media?.imageCaption ?? slot?.caption ?? "");
+    const figure = document.createElement("figure"); figure.className = "dev-room-media";
+    const description = document.createElement("figcaption");
+    description.textContent = caption || text(`第 ${index + 1} 节图片`, `Section ${index + 1} image`);
+    const staged = stagedPreviews.get(mediaPreviewKey(root, activeLanguage, current.id, index));
+    const stagedMatches = staged?.sha256 && staged.sha256 === image?.sha256;
+    const savedMatches = image?.sha256 ? image.sha256 === slot?.image?.sha256 : Boolean(slot?.hasImage);
+    const draftMatches = slot?.editable && image?.section === index && typeof image.sha256 === "string" && image.sha256.match(/^[0-9a-f]{64}/)?.[0] === image.sha256 &&
+      [image.sha256 + ".png", image.sha256 + ".jpg"].includes(image.stagingName);
+    if (stagedMatches || savedMatches || draftMatches) {
+      const pixels = document.createElement("img"); pixels.alt = description.textContent;
+      pixels.loading = "lazy"; pixels.decoding = "async";
+      const identity = { expectedRoot: root, id: current.id, section: String(index), revision: current.revision, language: activeLanguage };
+      pixels.src = stagedMatches ? staged.dataUrl : savedMatches ? "/api/dev-room/media?" + new URLSearchParams(identity) :
+        "/api/dev-room/media/draft?" + new URLSearchParams({ ...identity, stagingName: image.stagingName });
+      pixels.addEventListener("error", () => {
+        pixels.hidden = true;
+        const note = document.createElement("span"); note.className = "dev-room-media-note";
+        note.textContent = text("图片暂时无法读取，图片记录和说明已保留。", "The image could not be loaded. Its record and description are kept.");
+        figure.appendChild(note);
+      }, { once: true });
+      figure.appendChild(pixels);
+    } else {
+      const note = document.createElement("span"); note.className = "dev-room-media-note";
+      note.textContent = image?.sha256 ? text("替换图片已保留，保存后可以读取。", "The replacement image is kept. Save to load it.") : text("这个图片位置尚未填写。", "This image slot is empty.");
+      figure.appendChild(note);
+    }
+    figure.appendChild(description); return figure;
+  }
+  function mediaEditor(section) {
+    const group = document.createElement("div"); group.className = "dev-room-media-edit";
+    group.dataset.devRoomMediaSection = String(section.index);
+    group.appendChild(imageFigure(section, section.index));
+    const label = document.createElement("label"), caption = document.createElement("textarea");
+    caption.id = `devRoomImageCaption${section.index}`; label.htmlFor = caption.id;
+    label.textContent = text("图片说明", "Image description"); caption.value = section.media?.imageCaption || "";
+    caption.rows = 2; caption.addEventListener("input", () => {
+      section.media = { ...(section.media || { section: section.index }), imageCaption: caption.value };
+      if (updateFields() && keepDraft()) setStatus("draft");
+      const description = group.querySelector("figcaption"); if (description) description.textContent = caption.value || text(`第 ${section.index + 1} 节图片`, `Section ${section.index + 1} image`);
+    });
+    const controls = document.createElement("div"); controls.className = "dev-room-media-tools";
+    const file = document.createElement("input"); file.type = "file"; file.accept = "image/png,image/jpeg";
+    file.id = `devRoomImageFile${section.index}`; file.setAttribute("aria-label", text("选择替换图片", "Choose replacement image"));
+    const choose = document.createElement("button"); choose.type = "button"; choose.className = "ghost-button";
+    choose.textContent = text("替换图片", "Replace image"); choose.addEventListener("click", () => file.click());
+    const note = document.createElement("span"); note.className = "dev-room-media-note";
+    note.textContent = text("PNG / JPEG · 保存后再同步到游戏", "PNG / JPEG · Save before syncing to the game");
+    const status = document.createElement("p"); status.className = "dev-room-media-status"; status.setAttribute("role", "status");
+    file.addEventListener("change", () => { const selected = file.files?.[0]; if (selected) void uploadImage(section, selected, group, status); file.value = ""; });
+    controls.append(file, choose, note); group.append(label, caption, controls, status); return group;
+  }
+  async function uploadImage(section, file, group, status) {
+    if (busy || uploadBusy || !editing || !current?.revision || !mediaSlot(section.index)?.editable || !keepDraft()) return;
+    if (!["image/png", "image/jpeg"].includes(file.type) || !file.size || file.size > 10 * 1024 * 1024) {
+      status.textContent = text("请选择 10 MB 以内的 PNG 或 JPEG 图片。", "Choose a PNG or JPEG image up to 10 MB."); return;
+    }
+    const saved = { root, id: current.id, revision: current.revision, language: activeLanguage, section: section.index, sequence: ++sequence };
+    busy = true; uploadBusy = true; render();
+    status.textContent = text("正在上传替换图片……", "Uploading replacement image…");
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error("Image read failed")); reader.readAsDataURL(file);
+      });
+      if (!currentIdentity(saved)) return;
+      const result = await request("/api/dev-room/media/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedRoot: saved.root, id: saved.id, language: saved.language, expectedRevision: saved.revision, section: saved.section, filename: file.name, mimeType: file.type, base64: dataUrl.slice(dataUrl.indexOf(",") + 1) }) });
+      if (!currentIdentity(saved)) return;
+      if (Number(result.section) !== saved.section || result.expectedRevision !== saved.revision || !/^[0-9a-f]{64}$/.test(result.sha256 || "") || result.image?.sha256 !== result.sha256) throw new Error("Image receipt identity changed");
+      if (result.root && result.root !== saved.root || result.language && result.language !== saved.language || result.id && result.id !== saved.id) throw new Error("Image receipt identity changed");
+      const replacement = Object.fromEntries(imageFields.filter(key => Object.hasOwn(result.image, key)).map(key => [key, result.image[key]]));
+      section.media = { section: saved.section, imageCaption: section.media?.imageCaption || "", ...replacement };
+      if (!updateFields() || !keepDraft()) throw new Error("Image draft could not be kept");
+      stagedPreviews.set(mediaPreviewKey(saved.root, saved.language, saved.id, saved.section), { sha256: result.sha256, dataUrl });
+      while (stagedPreviews.size > 2) stagedPreviews.delete(stagedPreviews.keys().next().value);
+      const old = group.querySelector("figure"); if (old) { old.replaceChildren(...imageFigure(section, saved.section).children); }
+      setStatus("draft"); status.textContent = text("图片已上传，草稿已保留。点击保存，再同步到游戏。", "Image uploaded and draft kept. Save, then sync to the game.");
+    } catch (error) {
+      if (currentIdentity(saved)) status.textContent = error.status === 409 ? text("文档版本已改变，图片替换未写入正文；请先核对当前草稿。", "The document version changed. The replacement was not written to the document; review the draft.") : text("图片上传未完成，已有内容和图片保留。", "Image upload did not complete. Existing text and image are kept.");
+    } finally { if (saved.sequence === sequence) { busy = false; uploadBusy = false; render(); } }
+  }
+  function appendDevRoomInline(parent, source, depth = 0, managed = false) {
     const value = String(source);
     if (depth > 4) { parent.appendChild(document.createTextNode(value)); return; }
     const tokens = /(`[^`]+`|\*\*[^*]+\*\*|!?\[[^\]]*\]\((?:<[^>]+>|[^)]+)\))/g;
@@ -22264,7 +22410,7 @@ scheduleClockTick();
         const code = token.startsWith("`");
         const node = document.createElement(code ? "code" : "strong");
         if (code) node.textContent = token.slice(1, -1);
-        else appendDevRoomInline(node, token.slice(2, -2), depth + 1);
+        else appendDevRoomInline(node, token.slice(2, -2), depth + 1, managed);
         parent.appendChild(node);
       } else {
         const separator = token.indexOf("]("), image = token.startsWith("!");
@@ -22273,7 +22419,8 @@ scheduleClockTick();
         const linkedId = target.match(/^(?:#dev-room-([0-9a-f-]{36}|overview)|([0-9a-f-]{36})\.md)$/)?.slice(1).find(Boolean);
         if (!image && linkedId && documents.some(item => item.id === linkedId)) {
           const button = document.createElement("button"); button.type = "button";
-          button.className = "document-inline-link"; button.textContent = label;
+          const summary = managed ? documents.find(item => item.id === linkedId && item.language === activeLanguage) : null;
+          button.className = "document-inline-link"; button.textContent = summary?.title || label;
           button.addEventListener("click", () => void load(linkedId)); parent.appendChild(button);
         } else if (!image && /^https?:\/\//i.test(target)) {
           const link = document.createElement("a"); link.href = target; link.textContent = label;
@@ -22284,6 +22431,10 @@ scheduleClockTick();
     }
     parent.appendChild(document.createTextNode(value.slice(offset)));
   }
+  function appendManagedNavigationInline(parent, source, depth = 0) {
+    if (parent.tagName === "H2") appendDevRoomInline(parent, navigationCategory(String(source)), depth, true);
+    else appendDevRoomInline(parent, source, depth, true);
+  }
   function renderReading() {
     let view;
     try { view = window.CodexDevRoomEditor.present(bodyValue()); }
@@ -22291,7 +22442,20 @@ scheduleClockTick();
     let body = view.body;
     const title = body.match(/^\s*# ([^\r\n]+)\r?\n/);
     if (title?.[1] === ui.TitleInput.value) body = body.slice(title[0].length);
-    renderDocumentMarkdown(body, ui.Read, appendDevRoomInline);
+    if (managedNavigation()) {
+      body = body.replace(/^\s*# Dev Room\s*\n/, "");
+      renderDocumentMarkdown(body, ui.Read, appendManagedNavigationInline);
+    } else if (view.canonical && view.sections) {
+      ui.Read.replaceChildren();
+      const summary = document.createElement("div"); renderDocumentMarkdown(view.summary || "", summary, appendDevRoomInline); ui.Read.appendChild(summary);
+      for (const section of view.sections) {
+        if (section.technical) continue;
+        if (section.title) { const heading = document.createElement("h2"); heading.textContent = section.title; ui.Read.appendChild(heading); }
+        const content = document.createElement("div"); renderDocumentMarkdown(section.body, content, appendDevRoomInline); ui.Read.appendChild(content);
+        const slot = mediaSlot(section.index);
+        if (slot?.hasImage || section.media?.sha256 || section.media?.guid || section.media?.imageCaption) ui.Read.appendChild(imageFigure(section, section.index));
+      }
+    } else renderDocumentMarkdown(body, ui.Read, appendDevRoomInline);
     renderAgent(view);
   }
   function renderAgent(view) {
@@ -22342,7 +22506,7 @@ scheduleClockTick();
     const changed = current.restored || ui.TitleInput.value !== current.title || bodyValue() !== current.body || !current.revision && current.id !== "overview";
     if (changed) saved[current.id] = { id: current.id, title: ui.TitleInput.value, body: bodyValue(), expectedRevision: current.revision, language: activeLanguage, savedAt: new Date().toISOString() };
     else delete saved[current.id];
-    try { localStorage.setItem(draftKey(), JSON.stringify(saved)); return true; }
+    try { localStorage.setItem(draftKey(), JSON.stringify(saved)); refreshImportConfirmation(); return true; }
     catch { setStatus("draftError"); return false; }
   }
   function applyDraft(document) {
@@ -22376,19 +22540,42 @@ scheduleClockTick();
       if (item && item.language === activeLanguage && typeof item.id === "string" && typeof item.title === "string") all.set(item.id, { ...all.get(item.id), ...item, draft: true });
     }
     const indexed = new Map(catalog.map((item, order) => [item.id, { ...item, order }]));
-    const ordered = [...all.values()].sort((a, b) => a.id === "overview" ? -1 : b.id === "overview" ? 1 : (indexed.get(a.id)?.order ?? 999) - (indexed.get(b.id)?.order ?? 999));
+    const bindings = new Map((syncState?.bindings || []).map(item => [item.documentId, item]));
+    const numberOrder = value => Number.isFinite(value) ? value : 999;
+    const stableIdentity = binding => `${binding.scope || "globalLibrary"}:${binding.unityDocumentId || binding.documentId}`;
+    const ordered = [...all.values()].sort((a, b) => {
+      if (a.id === "overview" || b.id === "overview") return a.id === b.id ? 0 : a.id === "overview" ? -1 : 1;
+      const firstIndex = indexed.get(a.id), secondIndex = indexed.get(b.id);
+      // Keep the explicitly authored catalogue. A missing or stale translation
+      // must not reorder the remaining bound game documents by save time.
+      if (firstIndex || secondIndex) return (firstIndex?.order ?? Infinity) - (secondIndex?.order ?? Infinity);
+      const first = bindings.get(a.id), second = bindings.get(b.id);
+      if (!first || !second) return first ? -1 : second ? 1 : 0;
+      const rank = numberOrder(first.categoryOrder) - numberOrder(second.categoryOrder) || numberOrder(first.order) - numberOrder(second.order);
+      if (rank) return rank;
+      const firstId = stableIdentity(first), secondId = stableIdentity(second);
+      return firstId < secondId ? -1 : firstId > secondId ? 1 : 0;
+    });
     let previousGroup = null;
     for (const item of ordered) {
-      const group = item.id === "overview" ? null : indexed.get(item.id)?.group || text("其他文档", "Other documents");
-      if (group && group !== previousGroup && indexed.size) {
+      const binding = bindings.get(item.id), explicitGroup = indexed.get(item.id)?.group;
+      const group = item.id === "overview" ? null : explicitGroup ? `catalog:${explicitGroup}` : binding ? `game:${binding.scope || "globalLibrary"}:${binding.category}` : "local";
+      if (group && group !== previousGroup && (indexed.size || bindings.size)) {
         const label = document.createElement("p"); label.className = "dev-room-group";
         const names = { "Project Overview": "项目概览", Gameplay: "玩法", Systems: "系统", Content: "内容", Technical: "技术" };
-        label.textContent = text(names[group] || group, group); ui.List.appendChild(label);
+        const title = explicitGroup || binding?.categoryTitle || text("其他文档", "Other documents");
+        label.textContent = catalogManaged ? navigationCategory(title) : ((!explicitGroup && binding?.scope === "displayContent") || title === "设备私有展示") ? text("设备私有展示", "Device displays") : text(names[title] || title, title);
+        ui.List.appendChild(label);
       }
       previousGroup = group;
       const button = document.createElement("button");
       button.type = "button"; button.className = "dev-room-item";
       button.textContent = (item.id === "overview" && !item.updatedAt && !item.draft ? words().overview : item.title || words().untitled) + (item.draft ? words().dirty : "");
+      const translated = translationState(current?.id === item.id ? current : item);
+      if (translated) {
+        const label = document.createElement("span"); label.className = "dev-room-meta";
+        label.textContent = " · " + translationLabel(translated); button.appendChild(label);
+      }
       button.setAttribute("aria-current", String(item.id === current?.id));
       button.disabled = busy;
       button.addEventListener("click", () => void load(item.id));
@@ -22406,6 +22593,12 @@ scheduleClockTick();
     }
   }
   function render() {
+    applyViewMode(viewMode);
+    if (ui.ViewImages) ui.ViewImages.textContent = text("图文", "With images");
+    if (ui.ViewText) ui.ViewText.textContent = text("无图片", "Without images");
+    if (ui.ViewNote) ui.ViewNote.textContent = text("只改变浏览方式，保留图片和说明。", "Only changes how you browse. Images and descriptions are kept.");
+    if (ui.SyncHeading) ui.SyncHeading.textContent = text("与游戏同步", "Sync with the game");
+    if (ui.StructureNote) ui.StructureNote.textContent = text("在这里修改已有元素的内容；元素数量、顺序和布局在游戏里调整。", "Edit existing element content here. Change the element count, order and layout in the game.");
     byId("Heading").textContent = text("开发文档室", "Dev Room");
     panel.querySelector(".section-label").textContent = text("项目枢纽", "PROJECT NEXUS");
     panel.querySelector(".dev-room-sidebar").setAttribute("aria-label", text("开发文档室文档", "Dev Room documents"));
@@ -22416,10 +22609,13 @@ scheduleClockTick();
       ui.Editor.hidden = true; ui.Read.hidden = false; ui.Agent.hidden = true;
       ui.Read.textContent = text("草稿暂时无法保留，请切回原语言检查和保存。", "The draft could not be kept. Return to the previous language to review and save it.");
       for (const element of [ui.Edit, ui.Save, ui.Copy, ui.New, ui.Reload]) element.disabled = true;
+      for (const element of [ui.SyncPull, ui.SyncPush, ui.SyncReceipt, ui.SyncApply].filter(Boolean)) element.disabled = true;
+      if (ui.SyncPreview) ui.SyncPreview.hidden = true;
       ui.Status.textContent = words().draftError; return;
     }
     ui.Edit.textContent = editing ? words().preview : words().edit;
-    ui.Copy.textContent = document.documentElement.lang.startsWith("zh") ? "保存为副本" : "Save as a copy";
+    ui.Copy.textContent = words().saveCopy;
+    ui.Copy.title = text("仅复制文字和图片说明；图片、替换图片和同步绑定保留在原文档的草稿中。", "Copies text and image descriptions. Images, replacements and game bindings remain in the original document's draft.");
     ui.Copy.hidden = statusKey !== "conflict";
     ui.BodyInput.placeholder = words().placeholder;
     ui.Editor.hidden = !editing; ui.Read.hidden = editing; ui.Save.hidden = !editing;
@@ -22434,10 +22630,30 @@ scheduleClockTick();
     for (const element of [ui.Edit, ui.Save, ui.Copy, ui.New, ui.Reload, ui.TitleInput, ui.BodyInput]) element.disabled = busy || !current;
     ui.New.disabled = busy || !root;
     ui.Reload.disabled = busy;
-    ui.Edit.disabled = busy || !current || imported() && !fieldModel;
-    ui.Save.disabled = busy || !current || imported() && !fieldModel;
-    ui.Edit.title = imported() && !fieldModel ? text("文档结构需要核对，原文已保留。", "The document structure needs review. The original is kept.") : "";
-    for (const input of ui.Fields.querySelectorAll("input, textarea")) input.disabled = busy;
+    ui.Edit.disabled = busy || !current || managedNavigation() || imported() && !fieldModel;
+    ui.Save.disabled = busy || !current || managedNavigation() || imported() && !fieldModel;
+    ui.TitleInput.disabled ||= managedNavigation(); ui.BodyInput.disabled ||= managedNavigation();
+    ui.Edit.title = managedNavigation() ? text("由游戏目录生成，请在游戏里调整。", "Generated from the game directory. Change it in the game.") : imported() && !fieldModel ? text("文档结构需要核对，原文已保留。", "The document structure needs review. The original is kept.") : "";
+    for (const input of ui.Fields.querySelectorAll("input, textarea, button")) input.disabled = busy;
+    // Imported elements remain fixed. The ordinary local-document entry point
+    // stays available from the overview and other local documents.
+    ui.New.hidden = imported() || gameDocument();
+    if (ui.SyncPull) {
+      ui.SyncPull.textContent = text("从游戏更新", "Update from the game");
+      ui.SyncPush.textContent = text("同步当前文档到游戏", "Sync this document to the game");
+      ui.SyncReceipt.textContent = text("查看同步结果", "Check sync result");
+      ui.SyncApply.textContent = text("确认更新到 Console", "Confirm update to Console");
+      ui.SyncDismiss.textContent = text("返回文档", "Back to document");
+      ui.SyncPull.disabled = busy || !root;
+      ui.SyncPush.disabled = currentPushBlocked();
+      ui.SyncReceipt.hidden = !syncIntent;
+      ui.SyncReceipt.disabled = busy || !syncIntent;
+      ui.SyncApply.disabled = busy || !syncPlan?.canImport || Boolean(syncIntent) || syncRecordBlocked;
+      ui.SyncDismiss.disabled = busy;
+      ui.SyncPreview.hidden = !syncPlan;
+      ui.SyncStatus.textContent = typeof syncMessage === "object" ? text(syncMessage.zh, syncMessage.en) : syncMessage;
+      refreshImportConfirmation();
+    }
     if (current) {
       ui.Title.textContent = ui.TitleInput.value || words().untitled;
       ui.SavedAt.textContent = current.updatedAt ? `${words().updated} ${new Date(current.updatedAt).toLocaleString(document.documentElement.lang)}` : words().pending;
@@ -22466,6 +22682,7 @@ scheduleClockTick();
     editing = false;
     requestedDocumentId = document.id;
     current = applyDraft(document);
+    if (managedNavigation()) editing = false;
     legacyDraft = legacyDrafts()[document.id] || null;
     ui.TitleInput.value = current.title; ui.BodyInput.value = current.body;
     ui.Agent.open = false; prepareFields(current.body);
@@ -22475,7 +22692,7 @@ scheduleClockTick();
   async function request(url, options) {
     const response = await fetch(url, { cache: "no-store", ...options });
     const payload = await response.json();
-    if (!response.ok) { const error = new Error(payload.error || "Dev Room request failed"); error.status = response.status; throw error; }
+    if (!response.ok) { const error = new Error(payload.error || "Dev Room request failed"); error.status = response.status; error.requestId = payload.requestId; error.accepted = payload.accepted; error.code = payload.code; throw error; }
     return payload;
   }
   async function load(id = current?.id || requestedDocumentId) {
@@ -22489,19 +22706,29 @@ scheduleClockTick();
       if (!library.root) throw new Error("No selected library");
       const sameRoot = !root || root === library.root;
       const query = new URLSearchParams({ expectedRoot: library.root, id: sameRoot ? id : "overview", language: requestLanguage });
-      const [payload, overview] = await Promise.all([
+      const [payload, overview, sync] = await Promise.all([
         request(`/api/dev-room/state?${query}`),
-        query.get("id") === "overview" ? Promise.resolve(null) : request("/api/dev-room/state?" + new URLSearchParams({ expectedRoot: library.root, id: "overview", language: requestLanguage }))
+        query.get("id") === "overview" ? Promise.resolve(null) : request("/api/dev-room/state?" + new URLSearchParams({ expectedRoot: library.root, id: "overview", language: requestLanguage })),
+        ui.SyncPull ? request("/api/dev-room/sync/status?" + new URLSearchParams({ expectedRoot: library.root, language: requestLanguage })).catch(() => null) : Promise.resolve(null)
       ]);
       if (requestId !== sequence || requestLanguage !== activeLanguage || selectedLanguage() !== requestLanguage) return;
       if (payload.root !== library.root || overview && overview.root !== library.root) throw new Error("Library changed");
       if (payload.document && payload.document.language !== requestLanguage || overview?.document && overview.document.language !== requestLanguage) throw new Error("Document language changed");
       root = payload.root; documents = payload.documents;
+      syncState = sync && sync.root === root && sync.language === requestLanguage ? sync : null;
+      syncPlan = null; restoreSyncIntent();
+      if (ui.Sync && (syncIntent || syncRecordBlocked)) ui.Sync.open = true;
+      if (syncRecordBlocked) setSyncMessage("同步记录暂时无法读取，请保留当前页面核对，尚未提交新请求。", "The sync record could not be read. Keep this page for review; no new request was submitted.");
+      else if (syncIntent) setSyncMessage("有同步请求待核对，请查看同步结果。", "A sync request needs verification. Check its result.");
+      else if (syncState) setSyncMessage("保存修改后可同步到游戏，完成以游戏回执为准。", "Save edits before syncing. Completion requires a game receipt.");
+      else setSyncMessage("游戏同步暂时不可用，已有文档和草稿仍可保留。", "Game sync is currently unavailable. Saved documents and drafts are kept.");
+      catalogManaged = (overview || payload).document?.generatedNavigation === true;
       try { catalog = window.CodexDevRoomEditor.catalog((overview || payload).document?.body || "", documents.map(item => item.id)); }
       catch { catalog = []; }
       setStatus("ready");
       const draft = drafts()[sameRoot ? id : "overview"];
       select(payload.document || (draft ? { id: draft.id, title: "", body: "", revision: "", updatedAt: "", language: requestLanguage } : { id: query.get("id"), title: query.get("id") === "overview" ? words().overview : words().untitled, body: "", revision: "", updatedAt: "", language: requestLanguage }));
+      if (translationState() && !syncIntent && !syncRecordBlocked) setSyncMessage(translationState() === "stale" ? "需要重新核对译稿" : "待翻译", translationState() === "stale" ? "Translation needs review" : "Translation needed");
     } catch { if (requestId === sequence) setStatus("failed"); }
     finally { if (requestId === sequence) { busy = false; render(); } }
   }
@@ -22511,7 +22738,7 @@ scheduleClockTick();
     select(document); editing = true; keepDraft(); setStatus("draft"); render(); ui.TitleInput.focus(); ui.TitleInput.select();
   });
   ui.Edit.addEventListener("click", () => {
-    if (busy || !current) return;
+    if (busy || !current || managedNavigation()) return;
     if (editing && !keepDraft()) return;
     if (!editing && current.translationMissing && !bodyValue()) {
       try {
@@ -22534,7 +22761,7 @@ scheduleClockTick();
     ui.Title.textContent = ui.TitleInput.value || words().untitled; renderList();
   });
   ui.Save.addEventListener("click", async () => {
-    if (busy || !current || selectedLanguage() !== activeLanguage || !keepDraft()) return;
+    if (busy || !current || managedNavigation() || selectedLanguage() !== activeLanguage || !keepDraft()) return;
     const saved = { root, language: activeLanguage, id: current.id, revision: current.revision, title: ui.TitleInput.value, body: bodyValue() };
     const requestId = ++sequence;
     busy = true; setStatus("saving"); render();
@@ -22552,6 +22779,8 @@ scheduleClockTick();
       } catch { /* The full original draft bank stays available. */ }
       if (requestId !== sequence || root !== saved.root || activeLanguage !== saved.language || selectedLanguage() !== saved.language) return;
       documents = payload.documents; current = payload.document;
+      if (syncPlan) { syncPlan = null; setSyncMessage("已保存，请重新核对从游戏更新的预览。", "Saved. Review a new game update preview."); }
+      for (const key of stagedPreviews.keys()) { const identity = JSON.parse(key); if (identity[0] === saved.root && identity[1] === saved.language && identity[2] === saved.id) stagedPreviews.delete(key); }
       ui.TitleInput.value = current.title; ui.BodyInput.value = current.body;
       prepareFields(current.body);
       editing = false; setStatus("saved");
@@ -22561,7 +22790,7 @@ scheduleClockTick();
   ui.Copy.addEventListener("click", () => {
     if (busy || !current || !keepDraft()) return;
     const title = [...ui.TitleInput.value].slice(0, 190).join("") + (document.documentElement.lang.startsWith("zh") ? "（副本）" : " (copy)");
-    const body = fieldModel ? `# ${title}\n\n${fieldModel.summary}\n\n${fieldModel.sections.map(section => `## ${section.title}\n${section.body}`).join("\n\n")}\n` : ui.BodyInput.value;
+    const body = fieldModel ? `# ${title}\n\n${fieldModel.summary}\n\n${fieldModel.sections.map(section => `## ${section.title}\n${section.body}${section.media?.imageCaption ? "\n\n" + text("图片说明：", "Image description: ") + section.media.imageCaption : ""}`).join("\n\n")}\n` : ui.BodyInput.value;
     current = { id: crypto.randomUUID(), title: "", body: "", revision: "", updatedAt: "" };
     ui.TitleInput.value = title; ui.BodyInput.value = body;
     prepareFields();
@@ -22569,6 +22798,149 @@ scheduleClockTick();
     ui.Save.click();
   });
   ui.Reload.addEventListener("click", () => void load());
+  ui.ViewImages?.addEventListener("click", () => applyViewMode("images", true));
+  ui.ViewText?.addEventListener("click", () => applyViewMode("text", true));
+  function importDraftCount() {
+    try { return Object.keys(readDrafts(draftKey(), true)).length; }
+    catch { return -1; }
+  }
+  function refreshImportConfirmation() {
+    if (!ui.SyncApply) return;
+    const count = importDraftCount();
+    ui.SyncApply.disabled = busy || !syncPlan?.canImport || Boolean(syncIntent) || syncRecordBlocked || count !== 0;
+    if (syncPlan?.canImport && count !== 0) {
+      importDraftBlocked = true;
+      setSyncMessage(count < 0 ? "草稿暂时无法读取，请先核对并保留内容。" : "请先保存当前语言的草稿，再确认更新到 Console。", count < 0 ? "The draft could not be read. Review and keep your content first." : "Save drafts in this language before updating Console.");
+    } else if (importDraftBlocked) {
+      importDraftBlocked = false;
+      if (syncPlan?.canImport && !syncIntent) setSyncMessage("核对后确认更新到 Console。", "Confirm the Console update after review.");
+    }
+  }
+  function syncError(error) {
+    const messages = {
+      bridge_unavailable: ["游戏同步窗口未开启或已过期，请在 Unity 开启后重新提交。", "The game sync window is closed or expired. Open it in Unity, then submit again."],
+      bridge_changed: ["游戏同步窗口已改变，原请求待核对。请查看同步结果。", "The game sync window changed. Check the original request's result."],
+      unsaved_draft: ["请先保存当前语言的草稿，再更新 Console。", "Save drafts in this language before updating Console."],
+      preview_changed: ["预览后内容已改变，请重新核对更新预览。", "Content changed after preview. Review a new preview."],
+      unbound_document: ["这份文档没有游戏来源，已保留在 Console。", "This document has no game source. It is kept in Console."],
+      unsupported_image_identity: ["原图身份暂时无法核对；可浏览和保存，尚不能回写游戏。", "The original image identity cannot be verified. You can browse and save it; game writeback is unavailable."],
+      source_missing: ["游戏来源已缺失或改变，现有内容和草稿已保留。", "The game source is missing or changed. Content and drafts are kept."],
+      receipt_mismatch: ["回执与原请求不一致，尚未确认完成。请继续核对原请求。", "The receipt does not match the original request. Completion is unconfirmed; review that request."],
+      request_already_sent: ["原请求已提交，请查看同步结果，勿重复提交。", "The original request was submitted. Check its result before submitting again."],
+      sync_pending: ["这份文档已有请求待核对，请查看原同步结果。", "This document has a request awaiting verification. Check its original sync result."],
+      legacy_pending: ["旧同步请求仍待核对，已保留且不会自动重送。", "The previous sync request needs verification. It is kept and will not be resent automatically."]
+    };
+    if (messages[error.code]) setSyncMessage(...messages[error.code]);
+    else if (error.status === 409) setSyncMessage("文档、来源或资料库已改变，未覆盖内容；请核对版本和同步结果。", "The document, source or library changed. Content was not overwritten; review versions and the sync result.");
+    else setSyncMessage("同步尚未确认完成，内容和草稿已保留。已提交的请求请查看同步结果。", "Sync is not confirmed. Content and drafts are kept. Check the result of any submitted request.");
+  }
+  function freezeIntent(kind, saved) {
+    const value = { requestId: crypto.randomUUID(), kind, root: saved.root, language: saved.language, documentId: saved.id, expectedRevision: saved.revision || "", createdAt: new Date().toISOString() };
+    try { localStorage.setItem(syncKey(saved.root, saved.language), JSON.stringify(value)); }
+    catch { setSyncMessage("无法保留同步请求标识，尚未提交。请稍后重试。", "The sync request could not be kept. Nothing was submitted. Retry later."); return null; }
+    syncIntent = value; return value;
+  }
+  function validateSyncResult(result, saved, intent) {
+    if (result.requestId !== intent.requestId || result.root && result.root !== saved.root || result.language && result.language !== saved.language || result.documentId && result.documentId !== intent.documentId) throw new Error("Sync receipt identity changed");
+  }
+  function renderSyncPlan(plan) {
+    ui.SyncPreviewTitle.textContent = text("以下内容将从游戏更新到 Console", "Update these documents from the game to Console");
+    ui.SyncChanges.replaceChildren();
+    const actions = {
+      create: text("导入", "Import"), update: text("更新", "Update"), index: text("更新目录", "Update index"),
+      reconcile: text("核对同步记录", "Reconcile sync record"), preserve: text("保留 Console 修改", "Keep Console edits"),
+      unchanged: text("一致", "Unchanged"), conflict: text("版本冲突，需核对", "Version conflict; review required"),
+      source_missing: text("来源缺失，保留现有稿", "Source missing; keep saved document")
+    };
+    for (const change of plan.changes || []) {
+      const item = document.createElement("li"); item.textContent = `${actions[change.action] || text("需核对", "Review required")} · ${change.title || change.documentId || ""}`; ui.SyncChanges.appendChild(item);
+    }
+  }
+  ui.SyncPull?.addEventListener("click", async () => {
+    if (busy || !root || !keepDraft()) return;
+    const saved = { root, id: current?.id, language: activeLanguage, sequence: ++sequence };
+    busy = true; syncPlan = null; setSyncMessage("正在核对两边内容……", "Checking both versions…"); render();
+    try {
+      const plan = await request("/api/dev-room/sync/preview?" + new URLSearchParams({ expectedRoot: saved.root, language: saved.language }));
+      if (!currentIdentity(saved)) return;
+      if (plan.root !== saved.root || plan.language !== saved.language || !/^[0-9a-f]{64}$/.test(plan.planSha256 || "")) throw new Error("Sync preview identity changed");
+      syncPlan = plan; renderSyncPlan(plan);
+      setSyncMessage(plan.canImport ? "核对后确认更新；未保存的草稿保持原样。" : "存在版本冲突，请先核对两边内容。", plan.canImport ? "Confirm after review. Unsaved drafts are kept." : "A version conflict needs review before updating.");
+      ui.Sync.open = true;
+    } catch (error) { if (currentIdentity(saved)) syncError(error); }
+    finally { if (saved.sequence === sequence) { busy = false; render(); } }
+  });
+  ui.SyncDismiss?.addEventListener("click", () => { syncPlan = null; render(); });
+  ui.SyncApply?.addEventListener("click", async () => {
+    if (busy || !root || syncIntent || syncRecordBlocked || !syncPlan?.canImport || !keepDraft()) return;
+    if (importDraftCount() !== 0) { refreshImportConfirmation(); return; }
+    const saved = { root, id: current?.id, revision: current?.revision, language: activeLanguage, sequence: ++sequence };
+    const confirmed = syncPlan, intent = freezeIntent("import", saved); if (!intent) { render(); return; }
+    busy = true; setSyncMessage("正在更新 Console 内容……", "Updating Console content…"); render();
+    let completed = false;
+    try {
+      const result = await request("/api/dev-room/sync/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: intent.requestId, expectedRoot: saved.root, language: saved.language, planSha256: confirmed.planSha256, expectedIndexRevision: confirmed.indexRevision, draftIds: Object.keys(readDrafts(draftKey(saved.root, saved.language), true)) }) });
+      validateSyncResult(result, saved, intent);
+      completed = ["applied", "unchanged"].includes(result.status);
+      if (completed) clearSyncIntent(intent);
+      if (!currentIdentity(saved)) return;
+      if (completed) syncPlan = null;
+      setSyncMessage(completed ? "已更新到 Console；游戏中的元素顺序保持一致。" : "导入结果待核对，请查看同步结果。", completed ? "Console updated with the game's element order." : "The import needs verification. Check its sync result.");
+    } catch (error) { if (error.accepted === false) clearSyncIntent(intent); if (currentIdentity(saved)) syncError(error); }
+    finally { if (saved.sequence === sequence) { busy = false; render(); } }
+    if (completed && currentIdentity(saved)) { await load(saved.id); if (sameDocumentIdentity(saved)) setSyncMessage("已更新到 Console，图片和说明已保留。", "Console updated. Images and descriptions are kept."); }
+  });
+  ui.SyncPush?.addEventListener("click", async () => {
+    if (currentPushBlocked() || !keepDraft()) return;
+    const binding = currentBinding();
+    const saved = { root, id: current.id, revision: current.revision, language: activeLanguage, sequence: ++sequence };
+    const intent = freezeIntent("push", saved); if (!intent) { render(); return; }
+    busy = true; setSyncMessage("正在提交当前文档……", "Submitting this document…"); render();
+    let unchanged = false;
+    try {
+      const result = await request("/api/dev-room/sync/push", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requestId: intent.requestId, expectedRoot: saved.root, language: saved.language, documentId: saved.id, expectedRevision: saved.revision, expectedUnityRevision: binding.lastUnityRevision, draftIds: [] }) });
+      validateSyncResult(result, saved, intent);
+      unchanged = result.status === "unchanged";
+      if (unchanged) clearSyncIntent(intent);
+      if (!currentIdentity(saved)) return;
+      if (unchanged) setSyncMessage("两边内容一致，无需写入游戏。", "Both versions match. No game write is needed.");
+      else if (result.status === "pending") setSyncMessage("已提交，等待游戏确认；尚未确认写入。", "Submitted. Waiting for the game to confirm the write.");
+      else setSyncMessage("同步请求状态待核对，请查看同步结果。", "The sync request needs verification. Check its result.");
+      ui.Sync.open = true;
+    } catch (error) { if (error.accepted === false) clearSyncIntent(intent); if (currentIdentity(saved)) syncError(error); }
+    finally { if (saved.sequence === sequence) { busy = false; render(); } }
+    if (unchanged && currentIdentity(saved)) { await load(saved.id); if (sameDocumentIdentity(saved)) setSyncMessage("两边内容一致，无需写入游戏。", "Both versions match. No game write is needed."); }
+  });
+  ui.SyncReceipt?.addEventListener("click", async () => {
+    if (busy || !root || !syncIntent) return;
+    const intent = { ...syncIntent }, saved = { root, id: current?.id, language: activeLanguage, sequence: ++sequence };
+    busy = true; setSyncMessage("正在读取游戏回执……", "Reading the game receipt…"); render();
+    let completed = false, terminal = false, completion;
+    try {
+      const result = await request("/api/dev-room/sync/receipt?" + new URLSearchParams({ expectedRoot: saved.root, language: saved.language, requestId: intent.requestId }));
+      validateSyncResult(result, saved, intent);
+      completed = ["applied", "unchanged"].includes(result.status);
+      terminal = completed || ["failed", "conflict", "not_submitted"].includes(result.status);
+      if (terminal) clearSyncIntent(intent);
+      if (!currentIdentity(saved)) return;
+      const laterDraft = readDrafts(draftKey(saved.root, saved.language))[intent.documentId];
+      const unsavedLaterDraft = laterDraft?.language === saved.language && typeof laterDraft.title === "string" && typeof laterDraft.body === "string";
+      const unsavedFields = current?.id === intent.documentId && editing && (fieldInvalid || ui.TitleInput.value !== current.title || bodyValue() !== current.body);
+      const localChangesRemain = intent.kind === "push" && (result.localChangedSincePush === true || unsavedLaterDraft || unsavedFields);
+      completion = localChangesRemain ? (result.status === "unchanged" ?
+        ["本次提交版本与游戏一致；后来的本地修改尚未同步。", "The submitted version matches the game. Later local edits are not synced."] :
+        ["本次提交版本已写回；后来的本地修改尚未同步。", "The submitted version was written to the game. Later local edits are not synced."]) :
+        result.status === "unchanged" ? ["本次提交版本与游戏一致，无需写入游戏。", "The submitted version matches the game. No game write is needed."] :
+        intent.kind === "import" ? ["已确认更新到 Console，图片和说明已保留。", "The Console update is confirmed. Images and descriptions are kept."] :
+        ["游戏已确认写入本次提交的文字与图片。", "The game confirmed the submitted text and images."];
+      if (completed) { syncPlan = null; setSyncMessage(...completion); }
+      else if (result.status === "pending") setSyncMessage("游戏尚未确认写入，请保持项目打开，稍后查看结果。", "The game has not confirmed the write. Keep the project open and check later.");
+      else if (terminal) setSyncMessage("游戏未完成写入，已有内容保留；核对版本后可重新提交。", "The write did not complete. Existing content is kept; review versions before submitting again.");
+      else setSyncMessage("结果仍不明确，已保留同一请求标识。请继续核对，勿重复提交。", "The result is still uncertain. The same request is kept; check again before submitting.");
+    } catch (error) { if (currentIdentity(saved)) syncError(error); }
+    finally { if (saved.sequence === sequence) { busy = false; render(); } }
+    if (completed && currentIdentity(saved)) { await load(saved.id); if (sameDocumentIdentity(saved)) setSyncMessage(...completion); }
+  });
   window.addEventListener("beforeunload", event => {
     if (!keepDraft()) { event.preventDefault(); event.returnValue = ""; }
   });
@@ -22577,8 +22949,9 @@ scheduleClockTick();
     if (next === activeLanguage) { render(); return; }
     if (!keepDraft()) { render(); return; }
     const id = current?.id || requestedDocumentId;
-    ++sequence; activeLanguage = next; busy = false; current = null; legacyDraft = null; editing = false;
-    documents = []; catalog = []; fieldModel = null; fieldSource = ""; canonicalBody = ""; fieldInvalid = false;
+    ++sequence; activeLanguage = next; busy = false; uploadBusy = false; current = null; legacyDraft = null; editing = false;
+    syncState = null; syncPlan = null; syncIntent = null; syncMessage = ""; syncRecordBlocked = false; importDraftBlocked = false; stagedPreviews.clear();
+    documents = []; catalog = []; catalogManaged = false; fieldModel = null; fieldSource = ""; canonicalBody = ""; fieldInvalid = false;
     ui.TitleInput.value = ""; ui.BodyInput.value = ""; ui.Fields.replaceChildren(); ui.Read.replaceChildren(); ui.AgentContent.replaceChildren();
     setStatus("switching"); render(); void load(id);
   }

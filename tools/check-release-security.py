@@ -110,6 +110,7 @@ def main():
         "cryptography==50.0.1",
         "pefile==2024.8.26",
         "pillow==12.3.0",
+        "PyYAML==6.0.3",
         "pyinstaller==6.21.0",
         "pyinstaller-hooks-contrib==2026.6",
         "pywin32-ctypes==0.2.3",

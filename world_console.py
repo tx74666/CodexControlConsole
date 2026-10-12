@@ -59,6 +59,8 @@ from external_app_launcher import launch_or_focus_executable
 from reference_views import ReferenceViewSetService
 from document_library import DocumentLibraryService, current_memory
 from dev_room import DevRoomService, DevRoomConflict, MAX_REQUEST_BYTES as MAX_DEV_ROOM_REQUEST_BYTES
+from dev_room_sync import DevRoomSyncService, DevRoomSyncConflict
+from dev_room_http import dev_room_get, dev_room_post
 from resource_library import ResourceLibraryService, ResourceLibraryError, ResourceLibraryConflict
 from resource_preview import ResourcePreviewError
 from resource_http import resource_get, resource_post
@@ -561,6 +563,7 @@ BLENDER_LIVE_SELECTION_MAX_AGE_SECONDS = 8
 NATIVE_FILE_DRAG_SOURCE = APP_DIR / "tools" / "NativeFileDrag.cs"
 NATIVE_FILE_DRAG_EXE = APP_DIR / "tools" / "NativeFileDrag.exe"
 RANDOMREALM_PROJECT_DIR = Path(os.environ.get("CODEX_CONTROL_RANDOMREALM_PROJECT_DIR", r"D:\Unity Projects\RandomRealm2"))
+DEV_ROOM_SYNC = DevRoomSyncService(DOCUMENT_LIBRARY, RANDOMREALM_PROJECT_DIR, dev_room=DEV_ROOM)
 RANDOMREALM_MUSIC_CATALOG_FILE = RANDOMREALM_PROJECT_DIR / "Assets" / "Resources" / "ConsoleMusic" / "catalog.json"
 RANDOMREALM_MUSIC_STATE_DIR = Path(os.environ.get(
     "CODEX_CONTROL_RANDOMREALM_MUSIC_STATE_DIR",
@@ -1764,12 +1767,14 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if not self.require_local_request() or not self.require_trusted_post_context():
                 return
             try:
-                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-                if (parsed.path != "/api/dev-room/state" or set(query) - {"expectedRoot", "id", "language"}
-                        or "expectedRoot" not in query or any(len(value) != 1 for value in query.values())):
-                    raise ValueError("Dev Room 请求地址无效。")
-                self.send_json(DEV_ROOM.state(query["expectedRoot"][0], query.get("id", ["overview"])[0],
-                                              language=query.get("language", [None])[0]))
+                action = parsed.path.removeprefix("/api/dev-room/")
+                result = dev_room_get(DEV_ROOM, DEV_ROOM_SYNC, action, parsed.query)
+                if action in ("media", "media/draft"):
+                    self.send_bytes_response(Path(result['path']).read_bytes(), result['mime'])
+                else:
+                    self.send_json(result)
+            except (DevRoomSyncConflict, DevRoomConflict) as error:
+                self.send_json({"error": str(error), "code": getattr(error, "code", "revision_conflict")}, status=409)
             except ValueError as error:
                 self.send_json({"error": str(error)}, status=400)
             except (OSError, RuntimeError):
@@ -2320,13 +2325,18 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             if not self.require_local_request():
                 return
             try:
-                if parsed.path != "/api/dev-room/save" or parsed.query:
+                if parsed.query:
                     raise ValueError("Dev Room 保存地址无效。")
-                self.send_json(DEV_ROOM.save(self.read_json_body(max_bytes=MAX_DEV_ROOM_REQUEST_BYTES)))
-            except DevRoomConflict as error:
-                self.send_json({"error": str(error), "code": "revision_conflict"}, status=409)
+                action = parsed.path.removeprefix("/api/dev-room/")
+                maximum = 16 * 1024 * 1024 if action == "media/upload" else MAX_DEV_ROOM_REQUEST_BYTES
+                self.send_json(dev_room_post(DEV_ROOM, DEV_ROOM_SYNC, action,
+                                            self.read_json_body(max_bytes=maximum)))
+            except (DevRoomSyncConflict, DevRoomConflict) as error:
+                self.send_json({"error": str(error), "code": getattr(error, "code", "revision_conflict"),
+                    **({"accepted": bool(error.accepted)} if getattr(error, "accepted", None) is not None else {}),
+                    **({"requestId": error.syncRequestId} if getattr(error, "syncRequestId", None) else {})}, status=409)
             except ValueError as error:
-                self.send_json({"error": str(error)}, status=400)
+                self.send_json({"error": str(error), "accepted": False}, status=400)
             except (OSError, RuntimeError):
                 self.send_json({"error": "Dev Room 文档未保存，请检查磁盘或稍后重试。"}, status=503)
             return

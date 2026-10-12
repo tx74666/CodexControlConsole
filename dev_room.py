@@ -112,7 +112,7 @@ class DevRoomService:
             raise ValueError('Dev Room 语言文件超过读取限制。')
         value = self._json(raw)
         required = {'version', 'id', 'sourceRevision', 'variants'}
-        if (not isinstance(value, dict) or set(value) - (required | {'sourceLanguage'}) or not required <= set(value)
+        if (not isinstance(value, dict) or set(value) - (required | {'sourceLanguage', 'staleLanguages'}) or not required <= set(value)
                 or type(value['version']) is not int or value['version'] != 1 or value['id'] != identifier
                 or not isinstance(value['sourceRevision'], str) or not re.fullmatch(r'[0-9a-f]{64}', value['sourceRevision'])):
             raise ValueError('Dev Room 语言文件身份或来源无效。')
@@ -120,6 +120,12 @@ class DevRoomService:
         self._variants(value['variants'])
         if 'sourceLanguage' in value:
             self._language(value['sourceLanguage'])
+        if 'staleLanguages' in value:
+            stale = value['staleLanguages']
+            if (not isinstance(stale, list) or len(stale) > 2
+                    or any(language not in {'zh', 'en'} for language in stale)
+                    or len(set(stale)) != len(stale)):
+                raise ValueError('Dev Room 过期语言标记无效。')
         return value
 
     @staticmethod
@@ -149,14 +155,15 @@ class DevRoomService:
         locale = self._locale(raw, current['id'])
         entry = self._matched_catalog(current, catalog)
         valid = locale and locale['sourceRevision'] == current['revision']
+        stale = bool(valid and language in locale.get('staleLanguages', []))
         for variant in (locale['variants'].values() if valid else ()):
             self._structure(current['body'], variant['body'])
         for variant in (entry['variants'].values() if entry else ()):
             self._structure(current['body'], variant['body'])
-        variant = locale['variants'].get(language) if valid else None
-        if variant is None and entry:
+        variant = locale['variants'].get(language) if valid and not stale else None
+        if variant is None and entry and not stale:
             variant = entry['variants'].get(language)
-        if variant is None and valid and locale.get('sourceLanguage') == language:
+        if variant is None and valid and not stale and locale.get('sourceLanguage') == language:
             variant = {'title': current['title'], 'body': current['body']}
         virtual = not current['revision'] and current['id'] == 'overview'
         if variant:
@@ -166,7 +173,8 @@ class DevRoomService:
                 'revision': self._locale_revision(current, raw, entry),
                 'updatedAt': updated_at if variant and valid and language in locale['variants'] else current['updatedAt'],
                 'language': language, 'sourceRevision': current['revision'], 'sourceBody': current['body'],
-                'translationMissing': not variant and not virtual}
+                'translationMissing': not variant and not virtual,
+                **({'translationStale': True} if stale else {})}
 
     def _state_localized(self, root, identifier, language, catalog=None):
         catalog = self._catalog() if catalog is None else catalog
@@ -487,6 +495,10 @@ class DevRoomService:
                        'variants': dict(locale['variants']) if valid else {}}
             if valid and 'sourceLanguage' in locale:
                 updated['sourceLanguage'] = locale['sourceLanguage']
+            if valid and locale.get('staleLanguages'):
+                remaining = [item for item in locale['staleLanguages'] if item != language]
+                if remaining:
+                    updated['staleLanguages'] = remaining
             if creating:
                 updated['sourceLanguage'] = language
             updated['variants'][language] = {'title': title, 'body': body}

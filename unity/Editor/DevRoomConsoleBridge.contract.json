@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 2,
+  "scope": "Prepared source only; Unity compile, install, Enable, actual asset writes and recovery remain unverified.",
+  "mailbox": "<workspace>/.codex/console-content-sync/v2",
+  "requestPath": "requests/<canonical-lowercase-UUID>.json",
+  "receiptPath": "receipts/<same-UUID>.json",
+  "stagedMediaPath": "media/<sha256>.png or media/<sha256>.jpg",
+  "editorSession": {
+    "file": "session.json",
+    "requires": ["enabled", "editorInstanceNonce", "ownerToken", "projectRoot", "startedAt", "expiresAt"],
+    "enable": "Explicit main-Editor menu and confirmation for 15 minutes, or coordinator EnableForOwnedTask(nonempty ownerToken, 1..120 minutes) within an approved resource lease. Both use the same mailbox implementation and a fresh 32-hex nonce.",
+    "startupWrites": false,
+    "enableTimeQueueScan": false,
+    "reload": "Closes the session; pending old-nonce requests cannot run in a newly enabled instance.",
+    "disable": "Stops watcher/update callbacks and clears in-memory queue; writes disabled session state."
+  },
+  "requestFields": ["schemaVersion", "requestId", "editorInstanceNonce", "projectId", "projectLibraryGuid", "workspace", "language", "documentId", "consoleRevision", "contentSha256", "expectedLibrary", "document", "target"],
+  "expectedLibraryFields": ["kind", "path", "guid", "revision", "metaRevision"],
+  "parentKinds": ["devRoomLibrary", "displayContent"],
+  "projectIdentity": "Existing v1 projectId namespace: SHA256 UTF8 'unity-dev-room-v1\\n' + normalized lowercase Windows workspace + '\\n4d80e8531f4fc6d46b38bbafa382008e'. The canonical global Assets/Resources/DevsRealm/DocumentLibrary.asset GUID is verified; private Device parent GUID remains a separate source binding.",
+  "documentFields": ["path", "id", "guid", "localFileId", "revision", "metaRevision", "contentRevision", "structureRevision", "mediaRevision"],
+  "targetFields": ["title", "summary", "sections"],
+  "sectionFields": ["index", "title", "body", "imageCaption", "image"],
+  "imageFields": ["guid", "fileID", "type", "resourcePath", "assetPath", "sha256", "metaRevision", "stagingName"],
+  "imageModes": {
+    "none": "All identity/path/hash strings empty; fileID and type zero.",
+    "existing": "stagingName empty; exact persistent Texture2D GUID/fileID/type=3, asset source SHA and meta SHA; optional Resources path resolves to that same object.",
+    "staged": "guid empty, fileID=0, type=3, stagingName=<sha>.png|jpg; assetPath=Assets/Resources/UI/DevsRealm/ConsoleMedia/<sha>.<ext>; resourcePath=UI/DevsRealm/ConsoleMedia/<sha>."
+  },
+  "hashEncoding": "SHA256 over fields framed by unsigned BE32 UTF8 byte length; arrays use BE32 count. Numeric identity values use invariant decimal strings. No trimming or newline normalization.",
+  "contentHash": {
+    "prefix": ["title", "summary", "BE32 section count"],
+    "section": ["title", "body", "imageCaption", "image.resourcePath", "image.sha256"],
+    "resolvedIdentityCheck": "No-op, recovery and applied all separately verify requested GUID/fileID/meta/path, or exact generated SHA path for staged media."
+  },
+  "structureHash": {
+    "prefix": ["document.id", "document.guid", "document.localFileId", "document.category", "document.order", "BE32 section count"],
+    "section": ["index", "section"]
+  },
+  "mediaHash": {
+    "prefix": ["BE32 section count"],
+    "section": ["image.guid", "image.fileID", "image.type", "image.resourcePath", "image.assetPath", "image.sha256", "image.metaRevision"]
+  },
+  "receiptStatuses": ["pending", "applied", "conflict", "failed", "unknown"],
+  "receiptAppliedFields": ["actual", "appliedLibraryRevision", "appliedLibraryMetaRevision", "appliedUnityRevision", "appliedMetaRevision", "appliedContentSha256", "appliedStructureRevision", "appliedMediaRevision", "undoGroup", "undoName"],
+  "once": "UUID request bytes are immutable. Terminal receipts are never overwritten. After attemptStarted, recovery can only confirm a full protected result or report unknown; no second write.",
+  "protected": ["main parent serialization including ordered tabs/categories/refs", "document ID/GUID/localFileID", "category", "order", "section count/index", "sourceReference", "sourceUpdatedAt", "updatedAt", "all document/parent meta bytes including Device owner userData"],
+  "blockedStates": ["secondary Editor", "asset import worker", "Play or transition", "compilation", "asset importing", "active tests", "unknown TestRunner state", "any dirty object in either bound asset bundle", "dirty selected texture", "expired/disabled/mismatched instance nonce"],
+  "save": "Undo on exact document; edit only existing content fields; one SaveAssetIfDirty on exact bound main asset; ForceSynchronousImport and re-resolve GUID/localFileID; recheck content, image identity, structure, provenance and meta.",
+  "failure": "Before document save begins restore the formerly clean in-memory document and attempt MoveAssetToTrash only for exact media created by this request. After save begins, preserve the outcome and use unknown with read-only recovery; no YAML restoration or blind retry.",
+  "imageLimits": {"bytes": 16777216, "dimension": 8192, "pixels": 16777216, "formats": ["png", "jpg"]},
+  "minimumDeployment": ["A single Editor-only DevRoomConsoleBridge.cs (Unity generates its .meta)", "No runtime or DeviceEditorAuthoring changes", "Durable .codex/console-content-sync/v2 mailbox/session at explicit Enable, outside Unity asset scanning", "New Resources ConsoleMedia directory only when an approved request imports a new image"],
+  "verifiedTestRunnerSource": "com.unity.test-framework 1.7.0 UnityEditor.TestRunner/Api/TestRunnerApi.cs:217-220 exposes internal static bool IsRunActive() using all runner isRunning state. Reflection uses a zero-argument exact signature; unresolved or changed API blocks writes.",
+  "knownAcceptanceRequired": ["Compile in the actual main Editor during Building-approved resource window", "Actual runtime TestRunner idle reflection", "Real standalone doc and Device subasset save/readback", "Image existing/staged/removed and actual display rendering", "Undo", "dirty bundle protection", "domain reload and write-ahead crash recovery", "Disable prevents new writes"],
+  "knownProductConstraint": "Current game IsValid requires nonempty summary and section title/body; pure-image empty-body sections require a separate game-side authoring/runtime decision."
+}

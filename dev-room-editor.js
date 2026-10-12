@@ -11,6 +11,7 @@
   const maxMarkdownBytes = 2 * 1024 * 1024;
   const maxBodyBytes = 512 * 1024;
   const maxSections = 128;
+  const mediaMarker = "<!-- codex-dev-room-media ";
 
   function fail(message) { throw new Error(message); }
   function object(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
@@ -47,6 +48,32 @@
         typeof value.guid !== "string" || value.guid.match(/^[0-9a-f]{32}/)?.[0] !== value.guid) fail("Dev Room source identity is invalid.");
   }
 
+  // Media uses a separate content token. It never changes the Unity identity,
+  // canonical section markers, or the section count and order.
+  function media(value, index) {
+    keys(value, ["section", "imageCaption", "sha256", "stagingName", "resourcePath", "guid", "fileID", "type", "assetPath"], ["section", "imageCaption"]);
+    if (value.section !== index) fail("Dev Room media cannot move to another section.");
+    text(value.imageCaption, 64 * 1024);
+    if (value.imageCaption.includes(mediaMarker)) fail("Dev Room image description contains a reserved media marker.");
+    for (const name of ["sha256", "stagingName", "resourcePath", "guid", "assetPath"]) {
+      if (Object.hasOwn(value, name)) text(value[name], 8192, false, false);
+    }
+    if (value.sha256 && value.sha256.match(/^[0-9a-f]{64}/)?.[0] !== value.sha256) fail("Dev Room image hash is invalid.");
+    if (value.guid && value.guid.match(/^[0-9a-f]{32}/)?.[0] !== value.guid) fail("Dev Room image GUID is invalid.");
+    if (value.stagingName && value.stagingName.match(/^[0-9a-f]{64}\.(?:png|jpg)/)?.[0] !== value.stagingName) fail("Dev Room image storage name is invalid.");
+    for (const name of ["fileID", "type"]) if (Object.hasOwn(value, name) && !Number.isSafeInteger(value[name])) fail("Dev Room image reference is invalid.");
+    if (JSON.stringify(value).includes("-->")) fail("Dev Room image description contains a reserved comment ending.");
+    return { ...value };
+  }
+  function sectionContent(body, index) {
+    if (!body.includes(mediaMarker)) return { body };
+    const token = body.match(/(?:^|\r?\n)<!-- codex-dev-room-media ([^\r\n]+) -->\s*$/);
+    if (!token || body.slice(0, token.index).includes(mediaMarker)) fail("Dev Room media token is invalid.");
+    let value;
+    try { value = JSON.parse(token[1]); } catch { fail("Dev Room media token is invalid."); }
+    return { body: body.slice(0, token.index), media: media(value, index) };
+  }
+
   function decode(markdown) {
     text(markdown, maxMarkdownBytes, false, false);
     const header = markdown.match(/^<!-- rr-dev-room:v1 ([^\r\n]+) -->(\r?\n)/);
@@ -71,7 +98,7 @@
         "## ([^\\r\\n]*)" + endline + "([\\s\\S]*?)" + endline +
         escape(marker + "section-end " + index + " -->") + endline + endline));
       if (!section) fail("Dev Room section count, order or markers are invalid.");
-      sections.push({ index, title: text(section[1], maxBodyBytes, true), body: text(section[2], maxBodyBytes) });
+      sections.push({ index, title: text(section[1], maxBodyBytes, true), ...sectionContent(text(section[2], maxBodyBytes), index) });
       remainder = remainder.slice(section[0].length);
     }
     if (!sections.length) fail("Dev Room must retain its original sections.");
@@ -102,10 +129,13 @@
     result += marker + "summary -->" + newline + summary + newline + marker + "summary-end -->" + newline + newline;
     for (let index = 0; index < editedTextModel.sections.length; index++) {
       const section = editedTextModel.sections[index];
-      keys(section, ["index", "title", "body"]);
+      keys(section, ["index", "title", "body", "media"], ["index", "title", "body"]);
       if (!Number.isInteger(section.index) || section.index !== index) fail("Dev Room section order cannot change.");
+      const body = text(section.body, maxBodyBytes);
+      if (body.includes(mediaMarker)) fail("Dev Room media must be edited through its fixed image slot.");
+      const image = section.media ? media(section.media, index) : null;
       result += marker + "section " + index + " -->" + newline + "## " + text(section.title, maxBodyBytes, true) + newline +
-        text(section.body, maxBodyBytes) + newline + marker + "section-end " + index + " -->" + newline + newline;
+        body + (image ? (body ? newline : "") + mediaMarker + JSON.stringify(image) + " -->" : "") + newline + marker + "section-end " + index + " -->" + newline + newline;
     }
     text(result, maxMarkdownBytes, false, false);
     return result;
@@ -230,19 +260,20 @@
       const title = split.body.match(/^\s*# ([^\r\n]+)(?:\n|$)/)?.[1] || null;
       return { body: split.body, title, source: null, canonical: false, technical: split.technical };
     }
-    const parts = ["# " + model.title, "", hideReadingComments(model.summary), ""], technical = [];
+    const parts = ["# " + model.title, "", hideReadingComments(model.summary), ""], technical = [], sections = [];
     for (const section of model.sections) {
       const isTechnical = technicalTitle(section.title);
       const split = splitTechnical(hideReadingComments(section.body), isTechnical ? section.title : null);
       // A mixed References section with a human Risks subsection must remain
       // visible/editable. Only a whole technical section has its canonical index.
       if (!isTechnical || split.body.trim()) parts.push(...(!isTechnical ? ["## " + section.title] : []), split.body, "");
+      sections.push({ index: section.index, title: isTechnical ? "" : section.title, body: split.body, technical: isTechnical && !split.body.trim(), ...(section.media ? { media: section.media } : {}) });
       for (const item of split.technical) {
         const wholeSection = isTechnical && !split.body.trim() && split.technical.length === 1;
         technical.push({ ...item, index: wholeSection ? section.index : null });
       }
     }
-    return { body: parts.join("\n"), title: model.title, source: model.source, canonical: true, technical };
+    return { body: parts.join("\n"), title: model.title, summary: hideReadingComments(model.summary), sections, source: model.source, canonical: true, technical };
   }
 
   function catalog(markdown, allowedIds) {

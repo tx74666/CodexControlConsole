@@ -120,6 +120,9 @@ def main():
                  "console-developer-update.js", "console-developer-update.css", "console-repository-publish.js",
                  "console-repository-publish.css", "dev-room-editor.js", "dev-room-translations.json"):
         require((app_dir / "_internal" / name).is_file(), f"packaged UI entry is missing: {name}")
+    for name in ('DevRoomConsoleBridge.cs', 'DevRoomConsoleBridge.contract.json'):
+        require((app_dir / '_internal' / 'unity' / 'Editor' / name).is_file(),
+                f'packaged content bridge source is missing: {name}')
     manifests = list(app_dir.rglob("app-manifest.json"))
     require(len(manifests) == 1, "packaged manifest is missing or duplicated")
     manifest = json.loads(manifests[0].read_text(encoding="utf-8"))

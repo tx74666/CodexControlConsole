@@ -226,7 +226,9 @@ class DevRoomChecks(unittest.TestCase):
                 'CODEX_CONTROL_PUBLISHER_STATE_FILE': str(self.base / 'publisher.json'),
                 'CODEX_CONTROL_TEMP_DIR': str(self.base / 'server-temp')}):
             import world_console
-        with patch.object(world_console, 'DEV_ROOM', self.service):
+        from dev_room_sync import DevRoomSyncService
+        sync = DevRoomSyncService(self.library, self.base, dev_room=self.service)
+        with patch.object(world_console, 'DEV_ROOM', self.service), patch.object(world_console, 'DEV_ROOM_SYNC', sync):
             server = world_console.ConsoleHTTPServer(('127.0.0.1', 0), world_console.ConsoleHandler)
             worker = threading.Thread(target=server.serve_forever, daemon=True)
             worker.start()

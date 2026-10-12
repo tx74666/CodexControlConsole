@@ -575,6 +575,11 @@
           <span class="workspace-pill" data-dev-room-text="badge">文档</span>
         </div>
         <p class="dev-room-intro" data-dev-room-text="intro">面向开发者的文档，在这里查看和修改。</p>
+        <div class="dev-room-view-options" role="group" aria-label="文档浏览方式">
+          <button id="devRoomViewImages" class="ghost-button" type="button" aria-pressed="true">图文</button>
+          <button id="devRoomViewText" class="ghost-button" type="button" aria-pressed="false">无图片</button>
+          <span id="devRoomViewNote" class="dev-room-meta">只改变浏览方式，保留图片和说明。</span>
+        </div>
         <div class="dev-room-layout">
           <aside class="dev-room-sidebar" aria-label="Dev Room 文档">
             <div class="dev-room-list-head">
@@ -591,7 +596,7 @@
               </div>
               <div class="dev-room-actions">
                 <button id="devRoomEdit" class="ghost-button" type="button" data-dev-room-text="edit">编辑</button>
-                <button id="devRoomCopy" class="ghost-button" type="button" data-dev-room-text="saveCopy" hidden>保存为副本</button>
+                <button id="devRoomCopy" class="ghost-button" type="button" data-dev-room-text="saveCopy" hidden>保存文字副本</button>
                 <button id="devRoomSave" class="ghost-button primary-action" type="button" data-dev-room-text="save" hidden>保存</button>
               </div>
             </div>
@@ -613,6 +618,24 @@
           <span id="devRoomStatus" role="status" aria-live="polite"></span>
           <button id="devRoomReload" class="dev-room-reload" type="button" data-dev-room-text="reload">重新读取</button>
         </div>
+        <details id="devRoomSync" class="dev-room-sync">
+          <summary id="devRoomSyncHeading">与游戏同步</summary>
+          <p id="devRoomStructureNote" class="dev-room-meta">在这里修改已有元素的内容；元素数量、顺序和布局在游戏里调整。</p>
+          <div class="dev-room-sync-actions">
+            <button id="devRoomSyncPull" class="ghost-button" type="button">从游戏更新</button>
+            <button id="devRoomSyncPush" class="ghost-button" type="button">同步当前文档到游戏</button>
+            <button id="devRoomSyncReceipt" class="ghost-button" type="button" hidden>查看同步结果</button>
+          </div>
+          <p id="devRoomSyncStatus" role="status" aria-live="polite"></p>
+          <div id="devRoomSyncPreview" class="dev-room-sync-preview" hidden>
+            <strong id="devRoomSyncPreviewTitle"></strong>
+            <ul id="devRoomSyncChanges"></ul>
+            <div class="dev-room-sync-actions">
+              <button id="devRoomSyncApply" class="ghost-button primary-action" type="button">确认更新到 Console</button>
+              <button id="devRoomSyncDismiss" class="ghost-button" type="button">返回文档</button>
+            </div>
+          </div>
+        </details>
       </article>
       <article class="panel randomrealm-main-panel">
         <div class="panel-head">

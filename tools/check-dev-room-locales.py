@@ -88,6 +88,44 @@ class DevRoomLocaleChecks(unittest.TestCase):
         self.assertEqual({str(path): path.read_bytes() for path in self.storage.rglob('*') if path.is_file()}, before)
         self.assertEqual(self.service.state(str(self.root), self.identifier)['document'], source)
 
+    def test_stale_language_never_falls_back_to_a_matching_bundled_translation(self):
+        original = self.seed()
+        locale = {'version': 1, 'id': self.identifier, 'sourceRevision': original['revision'],
+                  'variants': {'zh': {'title': '当前中文', 'body': '当前正文'}},
+                  'sourceLanguage': 'zh', 'staleLanguages': ['en']}
+        self.locale_path().parent.mkdir(parents=True, exist_ok=True)
+        self.locale_path().write_text(json.dumps(locale, ensure_ascii=False), encoding='utf-8')
+        before = self.locale_path().read_bytes()
+        english = self.state('en')
+        self.assertTrue(english['translationMissing'])
+        self.assertTrue(english['translationStale'])
+        self.assertEqual(english['body'], '')
+        self.assertEqual(self.locale_path().read_bytes(), before)
+        self.assertEqual(self.state()['body'], '当前正文')
+
+    def test_saving_current_language_clears_only_its_stale_marker(self):
+        original = self.seed()
+        locale = {'version': 1, 'id': self.identifier, 'sourceRevision': original['revision'],
+                  'variants': {}, 'staleLanguages': ['zh', 'en']}
+        self.locale_path().parent.mkdir(parents=True, exist_ok=True)
+        self.locale_path().write_text(json.dumps(locale), encoding='utf-8')
+        self.service.save(self.payload(self.state('en'), language='en', title='Updated English', body='New translation'))
+        saved = json.loads(self.locale_path().read_text(encoding='utf-8'))
+        self.assertEqual(saved['staleLanguages'], ['zh'])
+        self.assertFalse(self.state('en')['translationMissing'])
+        self.assertTrue(self.state()['translationStale'])
+
+    def test_invalid_stale_markers_preserve_the_sidecar(self):
+        original = self.seed()
+        for stale in (['fr'], ['en', 'en'], 'en', [None], ['en', 'zh', 'fr']):
+            locale = {'version': 1, 'id': self.identifier, 'sourceRevision': original['revision'],
+                      'variants': {}, 'staleLanguages': stale}
+            self.locale_path().parent.mkdir(parents=True, exist_ok=True)
+            self.locale_path().write_text(json.dumps(locale), encoding='utf-8')
+            before = self.locale_path().read_bytes()
+            with self.subTest(stale=stale), self.assertRaises(ValueError):
+                self.state()
+            self.assertEqual(self.locale_path().read_bytes(), before)
     def test_two_languages_edit_independently_and_share_conflict_revision(self):
         self.seed()
         original = self.source_path().read_bytes()
@@ -366,7 +404,9 @@ class DevRoomLocaleChecks(unittest.TestCase):
         self.seed()
         with patch.dict(os.environ, {'CODEX_CONTROL_DATA_DIR': str(self.base / 'server-data'), 'LOCALAPPDATA': str(self.base / 'local-data'), 'CODEX_CONTROL_PUBLISHER_STATE_FILE': str(self.base / 'publisher.json'), 'CODEX_CONTROL_TEMP_DIR': str(self.base / 'server-temp')}):
             import world_console
-        with patch.object(world_console, 'DEV_ROOM', self.service):
+        from dev_room_sync import DevRoomSyncService
+        sync = DevRoomSyncService(self.library, self.base, dev_room=self.service)
+        with patch.object(world_console, 'DEV_ROOM', self.service), patch.object(world_console, 'DEV_ROOM_SYNC', sync):
             server = world_console.ConsoleHTTPServer(('127.0.0.1', 0), world_console.ConsoleHandler)
             worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
             def request(method, path, payload=None, headers=None):

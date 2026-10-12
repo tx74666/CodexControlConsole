@@ -81,6 +81,11 @@ $PythonSources = @(
   "desktop_layout.py",
   "document_library.py",
   "dev_room.py",
+  "dev_room_http.py",
+  "dev_room_media.py",
+  "dev_room_sync.py",
+  "unity_dev_room_documents.py",
+  "tools/check-dev-room-migration-v2.py",
   "resource_library.py",
   "resource_catalogs.py",
   "resource_sources.py",
@@ -154,6 +159,10 @@ $PythonChecks = @(
   "tools/check-document-library.py",
   "tools/check-dev-room.py",
   "tools/check-dev-room-locales.py",
+  "tools/check-dev-room-content-http.py",
+  "tools/check-dev-room-sync-v2.py",
+  "tools/check-dev-room-protocol-v2.py",
+  "tools/check-dev-room-unity-bridge-v2.py",
   "tools/check-randomrealm-music-order-sync.py",
   "tools/check-resource-library.py",
   "tools/check-resource-catalogs.py",
@@ -219,6 +228,9 @@ try {
     "tools/check-dev-room-editor.mjs",
     "tools/check-dev-room-translations.mjs",
     "tools/check-dev-room-language-ui.mjs",
+    "tools/check-dev-room-content-ui.mjs",
+    "unity/Editor/DevRoomConsoleBridge.cs",
+    "unity/Editor/DevRoomConsoleBridge.contract.json",
     "tools/check-randomrealm-music-order-ui.mjs",
     "console-developer-update.js",
     "console-developer-update.css",
@@ -288,6 +300,28 @@ try {
     Invoke-QualityStep $check { & $Python $check }
   }
 
+  # Exercise the dedicated read-only migration runner against disposable sources.
+  # CI never discovers or imports a user's real library/Unity workspace.
+  $DevRoomMigrationSmoke = @'
+import json, runpy
+from dev_room import DevRoomService
+fixtures = runpy.run_path('tools/check-dev-room-sync-v2.py')
+migration = runpy.run_path('tools/check-dev-room-migration-v2.py')
+case = fixtures['SyncChecks']('test_v1_media_migration_preserves_catalog_language_and_original_hash')
+case.setUp()
+try:
+    case.test_v1_media_migration_preserves_catalog_language_and_original_hash()
+    migration['rehearse'].__globals__['DevRoomService'] = lambda library: DevRoomService(library, case.dev.translations_path)
+    result = migration['rehearse'](case.root, case.workspace)
+    assert result['existingDocumentsPreserved'] == 2
+    assert result['englishAvailableBefore'] == result['englishAvailableAfter'] == 2
+    assert result['allOriginalSourceHashesPreserved'] and result['originalLibraryUnmodified']
+    print(json.dumps(result, ensure_ascii=False))
+finally:
+    case.tearDown()
+'@
+  Invoke-QualityStep "Dev Room isolated read-only migration rehearsal" { & $Python -c $DevRoomMigrationSmoke }
+
   if ($env:OS -eq "Windows_NT") {
     Invoke-QualityStep "Windows PowerShell sampler compatibility" {
       & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/Test-DeviceSnapshotCheckpoint.ps1
@@ -307,6 +341,7 @@ try {
   Invoke-QualityStep "Dev Room text preservation and presentation" { & $Node tools/check-dev-room-editor.mjs }
   Invoke-QualityStep "Dev Room bilingual document coverage" { & $Node tools/check-dev-room-translations.mjs }
   Invoke-QualityStep "Dev Room language switching and draft isolation" { & $Node tools/check-dev-room-language-ui.mjs }
+  Invoke-QualityStep "Dev Room fixed-slot image content and receipt UI" { & $Node tools/check-dev-room-content-ui.mjs }
   Invoke-QualityStep "Readable display copy and interpolation" { & $Node tools/check-readable-copy.mjs }
   Invoke-QualityStep "Phone pairing JavaScript syntax" { & $Node --check phone-pairing.js }
   Invoke-QualityStep "Offline phone export JavaScript syntax" { & $Node --check phone-offline-export.js }

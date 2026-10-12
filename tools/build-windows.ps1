@@ -308,6 +308,8 @@ if ($BuildApplication) {
     @{ Source = "app.js"; Destination = "." },
     @{ Source = "dev-room-editor.js"; Destination = "." },
     @{ Source = "dev-room-translations.json"; Destination = "." },
+    @{ Source = "unity\Editor\DevRoomConsoleBridge.cs"; Destination = "unity\Editor" },
+    @{ Source = "unity\Editor\DevRoomConsoleBridge.contract.json"; Destination = "unity\Editor" },
   @{ Source = "README.md"; Destination = "." },
   @{ Source = "release-defaults.json"; Destination = "." },
   @{ Source = "music-loudness.json"; Destination = "." },
