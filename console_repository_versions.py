@@ -18,6 +18,10 @@ class _CompanionVersionError(VersionPlanError):
     pass
 
 
+class _ApplicationVersionError(_CompanionVersionError):
+    pass
+
+
 def _hash(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -312,6 +316,83 @@ def _strict_blender_manifest(raw, current):
         raise _CompanionVersionError("固定 Blender manifest 不是完整、唯一且一致的 TOML 版本声明，请协调后重试。") from exc
 
 
+def _application_files(source, reader, current, primary_raw, contract):
+    """One explicitly configured root application, never unrelated plugin versions."""
+    if contract is None:
+        return None
+    try:
+        if not isinstance(contract, dict) or contract.get("ambiguous"):
+            raise _ApplicationVersionError("同一应用的关联版本来源重复或不明确，请保留唯一权威配置。")
+        _, manifest_text = _decode(primary_raw)
+        manifest = json.loads(manifest_text)
+        package_raw = reader("package.json")
+        package_current, package_edit = _one(package_raw, {"kind":"json", "key":"version"})
+        _, package_text = _decode(package_raw)
+        package = json.loads(package_text)
+        repository = manifest.get("repository", "")
+        package_name = package.get("name", "")
+        # A matching number alone never establishes common ownership.
+        if (not isinstance(repository, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+                or not isinstance(package_name, str) or not package_name):
+            return None
+        normalize = lambda value: re.sub(r"[^a-z0-9]", "", value.lower())
+        if normalize(package_name.rsplit("/", 1)[-1]) != normalize(repository.split("/", 1)[1]):
+            return None
+        package_source = contract["packageSource"]
+        scope = lambda item: sorted(set(value.replace("\\", "/").strip("/") for value in
+                                       (item.get("scope", "") if isinstance(item.get("scope", ""), list) else [item.get("scope", "")])))
+        if (contract["sourceId"] != source_id(source) or package_source.get("path") != "package.json"
+                or package_source.get("kind") not in {"json", "package", "app-manifest"}
+                or (package_source.get("key") or "version") != "version" or scope(package_source) != scope(source)
+                or type(contract.get("testMode", False)) is not bool
+                or not contract.get("testMode", False) and repository.lower() != str(contract["repository"]).lower()):
+            raise _ApplicationVersionError("同一应用的已配置版本来源或仓库归属不一致，请重新核对配置。")
+        if package_current != current:
+            raise _ApplicationVersionError("同一应用的 manifest 与 package 版本不同，请协调一致；不会分别升版。")
+        lock_raw = reader("package-lock.json")
+        lock_current, lock_edit = _one(lock_raw, {"kind":"json", "key":"version"})
+        locked_current, locked_edit = _one(lock_raw, {"kind":"json", "key":"packages..version"})
+        _, lock_text = _decode(lock_raw)
+        lock = json.loads(lock_text)
+        if (lock.get("lockfileVersion") not in {2, 3} or lock.get("name") != package_name
+                or lock["packages"][""].get("name") != package_name
+                or lock_current != current or locked_current != current):
+            raise _ApplicationVersionError("同一应用的 package-lock 根名称或两份根版本不一致，请协调后重试。")
+        evidence = []
+        head_versions = []
+        for path, raw, keys in (("app-manifest.json", primary_raw, ["version"]),
+                                ("package.json", package_raw, ["version"]),
+                                ("package-lock.json", lock_raw, ["version", "packages..version"])):
+            old = contract["headFiles"][path]
+            if old is not None and (not isinstance(old, bytes) or len(old) > MAX_BYTES):
+                raise _ApplicationVersionError("同一应用的固定 HEAD 文件证明超出读取范围。")
+            if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(contract["headSha"])):
+                raise _ApplicationVersionError("同一应用的固定 HEAD 身份无法确认。")
+            previous = [read_current_version(old, {"kind":"json", "key":key}) for key in keys] if old is not None else []
+            head_versions.extend(previous)
+            changed = old is None or any(version != current for version in previous)
+            if (type(contract["gitChanged"][path]) is not bool or type(contract["participates"][path]) is not bool
+                    or changed and (not contract["gitChanged"][path] or not contract["participates"][path])):
+                raise _ApplicationVersionError("同一应用的手动或新增版本未进入实际 Git 变化范围，请处理排除或特殊索引标记：" + path)
+            evidence.append({"path":path, "headSha":contract["headSha"], "headMissing":old is None,
+                             "headSha256":_hash(old) if old is not None else None,
+                             "headBytes":len(old) if old is not None else None, "headVersions":previous,
+                             "expectedSha256":_hash(raw), "expectedBytes":len(raw),
+                             "gitChanged":contract["gitChanged"][path], "participates":contract["participates"][path]})
+        if len(set(head_versions)) > 1:
+            raise _ApplicationVersionError("同一应用的固定 HEAD 关联版本不同，请先协调原应用版本；不会分别升版。")
+        bom, text, _ = lock_edit
+        edits = {"package.json":(package_raw, package_edit),
+                 "package-lock.json":(lock_raw, (bom, text, [lock_edit[2], locked_edit[2]]))}
+        proof = {"packageSourceId":source_id(package_source), "scope":scope(package_source),
+                 "repository":repository.lower(), "files":evidence}
+        return edits, proof
+    except _ApplicationVersionError:
+        raise
+    except (OSError, UnicodeError, ValueError, SyntaxError, KeyError, TypeError) as exc:
+        raise _ApplicationVersionError("同一应用的关联 JSON 版本缺失、损坏或不能唯一读取，请协调后重试；不会改动依赖版本。") from exc
+
+
 def _blender_companion(root, source, reader, current, primary_raw):
     path = Path(source["path"])
     if path.name == "blender_manifest.toml":
@@ -341,7 +422,7 @@ def _blender_companion(root, source, reader, current, primary_raw):
         raise _CompanionVersionError("同一 Blender 插件的另一版本声明缺失或不唯一，请协调一致；不会导入插件代码。") from exc
 
 
-def _inspect(root, source, reader, git_reader=None, console_reader=None):
+def _inspect(root, source, reader, git_reader=None, console_reader=None, application_reader=None):
     if source.get("kind") == "git_commit":
         if source.get("path") != "HEAD" or source.get("key") != "subject" or git_reader is None:
             raise VersionPlanError("提交版本仅允许固定 HEAD / subject 来源。")
@@ -355,14 +436,26 @@ def _inspect(root, source, reader, git_reader=None, console_reader=None):
                                       "targetVersion": public["nextVersion"], "files": [], "gitEvidence": evidence})
         return public, {}
     path = source["path"]
-    raw = reader(path)
-    current, edit = _one(raw, source)
+    application_authority = (path == "app-manifest.json" and source.get("kind") in {"json", "app-manifest", "package"}
+                             and (source.get("key") or "version") == "version" and application_reader is not None)
+    try:
+        raw = reader(path)
+        current, edit = _one(raw, source)
+    except (OSError, UnicodeError, ValueError, SyntaxError, KeyError, TypeError) as exc:
+        if application_authority and application_reader(source) is not None:
+            raise _ApplicationVersionError("同一应用的 manifest 权威 JSON 版本缺失、损坏或不能唯一读取，请协调后重试。") from exc
+        raise
     edits = {path: (raw, edit)}
     evidence = []
+    application = None
     if path == "app-manifest.json":
         companion = _console_files(root, source, reader, current, console_reader)
         if companion:
             edits, evidence = companion
+        elif application_authority:
+            application = _application_files(source, reader, current, raw, application_reader(source))
+            if application:
+                edits.update(application[0])
     paired = _blender_companion(root, source, reader, current, raw)
     if paired:
         companion, companion_raw, companion_edit = paired
@@ -373,15 +466,20 @@ def _inspect(root, source, reader, git_reader=None, console_reader=None):
               "expectedSha256": _hash(raw), "expectedBytes": len(raw), "expectedFiles": files}
     if paired:
         public.update(pairedCompanion=paired[0], companionState="paired")
+    if application:
+        public.update(pairedCompanion={"path":"package.json", "kind":"json", "key":"version"},
+                      companionState="paired", applicationCompanionEvidence=application[1])
     proof = {"sourceId": public["sourceId"], "currentVersion": current, "targetVersion": public["nextVersion"], "files": files}
     if evidence:
         public["consoleResourceEvidence"] = evidence
         proof["consoleResourceEvidence"] = evidence
+    if application:
+        proof["applicationCompanionEvidence"] = application[1]
     public["planProof"] = _proof(proof)
     return public, edits
 
 
-def catalog(root, sources, reader, git_reader=None, console_reader=None):
+def catalog(root, sources, reader, git_reader=None, console_reader=None, application_reader=None):
     items, seen = [], set()
     for source in sources:
         ident = source_id(source)
@@ -389,31 +487,42 @@ def catalog(root, sources, reader, git_reader=None, console_reader=None):
             continue
         seen.add(ident)
         try:
-            item, _ = _inspect(root, source, reader, git_reader, console_reader)
+            item, _ = _inspect(root, source, reader, git_reader, console_reader, application_reader)
         except (VersionPlanError, OSError, UnicodeError, ValueError, SyntaxError, KeyError, TypeError, ET.ParseError) as exc:
             item = {"sourceId": ident, **{key: source.get(key, "") for key in ("path", "kind", "key", "name", "scope")},
                     "currentVersion": "", "nextVersion": "", "canBump": False, "reason": str(exc) if isinstance(exc, VersionPlanError) else "版本来源缺失、变化或无法唯一读取，请手动准备版本。"}
             if isinstance(exc, _CompanionVersionError):
                 item["companionState"] = "blocked"
         items.append(item)
+    application_companions = {item["applicationCompanionEvidence"]["packageSourceId"] for item in items
+                              if item.get("applicationCompanionEvidence")}
+    items = [item for item in items if item["sourceId"] not in application_companions]
     for item in items:
         paths = {entry["path"] for entry in item.get("expectedFiles", [])}
         if paths and any(other is not item and (item.get("pairedCompanion") or other.get("pairedCompanion")) and
                          paths & {entry["path"] for entry in other.get("expectedFiles", [])} for other in items):
-            item.update(canBump=False, companionState="blocked", reason="同一 Blender 插件的双版本来源被重复配置，修改范围重叠；请保留一个权威来源。")
+            item.update(canBump=False, companionState="blocked", reason="同一组件的关联版本来源被重复配置，修改范围重叠；请保留一个权威来源。")
     return items
 
 
-def prepare_updates(root, sources, plans, reader, git_reader=None, console_reader=None):
+def prepare_updates(root, sources, plans, reader, git_reader=None, console_reader=None, application_reader=None):
     by_id = {source_id(source): source for source in sources}
     combined, proofs, paired_paths = {}, [], set()
     for plan in plans:
         source = by_id.get(plan["sourceId"])
         if source is None:
             raise VersionPlanError("版本来源已改变，请重新配置一次性版本计划。")
-        item, edits = _inspect(root, source, reader, git_reader, console_reader)
+        if source.get("path") == "package.json" and application_reader is not None:
+            for authority in sources:
+                if (authority.get("path") == "app-manifest.json"
+                        and authority.get("kind") in {"json", "app-manifest", "package"}
+                        and (authority.get("key") or "version") == "version"):
+                    application, _ = _inspect(root, authority, reader, git_reader, console_reader, application_reader)
+                    if application.get("applicationCompanionEvidence"):
+                        raise VersionPlanError("package.json 已归属同一应用的 manifest 权威来源，请重新配置应用版本计划；不会单独升版。")
+        item, edits = _inspect(root, source, reader, git_reader, console_reader, application_reader)
         if set(edits) & paired_paths or item.get("pairedCompanion") and set(edits) & combined.keys():
-            raise VersionPlanError("同一 Blender 插件的双版本来源被重复配置，修改范围重叠；请保留一个权威来源。")
+            raise VersionPlanError("同一组件的关联版本来源被重复配置，修改范围重叠；请保留一个权威来源。")
         if item.get("pairedCompanion"):
             paired_paths.update(edits)
         expected = {"sourceId": item["sourceId"], "currentVersion": item["currentVersion"], "targetVersion": item["nextVersion"],

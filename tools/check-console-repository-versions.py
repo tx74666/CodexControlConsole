@@ -1393,6 +1393,554 @@ def test_hidden_initial_authority_is_not_claimed_as_committed():
         require(f.git(root, "rev-parse", "HEAD") == f.git(remote, "rev-parse", "main") == head)
 
 
+def application_sources():
+    return [source("app-manifest.json", "json", "version", "Application", "**"),
+            source("package.json", "json", "version", "Package", "**")]
+
+
+def application_images(version="0.4.0"):
+    manifest = ('\ufeff{\r\n  "repository": "tx74666/CodexWorldConsole",\r\n'
+                '  "version" : "' + version + '",\r\n  "description": "保存原文 0.4.0"\r\n}\r\n').encode("utf-8")
+    package = ('\ufeff{\r\n  "name": "codex-world-console",\r\n  "version" : "' + version + '",\r\n'
+               '  "private": true,\r\n  "dependencies": {"fixture-tool": "0.4.0"},\r\n'
+               '  "description": "keep 0.4.0"\r\n}\r\n').encode("utf-8")
+    lock = ('\ufeff{\r\n  "name": "codex-world-console",\r\n  "version" : "' + version + '",\r\n'
+            '  "lockfileVersion": 3,\r\n  "requires": true,\r\n  "packages": {\r\n'
+            '    "": {"name": "codex-world-console", "version": "' + version + '", '
+            '"dependencies": {"fixture-tool": "0.4.0"}},\r\n'
+            '    "node_modules/fixture-tool": {"version": "0.4.0", "integrity": "sha512-fixture"}\r\n'
+            '  }\r\n}\r\n').encode("utf-8")
+    return {"app-manifest.json": manifest, "package.json": package, "package-lock.json": lock}
+
+
+def application_after(images, current, target):
+    root_old = ('"version" : "' + current + '"').encode("ascii")
+    root_new = ('"version" : "' + target + '"').encode("ascii")
+    result = {name: raw.replace(root_old, root_new, 1) for name, raw in images.items()}
+    result["package-lock.json"] = result["package-lock.json"].replace(
+        ('"version": "' + current + '"').encode("ascii"), ('"version": "' + target + '"').encode("ascii"), 1)
+    return result
+
+
+def application_contract(sources, images, *, head_files=None, head_sha=None, changed=None, participates=None):
+    primary, package = sources
+    paths = ("app-manifest.json", "package.json", "package-lock.json")
+    evidence = {"sourceId": versions.source_id(primary), "packageSource": copy.deepcopy(package),
+                "repository": "tx74666/CodexWorldConsole", "testMode": False,
+                "headSha": head_sha or "a" * 40,
+                "headFiles": copy.deepcopy(images if head_files is None else head_files),
+                "gitChanged": {name: False for name in paths} if changed is None else dict(changed),
+                "participates": {name: True for name in paths} if participates is None else dict(participates)}
+    def read(item):
+        return copy.deepcopy(evidence) if item.get("path") == "app-manifest.json" else None
+    return read, evidence
+
+
+def application_component(items, primary=None):
+    primary = primary or application_sources()[0]
+    rows = [item for item in items if item["sourceId"] == versions.source_id(primary)]
+    require(len(rows) == 1, items)
+    return rows[0]
+
+
+def application_seed(f, root, repo, version="0.4.0", commit=True):
+    images = application_images(version)
+    repo["versionSources"] = application_sources()
+    for name, raw in images.items():
+        (root / name).write_bytes(raw)
+    if commit:
+        f.git(root, "add", ".")
+        f.git(root, "commit", "-m", "application companion fixture")
+        f.git(root, "push", "origin", "HEAD:refs/heads/" + repo["branch"])
+    return images
+
+
+def require_application_images(root, expected):
+    require({name: (root / name).read_bytes() for name in expected} == expected,
+            "Application root declarations or unrelated dependency bytes changed")
+
+
+def test_application_root_companions_exact_three_file_plan_and_single_authority():
+    for current, target, reverse in (("0.4.0", "0.4.1", False), ("1.6.99", "1.7.0", True), ("1.99.99", "2.0.0", False)):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources, images = application_sources(), application_images(current)
+            contract, _ = application_contract(sources, images)
+            configured = list(reversed(sources)) if reverse else sources
+            items = versions.catalog(root, configured, images.__getitem__, application_reader=contract)
+            require(len(items) == 1, "Root package was presented as an independent application version")
+            component = application_component(items)
+            require(component["canBump"] and component["currentVersion"] == current and component["nextVersion"] == target, component)
+            paths = [entry["path"] for entry in component["expectedFiles"]]
+            require(len(paths) == len(set(paths)) == 3 and set(paths) == set(images), component)
+            original = copy.deepcopy(images)
+            updates, proofs = versions.prepare_updates(root, configured, [plan(component)], images.__getitem__, application_reader=contract)
+            require(len(updates) == 3 and len(proofs) == 1, updates)
+            actual = {entry["path"]: base64.b64decode(entry["afterBase64"]) for entry in updates}
+            require(actual == application_after(images, current, target), actual)
+            require(images == original, "Pure application plan mutated its reader data")
+            lock = json.loads(actual["package-lock.json"].decode("utf-8-sig"))
+            package = json.loads(actual["package.json"].decode("utf-8-sig"))
+            require(lock["version"] == lock["packages"][""]["version"] == package["version"] == target)
+            require(lock["packages"]["node_modules/fixture-tool"]["version"] == "0.4.0")
+            require(lock["packages"][""]["dependencies"]["fixture-tool"] == package["dependencies"]["fixture-tool"] == "0.4.0")
+            for name, raw in actual.items():
+                require(raw.startswith(b"\xef\xbb\xbf") and raw.count(b"\r\n") == images[name].count(b"\r\n"), name)
+
+
+def test_application_pair_requires_explicit_contract_and_attested_project_identity():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sources, images = application_sources(), application_images()
+        reads = []
+        def reader(name):
+            reads.append(name)
+            return images[name]
+        ordinary = versions.catalog(root, sources, reader)
+        require(len(ordinary) == 2 and all(len(item["expectedFiles"]) == 1 for item in ordinary), ordinary)
+        require("package-lock.json" not in reads, "Unconfigured application contract inferred a lock-file owner")
+        updates, _ = versions.prepare_updates(root, sources, [plan(ordinary[0])], reader)
+        require([entry["path"] for entry in updates] == ["app-manifest.json"])
+        for invalid in ("manifest_repository", "package_name", "lock_name", "lock_package_name", "scope", "source_id", "ambiguous"):
+            working = copy.deepcopy(images)
+            contract, evidence = application_contract(sources, images)
+            if invalid == "manifest_repository":
+                working["app-manifest.json"] = working["app-manifest.json"].replace(b"tx74666/CodexWorldConsole", b"other-owner/CodexWorldConsole")
+            elif invalid == "package_name":
+                working["package.json"] = working["package.json"].replace(b"codex-world-console", b"another-application")
+            elif invalid == "lock_name":
+                working["package-lock.json"] = working["package-lock.json"].replace(b"codex-world-console", b"another-application", 1)
+            elif invalid == "lock_package_name":
+                working["package-lock.json"] = working["package-lock.json"].replace(
+                    b'"": {"name": "codex-world-console"', b'"": {"name": "another-application"')
+            elif invalid == "scope":
+                evidence["packageSource"]["scope"] = "unrelated-module"
+            elif invalid == "ambiguous":
+                evidence["ambiguous"] = True
+            else:
+                evidence["sourceId"] = "not-the-configured-authority"
+            items = versions.catalog(root, sources, working.__getitem__, application_reader=contract)
+            component = application_component(items)
+            if invalid == "package_name":
+                require(len(items) == 2 and all(len(item["expectedFiles"]) == 1 for item in items), items)
+                require(component["canBump"], "Different application names were silently coupled")
+                updates, _ = versions.prepare_updates(root, sources, [plan(component)], working.__getitem__, application_reader=contract)
+                require([entry["path"] for entry in updates] == ["app-manifest.json"])
+                continue
+            require(not component["canBump"] and component["companionState"] == "blocked", (invalid, component))
+            require(working != images if invalid in {"manifest_repository", "package_name", "lock_name", "lock_package_name"} else working == images)
+
+
+def test_application_companion_source_cannot_be_planned_as_an_independent_component():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sources, images = application_sources(), application_images()
+        contract, _ = application_contract(sources, images)
+        primary = application_component(versions.catalog(root, sources, images.__getitem__, application_reader=contract))
+        independent_package = versions.catalog(root, [sources[1]], images.__getitem__)[0]
+        for invalid in (False, True):
+            working = copy.deepcopy(images)
+            if invalid:
+                working["package-lock.json"] += b" malformed current lock JSON"
+            for plans in ([plan(independent_package)], [plan(primary), plan(independent_package)]):
+                try:
+                    versions.prepare_updates(root, sources, plans, working.__getitem__, application_reader=contract)
+                except versions.VersionPlanError:
+                    pass
+                else:
+                    raise AssertionError("Root package companion accepted a separate version plan")
+
+
+def test_application_missing_malformed_duplicate_and_partial_versions_block_the_whole_pair():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sources, images = application_sources(), application_images()
+        for name in images:
+            for invalid in ("missing", "malformed", "duplicate", "manual_partial"):
+                working = copy.deepcopy(images)
+                if invalid == "missing":
+                    working.pop(name)
+                elif invalid == "malformed":
+                    working[name] += b" incomplete JSON trailing text"
+                elif invalid == "duplicate":
+                    working[name] = working[name].replace(b"{\r\n", b'{\r\n  "version": "0.4.0",\r\n', 1)
+                else:
+                    working[name] = working[name].replace(b'"version" : "0.4.0"', b'"version" : "0.4.1"', 1)
+                contract, _ = application_contract(sources, images)
+                before = copy.deepcopy(working)
+                component = application_component(versions.catalog(root, sources, working.__getitem__, application_reader=contract))
+                require(not component["canBump"] and component["companionState"] == "blocked", (name, invalid, component))
+                require(working == before, "Rejected application inspection changed the supplied file data")
+        working = copy.deepcopy(images)
+        working["package-lock.json"] = working["package-lock.json"].replace(b'"version": "0.4.0"', b'"version": "0.4.1"', 1)
+        contract, _ = application_contract(sources, images)
+        component = application_component(versions.catalog(root, sources, working.__getitem__, application_reader=contract))
+        require(not component["canBump"] and component["companionState"] == "blocked", component)
+
+
+def test_application_plan_proof_binds_each_companion_raw_bytes_and_fixed_head():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sources, images = application_sources(), application_images()
+        contract, evidence = application_contract(sources, images)
+        component = application_component(versions.catalog(root, sources, images.__getitem__, application_reader=contract))
+        original_plan = plan(component)
+        for name in images:
+            working = copy.deepcopy(images)
+            working[name] += b"\r\n"
+            try:
+                versions.prepare_updates(root, sources, [original_plan], working.__getitem__, application_reader=contract)
+            except versions.VersionPlanError:
+                pass
+            else:
+                raise AssertionError("Changed application companion bytes accepted an old plan: " + name)
+            require(working[name] == images[name] + b"\r\n", "CAS rejection replaced user bytes")
+        evidence["headSha"] = "b" * 40
+        try:
+            versions.prepare_updates(root, sources, [original_plan], images.__getitem__, application_reader=contract)
+        except versions.VersionPlanError:
+            pass
+        else:
+            raise AssertionError("Application plan did not bind its fixed HEAD evidence")
+
+
+def test_application_changed_or_initial_versions_require_all_three_actual_participants():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sources, original = application_sources(), application_images()
+        working = application_after(original, "0.4.0", "0.4.1")
+        for initial in (False, True):
+            for hidden in original:
+                participation = {name: name != hidden for name in original}
+                changed = {name: True for name in original}
+                head = {name: None for name in original} if initial else original
+                contract, _ = application_contract(sources, working, head_files=head, changed=changed, participates=participation)
+                component = application_component(versions.catalog(root, sources, working.__getitem__, application_reader=contract))
+                require(not component["canBump"] and component["companionState"] == "blocked", (initial, hidden, component))
+                require(working == application_after(original, "0.4.0", "0.4.1"))
+
+
+def test_application_fixed_head_requires_matching_history_or_attested_new_members():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sources, images = application_sources(), application_images()
+        cases = []
+        for name in images:
+            missing = copy.deepcopy(images)
+            missing[name] = None
+            cases.append((name + " new member without actual Git change", missing))
+            malformed = copy.deepcopy(images)
+            malformed[name] += b" incomplete HEAD JSON"
+            cases.append((name + " malformed", malformed))
+            mismatched = copy.deepcopy(images)
+            mismatched[name] = mismatched[name].replace(b'"version" : "0.4.0"', b'"version" : "0.4.1"', 1)
+            cases.append((name + " mismatch", mismatched))
+        cases.append(("all initial without actual Git changes", {name: None for name in images}))
+        partial_lock = copy.deepcopy(images)
+        partial_lock["package-lock.json"] = partial_lock["package-lock.json"].replace(b'"version": "0.4.0"', b'"version": "0.4.1"', 1)
+        cases.append(("HEAD lock empty-package partial", partial_lock))
+        for label, head in cases:
+            contract, _ = application_contract(sources, images, head_files=head)
+            component = application_component(versions.catalog(root, sources, images.__getitem__, application_reader=contract))
+            require(not component["canBump"] and component["companionState"] == "blocked", (label, component))
+            require(images == application_images(), "Rejected historical evidence changed working declaration data")
+
+
+def test_application_new_members_are_allowed_only_with_actual_git_change_evidence():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sources, images = application_sources(), application_images()
+        for initial in (False, True):
+            head = {name: None for name in images} if initial else dict(images)
+            if not initial:
+                head["package-lock.json"] = None
+            changes = {name: head[name] is None for name in images}
+            contract, _ = application_contract(sources, images, head_files=head, changed=changes)
+            component = application_component(versions.catalog(root, sources, images.__getitem__, application_reader=contract))
+            require(component["canBump"] and len(component["expectedFiles"]) == 3, (initial, component))
+            updates, _ = versions.prepare_updates(root, sources, [plan(component)], images.__getitem__, application_reader=contract)
+            require({entry["path"] for entry in updates} == set(images))
+            require(images == application_images(), "Read-only attestation wrote new application declarations")
+
+
+def test_application_root_pair_keeps_independent_nested_module_versions():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        sources, images = application_sources(), application_images()
+        module_source = source("plugins/example/package.json", "json", "version", "Independent plugin", "plugins/example")
+        images[module_source["path"]] = b'{"name":"independent-plugin","version":"7.2.9"}\r\n'
+        contract, _ = application_contract(sources, {name: raw for name, raw in images.items() if name != module_source["path"]})
+        configured = sources + [module_source]
+        items = versions.catalog(root, configured, images.__getitem__, application_reader=contract)
+        require(len(items) == 2, items)
+        independent = [item for item in items if item["sourceId"] == versions.source_id(module_source)][0]
+        require(independent["currentVersion"] == "7.2.9" and len(independent["expectedFiles"]) == 1, independent)
+        updates, _ = versions.prepare_updates(root, configured, [plan(application_component(items))], images.__getitem__, application_reader=contract)
+        require({entry["path"] for entry in updates} == {"app-manifest.json", "package.json", "package-lock.json"}, updates)
+        require(images[module_source["path"]] == b'{"name":"independent-plugin","version":"7.2.9"}\r\n')
+
+
+def test_application_auto_dirty_summary_readonly_then_synchronized_commit_once():
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        images = application_seed(f, root, repo)
+        save_edit(root)
+        service = f.service()
+        service.status()
+        settings_bytes = service._settings_path.read_bytes()
+        head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+        catalog = service.version_catalog()["repositories"][0]
+        require(len(catalog["components"]) == 1 and catalog["hasChanges"] is True, catalog)
+        component = application_component(catalog["components"])
+        require(component["autoPlan"]["state"] == "eligible" and component["autoPlan"]["targetVersion"] == "0.4.1", component)
+        preview = service.preview()["previews"][0]
+        require(preview["title"] == "0.4.0 → 0.4.1" and len(preview["versionTransitions"]) == 1, preview)
+        require(len(preview["components"]) == 1 and "Application 0.4.0 → 0.4.1" in preview["body"], preview)
+        require_application_images(root, images)
+        require(f.git(root, "rev-parse", "HEAD") == head and (root / ".git/index").read_bytes() == index)
+        require(not (root / ".git/FETCH_HEAD").exists())
+        first = f.run(service)
+        sha = child(first)["commitSha"]
+        require(child(first)["status"] == "success" and child(first)["title"] == preview["title"], first)
+        expected = application_after(images, "0.4.0", "0.4.1")
+        require_application_images(root, expected)
+        require(f.git(remote, "rev-parse", "main") == sha and f.git(root, "rev-list", "--count", "HEAD") == "3")
+        require(service.run("request_00000001") == first, "Repeated request created another application commit")
+        second = f.run(service, "request_00000002")
+        require(child(second)["status"] == "noop" and f.git(root, "rev-parse", "HEAD") == sha, second)
+        require_application_images(root, expected)
+        require(not service.status()["settings"]["repositories"][0]["versionPlans"])
+        require(service._settings_path.read_bytes() == settings_bytes, "Automatic application plan changed saved user choices")
+
+
+def test_application_manual_matching_declarations_are_not_incremented_again():
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        images = application_seed(f, root, repo)
+        expected = application_after(images, "0.4.0", "0.4.1")
+        for name, raw in expected.items():
+            (root / name).write_bytes(raw)
+        save_edit(root)
+        service = f.service()
+        catalog = service.version_catalog()["repositories"][0]
+        require(len(catalog["components"]) == 1, catalog)
+        component = application_component(catalog["components"])
+        require(component["autoPlan"]["state"] == "manual_version", component)
+        preview = service.preview()["previews"][0]
+        require(preview["title"] == "0.4.0 → 0.4.1", preview)
+        result = f.run(service)
+        require(child(result)["status"] == "success" and child(result)["title"] == preview["title"], result)
+        require_application_images(root, expected)
+        require(f.git(remote, "rev-parse", "main") == child(result)["commitSha"])
+        require(f.git(root, "rev-list", "--count", "HEAD") == "3")
+        for name, raw in expected.items():
+            require(f.git(root, "show", "HEAD:" + name) == raw.decode("utf-8").strip(), "Commit omitted an application declaration: " + name)
+
+
+def test_application_initial_declarations_preserved_and_untracked_companion_write_deferred():
+    for initial in (False, True):
+        with Fixture() as f:
+            root, remote, repo = f.repo()
+            images = application_seed(f, root, repo, commit=not initial)
+            if not initial:
+                f.git(root, "rm", "package-lock.json")
+                f.git(root, "commit", "-m", "HEAD companion missing fixture")
+                f.git(root, "push", "origin", "main")
+                (root / "package-lock.json").write_bytes(images["package-lock.json"])
+            save_edit(root)
+            head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+            service = f.service()
+            component = application_component(service.version_catalog()["repositories"][0]["components"])
+            require(component["autoPlan"]["state"] == ("initial_version" if initial else "blocked"), component)
+            require_application_images(root, images)
+            result = f.run(service)
+            require_application_images(root, images)
+            if initial:
+                require(child(result)["status"] == "success" and child(result)["title"] == "0.4.0", result)
+                require(f.git(root, "rev-parse", "HEAD") == f.git(remote, "rev-parse", "main") == child(result)["commitSha"])
+                require(f.git(root, "rev-list", "--count", "HEAD") == "2")
+                for name, raw in images.items():
+                    require(f.git(root, "show", "HEAD:" + name) == raw.decode("utf-8").strip(), "Commit omitted an attested initial declaration: " + name)
+            else:
+                require(child(result)["status"] == "deferred" and "版本" in child(result)["message"], result)
+                require((root / ".git/index").read_bytes() == index and f.git(root, "rev-parse", "HEAD") == head)
+                require(f.git(remote, "rev-parse", "main") == head and f.git(root, "rev-list", "--count", "HEAD") == "3")
+
+
+def test_application_duplicate_configured_root_package_sources_defer_as_ambiguous():
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        images = application_seed(f, root, repo)
+        duplicate = copy.deepcopy(repo["versionSources"][1])
+        duplicate["name"] = "Another root package authority"
+        repo["versionSources"].append(duplicate)
+        save_edit(root)
+        head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+        service = f.service()
+        component = application_component(service.version_catalog()["repositories"][0]["components"])
+        require(component["companionState"] == "blocked" and component["autoPlan"]["state"] == "blocked", component)
+        result = f.run(service)
+        require(child(result)["status"] == "deferred" and "版本" in child(result)["message"], result)
+        require_application_images(root, images)
+        require((root / ".git/index").read_bytes() == index and f.git(root, "rev-parse", "HEAD") == head)
+        require(f.git(remote, "rev-parse", "main") == head)
+
+
+def test_application_partial_malformed_or_missing_companion_defers_without_writes():
+    for invalid in ("primary_only", "lock_root_only", "lock_package_only", "malformed_lock", "missing_lock"):
+        with Fixture() as f:
+            root, remote, repo = f.repo()
+            images = application_seed(f, root, repo)
+            if invalid == "primary_only":
+                (root / "app-manifest.json").write_bytes(images["app-manifest.json"].replace(b'"version" : "0.4.0"', b'"version" : "0.4.1"'))
+            elif invalid == "lock_root_only":
+                (root / "package-lock.json").write_bytes(images["package-lock.json"].replace(b'"version" : "0.4.0"', b'"version" : "0.4.1"', 1))
+            elif invalid == "lock_package_only":
+                (root / "package-lock.json").write_bytes(images["package-lock.json"].replace(b'"version": "0.4.0"', b'"version": "0.4.1"', 1))
+            elif invalid == "malformed_lock":
+                (root / "package-lock.json").write_bytes(images["package-lock.json"] + b" incomplete JSON")
+            else:
+                (root / "package-lock.json").unlink()
+            save_edit(root)
+            expected = {name: (root / name).read_bytes() for name in images if (root / name).exists()}
+            head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+            service = f.service()
+            component = application_component(service.version_catalog()["repositories"][0]["components"])
+            require(component["companionState"] == "blocked" and component["autoPlan"]["state"] == "blocked", (invalid, component))
+            result = f.run(service)
+            require(child(result)["status"] == "deferred" and "版本" in child(result)["message"], (invalid, result))
+            require_application_images(root, expected)
+            require((root / ".git/index").read_bytes() == index and f.git(root, "rev-parse", "HEAD") == head)
+            require(f.git(remote, "rev-parse", "main") == head and (root / "tracked.txt").read_text() == "saved implementation change\n")
+            if invalid == "missing_lock":
+                require(not (root / "package-lock.json").exists(), "Rejected upload recreated a missing companion")
+
+
+def test_application_hidden_primary_package_and_lock_manual_changes_preserve_index():
+    for hidden, guard in (("app-manifest.json", "exclude"), ("package.json", "assume"), ("package-lock.json", "skip")):
+        with Fixture() as f:
+            root, remote, repo = f.repo()
+            images = application_seed(f, root, repo)
+            expected = application_after(images, "0.4.0", "0.4.1")
+            for name, raw in expected.items():
+                (root / name).write_bytes(raw)
+            save_edit(root)
+            if guard == "exclude":
+                repo["exclude"] = [hidden]
+            else:
+                f.git(root, "update-index", "--assume-unchanged" if guard == "assume" else "--skip-worktree", hidden)
+            head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+            service = f.service()
+            component = application_component(service.version_catalog()["repositories"][0]["components"])
+            require(component["companionState"] == "blocked" and component["autoPlan"]["state"] == "blocked", (hidden, guard, component))
+            result = f.run(service)
+            require(child(result)["status"] == "deferred" and "版本" in child(result)["message"], result)
+            require_application_images(root, expected)
+            require((root / ".git/index").read_bytes() == index and f.git(root, "rev-parse", "HEAD") == head)
+            require(f.git(remote, "rev-parse", "main") == head)
+
+
+def test_application_hidden_initial_companion_is_not_claimed_as_uploaded():
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        images = application_seed(f, root, repo, commit=False)
+        repo["exclude"] = ["package-lock.json"]
+        save_edit(root)
+        head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+        result = f.run(f.service())
+        require(child(result)["status"] == "deferred" and "版本" in child(result)["message"], result)
+        require_application_images(root, images)
+        require((root / ".git/index").read_bytes() == index and f.git(root, "rev-parse", "HEAD") == head)
+        require(f.git(remote, "rev-parse", "main") == head)
+
+
+def test_application_partial_write_restart_continues_original_three_file_intent():
+    class Interrupt(Service):
+        def _version_intent_snapshot(self, repo, context, pending):
+            current = super()._version_intent_snapshot(repo, context, pending)
+            if any(module._stable(context[0] / entry["path"])["sha256"] == entry["afterSha256"] for entry in pending["versionUpdates"]):
+                raise Error("fixture interruption after first application version write")
+            return current
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        images = application_seed(f, root, repo)
+        save_edit(root)
+        failed = f.run(f.service(Interrupt))
+        require(child(failed)["status"] == "deferred" and f.git(root, "rev-list", "--count", "HEAD") == "2", failed)
+        pending = module._read(f.base / "state/pending/one.json")
+        require(len(pending["versionPlans"]) == 1 and len(pending["versionUpdates"]) == 3, pending)
+        require(pending["versionPlans"][0]["currentVersion"] == "0.4.0" and pending["versionPlans"][0]["targetVersion"] == "0.4.1")
+        require({entry["path"] for entry in pending["versionUpdates"]} == set(images))
+        expected = application_after(images, "0.4.0", "0.4.1")
+        written = [name for name in images if (root / name).read_bytes() == expected[name]]
+        require(len(written) == 1, "Interruption did not preserve the actual partial application write")
+        original_remote = f.git(remote, "rev-parse", "main")
+        resumed = f.run(f.service(), "request_00000002")
+        require(child(resumed)["status"] == "success" and child(resumed)["title"] == "0.4.0 → 0.4.1", resumed)
+        require_application_images(root, expected)
+        require(f.git(root, "rev-list", "--count", "HEAD") == "3" and child(resumed)["commitSha"] != original_remote)
+        require(f.git(remote, "rev-parse", "main") == child(resumed)["commitSha"])
+
+
+def test_application_concurrent_companion_edit_holds_without_overwriting_user_bytes():
+    class Concurrent(Service):
+        def _apply_version_intent(self, repo, context, pending, pending_path):
+            path = context[0] / "package-lock.json"
+            path.write_bytes(path.read_bytes() + b"\r\n")
+            return super()._apply_version_intent(repo, context, pending, pending_path)
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        images = application_seed(f, root, repo)
+        save_edit(root)
+        head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+        failed = f.run(f.service(Concurrent))
+        require(child(failed)["status"] == "deferred", failed)
+        expected = dict(images)
+        expected["package-lock.json"] += b"\r\n"
+        require_application_images(root, expected)
+        resumed = f.run(f.service(), "request_00000002")
+        require(child(resumed)["status"] == "deferred", resumed)
+        require_application_images(root, expected)
+        require((root / ".git/index").read_bytes() == index and f.git(root, "rev-parse", "HEAD") == head)
+        require(f.git(remote, "rev-parse", "main") == head and f.git(root, "rev-list", "--count", "HEAD") == "2")
+
+
+def test_application_failed_or_uncertain_push_retries_exact_synchronized_commit():
+    class Fail(Service):
+        def _git(self, root, *arguments, **kwargs):
+            if arguments and arguments[0] == "push":
+                raise module._GitFailure("permissions")
+            return super()._git(root, *arguments, **kwargs)
+    class Unknown(Service):
+        did_push = False
+        def _git(self, root, *arguments, **kwargs):
+            if arguments and arguments[0] == "push":
+                super()._git(root, *arguments, **kwargs)
+                self.did_push = True
+                raise module._GitFailure("timeout")
+            if self.did_push and arguments and arguments[0] == "ls-remote":
+                raise module._GitFailure("timeout")
+            return super()._git(root, *arguments, **kwargs)
+    for uncertain in (False, True):
+        with Fixture() as f:
+            root, remote, repo = f.repo()
+            images = application_seed(f, root, repo)
+            save_edit(root)
+            first = f.run(f.service(Unknown if uncertain else Fail))
+            sha = child(first)["commitSha"]
+            require(child(first)["status"] == ("verification_required" if uncertain else "push_failed") and sha, first)
+            expected = application_after(images, "0.4.0", "0.4.1")
+            require_application_images(root, expected)
+            pending = module._read(f.base / "state/pending/one.json")
+            require(len(pending["versionPlans"]) == 1 and len(pending["versionUpdates"]) == 3, pending)
+            (root / "tracked.txt").write_text("later user work remains\n")
+            resumed = f.run(f.service(), "request_00000002")
+            require(child(resumed)["status"] == "success" and child(resumed)["commitSha"] == sha, resumed)
+            require_application_images(root, expected)
+            require(f.git(root, "rev-parse", "HEAD") == f.git(remote, "rev-parse", "main") == sha)
+            require(f.git(root, "rev-list", "--count", "HEAD") == "3" and (root / "tracked.txt").read_text() == "later user work remains\n")
+
+
 TESTS = [item for name, item in tuple(globals().items()) if name.startswith("test_") and callable(item)]
 if __name__ == "__main__":
     files = [ROOT / "console_repository_versions.py", ROOT / "console_repository_publish.py", Path(__file__),

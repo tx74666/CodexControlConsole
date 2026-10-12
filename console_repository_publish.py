@@ -551,6 +551,57 @@ class RepositoryPublishService:
             return head, blob, bool(status)
         return read
 
+    def _application_reader(self, repo, root, identity):
+        """Fixed, read-only proof for explicitly configured root application files."""
+        def read(source):
+            if (source.get("path") != "app-manifest.json"
+                    or source.get("kind") not in {"json", "app-manifest", "package"}
+                    or (source.get("key") or "version") != "version"):
+                return None
+            configured = repo.get("versionSources", [])
+            authorities = [item for item in configured if version_source_id(item) == version_source_id(source)]
+            packages = [item for item in configured if item.get("path") == "package.json"
+                        and item.get("kind") in {"json", "app-manifest", "package"}
+                        and (item.get("key") or "version") == "version"]
+            if not authorities or not packages:
+                return None  # No inferred package/lock model from matching version numbers.
+            if len(authorities) != 1 or len(packages) != 1:
+                return {"ambiguous": True}
+            paths = ("app-manifest.json", "package.json", "package-lock.json")
+            head = self._text(root, "rev-parse", "HEAD")
+            if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", head):
+                raise VersionPlanError("同一应用的固定 HEAD 身份无法确认。")
+            tree = self._git(root, "--literal-pathspecs", "ls-tree", "--name-only", "-z", head, "--", *paths)
+            names = tree.split(b"\0")
+            if tree and (not tree.endswith(b"\0") or any(name not in {path.encode("utf-8") for path in paths} for name in names[:-1])):
+                raise VersionPlanError("同一应用的固定 HEAD 文件清单不完整。")
+            head_files = {}
+            for path in paths:
+                blob = self._git(root, "show", head + ":" + path) if path.encode("utf-8") in names else None
+                if blob is not None and len(blob) > VERSION_MAX_BYTES:
+                    raise VersionPlanError("同一应用的固定 HEAD 版本文件超出读取范围。")
+                head_files[path] = blob
+            status = self._git(root, "--literal-pathspecs", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--", *paths)
+            changed = set()
+            if status and not status.endswith(b"\0"):
+                raise VersionPlanError("同一应用的 Git 变化清单不完整。")
+            for record in status.split(b"\0"):
+                if not record:
+                    continue
+                if len(record) < 4 or record[2:3] != b" ":
+                    raise VersionPlanError("同一应用的 Git 变化记录不能唯一读取。")
+                path = record[3:].decode("utf-8", "surrogateescape")
+                if path not in paths:
+                    raise VersionPlanError("同一应用的 Git 变化范围不是固定根文件。")
+                changed.add(path)
+            if self._text(root, "rev-parse", "HEAD") != head:
+                raise VersionPlanError("同一应用的关联版本读取期间 HEAD 已变化。")
+            return {"sourceId": version_source_id(source), "packageSource": dict(packages[0]),
+                    "repository": identity["repository"], "testMode": self._test_mode, "headSha": head,
+                    "headFiles": head_files, "gitChanged": {path:path in changed for path in paths},
+                    "participates": {path:not _excluded(path, repo["exclude"]) for path in paths}}
+        return read
+
     def _saved_sync_changes(self, repo, root):
         result = {"syncChanged": False, "syncState": "none", "syncReason": "", "syncDifferences": []}
         try:
@@ -637,7 +688,8 @@ class RepositoryPublishService:
         root = context[0]
         sources = self._version_sources(repo, root)
         head = self._text(root, "rev-parse", "HEAD")
-        components = version_catalog_items(root, sources, self._version_reader(root), self._git_version_reader(root), self._console_resource_reader(root))
+        components = version_catalog_items(root, sources, self._version_reader(root), self._git_version_reader(root),
+                                           self._console_resource_reader(root), self._application_reader(repo, root, context[3]))
         by_id = {version_source_id(source): source for source in sources}
         plans = {plan["sourceId"]: plan for plan in repo.get("versionPlans", [])}
         for component in components:
@@ -654,6 +706,8 @@ class RepositoryPublishService:
                     component.update(canBump=False, companionState="blocked", reason="原 Blender 插件的另一版本声明已缺失，请协调一致；不会只升剩下的一份。")
             if any(entry["headSha"] != head for entry in component.get("consoleResourceEvidence", [])):
                 raise RepositoryPublishError("读取 Console 资源和版本期间 HEAD 已变化。")
+            if any(entry["headSha"] != head for entry in component.get("applicationCompanionEvidence", {}).get("files", [])):
+                raise RepositoryPublishError("读取同一应用关联版本期间 HEAD 已变化。")
             if not component.get("currentVersion") and source["kind"] != "git_commit":
                 try:
                     component["currentVersion"] = read_current_version(self._version_reader(root)(source["path"]), source)
@@ -811,7 +865,8 @@ class RepositoryPublishService:
         try:
             updates, plans = prepare_version_updates(context[0], self._version_sources(repo, context[0]),
                                                      repo.get("versionPlans", []) if plans is None else plans,
-                                                     self._version_reader(context[0]), self._git_version_reader(context[0]), self._console_resource_reader(context[0]))
+                                                     self._version_reader(context[0]), self._git_version_reader(context[0]),
+                                                     self._console_resource_reader(context[0]), self._application_reader(repo, context[0], context[3]))
         except VersionPlanError as exc:
             raise RepositoryPublishError(str(exc)) from exc
         self._version_write_scope(repo, context[0], updates)
@@ -1248,7 +1303,8 @@ class RepositoryPublishService:
             if repo.get("versionPlans"):
                 try:
                     _, version_plans = prepare_version_updates(root, self._version_sources(repo, root), repo["versionPlans"],
-                                                              self._version_reader(root), self._git_version_reader(root), self._console_resource_reader(root))
+                                                              self._version_reader(root), self._git_version_reader(root),
+                                                              self._console_resource_reader(root), self._application_reader(repo, root, snapshot["identity"]))
                 except VersionPlanError as exc:
                     raise RepositoryPublishError(str(exc)) from exc
         planned = {plan["sourceId"]: plan for plan in version_plans}
