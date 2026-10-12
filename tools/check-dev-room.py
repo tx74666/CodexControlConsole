@@ -169,6 +169,9 @@ class DevRoomChecks(unittest.TestCase):
             for payload in (None, [], 'not an object'):
                 with self.subTest(payload=payload), self.assertRaises(ValueError):
                     sync.save_document(payload)
+            for invalid_id in ([], {}, None, 17):
+                with self.subTest(idType=type(invalid_id).__name__), self.assertRaises(ValueError):
+                    sync.save_document({**self.payload(), 'id': invalid_id})
             self.assertEqual(scope.call_count + index.call_count + source.call_count, 0)
         for id in ('../outside', '..', 'C:\\outside', 'overview/other', 'a.md', 1):
             with self.subTest(id=id), self.assertRaises(ValueError):
