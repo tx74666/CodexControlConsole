@@ -299,6 +299,7 @@ class RepositoryPublishService:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._ops = self.state_dir / "operations"
         self._pending_dir = self.state_dir / "pending"
+        self._uploads = self.state_dir / "confirmed-uploads"
         self._ops.mkdir(exist_ok=True)
         self._pending_dir.mkdir(exist_ok=True)
         self._settings_path = self.state_dir / "settings.json"
@@ -782,6 +783,7 @@ class RepositoryPublishService:
             if repo_id is not None and repo["id"] != repo_id:
                 continue
             item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "components": [], "message": "",
+                    "uploadSummary": self._upload_summary(repo),
                     "hasChanges": None, "changeState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
                     "planState": "none", "versionChanged": None, "versionState": "unknown",
                     "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
@@ -1070,6 +1072,7 @@ class RepositoryPublishService:
         settings = self._settings()
         normalized = self._normalize(settings)
         return {"settings": settings, "warnings": settings.get("warnings", []), "operation": self.operation(),
+                "uploadSummaries": [{"repoId": repo["id"], **self._upload_summary(repo)} for repo in settings["repositories"]],
                 "normalizedSettings": normalized, "settingsSha": _json_sha(normalized),
                 "casRequired": settings.get("casRequired") is True,
                 "warningsSource": "initial_discovery", "allowed": self.allowed, "busy": self.busy}
@@ -1094,7 +1097,245 @@ class RepositoryPublishService:
             if not alive:
                 receipt["status"] = "verification_required"
                 receipt["message"] = "上次操作中断，请点击重试；先核对原提交，不会重复提交。"
+        if receipt:
+            rows = receipt.get("repositories", [])
+            for row in rows if isinstance(rows, list) else []:
+                if not isinstance(row, dict):
+                    continue
+                if "uploadSummary" not in row:
+                    row["uploadSummary"] = self._upload_value(
+                        {"repoId": row.get("repoId", ""), "path": "", "repositoryUrl": "", "remote": "", "branch": ""},
+                        state="unknown", count=None, reason="旧操作未保留固定上传目标；请以当前仓库的确认记录为准。")
+            receipt["progress"] = self._operation_progress(receipt)
         return receipt
+
+    @staticmethod
+    def _operation_progress(receipt):
+        rows = receipt.get("repositories", [])
+        rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        terminal = [row for row in rows if row.get("status") not in {"queued", "working"}]
+        current = next((row for row in rows if row.get("status") == "working"), {}) if receipt.get("status") in {"queued", "working"} else {}
+        return {"total": len(rows), "completed": len(terminal),
+                "succeeded": sum(row.get("status") == "success" for row in terminal),
+                "skipped": sum(row.get("status") == "noop" for row in terminal),
+                "needsAttention": sum(row.get("status") not in {"success", "noop"} for row in terminal),
+                "currentRepoId": current.get("repoId", ""), "currentPhase": current.get("phase", "")}
+
+    @staticmethod
+    def _upload_binding(repo):
+        return {"repoId": repo["id"], **{key: repo[key] for key in ("path", "repositoryUrl", "remote", "branch")}}
+
+    def _upload_destination(self, value):
+        if not isinstance(value, dict):
+            raise RepositoryPublishError("上传序号的目标记录不完整。")
+        identity = value.get("identity", value)
+        if not isinstance(identity, dict):
+            raise RepositoryPublishError("上传序号的目标记录不完整。")
+        if "repository" in identity:
+            repository, branch = identity.get("repository"), identity.get("branch")
+        else:
+            repository = (os.path.normcase(str(Path(value["repositoryUrl"]).resolve())) if self._test_mode
+                          else self._github(value.get("repositoryUrl", "")))
+            branch = value.get("branch")
+        if not isinstance(repository, str) or not repository or not isinstance(branch, str) or not branch or "\0" in branch:
+            raise RepositoryPublishError("上传序号的仓库或目标分支尚未核定。")
+        return {"repository": repository, "branch": branch}
+
+    def _upload_ledger(self, destination):
+        path = self._uploads / (_json_sha(destination) + ".json")
+        ledger = _read(path)
+        if ledger is None:
+            return path, None
+        events = ledger.get("events")
+        if (ledger.get("schema") != "console-confirmed-uploads-v1" or ledger.get("destination") != destination
+                or not isinstance(events, list) or not self._upload_time(ledger.get("startedAt"))):
+            raise RepositoryPublishError("上传序号记录格式错误，原上传回执保留；请核对记录。")
+        seen = set()
+        for number, event in enumerate(events, 1):
+            if (not isinstance(event, dict) or type(event.get("sequence")) is not int or event["sequence"] != number
+                    or not _SHA.fullmatch(str(event.get("commitSha", "")))
+                    or not _SHA.fullmatch(str(event.get("verifiedRemote", "")))
+                    or not self._upload_time(event.get("verifiedAt"))
+                    or not _REQUEST.fullmatch(str(event.get("requestId", "")))
+                    or event["commitSha"] in seen):
+                raise RepositoryPublishError("上传序号记录不一致，原上传回执保留；不会重置或猜测次数。")
+            seen.add(event["commitSha"])
+        return path, ledger
+
+    @staticmethod
+    def _upload_time(value):
+        if not isinstance(value, str):
+            return False
+        try:
+            return datetime.fromisoformat(value).tzinfo is not None
+        except ValueError:
+            return False
+
+    def _delivery_evidence(self, pending, destination):
+        return (isinstance(pending, dict) and pending.get("state") == "delivered"
+                and self._upload_destination(pending) == destination
+                and bool(_SHA.fullmatch(str(pending.get("commitSha", ""))))
+                and bool(_SHA.fullmatch(str(pending.get("verifiedRemote", ""))))
+                and self._upload_time(pending.get("verifiedAt"))
+                and bool(_REQUEST.fullmatch(str(pending.get("requestId", "")))))
+
+    def _upload_floor(self, pending, destination):
+        """A missing/truncated established ledger must never silently reset."""
+        if not pending or self._upload_destination(pending) != destination:
+            return 0, False
+        floor, required = 0, False
+        base = pending.get("uploadCounterBase")
+        if base is not None:
+            if (not isinstance(base, dict) or base.get("destination") != destination
+                    or type(base.get("count")) is not int or base["count"] < 0
+                    or type(base.get("ledgerExisted")) is not bool):
+                raise RepositoryPublishError("上传序号的起始记录不一致，请保留回执核对。")
+            floor, required = base["count"], base["ledgerExisted"]
+        summary = pending.get("uploadSummary")
+        if isinstance(summary, dict) and summary.get("source") == "console_confirmed_deliveries" and summary.get("state") == "recorded":
+            if type(summary.get("count")) is not int or summary["count"] < 0:
+                raise RepositoryPublishError("已确认上传序号不一致，请保留回执核对。")
+            if self._upload_destination(summary.get("binding")) == destination:
+                floor = max(floor, summary["count"])
+                required = required or summary["count"] > 1 or (summary["count"] > 0 and summary.get("commitSha") != pending.get("commitSha"))
+        return floor, required
+
+    def _delivery_acknowledged(self, pending):
+        request_id = pending.get("deliveryRecoveryRequestId") or pending.get("requestId")
+        if not _REQUEST.fullmatch(str(request_id)):
+            return False
+        original = _read(self._ops / (request_id + ".json"), {})
+        rows = original.get("repositories", [])
+        return isinstance(rows, list) and any(isinstance(row, dict) and row.get("repoId") == pending.get("repoId")
+                                             and row.get("status") == "success" and row.get("commitSha") == pending.get("commitSha")
+                                             for row in rows)
+
+    def _upload_anchors(self, pending, destination):
+        anchors = []
+        if not pending or self._upload_destination(pending) != destination:
+            return anchors
+        base = pending.get("uploadCounterBase")
+        if isinstance(base, dict) and "commitSha" in base and base.get("count", 0):
+            anchors.append({"count": base["count"], "commitSha": base["commitSha"]})
+        summary = pending.get("uploadSummary")
+        if (isinstance(summary, dict) and summary.get("source") == "console_confirmed_deliveries"
+                and summary.get("state") == "recorded" and summary.get("count", 0)
+                and self._upload_destination(summary.get("binding")) == destination):
+            anchors.append({"count": summary["count"], "commitSha": summary.get("commitSha")})
+        if any(type(anchor["count"]) is not int or anchor["count"] < 1
+               or not _SHA.fullmatch(str(anchor["commitSha"])) for anchor in anchors):
+            raise RepositoryPublishError("上传序号与原确认提交的关联不一致，请保留回执核对。")
+        return anchors
+
+    def _upload_check_anchors(self, pending, destination, ledger):
+        for anchor in self._upload_anchors(pending, destination):
+            if anchor["count"] > len(ledger["events"]) or ledger["events"][anchor["count"] - 1]["commitSha"] != anchor["commitSha"]:
+                raise RepositoryPublishError("上传序号对应的原提交不一致，不会把同一确认追加为另一次上传。")
+
+    @staticmethod
+    def _upload_value(binding, *, state="recorded", count=0, event=None, started_at="", reason=""):
+        return {"state": state, "count": count, "commitSha": (event or {}).get("commitSha", ""),
+                "verifiedAt": (event or {}).get("verifiedAt", ""), "startedAt": started_at,
+                "source": "console_confirmed_deliveries", "binding": binding,
+                "reason": reason or "仅计本机 Console 保留并确认的上传记录，不代表完整 Git 历史或插件软件版本。"}
+
+    def _upload_summary(self, repo):
+        """Read-only local receipts; never infer upload counts from Git history."""
+        binding = self._upload_binding(repo)
+        try:
+            destination = self._upload_destination(repo)
+            _, ledger = self._upload_ledger(destination)
+            pending = _read(self._pending_path(repo["id"]))
+            floor, ledger_required = self._upload_floor(pending, destination)
+            evidence = self._delivery_evidence(pending, destination) if pending else False
+            events = ledger["events"] if ledger else []
+            if (ledger is None and ledger_required) or (ledger is not None and len(events) < floor):
+                raise RepositoryPublishError("已确认上传序号的历史记录缺失，不会重新从 1 计数。")
+            if ledger is not None:
+                self._upload_check_anchors(pending, destination, ledger)
+            if pending and pending.get("uploadCounterPending") is True and evidence:
+                return self._upload_value(binding, state="pending", count=None, reason="上传已确认，序号记录待核对；重试只恢复原记录，不重复上传。")
+            if evidence and pending["commitSha"] not in {event["commitSha"] for event in events}:
+                # A legacy receipt is already durable confirmation. Expose it
+                # without writing on GET; the next explicit run persists it
+                # before this per-repository pending journal can be replaced.
+                event = {key: pending[key] for key in ("commitSha", "verifiedAt")}
+                return self._upload_value(binding, count=len(events) + 1, event=event,
+                                          started_at=ledger["startedAt"] if ledger else pending["verifiedAt"])
+            if events:
+                return self._upload_value(binding, count=len(events), event=events[-1], started_at=ledger["startedAt"])
+            # Old operation rows did not freeze destination identity. A success
+            # row for this id cannot seed a new binding's numerical history.
+            if ledger is None:
+                for operation_path in self._ops.glob("*.json"):
+                    operation = _read(operation_path, {})
+                    if any(row.get("repoId") == repo["id"] and row.get("status") == "success"
+                           for row in operation.get("repositories", []) if isinstance(row, dict)):
+                        return self._upload_value(binding, state="unknown", count=None, reason="旧成功记录缺少固定上传目标，历史起点待核对；不会用 Git 提交数猜测。")
+            return self._upload_value(binding, started_at=ledger["startedAt"] if ledger else "")
+        except (RepositoryPublishError, OSError, ValueError, KeyError, TypeError):
+            return self._upload_value(binding, state="unknown", count=None, reason="上传序号记录不可读取或不一致；原工作与回执保留，次数待核对。")
+
+    def _record_delivery(self, repo, pending, pending_path, item):
+        """Idempotent ledger append after the delivered journal is durable.
+
+        If the ledger cannot be saved, retain the confirmed pending journal and
+        stop its replacement on the next run. A successful push stays success.
+        """
+        binding = pending.get("uploadBinding") or self._upload_binding(repo)
+        destination, floor, ledger_required, anchors = None, 0, False, []
+        try:
+            destination = self._upload_destination(pending)
+            if not self._delivery_evidence(pending, destination):
+                raise RepositoryPublishError("原上传确认记录不完整，请保留回执后核对。")
+            if "uploadBinding" not in pending:
+                identity = pending["identity"]
+                same = (os.path.normcase(str(Path(repo["path"]).resolve())) == os.path.normcase(str(Path(identity.get("root", "")).resolve()))
+                        and repo["remote"] == identity.get("remote") and repo["branch"] == identity.get("branch")
+                        and self._upload_destination(repo) == destination)
+                if not same:
+                    binding = {"repoId": pending.get("repoId", ""), "path": identity.get("root", ""),
+                               "repositoryUrl": identity.get("fetchUrl", ""), "remote": identity.get("remote", ""), "branch": identity.get("branch", "")}
+            floor, ledger_required = self._upload_floor(pending, destination)
+            anchors = self._upload_anchors(pending, destination)
+            path = self._uploads / (_json_sha(destination) + ".json")
+            with _file_lock(path.with_suffix(".lock")):
+                _, ledger = self._upload_ledger(destination)
+                if (ledger is None and ledger_required) or (ledger is not None and len(ledger["events"]) < floor):
+                    raise RepositoryPublishError("已确认上传序号的历史记录缺失，不会重新从 1 计数。")
+                if ledger is not None:
+                    self._upload_check_anchors(pending, destination, ledger)
+                if ledger is None:
+                    ledger = {"schema": "console-confirmed-uploads-v1", "destination": destination,
+                              "startedAt": pending["verifiedAt"], "events": []}
+                events = ledger["events"]
+                event = next((event for event in events if event["commitSha"] == pending["commitSha"]), None)
+                if event is None:
+                    event = {"sequence": len(events) + 1, **{key: pending[key] for key in
+                             ("commitSha", "verifiedRemote", "verifiedAt", "requestId")}}
+                    events.append(event)
+                    _atomic(path, ledger)
+                summary = self._upload_value(binding, count=len(events), event=events[-1], started_at=ledger["startedAt"])
+                pending.update(uploadSummary=summary, uploadCounterPending=False)
+                _atomic(pending_path, pending)
+                item["uploadSummary"] = summary
+                return True
+        except (RepositoryPublishError, OSError, ValueError, KeyError, TypeError):
+            summary = self._upload_value(binding, state="pending", count=None,
+                                         reason="上传已确认，序号记录待核对；重试只恢复原记录，不重复上传。")
+            pending.update(uploadSummary=summary, uploadCounterPending=True)
+            if destination is not None and (floor or ledger_required):
+                pending["uploadCounterBase"] = {"destination": destination, "count": floor, "ledgerExisted": ledger_required or floor > 1}
+                anchor = next((anchor for anchor in anchors if anchor["count"] == floor), None)
+                if anchor:
+                    pending["uploadCounterBase"]["commitSha"] = anchor["commitSha"]
+            try:
+                _atomic(pending_path, pending)
+            except (OSError, RepositoryPublishError):
+                pass  # The earlier durable delivered receipt is still kept.
+            item["uploadSummary"] = summary
+            item["message"] += " 上传序号记录待核对。"
+            return False
 
     def _repo(self, repo):
         if not repo["path"] or not Path(repo["path"]).exists():
@@ -1377,6 +1618,7 @@ class RepositoryPublishService:
         commons = {}
         for repo in selected:
             item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "title": "", "body": "", "versions": [], "files": [],
+                    "uploadSummary": self._upload_summary(repo),
                     "components": [], "versionTransitions": [], "hasChanges": None, "changeState": "unknown", "planWillApply": None, "action": "unknown",
                     "versionState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
                     "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
@@ -1447,7 +1689,8 @@ class RepositoryPublishService:
             receipt = {"requestId": request_id, "status": "queued", "phase": "queued", "message": "已接收，逐仓库处理。",
                        "createdAt": _now(), "updatedAt": _now(), "owner": {"pid": os.getpid(), "processKey": self._pid_key, "nonce": self._owner},
                        "repositories": [{"repoId": r["id"], "name": Path(r["path"]).name or r["id"], "status": "queued", "phase": "queued",
-                                         "message": "等待处理", "commitSha": "", "title": "", "body": "", "logs": []} for r in selected]}
+                                         "message": "等待处理", "commitSha": "", "title": "", "body": "", "logs": [],
+                                         "uploadSummary": self._upload_summary(r)} for r in selected]}
             self._starting = True
             _LIVE[self._owner] = weakref.ref(self)
             try:
@@ -1476,6 +1719,7 @@ class RepositoryPublishService:
 
     def _save(self, receipt):
         receipt["updatedAt"] = _now()
+        receipt["progress"] = self._operation_progress(receipt)
         _atomic(self._ops / (receipt["requestId"] + ".json"), receipt)
 
     def _phase(self, receipt, item, phase, message):
@@ -1731,6 +1975,23 @@ class RepositoryPublishService:
             self._busy_reason(root)
             pending_path = self._pending_path(repo["id"])
             pending = _read(pending_path)
+            if pending and pending.get("state") == "delivered":
+                # Repair a previous ledger-only failure before replacing its
+                # sole durable delivery receipt with another submission.
+                item.update(commitSha=pending.get("commitSha", ""), title=pending.get("title", ""), body=pending.get("body", ""),
+                            status="success", phase="complete", message="原提交已确认送达，正在保存上传序号。")
+                if not self._delivery_evidence(pending, self._upload_destination(pending)):
+                    item.update(status="verification_required", phase="verify", message="原上传确认记录不完整，保留原提交和回执，请先核对。")
+                    return
+                recovering_counter = pending.get("uploadCounterPending") is True or not self._delivery_acknowledged(pending)
+                if not self._record_delivery(repo, pending, pending_path, item):
+                    return
+                if recovering_counter:
+                    pending["deliveryRecoveryRequestId"] = receipt["requestId"]
+                    _atomic(pending_path, pending)
+                    item["message"] = "原提交已确认送达，上传序号已恢复；新修改保留，未再次提交或推送。"
+                    return
+                item.update(status="working", phase="check", message="核对仓库、分支和活动任务。")
             if (pending and (pending.get("versionUpdates") or pending.get("versionPlans")) and not pending.get("commitSha")
                     and pending.get("state") in {"version_prepared", "version_applying", "prepared", "cancelled_before_commit"}):
                 if pending["identity"] != identity or pending["repositorySettingsSha"] != _repo_settings_sha(repo):
@@ -1782,8 +2043,14 @@ class RepositoryPublishService:
                 item.update(status="noop", phase="complete", message="没有需要提交或推送的文件；一次性标题计划保留。" if repo.get("versionPlans") else "没有需要提交或推送的文件。")
                 return
             pending = {"state": "prepared", "requestId": receipt["requestId"], "repoId": repo["id"], "identity": identity,
+                       "uploadBinding": self._upload_binding(repo),
                        "repositorySettingsSha": _repo_settings_sha(repo), "parentSha": snapshot["head"], "snapshot": snapshot,
                        "title": title, "body": body, "createdAt": _now(), "commitSha": "", "indexReconciled": not snapshot["files"]}
+            _, previous_uploads = self._upload_ledger(self._upload_destination(repo))
+            pending["uploadCounterBase"] = {"destination": self._upload_destination(repo),
+                                            "count": len(previous_uploads["events"]) if previous_uploads else 0,
+                                            "ledgerExisted": previous_uploads is not None,
+                                            "commitSha": previous_uploads["events"][-1]["commitSha"] if previous_uploads and previous_uploads["events"] else ""}
             pending["transportOptionsSha"] = transport["optionsSha"]
             pending["syncProofs"] = item["syncFiles"]
             if apply_plans:
@@ -2010,6 +2277,7 @@ class RepositoryPublishService:
             pending.update(state="delivered", verifiedAt=_now(), verifiedRemote=remote)
             _atomic(pending_path, pending)
             item.update(status="success", phase="complete", message="已核对原提交在远端，无需重复推送。")
+            self._record_delivery(repo, pending, pending_path, item)
             return
         if remote and not self._ancestor(root, remote, sha):
             raise RepositoryPublishError("远端领先或分叉，请自行整合；保留原提交。")
@@ -2048,3 +2316,5 @@ class RepositoryPublishService:
             pending.update(state="verification_required", pushError=error.code if error else "verification")
             item.update(status="verification_required", phase="verify", message="推送结果尚未确认；重试会先核对远端并继续原提交。")
         _atomic(pending_path, pending)
+        if delivered:
+            self._record_delivery(repo, pending, pending_path, item)

@@ -124,6 +124,7 @@ def test_basic_binary_delete_and_preview():
         require(not (root / ".git" / "FETCH_HEAD").exists())
         receipt = f.run(service)
         require(child(receipt)["status"] == "success", receipt)
+        require(child(receipt)["uploadSummary"]["count"] == 1, receipt)
         sha = child(receipt)["commitSha"]
         require(f.git(remote, "rev-parse", "main") == sha)
         require(f.git(root, "ls-tree", "--name-only", sha) == ".gitignore\nscene.blend")
@@ -146,6 +147,9 @@ def test_any_staging_and_mixed_batch():
         require(child(receipt)["status"] == "deferred" and "暂存" in child(receipt)["message"], receipt)
         require((root / ".git" / "index").read_bytes() == index)
         require(child(receipt, 1)["status"] == "success", receipt)
+        require(receipt["progress"] == {"total": 2, "completed": 2, "succeeded": 1, "skipped": 0,
+                                        "needsAttention": 1, "currentRepoId": "", "currentPhase": ""}, receipt)
+        require(child(receipt)["uploadSummary"]["count"] == 0 and child(receipt, 1)["uploadSummary"]["count"] == 1)
         require(f.git(other_remote, "rev-parse", "main") == child(receipt, 1)["commitSha"])
 
 
@@ -179,11 +183,13 @@ def test_duplicate_and_restart_failed_push():
         first = f.run(service)
         sha = child(first)["commitSha"]
         require(child(first)["status"] == "push_failed" and sha, first)
+        require(child(first)["uploadSummary"]["count"] == 0, first)
         require(service.run("request_00000001") == first)
         (root / "tracked.txt").write_text("later edit must remain\n")
         restarted = f.service()
         second = f.run(restarted, "request_00000002")
         require(child(second)["commitSha"] == sha and child(second)["status"] == "success", second)
+        require(child(second)["uploadSummary"]["count"] == 1, second)
         require(f.git(root, "rev-parse", "HEAD") == sha and f.git(remote, "rev-parse", "main") == sha)
         require((root / "tracked.txt").read_text() == "later edit must remain\n")
         require(f.git(root, "rev-list", "--count", "HEAD") == "2")
@@ -204,8 +210,10 @@ def test_delivered_response_lost_no_resend():
         service = f.service(Lost)
         result = f.run(service)
         require(child(result)["status"] == "success" and service.pushes == 1, result)
+        require(child(result)["uploadSummary"]["count"] == 1, result)
         f.run(service, "request_00000002")
         require(service.pushes == 1)
+        require(service.version_catalog()["repositories"][0]["uploadSummary"]["count"] == 1)
 
 
 def test_unknown_push_then_verified_original():
@@ -224,10 +232,12 @@ def test_unknown_push_then_verified_original():
         (root / "new.txt").write_text("one\n")
         first = f.run(f.service(Unknown))
         require(child(first)["status"] == "verification_required", first)
+        require(child(first)["uploadSummary"]["count"] == 0, first)
         sha = child(first)["commitSha"]
         (root / "new.txt").write_text("later\n")
         second = f.run(f.service(), "request_00000002")
         require(child(second)["status"] == "success" and child(second)["commitSha"] == sha, second)
+        require(child(second)["uploadSummary"]["count"] == 1, second)
         require(f.git(root, "rev-list", "--count", "HEAD") == "2")
 
 
@@ -793,6 +803,312 @@ def test_worker_start_failure_does_not_stick_busy():
         resumed = f.run(service, "request_00000002")
         require(child(resumed)["status"] == "success", resumed)
         require(f.git(root, "rev-list", "--count", "HEAD") == "2")
+
+
+def retained_delivery(f, *, name="one", branch="main", sha="a" * 40):
+    """Synthetic retained receipt, with no subprocess or real remote access."""
+    root, remote = f.base / name, f.base / (name + ".git")
+    repo = {"id": name, "path": str(root), "repositoryUrl": str(remote), "remote": "origin", "branch": branch,
+            "enabled": True, "syncFiles": [], "versionSources": [], "exclude": []}
+    f.repositories.append(repo)
+    pending = {"state": "delivered", "requestId": "request_00000001", "repoId": name, "commitSha": sha,
+               "verifiedRemote": sha, "verifiedAt": module._now(), "title": "original title", "body": "original body",
+               "identity": {"root": str(root), "gitdir": str(root / ".git"), "common": str(root / ".git"),
+                            "branch": branch, "remote": "origin", "fetchUrl": str(remote), "pushUrl": str(remote),
+                            "repository": os.path.normcase(str(remote.resolve()))}}
+    return repo, pending
+
+
+def test_upload_counter_retained_seed_read_only_and_scopes():
+    with Fixture() as f:
+        repo, pending = retained_delivery(f)
+        service = f.service()
+        path = service._pending_path(repo["id"])
+        module._atomic(path, pending)
+        original = path.read_bytes()
+        summary = service.status()["uploadSummaries"][0]
+        require(summary["state"] == "recorded" and summary["count"] == 1, summary)
+        require(summary["binding"] == service._upload_binding(repo) and not service._uploads.exists())
+        require(path.read_bytes() == original, "GET migration must be read-only")
+        item = {"message": "confirmed"}
+        require(service._record_delivery(repo, pending, path, item))
+        require(item["uploadSummary"]["count"] == 1 and service._uploads.exists())
+        pending["requestId"] = "request_00000002"
+        require(f.service()._record_delivery(repo, pending, path, item))
+        require(item["uploadSummary"]["count"] == 1, "same destination and commit must be idempotent")
+        pending.update(commitSha="b" * 40, verifiedRemote="b" * 40)
+        require(service._record_delivery(repo, pending, path, item))
+        require(item["uploadSummary"]["count"] == 2)
+        renamed = dict(repo, id="new-name", path=str(f.base / "another-checkout"), remote="upstream")
+        require(service._upload_summary(renamed)["count"] == 2, "display binding does not reset destination ledger")
+        require(service._upload_summary(dict(renamed, branch="feature"))["count"] == 0, "branches must remain independent")
+        require(service._upload_summary(dict(repo, repositoryUrl=str(f.base / "different.git")))["count"] == 0)
+
+
+def test_upload_counter_unbound_old_history_stays_unknown():
+    with Fixture() as f:
+        repo, pending = retained_delivery(f)
+        service = f.service()
+        module._atomic(service._ops / "request_00000001.json", {"status": "success", "repositories": [
+            {"repoId": repo["id"], "status": "success", "commitSha": pending["commitSha"]}]})
+        summary = service._upload_summary(repo)
+        require(summary["state"] == "unknown" and summary["count"] is None, summary)
+        incomplete = dict(pending)
+        incomplete.pop("verifiedRemote")
+        module._atomic(service._pending_path(repo["id"]), incomplete)
+        require(service._upload_summary(repo)["count"] is None, "incomplete delivery cannot seed a number")
+        require(service._record_delivery(repo, pending, service._pending_path(repo["id"]), {"message": "confirmed"}))
+        summary = service._upload_summary(repo)
+        require(summary["count"] == 1 and summary["source"] == "console_confirmed_deliveries", summary)
+
+
+def test_upload_counter_corrupt_scope_does_not_reset_or_affect_other():
+    with Fixture() as f:
+        one, first = retained_delivery(f, name="one")
+        two, second = retained_delivery(f, name="two")
+        service = f.service()
+        for repo, pending in ((one, first), (two, second)):
+            require(service._record_delivery(repo, pending, service._pending_path(repo["id"]), {"message": "confirmed"}))
+        ledger, _ = service._upload_ledger(service._upload_destination(one))
+        ledger.write_bytes(b'{"corrupt":true}')
+        preserved = ledger.read_bytes()
+        require(service._upload_summary(one)["state"] == "unknown" and service._upload_summary(one)["count"] is None)
+        require(not service._record_delivery(one, first, service._pending_path(one["id"]), {"message": "confirmed"}))
+        require(ledger.read_bytes() == preserved and module._read(service._pending_path(one["id"]))["state"] == "delivered")
+        second.update(commitSha="c" * 40, verifiedRemote="c" * 40)
+        require(service._record_delivery(two, second, service._pending_path(two["id"]), {"message": "confirmed"}))
+        require(service._upload_summary(two)["count"] == 2, "one corrupted ledger must not stop other counters")
+
+
+def test_upload_counter_crash_after_ledger_is_idempotent():
+    with Fixture() as f:
+        repo, pending = retained_delivery(f)
+        service = f.service()
+        path = service._pending_path(repo["id"])
+        module._atomic(path, pending)
+        original_atomic = module._atomic
+        def crash(path_to_write, value):
+            if path_to_write == path:
+                raise KeyboardInterrupt("fixture crash after durable ledger")
+            return original_atomic(path_to_write, value)
+        module._atomic = crash
+        try:
+            try:
+                service._record_delivery(repo, pending, path, {"message": "confirmed"})
+                raise AssertionError("crash fixture did not interrupt")
+            except KeyboardInterrupt:
+                pass
+        finally:
+            module._atomic = original_atomic
+        restarted = f.service()
+        stored = module._read(path)
+        require(restarted._upload_summary(repo)["count"] == 1)
+        require(restarted._record_delivery(repo, stored, path, {"message": "recovered"}))
+        require(restarted._upload_summary(repo)["count"] == 1)
+
+
+def test_upload_counter_cas_lock_failure_retains_confirmation():
+    with Fixture() as f:
+        repo, pending = retained_delivery(f)
+        service = f.service()
+        path = service._pending_path(repo["id"])
+        module._atomic(path, pending)
+        ledger = service._uploads / (module._json_sha(service._upload_destination(repo)) + ".json")
+        with module._file_lock(ledger.with_suffix(".lock")):
+            item = {"message": "confirmed"}
+            require(not service._record_delivery(repo, pending, path, item))
+            require(item["uploadSummary"]["state"] == "pending" and item["uploadSummary"]["count"] is None)
+            require(module._read(path)["state"] == "delivered" and not ledger.exists())
+        require(service._record_delivery(repo, module._read(path), path, {"message": "confirmed"}))
+        require(service._upload_summary(repo)["count"] == 1)
+
+
+def test_upload_counter_save_failure_retry_preserves_later_work():
+    class Observed(Service):
+        pushes = 0
+        def _git(self, root, *arguments, **kwargs):
+            if arguments and arguments[0] == "push":
+                self.pushes += 1
+            return super()._git(root, *arguments, **kwargs)
+    with Fixture() as f:
+        root, remote, _ = f.repo()
+        (root / "new.txt").write_text("original saved change\n")
+        service = f.service(Observed)
+        original_atomic = module._atomic
+        def failed_counter(path, value):
+            if path.parent == service._uploads and path.suffix == ".json":
+                raise PermissionError("fixture counter cannot save")
+            return original_atomic(path, value)
+        module._atomic = failed_counter
+        try:
+            first = f.run(service)
+        finally:
+            module._atomic = original_atomic
+        sha = child(first)["commitSha"]
+        require(child(first)["status"] == "success" and child(first)["uploadSummary"]["state"] == "pending", first)
+        require(f.git(remote, "rev-parse", "main") == sha and service.pushes == 1)
+        require(service.status()["uploadSummaries"][0]["state"] == "pending")
+        require(service.run("request_00000001") == first, "duplicate click must not count or upload again")
+        (root / "new.txt").write_text("later edit must stay separate\n")
+        second = f.run(service, "request_00000002")
+        require(child(second)["status"] == "success" and child(second)["uploadSummary"]["count"] == 1, second)
+        require(child(second)["commitSha"] == sha and service.pushes == 1)
+        require(f.git(root, "rev-list", "--count", "HEAD") == "2")
+        require((root / "new.txt").read_text() == "later edit must stay separate\n")
+        third = f.run(service, "request_00000003")
+        require(child(third)["uploadSummary"]["count"] == 2 and service.pushes == 2, third)
+        require(f.git(root, "rev-list", "--count", "HEAD") == "3")
+
+
+def test_upload_counter_lfs_failure_does_not_advance():
+    class FailedLfs(Service):
+        def _git(self, root, *arguments, **kwargs):
+            if arguments and arguments[0] == "push":
+                raise module._GitFailure("lfs")
+            return super()._git(root, *arguments, **kwargs)
+    with Fixture() as f:
+        root, remote, _ = f.repo()
+        original = f.git(remote, "rev-parse", "main")
+        (root / "asset.blend").write_bytes(b"saved LFS fixture asset")
+        failed = f.run(f.service(FailedLfs))
+        require(child(failed)["status"] == "push_failed" and child(failed)["uploadSummary"]["count"] == 0, failed)
+        require(f.git(remote, "rev-parse", "main") == original)
+        resumed = f.run(f.service(), "request_00000002")
+        require(child(resumed)["commitSha"] == child(failed)["commitSha"] and child(resumed)["uploadSummary"]["count"] == 1, resumed)
+
+
+def test_upload_counter_missing_and_truncated_ledger_preserved():
+    with Fixture() as f:
+        repo, pending = retained_delivery(f)
+        service = f.service()
+        path = service._pending_path(repo["id"])
+        require(service._record_delivery(repo, pending, path, {"message": "confirmed"}))
+        pending.update(commitSha="b" * 40, verifiedRemote="b" * 40)
+        require(service._record_delivery(repo, pending, path, {"message": "confirmed"}))
+        ledger, value = service._upload_ledger(service._upload_destination(repo))
+        complete = ledger.read_bytes()
+        ledger.unlink()
+        require(service._upload_summary(repo)["state"] == "unknown" and service._upload_summary(repo)["count"] is None)
+        require(not service._record_delivery(repo, pending, path, {"message": "confirmed"}))
+        require(not ledger.exists(), "missing established ledger must not silently restart at one")
+        truncated = dict(value, events=value["events"][:1])
+        module._atomic(ledger, truncated)
+        original = ledger.read_bytes()
+        require(service._upload_summary(repo)["count"] is None)
+        require(not service._record_delivery(repo, module._read(path), path, {"message": "confirmed"}))
+        require(ledger.read_bytes() == original, "truncated ledger must stay preserved")
+        ledger.write_bytes(complete)
+        require(service._record_delivery(repo, module._read(path), path, {"message": "confirmed"}))
+        require(service._upload_summary(repo)["count"] == 2)
+        # A new delivery also freezes whether an older ledger existed. Even
+        # one prior entry cannot be replaced by the new commit as upload #1.
+        next_pending = dict(pending, commitSha="c" * 40, verifiedRemote="c" * 40)
+        next_pending.pop("uploadSummary", None)
+        next_pending["uploadCounterBase"] = {"destination": service._upload_destination(repo), "count": 2, "ledgerExisted": True}
+        ledger.unlink()
+        require(not service._record_delivery(repo, next_pending, path, {"message": "confirmed"}) and not ledger.exists())
+
+
+def test_upload_counter_malformed_binding_isolated():
+    with Fixture() as f:
+        one, first = retained_delivery(f, name="one")
+        two, second = retained_delivery(f, name="two")
+        service = f.service()
+        for repo, pending in ((one, first), (two, second)):
+            require(service._record_delivery(repo, pending, service._pending_path(repo["id"]), {"message": "confirmed"}))
+        path = service._pending_path(one["id"])
+        original = module._read(path)
+        for binding in (None, [], {}, "invalid"):
+            malformed = dict(original, uploadSummary=dict(original["uploadSummary"], binding=binding))
+            module._atomic(path, malformed)
+            preserved = path.read_bytes()
+            summaries = service.status()["uploadSummaries"]
+            require(summaries[0]["state"] == "unknown" and summaries[0]["count"] is None)
+            require(summaries[1]["state"] == "recorded" and summaries[1]["count"] == 1)
+            versions = service.version_catalog()["repositories"]
+            require(versions[0]["uploadSummary"]["state"] == "unknown" and versions[1]["uploadSummary"]["count"] == 1)
+            require(path.read_bytes() == preserved, "bad bindings must not be rewritten by GET")
+        malformed = dict(original, identity=[])
+        module._atomic(path, malformed)
+        require(service.status()["uploadSummaries"][0]["state"] == "unknown")
+        require(service.status()["uploadSummaries"][1]["count"] == 1)
+
+
+def test_upload_counter_same_length_wrong_anchor_preserved():
+    with Fixture() as f:
+        repo, pending = retained_delivery(f)
+        service = f.service()
+        path = service._pending_path(repo["id"])
+        require(service._record_delivery(repo, pending, path, {"message": "confirmed"}))
+        pending.update(commitSha="b" * 40, verifiedRemote="b" * 40)
+        require(service._record_delivery(repo, pending, path, {"message": "confirmed"}))
+        ledger, value = service._upload_ledger(service._upload_destination(repo))
+        complete = ledger.read_bytes()
+        value["events"][-1].update(commitSha="c" * 40, verifiedRemote="c" * 40)
+        module._atomic(ledger, value)
+        preserved = ledger.read_bytes()
+        require(service._upload_summary(repo)["state"] == "unknown" and service._upload_summary(repo)["count"] is None)
+        require(not service._record_delivery(repo, pending, path, {"message": "confirmed"}))
+        require(ledger.read_bytes() == preserved, "same-length wrong ledger must not append original confirmation again")
+        require(module._read(path)["uploadCounterBase"]["commitSha"] == "b" * 40)
+        ledger.write_bytes(complete)
+        require(service._record_delivery(repo, module._read(path), path, {"message": "confirmed"}))
+        require(service._upload_summary(repo)["count"] == 2)
+
+
+def test_upload_counter_operation_ack_crash_keeps_later_edits():
+    with Fixture() as f:
+        root, remote, _ = f.repo()
+        (root / "new.txt").write_text("original edit\n")
+        service = f.service()
+        first = f.run(service)
+        sha = child(first)["commitSha"]
+        # Model the precise crash boundary after delivered journal + ledger,
+        # before the operation's successful row was durably acknowledged.
+        interrupted = module._read(service._ops / "request_00000001.json")
+        interrupted.update(status="working", owner={"pid": 0, "processKey": "", "nonce": "stale"})
+        interrupted["repositories"][0].update(status="working", phase="push", message="waiting for receipt")
+        module._atomic(service._ops / "request_00000001.json", interrupted)
+        (root / "new.txt").write_text("later edit\n")
+        second = f.run(f.service(), "request_00000002")
+        require(child(second)["status"] == "success" and child(second)["commitSha"] == sha, second)
+        require(child(second)["uploadSummary"]["count"] == 1)
+        require(f.git(root, "rev-list", "--count", "HEAD") == "2" and f.git(remote, "rev-parse", "main") == sha)
+        require((root / "new.txt").read_text() == "later edit\n")
+        third = f.run(f.service(), "request_00000003")
+        require(child(third)["uploadSummary"]["count"] == 2 and child(third)["commitSha"] != sha, third)
+        require(f.git(root, "rev-list", "--count", "HEAD") == "3")
+
+
+def test_upload_counter_deleted_ledger_retry_preserves_later_work():
+    class Observed(Service):
+        pushes = 0
+        def _git(self, root, *arguments, **kwargs):
+            if arguments and arguments[0] == "push":
+                self.pushes += 1
+            return super()._git(root, *arguments, **kwargs)
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        service = f.service(Observed)
+        for number in (1, 2):
+            (root / "new.txt").write_text(str(number) + "\n")
+            uploaded = f.run(service, "request_0000000" + str(number))
+            require(child(uploaded)["uploadSummary"]["count"] == number)
+        sha = child(uploaded)["commitSha"]
+        ledger, _ = service._upload_ledger(service._upload_destination(repo))
+        complete = ledger.read_bytes()
+        ledger.unlink()
+        (root / "new.txt").write_text("later edit must remain\n")
+        third = f.run(service, "request_00000003")
+        require(child(third)["status"] == "success" and child(third)["commitSha"] == sha, third)
+        require(child(third)["uploadSummary"]["state"] == "pending" and child(third)["uploadSummary"]["count"] is None)
+        require(service.pushes == 2 and f.git(root, "rev-list", "--count", "HEAD") == "3" and not ledger.exists())
+        require(f.git(remote, "rev-parse", "main") == sha)
+        ledger.write_bytes(complete)
+        fourth = f.run(service, "request_00000004")
+        require(child(fourth)["status"] == "success" and child(fourth)["uploadSummary"]["count"] == 2, fourth)
+        require(service.pushes == 2 and child(fourth)["commitSha"] == sha)
+        require((root / "new.txt").read_text() == "later edit must remain\n" and f.git(root, "rev-list", "--count", "HEAD") == "3")
 
 
 TESTS = [v for k, v in tuple(globals().items()) if k.startswith("test_") and callable(v)]
