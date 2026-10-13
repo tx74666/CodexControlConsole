@@ -9,6 +9,7 @@ const css = readFileSync(new URL("../console-repository-publish.css", import.met
 const index = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const BASE = "/api/console/repository-publish";
 const KEY = "console.repositoryPublish.pending.v1";
+const DISPLAY_KEY = "console.repositoryPublish.versionDisplay.v1";
 const settle = async () => { for (let i = 0; i < 15; i++) await new Promise(resolve => setImmediate(resolve)); };
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const response = value => ({ ok: true, status: 200, json: async () => structuredClone(value) });
@@ -29,7 +30,7 @@ function harness(options = {}) {
   let document, hook = options.hook, timerId = 0;
   class Element {
     constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.parentElement = null; this.listeners = new Map(); this.attributes = {}; this.dataset = {}; this.hidden = false; this.disabled = false; this.open = false; this.checked = false; this.value = ""; this.textContent = ""; this.className = ""; }
-    append(...items) { for (const item of items) { item.parentElement = this; this.children.push(item); } }
+    append(...items) { for (const item of items) { item.remove(); item.parentElement = this; this.children.push(item); } }
     replaceChildren(...items) { for (const old of this.children) old.parentElement = null; this.children = []; this.append(...items); }
     remove() { if (this.parentElement) { const parent = this.parentElement; parent.children.splice(parent.children.indexOf(this), 1); this.parentElement = null; } }
     contains(item) { return item === this || this.children.some(child => child.contains(item)); }
@@ -38,8 +39,8 @@ function harness(options = {}) {
     getAttribute(key) { return this.attributes[key] ?? null; }
     setCustomValidity(value) { this.validationMessage = value; }
     addEventListener(type, handler) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(handler); }
-    dispatch(type) { if (this.disabled && ["click", "change"].includes(type)) return; for (const handler of this.listeners.get(type) || []) handler({ target: this, preventDefault() {} }); }
-    click() { this.dispatch("click"); }
+    dispatch(type, extra = {}) { if (this.disabled && ["click", "change"].includes(type)) return; const event = { target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra }; for (const handler of this.listeners.get(type) || []) handler(event); return event; }
+    click() { const event = this.dispatch("click"); if (event && !event.defaultPrevented && this.tagName === "SUMMARY" && this.parentElement?.tagName === "DETAILS") { this.parentElement.open = !this.parentElement.open; this.parentElement.dispatch("toggle"); } }
     showModal() { this.open = true; }
     close() { this.open = false; this.dispatch("close"); }
     focus() { document.activeElement = this; }
@@ -58,7 +59,8 @@ function harness(options = {}) {
   const root = new Element("html"), panel = new Element("section"), host = new Element("div");
   root.lang = options.lang || "zh-CN"; panel.setAttribute("data-module-panel", options.module || "workspace"); host.id = "consoleRepositoryPublishHost"; root.append(panel); panel.append(host);
   const all = (parent = root) => [parent, ...parent.children.flatMap(item => all(item))];
-  document = { documentElement: root, readyState: options.loading ? "loading" : "complete", activeElement: null, createElement: tag => tag.toLowerCase() === "textarea" ? new TextAreaElement(tag) : tag.toLowerCase() === "select" ? new SelectElement(tag) : new Element(tag), getElementById: id => all().find(item => item.id === id), addEventListener(type, handler) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(handler); } };
+  document = { documentElement: root, readyState: options.loading ? "loading" : "complete", activeElement: null, createElement: tag => tag.toLowerCase() === "textarea" ? new TextAreaElement(tag) : tag.toLowerCase() === "select" ? new SelectElement(tag) : new Element(tag), getElementById: id => all().find(item => item.id === id), addEventListener(type, handler) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(handler); }, removeEventListener(type, handler) { listeners.set(type, (listeners.get(type) || []).filter(item => item !== handler)); } };
+  document.emit = (type, event) => { for (const handler of listeners.get(type) || []) handler(event); };
   const stored = options.storageUnavailable ? { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); }, removeItem() { throw new Error("blocked"); } } : { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   const snapshot = { allowed: true, busy: false, settings: settings(), operation: null, ...(options.snapshot || {}) };
   if (!("settingsSha" in snapshot)) snapshot.settingsSha = settingsSha(snapshot.settings);
@@ -94,7 +96,7 @@ function harness(options = {}) {
   } };
   class MutationObserver { constructor(callback) { this.callback = callback; observers.push(this); } observe(target) { this.target = target; } disconnect() { this.disconnected = true; } }
   runInNewContext(source, { window, document, MutationObserver, WeakMap, Map, Set, Uint8Array, AbortController, console });
-  const byClass = name => all().find(item => item.className.split(" ").includes(name));
+  const byClass = (name, parent = root) => all(parent).find(item => item.className.split(" ").includes(name));
   const fields = name => all().filter(item => item.dataset.field === name);
   const button = label => all().find(item => item.tagName === "BUTTON" && item.textContent === label);
   const visible = item => { for (let parent = item; parent; parent = parent.parentElement) if (parent.hidden || parent !== item && parent.tagName === "DETAILS" && !parent.open && !parent.children[0]?.contains(item)) return false; return true; };
@@ -298,7 +300,7 @@ await test("arrow shows five dynamic GitHub names and current versions without f
   const names = ["RandomRealm2", "Builder6", "CodexControlConsole", "MyWeb", "MyGitHub"], repos = names.map((name, i) => repository({ id: `repository-${i + 1}`, path: `D:/Unrelated/Folder${i}`, name: `Wrong path title ${i}`, repositoryUrl: i === 4 ? "git@github.com:owner/MyGitHub.git" : `https://github.com/owner/${name}.git`, versionSources: [{ path: "package.json", kind: "json", key: "version" }] }));
   const h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: repos.map((repo, i) => ({ repoId: repo.id, components: [component({ currentVersion: `1.0.${i}`, nextVersion: `1.0.${i + 1}` })] })) } }); await h.ready();
   assert.equal(h.byClass("repository-publish-primary").textContent, "推送到 GitHub"); assert.equal(h.byClass("repository-publish-expanded").hidden, true); assert.equal(h.calls.length, 1); assert.equal(h.fields("path").length, 0);
-  await h.expand(); const rows = h.byClass("repository-publish-compact-rows").children; assert.equal(rows.length, 5); assert.deepEqual(rows.map(row => row.children[0].textContent), names); assert.deepEqual(rows.map(row => row.children[1].textContent), names.map((_, i) => `1.0.${i}`));
+  await h.expand(); const rows = h.byClass("repository-publish-compact-rows").children; assert.equal(rows.length, 5); assert.deepEqual(rows.map(row => row.children[0].textContent), names); assert.deepEqual(rows.map(row => h.byClass("repository-publish-compact-version", row).textContent), names.map((_, i) => `1.0.${i}`));
   assert.equal(h.byClass("repository-publish-toggle").getAttribute("aria-expanded"), "true"); assert.ok(h.button("配置全部")); assert.equal(h.fields("path").length, 0); assert.equal(h.posts().length, 0); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 1);
   await h.expand(); assert.equal(h.byClass("repository-publish-expanded").hidden, true); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 1); h.locale("en"); assert.equal(h.byClass("repository-publish-primary").textContent, "Push to GitHub"); assert.equal(h.posts().length, 0);
 });
@@ -320,7 +322,8 @@ await test("patch plans preserve each component format and proof and only save c
   const h = harness({ catalog: { repositories: [{ repoId: "repository-001", components }] } }); await h.ready(); await h.open("repository-001"); let actions = h.all().filter(item => item.className.split(" ").includes("repository-publish-plan-action")); assert.equal(actions.length, 3); assert.equal(actions[2].disabled, true); assert.ok(h.all().some(item => item.textContent === "Custom format is read-only"));
   actions[0].click(); await settle(); actions = h.all().filter(item => item.className.split(" ").includes("repository-publish-plan-action")); actions[1].click(); await settle();
   const plans = h.posts("/config").at(-1).body.settings.repositories[0].versionPlans; assert.deepEqual(plans, components.slice(0, 2).map(item => ({ sourceId: item.sourceId, currentVersion: item.currentVersion, targetVersion: item.nextVersion, expectedSha256: item.expectedSha256, expectedBytes: item.expectedBytes, planProof: item.planProof }))); assert.equal(h.posts("/run").length, 0);
-  assert.match(h.byClass("repository-publish-compact-version").textContent, /Unity 0.1 → 0.1.1.*Blender \(1, 2, 3\) → \(1, 2, 4\)/);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "Unity 0.1 → 0.1.1");
+  assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.dataset.sourceId).map(item => item.textContent), ["Unity 0.1 → 0.1.1", "Blender (1, 2, 3) → (1, 2, 4)", "Other 2.3.4"]);
   h.button("取消计划").click(); await settle(); assert.equal(h.posts("/config").at(-1).body.settings.repositories[0].versionPlans.length, 1); assert.equal(h.posts("/run").length, 0);
 });
 await test("version lookup failure or missing proof cannot invent a plan or block unchanged-version push", async () => {
@@ -363,11 +366,11 @@ await test("compact version colors follow real worktree or outgoing state, never
   ];
   const h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: rows } }); await h.ready(); await h.expand();
   const visible = h.byClass("repository-publish-compact-rows").children;
-  assert.deepEqual(visible.map(row => row.children[1].dataset.changeState), ["unchanged", "changed", "changed", "unknown"]);
-  assert.match(visible[0].children[1].textContent, /2\.3\.4 → 2\.3\.5/);
-  assert.equal(visible[1].children[1].textContent, "2.3.4"); assert.equal(visible[2].children[1].textContent, "2.3.4");
+  assert.deepEqual(visible.map(row => h.byClass("repository-publish-compact-version", row).dataset.changeState), ["unchanged", "changed", "changed", "unknown"]);
+  assert.match(h.byClass("repository-publish-compact-version", visible[0]).textContent, /2\.3\.4 → 2\.3\.5/);
+  assert.equal(h.byClass("repository-publish-compact-version", visible[1]).textContent, "2.3.4"); assert.equal(h.byClass("repository-publish-compact-version", visible[2]).textContent, "2.3.4");
   assert.equal(visible[2].children[2].textContent, "有提交待推送"); assert.equal(visible[3].children[2].textContent, "变化未核对");
-  assert.match(visible[3].children[1].title, /No trustworthy tracking ref/); assert.equal(h.posts().length, 0);
+  assert.match(h.byClass("repository-publish-compact-version", visible[3]).title, /No trustworthy tracking ref/); assert.equal(h.posts().length, 0);
   const colors = [...css.matchAll(/--repository-publish-change:\s*#([0-9a-f]{6})/gi)].map(match => match[1]);
   assert.equal(colors.length, 2);
   for (const color of colors) { const channels = color.match(/../g).map(value => Number.parseInt(value, 16)); assert.ok(channels[1] > channels[0] && channels[1] > channels[2], "Both actual theme change colors must be green, not the desktop dark blue --green alias"); }
@@ -402,7 +405,8 @@ await test("99 rollover and independent module formats are displayed only from b
   const components = [component({ currentVersion: "1.6.99", nextVersion: "1.7.0", name: "Console" }),
     component({ sourceId: "second-source", currentVersion: "(1, 99, 99)", nextVersion: "(2, 0, 0)", name: "Plugin" })];
   const h = harness({ snapshot: { settings: settings([repository({ versionPlans: components.map(planFor) })]) }, catalog: { repositories: [{ repoId: "repository-001", components }] } });
-  await h.ready(); await h.open(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "Console 1.6.99 → 1.7.0 · Plugin (1, 99, 99) → (2, 0, 0)");
+  await h.ready(); await h.open(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "Console 1.6.99 → 1.7.0");
+  assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.dataset.sourceId).map(item => item.textContent), ["Console 1.6.99 → 1.7.0", "Plugin (1, 99, 99) → (2, 0, 0)"]);
   assert.equal(h.posts().length, 0); h.byClass("repository-publish-primary").click(); await settle(); assert.equal(h.posts("/run").length, 1);
   assert.deepEqual(Object.keys(h.posts("/run")[0].body).sort(), ["repoIds", "requestId"]); assert.equal(h.posts("/config").length, 0);
 });
@@ -569,5 +573,122 @@ await test("a late return catalog cannot repaint a hidden Console or supersede i
   pending.resolve(response({ repositories: [{ repoId: "repository-001", hasChanges: false, changeState: "unchanged", components: [component({ currentVersion: "9.9.9" })] }] })); await settle(); assert.equal(h.calls.length, before); assert.notEqual(h.byClass("repository-publish-compact-version").textContent, "9.9.9");
   h.hook(null); h.catalog.repositories[0] = { repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: true, components: [component({ currentVersion: "3.0.1" })] };
   await h.setPanelHidden(false); assert.equal(h.byClass("repository-publish-compact-version").textContent, "3.0.1"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "changed"); assert.equal(h.posts().length, 0);
+});
+const menuComponents = () => [component({ sourceId: "idle-plugin", name: "Node library", currentVersion: "0.3.1", nextVersion: "0.3.2" }),
+  automaticComponent({ sourceId: "changed-plugin", name: "Character Designer", currentVersion: "0.77.25", nextVersion: "0.77.38" }),
+  component({ sourceId: "other-plugin", name: "RR Helper", currentVersion: "0.2.60", nextVersion: "0.2.61" })];
+const menuCatalog = (repoId = "repository-001", components = menuComponents()) => ({ repoId, hasChanges: true, changeState: "changed", worktreeChanged: true, outgoingCommits: 0, components });
+const rowFor = (h, id = "repository-001") => h.byClass("repository-publish-compact-rows").children.find(row => row.dataset.repoId === id);
+const menuOptions = (h, row = rowFor(h)) => h.all(h.byClass("repository-publish-version-menu", row)).filter(item => item.dataset.sourceId);
+await test("multiple versions remain compact and expose fact-based changed and other groups on demand", async () => {
+  const h = harness({ catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand();
+  const picker = h.byClass("repository-publish-version-picker"), trigger = h.byClass("repository-publish-version-trigger");
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "Character Designer 0.77.25 → 0.77.38");
+  assert.equal(h.byClass("repository-publish-version-count").textContent, "3 个插件"); assert.equal(picker.open, false);
+  assert.equal(h.visible(menuOptions(h)[0]), false); assert.equal(h.fields("path").length, 0);
+  trigger.click(); assert.equal(picker.open, true); assert.equal(h.visible(menuOptions(h)[0]), true);
+  const menu = h.byClass("repository-publish-version-menu"), groups = h.all(menu).filter(item => item.tagName === "H4").map(item => item.textContent);
+  assert.deepEqual(groups, ["本次有改动", "其他插件"]); assert.equal(h.all(menu).filter(item => item.tagName === "HR").length, 2);
+  assert.deepEqual(menuOptions(h).map(item => [item.dataset.sourceId, item.dataset.changeState]), [["changed-plugin", "changed"], ["idle-plugin", "unchanged"], ["other-plugin", "unchanged"]]);
+  assert.match(trigger.getAttribute("aria-label"), /选择显示的插件版本.*Character Designer.*3 个插件/);
+  assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
+});
+await test("choosing a plugin changes display and focus only while real repository changes remain visible", async () => {
+  const h = harness({ catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand();
+  const reads = h.calls.length, settingsBefore = structuredClone(h.snapshot.settings), trigger = h.byClass("repository-publish-version-trigger"); trigger.click();
+  menuOptions(h).find(item => item.dataset.sourceId === "idle-plugin").click(); await settle();
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "Node library 0.3.1");
+  assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unchanged");
+  assert.equal(h.byClass("repository-publish-compact-status").dataset.changeState, "changed"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "有待提交改动");
+  assert.equal(h.byClass("repository-publish-version-picker").open, false); assert.equal(h.document.activeElement, trigger);
+  assert.equal(menuOptions(h).find(item => item.dataset.sourceId === "idle-plugin").getAttribute("aria-pressed"), "true");
+  assert.equal(h.calls.length, reads); assert.equal(h.posts().length, 0); assert.deepEqual(h.snapshot.settings, settingsBefore);
+  assert.equal(h.api.hasDraft(), false); assert.equal(h.api.canReload(), true); assert.equal(h.byClass("repository-publish-primary").disabled, false);
+  assert.ok(Object.values(JSON.parse(h.storage.get(DISPLAY_KEY))).includes("idle-plugin"));
+  h.button("自动显示有改动的插件").click(); await settle(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "Character Designer 0.77.25 → 0.77.38");
+  assert.equal(Object.values(JSON.parse(h.storage.get(DISPLAY_KEY))).includes("idle-plugin"), false); assert.equal(h.posts().length, 0);
+});
+await test("reload preserves the chosen source while using its freshly read version and one-time plan consumption", async () => {
+  const storage = new Map(), first = harness({ storage, catalog: { repositories: [menuCatalog()] } }); await first.ready(); await first.expand();
+  menuOptions(first).find(item => item.dataset.sourceId === "idle-plugin").click(); first.api.destroy();
+  const components = menuComponents(); components[0] = component({ ...components[0], currentVersion: "0.3.2", nextVersion: "0.3.3", worktreeChanged: true });
+  const h = harness({ storage, snapshot: { settings: settings([repository({ versionPlans: [planFor(components[1])] })]) }, catalog: { repositories: [menuCatalog("repository-001", components)] } });
+  await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "Node library 0.3.2");
+  h.snapshot.settings.repositories[0].versionPlans = []; h.snapshot.settingsSha = settingsSha(h.snapshot.settings); await h.emitWindow("focus");
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "Node library 0.3.2"); assert.equal(h.posts().length, 0);
+  assert.equal(h.api.hasDraft(), false); assert.equal(h.api.canReload(), true);
+});
+await test("display choices stay isolated by repository and actual branch binding", async () => {
+  const repos = [repository(), repository({ id: "repository-002", path: "D:/Other", repositoryUrl: "https://github.com/example/Other", branch: "feature/other" })];
+  const h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: repos.map(repo => menuCatalog(repo.id)) } }); await h.ready(); await h.expand();
+  menuOptions(h, rowFor(h, repos[0].id)).find(item => item.dataset.sourceId === "idle-plugin").click();
+  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "Node library 0.3.1");
+  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).textContent, "Character Designer 0.77.25 → 0.77.38");
+  menuOptions(h, rowFor(h, repos[1].id)).find(item => item.dataset.sourceId === "other-plugin").click();
+  const values = Object.values(JSON.parse(h.storage.get(DISPLAY_KEY))); assert.deepEqual(values.sort(), ["idle-plugin", "other-plugin"]); assert.equal(h.posts().length, 0);
+  await h.open(repos[0].id); await h.change("branch", "feature/new-bound-branch");
+  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "Character Designer 0.77.25 → 0.77.38");
+  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).textContent, "RR Helper 0.2.60"); assert.equal(h.posts("/config").length, 1); assert.equal(h.posts("/run").length, 0);
+});
+await test("a removed source safely falls back without stale versions or phantom choices", async () => {
+  const h = harness({ catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand();
+  menuOptions(h).find(item => item.dataset.sourceId === "idle-plugin").click();
+  h.catalog.repositories[0].components = menuComponents().filter(item => item.sourceId !== "idle-plugin"); await h.emitWindow("focus");
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "Character Designer 0.77.25 → 0.77.38"); assert.equal(h.byClass("repository-publish-version-count").textContent, "2 个插件");
+  assert.equal(menuOptions(h).some(item => item.dataset.sourceId === "idle-plugin"), false); assert.equal(h.button("自动显示有改动的插件").getAttribute("aria-pressed"), "true");
+  h.catalog.repositories[0].components = [component({ sourceId: "new-only", currentVersion: "4.0.7", nextVersion: "4.0.8" })]; await h.emitWindow("focus");
+  assert.equal(h.byClass("repository-publish-version-picker").hidden, true); assert.equal(h.byClass("repository-publish-compact-version").textContent, "4.0.7"); assert.equal(h.visible(h.byClass("repository-publish-compact-version")), true);
+  h.catalog.repositories[0].components = menuComponents(); await h.emitWindow("focus"); assert.equal(h.byClass("repository-publish-version-picker").hidden, false);
+  assert.equal(h.all().filter(item => item.className.split(" ").includes("repository-publish-compact-version")).length, 1, "The native append contract moves rather than duplicates the version span"); assert.equal(h.posts().length, 0);
+});
+await test("unavailable display storage does not dirty configuration or disable normal controls", async () => {
+  const h = harness({ storageUnavailable: true, catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand();
+  const reads = h.calls.length; menuOptions(h).find(item => item.dataset.sourceId === "idle-plugin").click();
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "Node library 0.3.1"); assert.equal(h.byClass("repository-publish-primary").disabled, false);
+  assert.equal(h.api.hasDraft(), false); assert.equal(h.api.canReload(), true); assert.equal(h.calls.length, reads); assert.equal(h.posts().length, 0);
+  await h.emitWindow("focus"); assert.equal(h.byClass("repository-publish-compact-version").textContent, "Node library 0.3.1");
+});
+await test("locale changes update menu labels and count without changing the saved display choice", async () => {
+  const h = harness({ catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand(); menuOptions(h).find(item => item.dataset.sourceId === "idle-plugin").click();
+  const preference = h.storage.get(DISPLAY_KEY), reads = h.calls.length; h.byClass("repository-publish-version-trigger").click(); h.locale("en");
+  assert.equal(h.byClass("repository-publish-version-count").textContent, "3 plugins"); assert.equal(h.byClass("repository-publish-version-picker").open, false);
+  assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.tagName === "H4").map(item => item.textContent), ["Changed plugins", "Other plugins"]);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "Node library 0.3.1"); assert.equal(h.storage.get(DISPLAY_KEY), preference); assert.equal(h.calls.length, reads); assert.equal(h.posts().length, 0);
+});
+await test("unknown component state remains marked unknown and is never described as an unchanged plugin", async () => {
+  const unknown = component({ sourceId: "unknown-plugin", name: "Unknown", worktreeChanged: null, versionChanged: null }), other = component({ sourceId: "known-plugin", name: "Other", worktreeChanged: null, versionChanged: null });
+  const h = harness({ catalog: { repositories: [{ repoId: "repository-001", hasChanges: null, changeState: "unknown", worktreeChanged: null, components: [unknown, other] }] } }); await h.ready(); await h.expand();
+  assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "变化未核对");
+  assert.deepEqual(menuOptions(h).map(item => item.dataset.changeState), ["unknown", "unknown"]);
+  const labels = h.all(h.byClass("repository-publish-version-menu")).map(item => item.textContent).join(" "); assert.doesNotMatch(labels, /无改动|无变化|本次有改动/); assert.match(labels, /其他插件/); assert.equal(h.posts().length, 0);
+});
+await test("version menus close on Escape and outside click, retain focus, and opening another closes the first", async () => {
+  const repos = [repository(), repository({ id: "repository-002", path: "D:/Other" })], h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: repos.map(repo => menuCatalog(repo.id)) } }); await h.ready(); await h.expand();
+  const first = h.byClass("repository-publish-version-picker", rowFor(h, repos[0].id)), second = h.byClass("repository-publish-version-picker", rowFor(h, repos[1].id));
+  const trigger = h.byClass("repository-publish-version-trigger", rowFor(h, repos[0].id)); trigger.click(); assert.equal(first.open, true);
+  const escaped = first.dispatch("keydown", { key: "Escape" }); assert.equal(escaped.defaultPrevented, true); assert.equal(first.open, false); assert.equal(h.document.activeElement, trigger);
+  trigger.click(); h.document.emit("click", { target: h.byClass("repository-publish-version-menu", rowFor(h, repos[0].id)) }); assert.equal(first.open, true, "Inside clicks retain the current menu");
+  h.document.emit("click", { target: h.host }); assert.equal(first.open, false);
+  trigger.click(); h.byClass("repository-publish-version-trigger", rowFor(h, repos[1].id)).click(); assert.equal(first.open, false); assert.equal(second.open, true);
+  h.api.destroy(); second.open = true; h.document.emit("click", { target: h.host }); assert.equal(second.open, true, "Destroy removes this component's document click hook"); assert.equal(h.posts().length, 0);
+});
+await test("refresh and hiding or collapsing Console close an old version menu without losing a valid choice", async () => {
+  const h = harness({ catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand(); menuOptions(h).find(item => item.dataset.sourceId === "idle-plugin").click();
+  const picker = h.byClass("repository-publish-version-picker"), trigger = h.byClass("repository-publish-version-trigger"), pending = deferred(); trigger.click();
+  h.hook(call => call.url === BASE + "/versions" ? pending.promise : undefined); await h.emitWindow("focus"); assert.equal(picker.open, false); assert.equal(h.byClass("repository-publish-compact-version").textContent, "正在读取…");
+  pending.resolve(response({ repositories: [menuCatalog()] })); await settle(); h.hook(null); assert.equal(h.byClass("repository-publish-compact-version").textContent, "Node library 0.3.1");
+  trigger.click(); await h.setPanelHidden(true); assert.equal(picker.open, false); await h.setPanelHidden(false);
+  trigger.click(); await h.expand(); assert.equal(picker.open, false); await h.expand(); assert.equal(picker.open, false);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "Node library 0.3.1"); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
+});
+await test("a stale menu event cannot choose a source while its catalog is refreshing or after that source disappears", async () => {
+  const h = harness({ catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand();
+  const staleOption = menuOptions(h).find(item => item.dataset.sourceId === "idle-plugin"), pending = deferred();
+  h.hook(call => call.url === BASE + "/versions" ? pending.promise : undefined); await h.emitWindow("focus");
+  staleOption.click(); assert.equal(h.storage.has(DISPLAY_KEY), false); assert.equal(h.byClass("repository-publish-compact-version").textContent, "正在读取…");
+  const fresh = [automaticComponent({ sourceId: "replacement-changed", name: "Replacement", currentVersion: "4.0.7", nextVersion: "4.0.8" }), component({ sourceId: "replacement-idle", name: "Other" })];
+  pending.resolve(response({ repositories: [menuCatalog("repository-001", fresh)] })); await settle();
+  staleOption.click(); assert.equal(h.storage.has(DISPLAY_KEY), false); assert.equal(h.byClass("repository-publish-compact-version").textContent, "Replacement 4.0.7 → 4.0.8");
+  assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
 });
 console.log(`PASS ${count} isolated repository-publish UI fixtures`);

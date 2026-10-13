@@ -2,6 +2,7 @@
   "use strict";
   const BASE = "/api/console/repository-publish";
   const KEY = "console.repositoryPublish.pending.v1";
+  const DISPLAY_KEY = "console.repositoryPublish.versionDisplay.v1";
   const mounted = new WeakMap();
   const instances = new Set();
   const activeStatuses = new Set(["queued", "working"]);
@@ -33,6 +34,8 @@
   copy.zh.bindingHintSnapshot = "此清单是初次发现时的快照，不代表当前仍有异常。"; copy.en.bindingHintSnapshot = "This is the initial discovery snapshot; it does not describe current issues.";
   copy.zh.omittedLink = "链接已省略"; copy.en.omittedLink = "Link omitted";
   copy.zh.scope = "适用范围（每行一项）"; copy.en.scope = "Scope (one pattern per line)";
+  Object.assign(copy.zh, { displayVersion: "选择显示的插件版本", pluginCount: "{n} 个插件", changedPlugins: "本次有改动", otherPlugins: "其他插件", autoDisplay: "自动显示有改动的插件", displayOnly: "只切换显示；提交仍包含实际改动的插件。" });
+  Object.assign(copy.en, { displayVersion: "Choose a plugin version to display", pluginCount: "{n} plugins", changedPlugins: "Changed plugins", otherPlugins: "Other plugins", autoDisplay: "Automatically show a changed plugin", displayOnly: "Display only; commits still include the plugins with changes." });
   const clone = value => JSON.parse(JSON.stringify(value));
   const plain = value => value && typeof value === "object" && !Array.isArray(value);
   const clean = (value, length = 2000) => typeof value === "string" ? value.slice(0, length) : "";
@@ -87,6 +90,12 @@
     }
     return settings;
   }
+  function displayPreferences() {
+    for (const name of ["localStorage", "sessionStorage"]) {
+      try { const value = JSON.parse(window[name]?.getItem(DISPLAY_KEY) || "null"); if (plain(value)) return Object.fromEntries(Object.entries(value).filter(([key, id]) => key.length < 8000 && typeof id === "string" && id.length <= 120).slice(-128)); } catch { /* A display choice never blocks a commit. */ }
+    }
+    return {};
+  }
   function mount({ host } = {}) {
     const workspacePanel = host?.closest('[data-module-panel="workspace"]');
     if (!workspacePanel) return null;
@@ -95,6 +104,7 @@
     const text = key => copy[language()][key] || key;
     state.pendingRequest = storedRequest(); state.notFound = false;
     state.expanded = false; state.configRepoId = null; state.versionBusy = false; state.versionFailed = false; state.versionEpoch = 0; state.catalog = new Map(); state.savedSources = new Map(); state.operatedRepoIds = new Set();
+    state.displayPreferences = displayPreferences();
     const controls = [], resultRetries = [], syncDrafts = new Map(), inputPending = new Set();
     const compactRefs = new Map(), configCards = new Map(), configSections = new Map(), planBoxes = new Map();
     const managed = item => { item.setAttribute("data-console-management", ""); return item; };
@@ -196,11 +206,61 @@
         ? clean(transition.fromVersion, 80) + " → " + clean(transition.toVersion, 80)
         : clean(component.currentVersion, 80) || text("versionFailed"));
     }
+    function displayIdentity(repo) { return JSON.stringify([repo.id, repo.path, repo.repositoryUrl, repo.remote, repo.branch]); }
+    function componentChanged(component) { return component.worktreeChanged === true || component.versionChanged === true; }
+    function displayedComponent(repo, components) {
+      const selected = state.displayPreferences[displayIdentity(repo)];
+      return components.find(item => item.sourceId === selected) || components.find(componentChanged) || components[0];
+    }
+    function chooseDisplay(repo, sourceId) {
+      if (state.destroyed || !state.allowed) return;
+      const catalog = catalogFor(repo), components = catalog?.components || [];
+      if (sourceId && !components.some(item => item.sourceId === sourceId)) return;
+      const key = displayIdentity(repo), choices = { ...state.displayPreferences, ...displayPreferences() };
+      if (sourceId) choices[key] = sourceId; else delete choices[key];
+      state.displayPreferences = Object.fromEntries(Object.entries(choices).slice(-128));
+      for (const name of ["localStorage", "sessionStorage"]) {
+        try { window[name]?.setItem(DISPLAY_KEY, JSON.stringify(state.displayPreferences)); } catch { /* The current choice still works in this window. */ }
+      }
+      render();
+    }
+    function componentChangeState(component, catalog) {
+      if (componentChanged(component)) return "changed";
+      return component.worktreeChanged === false || repoChangeState(catalog) === "unchanged" ? "unchanged" : "unknown";
+    }
     function versionSummary(repo) {
       const catalog = catalogFor(repo), components = catalog?.components || [];
       if (!components.length && catalog?.versionState === "missing") return text("authorityMissing");
       if (!components.length) return text(state.versionBusy ? "loading" : state.versionFailed || catalog?.message ? "versionFailed" : catalog ? "noVersion" : "versionPending");
-      return components.map(component => componentVersionText(component, components.length, catalog)).join(" · ");
+      return componentVersionText(displayedComponent(repo, components), components.length, catalog);
+    }
+    function renderVersionPicker(refs, repo, catalog) {
+      const components = catalog?.components || [], multiple = components.length > 1;
+      if (workspacePanel.hidden || !state.expanded || !state.allowed) refs.picker.open = false;
+      refs.picker.hidden = !multiple;
+      if (!multiple) { refs.picker.open = false; if (refs.version.parentElement !== refs.cell) refs.cell.append(refs.version); return; }
+      if (refs.version.parentElement !== refs.summary) refs.summary.append(refs.version, refs.count, refs.arrow);
+      refs.count.textContent = text("pluginCount").replace("{n}", String(components.length));
+      refs.summary.setAttribute("aria-label", [text("displayVersion"), refs.version.textContent, refs.count.textContent].join(" · "));
+      const signature = JSON.stringify([language(), displayIdentity(repo), components, state.settings.naming.autoBump, state.displayPreferences[displayIdentity(repo)]]);
+      if (signature === refs.menuSignature) return;
+      refs.menuSignature = signature; refs.picker.open = false; refs.menu.replaceChildren();
+      const selected = state.displayPreferences[displayIdentity(repo)], automatic = managed(node("button", "repository-publish-version-option", text("autoDisplay"))); automatic.type = "button";
+      automatic.setAttribute("aria-pressed", String(!components.some(item => item.sourceId === selected)));
+      automatic.addEventListener("click", () => { chooseDisplay(repo, ""); refs.picker.open = false; refs.summary.focus(); }); refs.menu.append(automatic);
+      const changed = components.filter(componentChanged), others = components.filter(item => !componentChanged(item));
+      for (const [key, items] of [["changedPlugins", changed], ["otherPlugins", others]]) {
+        if (!items.length) continue;
+        refs.menu.append(node("hr", "repository-publish-version-divider"), node("h4", "repository-publish-version-group", text(key)));
+        for (const component of items) {
+          const option = managed(node("button", "repository-publish-version-option", componentVersionText(component, components.length, catalog))); option.type = "button";
+          option.dataset.sourceId = clean(component.sourceId, 120); option.dataset.changeState = componentChangeState(component, catalog);
+          option.setAttribute("aria-pressed", String(Boolean(selected) && selected === component.sourceId));
+          option.disabled = !clean(component.sourceId, 120); option.title = clean(component.path, 200);
+          option.addEventListener("click", () => { chooseDisplay(repo, component.sourceId); refs.picker.open = false; refs.summary.focus(); }); refs.menu.append(option);
+        }
+      }
+      refs.menu.append(node("p", "repository-publish-version-note", text("displayOnly")));
     }
     function renderCompactRows() {
       const repos = state.settings?.repositories || [];
@@ -209,13 +269,19 @@
         let refs = compactRefs.get(repo.id);
         if (!refs) {
           const row = node("div", "repository-publish-compact-row"), name = node("strong", "repository-publish-compact-name"), version = node("span", "repository-publish-compact-version"), status = node("span", "repository-publish-compact-status"), configure = managed(node("button", "ghost-button repository-publish-row-config")); configure.type = "button";
-          row.dataset.repoId = repo.id; row.append(name, version, status, configure); compactRows.append(row); refs = { row, name, version, status, configure }; compactRefs.set(repo.id, refs);
+          const cell = node("div", "repository-publish-version-cell"), picker = managed(node("details", "repository-publish-version-picker")), summary = node("summary", "repository-publish-version-trigger"), count = node("span", "repository-publish-version-count"), arrow = node("span", "repository-publish-version-arrow", "⌄"), menu = node("div", "repository-publish-version-menu");
+          arrow.setAttribute("aria-hidden", "true"); picker.append(summary, menu); cell.append(version, picker);
+          row.dataset.repoId = repo.id; row.append(name, cell, status, configure); compactRows.append(row); refs = { row, name, version, status, configure, cell, picker, summary, count, arrow, menu, menuSignature: "" }; compactRefs.set(repo.id, refs);
+          picker.addEventListener("toggle", () => { if (picker.open) for (const other of compactRefs.values()) if (other !== refs) other.picker.open = false; });
+          picker.addEventListener("keydown", event => { if (event.key === "Escape" && picker.open) { event.preventDefault(); picker.open = false; summary.focus(); } });
           configure.addEventListener("click", () => open(repo.id));
         }
         const result = state.operation?.results.find(item => item.repoId === repo.id);
         const catalog = catalogFor(repo), changeState = repoChangeState(catalog);
         refs.name.textContent = repoName(repo); refs.version.textContent = versionSummary(repo); refs.version.dataset.changeState = changeState;
         refs.version.title = [refs.version.textContent, changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
+        if ((catalog?.components || []).length > 1) refs.version.dataset.changeState = componentChangeState(displayedComponent(repo, catalog.components), catalog);
+        renderVersionPicker(refs, repo, catalog);
         refs.status.textContent = repo.enabled !== true ? text("disabledRepo") : result && activeStatuses.has(result.status) ? text("repoWorking")
           : result && !["noop", "no_changes", "success", "pushed"].includes(result.status) ? text("repoAttention")
             : catalog ? changeHint(catalog) : text(state.versionBusy ? "loading" : "changeUnknown");
@@ -582,14 +648,16 @@
     if (typeof MutationObserver === "function") {
       visibilityObserver = new MutationObserver(() => {
         const hidden = workspacePanel.hidden; if (hidden === wasHidden) return; wasHidden = hidden;
-        if (hidden) { state.versionEpoch++; } else void recheckVisible();
+        if (hidden) { state.versionEpoch++; for (const refs of compactRefs.values()) refs.picker.open = false; } else void recheckVisible();
       });
       visibilityObserver.observe(workspacePanel, { attributes: true, attributeFilter: ["hidden"] });
     }
     function suspend() { stopPoll(); }
     function resume() { if (workspacePanel.hidden || state.destroyed) return; if (state.pendingId) schedulePoll(); else void recheckVisible(); }
     window.addEventListener("pagehide", suspend); window.addEventListener("pageshow", resume); window.addEventListener("focus", recheckVisible);
-    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; stopPoll(); observer?.disconnect(); visibilityObserver?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); window.removeEventListener("focus", recheckVisible); bar.remove(); expanded.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
+    function dismissVersionPickers(event) { for (const refs of compactRefs.values()) if (!refs.picker.contains(event.target)) refs.picker.open = false; }
+    document.addEventListener("click", dismissVersionPickers);
+    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; stopPoll(); observer?.disconnect(); visibilityObserver?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); window.removeEventListener("focus", recheckVisible); document.removeEventListener("click", dismissVersionPickers); bar.remove(); expanded.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
     mounted.set(host, api); instances.add(api); render(); void readStatus(); return api;
   }
   window.ConsoleRepositoryPublish = { mount, hasDraft: () => Array.from(instances).some(item => item.hasDraft()), canReload: () => Array.from(instances).every(item => item.canReload()) };
