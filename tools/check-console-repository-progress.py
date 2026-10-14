@@ -165,22 +165,43 @@ def test_timeout_only_owns_git_child_tree():
                                  creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     try:
         marker = base / "owned-child-pid.txt"
-        code = """import subprocess,sys,time,pathlib
+        pending = marker.with_name(marker.name + ".pending")
+        acknowledged = marker.with_name(marker.name + ".ack")
+        published = []
+        code = """import subprocess,sys,time,pathlib,os
 time.sleep(.1)
-child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)'])
-pathlib.Path(sys.argv[1]).write_text(str(child.pid))
+marker=pathlib.Path(sys.argv[1])
+pending=marker.with_name(marker.name+'.pending')
+acknowledged=marker.with_name(marker.name+'.ack')
+with pending.open('x',encoding='ascii') as stream:
+ print('Writing objects: 5% (1/20)',file=sys.stderr,flush=True)
+ while not acknowledged.exists(): time.sleep(.01)
+ child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)'])
+ stream.write(str(child.pid)); stream.flush(); os.fsync(stream.fileno())
+os.replace(pending,marker)
 print('Writing objects: 10% (1/10)',file=sys.stderr,flush=True)
 time.sleep(20)
 """
+        def publication(value):
+            if value.get("percent") == 5:
+                require(pending.exists() and pending.read_text(encoding="ascii") == "",
+                        "Fixture must expose its pending empty file before publishing")
+                require(not marker.exists(), "An incomplete PID marker must remain invisible")
+                acknowledged.write_text("checked", encoding="ascii")
+            elif value.get("percent") == 10:
+                text = marker.read_text(encoding="ascii")
+                require(text.isdigit() and int(text) > 0, "Only a complete PID can be published")
+                published.append(int(text))
         started = time.monotonic()
         try:
-            service._stream_git([sys.executable, "-u", "-c", code, str(marker)], os.environ.copy(), None, .7, lambda value: None)
+            service._stream_git([sys.executable, "-u", "-c", code, str(marker)], os.environ.copy(), None, 3, publication)
             require(False, "Must time out")
         except subprocess.TimeoutExpired:
             pass
-        require(time.monotonic() - started < 4, "Timeout cannot hang on descendant pipe handles")
-        require(marker.exists(), "Owned child fixture must actually start")
-        pid = int(marker.read_text())
+        require(time.monotonic() - started < 7, "Timeout cannot hang on descendant pipe handles")
+        require(len(published) == 1 and marker.exists(), "Owned child must atomically publish before timeout")
+        pid = int(marker.read_text(encoding="ascii"))
+        require(pid == published[0], "The PID read after timeout must match the atomic publication")
         deadline = time.monotonic() + 2
         while module._process_key(pid) is not None and time.monotonic() < deadline:
             time.sleep(.02)
