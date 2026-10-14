@@ -2,7 +2,11 @@
 .repository-publish-bar[hidden] { display: none; }
 .repository-publish-bar .ghost-button { min-height: 32px; padding: 5px 11px; font-size: 12px; }
 .repository-publish-bar .repository-publish-primary { min-height: 40px; padding: 8px 16px; color: var(--bg, #092522); background: var(--status-success, var(--green, #59d4bb)); border-color: var(--status-success, var(--green, #59d4bb)); font-size: 14px; font-weight: 700; }
-.repository-publish-bar .repository-publish-toggle { min-height: 40px; width: 36px; padding: 4px; font-size: 20px; }
+.repository-publish-bar .repository-publish-toggle { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; width: 36px; padding: 0; border-color: transparent; background: transparent; color: var(--muted, #92a2b5); outline: none; box-shadow: none; }
+.repository-publish-bar .repository-publish-toggle::before { content: ""; width: 8px; height: 8px; border: solid currentColor; border-width: 0 1.75px 1.75px 0; transform: translateX(-2px) rotate(-45deg); pointer-events: none; }
+.repository-publish-bar .repository-publish-toggle[aria-expanded="true"]::before { transform: translateY(-2px) rotate(45deg); }
+.repository-publish-bar .repository-publish-toggle:hover:not(:disabled) { border-color: transparent; background: var(--secondary-button-bg, #ffffff0f); color: var(--soft, #dcecff); }
+.repository-publish-bar .repository-publish-toggle:focus-visible { border-color: transparent; outline: 2px solid var(--green, #59d4bb); outline-offset: 1px; box-shadow: none; }
 .repository-publish-expanded { margin: 0 0 12px; max-width: 100%; border: 1px solid var(--line, #3b4a5b); border-radius: 10px; background: var(--panel, #182434); }
 .repository-publish-expanded, .repository-publish-dialog { --repository-publish-change: #087a4e; }
 :root[data-theme="dark"] .repository-publish-expanded, :root[data-theme="dark"] .repository-publish-dialog { --repository-publish-change: #69dfa7; }

@@ -108,7 +108,7 @@
     const managed = item => { item.setAttribute("data-console-management", ""); return item; };
     const bar = managed(node("div", "repository-publish-bar"));
     const runButton = managed(node("button", "ghost-button repository-publish-primary")); runButton.type = "button";
-    const toggleButton = managed(node("button", "ghost-button repository-publish-toggle", "⌄")); toggleButton.type = "button";
+    const toggleButton = managed(node("button", "ghost-button repository-publish-toggle")); toggleButton.type = "button";
     const configButton = managed(node("button", "ghost-button repository-publish-config")); configButton.type = "button";
     const shortStatus = node("span", "repository-publish-status"); shortStatus.setAttribute("role", "status"); shortStatus.setAttribute("aria-live", "polite");
     const progress = node("div", "repository-publish-progress"), progressFill = node("span", "repository-publish-progress-fill"); progress.hidden = true;
@@ -181,7 +181,7 @@
       bar.hidden = state.allowed !== true; if (!state.allowed && dialog.open) dialog.close();
       expanded.hidden = !state.allowed || !state.expanded;
       runButton.textContent = text("run"); configButton.textContent = text("configAll"); heading.textContent = state.configRepoId ? repoName(state.settings?.repositories.find(repo => repo.id === state.configRepoId)) + " · " + text("config") : text("configAll"); closeButton.textContent = text("close");
-      toggleButton.textContent = state.expanded ? "⌃" : "⌄"; toggleButton.disabled = !state.allowed; toggleButton.setAttribute("aria-label", text(state.expanded ? "collapse" : "expand")); toggleButton.setAttribute("aria-expanded", String(state.expanded)); toggleButton.setAttribute("aria-controls", expanded.id);
+      const toggleLabel = text(state.expanded ? "collapse" : "expand"); toggleButton.disabled = !state.allowed; toggleButton.setAttribute("aria-label", toggleLabel); toggleButton.title = toggleLabel; toggleButton.setAttribute("aria-expanded", String(state.expanded)); toggleButton.setAttribute("aria-controls", expanded.id);
       configButton.setAttribute("aria-controls", dialog.id); configButton.setAttribute("aria-expanded", String(dialog.open));
       shortStatus.textContent = statusText(); detailStatus.textContent = statusText(); shortStatus.dataset.state = state.error ? "error" : blocked() ? "working" : "ready";
       const info = operationProgress(); progress.hidden = !state.allowed || !info;

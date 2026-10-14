@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.1.9";
+const consoleUiVersion = "1.1.10";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
