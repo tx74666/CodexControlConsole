@@ -37,6 +37,8 @@
   Object.assign(copy.en, { displayVersion: "View plugin versions", changedPlugins: "Changed plugins", otherPlugins: "Other plugins", uploadNumber: "Push #{n}", uploadUnknown: "Push #?", uploadHint: "Uploads confirmed by Console; independent plugin versions are listed below.", uploadPending: "Upload count needs verification", pluginDetails: "Plugin versions", processed: "Processed {n}/{total}", succeeded: "Succeeded {n}", skipped: "Skipped {n}", attention: "Needs attention {n}", review: "Unconfirmed {n}", progressWaiting: "Waiting for a progress receipt…", progressLabel: "Repository progress", phaseQueued: "Queued", phaseCheck: "Checking repository", phaseSync: "Syncing work files", phaseRemote: "Checking remote", phaseVersion: "Preparing versions", phaseCommit: "Committing", phasePush: "Uploading", phaseVerify: "Verifying upload", phaseOther: "Processing", uploaded: "Uploaded", deferred: "Deferred", failed: "Failed", verifyRequired: "Unconfirmed", detailsAction: "View this repository's operation details" });
   Object.assign(copy.zh, { historicalReceipt: "历史回执", historicalHint: "此回执未匹配当前仓库目标，保留原结果；不会按新配置重试。", originalTarget: "原上传目标" });
   Object.assign(copy.en, { historicalReceipt: "Historical receipt", historicalHint: "This receipt does not match the current repository target. Its original result is kept; retrying against the new configuration is unavailable.", originalTarget: "Original upload target" });
+  Object.assign(copy.zh, { diagnosis: "原因与下一步", diagnosisRead: "当前读取", diagnosisOperation: "本次执行", diagnosisHistory: "历史执行", diagnosisNext: "下一步", locateSetting: "查看对应设置", recheckRepository: "重新核对此仓库", readingLocal: "读取版本与本地差异…", readingHint: "正在读取本机状态，最多等待 60 秒；不会同步、提交或推送。", updatingLocal: "更新核对中…", readTimeout: "读取已超时", readInvalid: "仓库状态回执不完整", readConnection: "暂时无法读取仓库状态", readNext: "稍后重新核对。原工作、配置与操作回执已保留。", notRead: "此仓库状态尚未核对", notReadNext: "点击重新核对，只读取本机仓库状态。", publishingRead: "上传处理中，结束后可重新核对版本。", waitOperation: "等待原操作完成；不要重复提交。", knownBefore: "显示上次读取结果，当前尚未重新核对。", checkedAt: "上次核对", inspectOriginal: "查看下方原回执。只在确认原目标后继续原请求。", configDraftRead: "配置草稿尚未保存；保留草稿，保存后再核对。" });
+  Object.assign(copy.en, { diagnosis: "Reason and next step", diagnosisRead: "Current check", diagnosisOperation: "Operation receipt", diagnosisHistory: "Historical receipt", diagnosisNext: "Next step", locateSetting: "View the relevant setting", recheckRepository: "Recheck this repository", readingLocal: "Reading versions and local changes…", readingHint: "Reading local state, with a 60-second deadline. No sync, commit or push is performed.", updatingLocal: "Rechecking…", readTimeout: "Read timed out", readInvalid: "Repository receipt is incomplete", readConnection: "Repository state could not be read", readNext: "Recheck later. Your work, configuration and operation receipts are retained.", notRead: "This repository has not been checked", notReadNext: "Recheck to read local repository state only.", publishingRead: "Publishing is active; versions can be rechecked when it finishes.", waitOperation: "Wait for the original operation; do not submit it again.", knownBefore: "Showing the last reading; the current state is not yet rechecked.", checkedAt: "Last checked", inspectOriginal: "Inspect the original receipt below. Continue only after confirming its original target.", configDraftRead: "Configuration has an unsaved draft. Keep it and recheck after saving." });
   const clone = value => JSON.parse(JSON.stringify(value));
   const plain = value => value && typeof value === "object" && !Array.isArray(value);
   const clean = (value, length = 2000) => typeof value === "string" ? value.slice(0, length) : "";
@@ -100,6 +102,7 @@
     state.pendingRequest = storedRequest(); state.notFound = false;
     state.expanded = false; state.configRepoId = null; state.versionBusy = false; state.versionFailed = false; state.versionEpoch = 0; state.catalog = new Map(); state.savedSources = new Map(); state.operatedRepoIds = new Set();
     state.uploadSummaries = new Map(); state.multiBindings = new Set();
+    state.versionReads = new Map(); state.statusReadError = null;
     const controls = [], resultRetries = [], syncDrafts = new Map(), inputPending = new Set();
     const compactRefs = new Map(), configCards = new Map(), configSections = new Map(), planBoxes = new Map();
     const managed = item => { item.setAttribute("data-console-management", ""); return item; };
@@ -123,8 +126,10 @@
     const refreshButton = managed(node("button", "ghost-button")), previewButton = managed(node("button", "ghost-button")); refreshButton.type = previewButton.type = "button";
     const resumeButton = managed(node("button", "ghost-button")); resumeButton.type = "button"; resumeButton.hidden = true;
     const previewHint = node("p", "repository-publish-hint"), previewResult = node("div", "repository-publish-preview");
+    const diagnosisBox = node("div", "repository-publish-diagnosis"), diagnosisHeading = node("strong"), diagnosisSummary = node("p", "repository-publish-diagnosis-summary"), diagnosisNext = node("p", "repository-publish-diagnosis-next"), diagnosisMeta = node("p", "repository-publish-diagnosis-meta"), diagnosisActions = node("div", "repository-publish-diagnosis-actions"), diagnosisLocate = managed(node("button", "ghost-button repository-publish-diagnosis-locate")), diagnosisRecheck = managed(node("button", "ghost-button repository-publish-diagnosis-recheck"));
+    diagnosisLocate.type = diagnosisRecheck.type = "button"; diagnosisBox.hidden = true; diagnosisSummary.id = "repository-publish-reason-" + (uniqueId() || "current"); diagnosisActions.append(diagnosisLocate, diagnosisRecheck); diagnosisBox.append(diagnosisHeading, diagnosisSummary, diagnosisNext, diagnosisMeta, diagnosisActions);
     detail.append(detailSummary, detailStatus, refreshButton, previewButton, resumeButton, previewHint, previewResult, results);
-    form.append(repositories, addButton, namingDetails, warningDetails, detail); dialog.append(header, form); host.append(bar, expanded, dialog);
+    form.append(diagnosisBox, repositories, addButton, namingDetails, warningDetails, detail); dialog.append(header, form); host.append(bar, expanded, dialog);
     const blocked = () => state.postBusy || state.previewBusy || state.serverBusy || Boolean(state.pendingId) || activeStatuses.has(state.operation?.status);
     const enabled = () => (state.settings?.repositories || []).filter(repo => repo.enabled === true);
     function localize(item, key, property = "textContent") { state.localized.push({ item, key, property }); item[property] = text(key); }
@@ -191,7 +196,7 @@
       for (const label of state.localized) label.item[label.property] = text(label.key);
       refreshButton.textContent = text(state.configConflict ? "reloadConfig" : "refresh");
       if (dialog.open) renderWarnings();
-      renderCompactRows(); renderConfigVisibility(); renderVersionPlans();
+      renderCompactRows(); renderConfigVisibility(); renderVersionPlans(); renderDiagnosis();
     }
     function repoName(repo) {
       const url = clean(repo?.repositoryUrl).split(/[?#]/)[0].replace(/\/+$/, ""), match = url.match(/^(?:https:\/\/github\.com\/|git@github\.com:)[^/]+\/([^/]+)$/i);
@@ -202,6 +207,78 @@
     function sourceIdentity(repo, naming = state.settings?.naming) { return JSON.stringify([repo.path, repo.repositoryUrl, repo.remote, repo.branch, repo.versionSources, repo.syncFiles, repo.exclude, repo.versionPlans, naming?.autoBump]); }
     function sourceIdentities(settings) { return new Map(settings.repositories.map(repo => [repo.id, sourceIdentity(repo, settings.naming)])); }
     function catalogFor(repo) { const catalog = state.catalog.get(repo.id); return catalog?.sourceIdentity === sourceIdentity(repo) ? catalog : null; }
+    const diagnosticCategories = new Set(["connection", "sync", "activity", "repository", "versions", "naming", "verification", "authentication", "permissions", "rules", "lfs", "network", "remote", "unknown"]);
+    const diagnosticTargets = new Map([
+      ...[["repo_missing", "path"], ["repo_root", "path"], ["branch_mismatch", "branch"], ["remote_config", "remote"], ["remote_ownership", "repositoryUrl"], ["duplicate_repository", "path"]].map(([code, field]) => [code, ["connection", new Set([field])]]),
+      ...["sync_config", "sync_missing", "sync_writing", "sync_changed"].map(code => [code, ["sync", new Set(["sync"])]]),
+      ...["version_authority", "version_plan_stale", "version_plan_blocked"].map(code => [code, ["versions", new Set(["versionPath"])]]),
+      ["version_fallback", ["naming", new Set(["fallbackTitle"])]]
+    ]);
+    function safeDiagnosticText(value, length = 1200) { return clean(value, length).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, ""); }
+    function normalizedDiagnostic(value) {
+      if (!plain(value) || !/^[a-z][a-z0-9_]{0,79}$/.test(value.code || "") || !["info", "warning", "error"].includes(value.severity) || !safeDiagnosticText(value.summary)) return null;
+      const category = diagnosticCategories.has(value.category) ? value.category : "unknown", allowed = diagnosticTargets.get(value.code);
+      let target = null;
+      if (allowed && category === allowed[0] && plain(value.target) && value.target.section === allowed[0] && allowed[1].has(value.target.field)
+        && (value.target.sourceId === undefined && allowed[0] !== "versions" || typeof value.target.sourceId === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(value.target.sourceId))) {
+        target = { section: allowed[0], field: value.target.field, ...(value.target.sourceId ? { sourceId: value.target.sourceId } : {}) };
+      }
+      return { code: value.code, category, severity: value.severity, summary: safeDiagnosticText(value.summary), nextStep: safeDiagnosticText(value.nextStep), target };
+    }
+    function readFor(repo) { const value = state.versionReads.get(repo.id); return value?.sourceIdentity === sourceIdentity(repo) ? value : null; }
+    function readErrorDiagnostic(error) {
+      return error?.diagnostic || { code: error?.kind === "timeout" ? "read_timeout" : error?.kind === "invalid_response" ? "read_invalid" : "read_unavailable", category: "network", severity: "warning", summary: error?.safeMessage || text(error?.kind === "timeout" ? "readTimeout" : error?.kind === "invalid_response" ? "readInvalid" : "readConnection"), nextStep: text("readNext"), target: null };
+    }
+    function diagnosisFor(repo) {
+      const catalog = catalogFor(repo), reading = readFor(repo), original = state.operation?.results.find(item => item.repoId === repo.id), result = uploadBindingMatches(original?.uploadSummary, repo) ? original : null;
+      const wrap = (diagnostic, origin, metadata = "") => {
+        const target = diagnostic.target, component = target?.section === "versions" && catalog?.components.find(item => item.sourceId === target.sourceId);
+        const located = target?.section !== "versions" || component && repo.versionSources.some(source => source.path === component.path && source.kind === component.kind && source.key === component.key);
+        return { ...diagnostic, target: located ? target : null, origin, metadata, repoId: repo.id, sourceIdentity: sourceIdentity(repo) };
+      };
+      if (reading?.busy) return wrap({ summary: text(catalog ? "updatingLocal" : "readingLocal"), nextStep: text("readingHint"), severity: "info", target: null }, "diagnosisRead", catalog ? text("knownBefore") : "");
+      if (reading?.error) return wrap(readErrorDiagnostic(reading.error), "diagnosisRead", catalog ? text("knownBefore") : "");
+      if (state.statusReadError?.sources.get(repo.id) === sourceIdentity(repo)) return wrap(readErrorDiagnostic(state.statusReadError.error), "diagnosisRead");
+      if (result && activeStatuses.has(result.status)) return wrap(normalizedDiagnostic(result.diagnostic) || { summary: [phaseText(result.phase), safeDiagnosticText(result.message)].filter(Boolean).join(" · "), nextStep: text("waitOperation"), severity: "info", target: null }, "diagnosisOperation");
+      const currentDiagnostic = normalizedDiagnostic(catalog?.diagnostic);
+      if (currentDiagnostic && currentDiagnostic.severity !== "info") return wrap(currentDiagnostic, "diagnosisRead");
+      if (result && (failedRepoStatuses.has(result.status) || reviewRepoStatuses.has(result.status) || result.uploadSummary?.state === "pending")) return wrap(normalizedDiagnostic(result.diagnostic) || { summary: safeDiagnosticText(result.message) || text(result.uploadSummary?.state === "pending" ? "uploadPending" : "repoAttention"), nextStep: text("inspectOriginal"), severity: "warning", target: null }, "diagnosisOperation");
+      if (currentDiagnostic) return wrap(currentDiagnostic, "diagnosisRead");
+      if (catalog) return wrap({ summary: safeDiagnosticText(catalog.message) || safeDiagnosticText(catalog.syncState === "unknown" ? catalog.syncReason : "") || safeDiagnosticText(catalog.components?.find(item => !item.currentVersion && item.reason)?.reason) || safeDiagnosticText(catalog.changesReason) || changeHint(catalog), nextStep: text("notReadNext"), severity: "info", target: null }, "diagnosisRead", reading?.checkedAt ? text("checkedAt") + " · " + reading.checkedAt : "");
+      if (original && !result) return wrap({ summary: text("historicalHint"), nextStep: text("inspectOriginal"), severity: "info", target: null }, "diagnosisHistory");
+      return wrap({ summary: text(blocked() ? "publishingRead" : "notRead"), nextStep: text(state.dirty ? "configDraftRead" : blocked() ? "waitOperation" : "notReadNext"), severity: "info", target: null }, "diagnosisRead");
+    }
+    function renderDiagnosis() {
+      const repo = state.settings?.repositories.find(item => item.id === state.configRepoId);
+      diagnosisBox.hidden = !dialog.open || !repo; if (!repo || !dialog.open) return;
+      const value = diagnosisFor(repo); state.diagnosisPresentation = value;
+      diagnosisHeading.textContent = text("diagnosis"); diagnosisSummary.textContent = value.summary; diagnosisNext.textContent = value.nextStep ? text("diagnosisNext") + " · " + value.nextStep : "";
+      diagnosisNext.hidden = !value.nextStep; diagnosisMeta.textContent = [text(value.origin), value.metadata].filter(Boolean).join(" · "); diagnosisBox.dataset.severity = value.severity;
+      diagnosisLocate.textContent = text("locateSetting"); diagnosisLocate.hidden = !value.target; diagnosisLocate.disabled = !state.allowed;
+      diagnosisRecheck.textContent = text("recheckRepository"); diagnosisRecheck.disabled = blocked() || state.versionBusy || state.readBusy || state.saveBusy || state.dirty || state.invalid.size > 0;
+    }
+    function childrenOf(parent) { return parent ? [parent, ...Array.from(parent.children || []).flatMap(childrenOf)] : []; }
+    function focusDiagnosticTarget(value = state.diagnosisPresentation) {
+      const repo = state.settings?.repositories.find(item => item.id === value?.repoId), target = value?.target;
+      if (!repo || !target || state.destroyed || !state.allowed || !dialog.open || state.configRepoId !== repo.id || value.sourceIdentity !== sourceIdentity(repo)) return;
+      const sections = configSections.get(repo.id); let container, fieldName = target.field;
+      if (target.section === "connection") { container = sections?.connection; if (container) container.open = true; }
+      else if (target.section === "sync") { container = sections?.rules; if (container) container.open = true; }
+      else if (target.section === "versions") {
+        if (sections?.rules) sections.rules.open = true; container = sections?.versions;
+        if (target.sourceId) {
+          const component = catalogFor(repo)?.components.find(item => item.sourceId === target.sourceId);
+          const row = component && childrenOf(container).find(item => item.dataset?.sourcePath === component.path && item.dataset?.sourceKind === component.kind && item.dataset?.sourceKey === component.key);
+          if (!row) { sections?.rules?.children[0]?.focus(); return; } container = row;
+        }
+      } else if (target.section === "naming") { state.diagnosticNaming = true; namingDetails.hidden = false; namingDetails.open = true; container = namingFields; fieldName = target.field === "fallbackTitle" ? "fallback" : target.field; }
+      if (!container) return;
+      const field = childrenOf(container).find(item => item.dataset?.field === fieldName);
+      const focus = field && !field.disabled ? field : container.children[0];
+      if (focus) { if (field) field.setAttribute("aria-describedby", diagnosisSummary.id); focus.scrollIntoView?.({ block: "center" }); focus.focus(); }
+    }
+    diagnosisLocate.addEventListener("click", () => focusDiagnosticTarget());
+    diagnosisRecheck.addEventListener("click", () => { if (!diagnosisRecheck.disabled && state.configRepoId) void readVersions(state.configRepoId); });
     function repoChangeState(catalog) {
       if (!catalog || typeof catalog.hasChanges !== "boolean") return "unknown";
       const expected = catalog.hasChanges ? "changed" : "unchanged";
@@ -268,16 +345,17 @@
     }
     function renderVersionPicker(refs, repo, catalog) {
       const components = catalog?.components || [], multiple = hasMultipleVersions(repo, catalog);
-      if (workspacePanel.hidden || !state.expanded || !state.allowed) refs.picker.open = false;
+      if (workspacePanel.hidden || !state.expanded || !state.allowed || readFor(repo)?.busy) refs.picker.open = false;
       refs.picker.hidden = !multiple;
       if (!multiple) { refs.picker.open = false; if (refs.version.parentElement !== refs.cell) refs.cell.append(refs.version); return; }
       if (refs.version.parentElement !== refs.summary) refs.summary.append(refs.version, refs.arrow);
       refs.summary.setAttribute("aria-label", [refs.version.textContent, text("displayVersion")].join(" · "));
       const uploaded = uploadSummary(repo, catalog);
-      const signature = JSON.stringify([language(), displayIdentity(repo), components, state.settings.naming.autoBump, uploaded]);
+      const reading = readFor(repo), signature = JSON.stringify([language(), displayIdentity(repo), components, state.settings.naming.autoBump, uploaded, Boolean(reading?.busy), Boolean(reading?.error)]);
       if (signature === refs.menuSignature) return;
       refs.menuSignature = signature; refs.picker.open = false; refs.menu.replaceChildren();
       refs.menu.append(node("h4", "repository-publish-version-group", text("pluginDetails")));
+      if (catalog && (reading?.busy || reading?.error)) refs.menu.append(node("p", "repository-publish-version-note", text("knownBefore")));
       if (!components.length) refs.menu.append(node("p", "repository-publish-version-note", text(state.versionBusy ? "loading" : "versionPending")));
       const changed = components.filter(componentChanged), others = components.filter(item => !componentChanged(item));
       for (const [key, items] of [["changedPlugins", changed], ["otherPlugins", others]]) {
@@ -305,11 +383,11 @@
           picker.addEventListener("toggle", () => { if (picker.open) for (const other of compactRefs.values()) if (other !== refs) other.picker.open = false; });
           picker.addEventListener("keydown", event => { if (event.key === "Escape" && picker.open) { event.preventDefault(); picker.open = false; summary.focus(); } });
           configure.addEventListener("click", () => open(repo.id));
-          status.addEventListener("click", () => { if (!state.destroyed && state.allowed) { open(repo.id); detail.open = true; renderResults(); } });
+          status.addEventListener("click", () => { if (!state.destroyed && state.allowed) { open(repo.id, { diagnose: true }); detail.open = Boolean(state.operation?.results.some(item => item.repoId === repo.id)); renderResults(); dialog.scrollTop = 0; } });
         }
         const originalResult = state.operation?.results.find(item => item.repoId === repo.id);
         const result = uploadBindingMatches(originalResult?.uploadSummary, repo) ? originalResult : null;
-        const catalog = catalogFor(repo), changeState = repoChangeState(catalog);
+        const catalog = catalogFor(repo), reading = readFor(repo), changeState = reading?.busy || reading?.error ? "unknown" : repoChangeState(catalog), diagnostic = normalizedDiagnostic(catalog?.diagnostic);
         refs.name.textContent = repoName(repo); refs.version.textContent = versionSummary(repo); refs.version.dataset.changeState = changeState;
         refs.version.title = [refs.version.textContent, hasMultipleVersions(repo, catalog) ? text("uploadHint") : changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
         renderVersionPicker(refs, repo, catalog);
@@ -318,37 +396,44 @@
             : result && skippedRepoStatuses.has(result.status) ? text("repoNoChanges")
               : result && reviewRepoStatuses.has(result.status) ? text("verifyRequired")
                 : result && failedRepoStatuses.has(result.status) ? text(result.status === "deferred" ? "deferred" : "failed")
-                  : catalog ? changeHint(catalog) : text(state.versionBusy ? "loading" : "changeUnknown");
+                  : reading?.busy ? text(catalog ? "updatingLocal" : "readingLocal") : reading?.error ? readErrorDiagnostic(reading.error).summary
+                    : diagnostic && diagnostic.severity !== "info" ? text("repoAttention") : catalog ? changeHint(catalog) : text(blocked() ? "publishingRead" : "notRead");
         refs.status.dataset.changeState = changeState;
-        refs.status.dataset.status = originalResult && !result ? "historical" : clean(result?.status, 60); refs.status.disabled = !state.allowed || !originalResult;
-        refs.status.title = [text("detailsAction"), originalResult && !result ? text("historicalHint") : clean(result?.message, 500)].filter(Boolean).join(" · "); refs.configure.textContent = text("config"); refs.configure.disabled = !state.allowed;
+        refs.status.dataset.status = originalResult && !result ? "historical" : clean(result?.status, 60); refs.status.disabled = !state.allowed;
+        refs.status.title = [text("diagnosis"), diagnosisFor(repo).summary, reading?.busy && catalog ? text("knownBefore") : ""].filter(Boolean).join(" · "); refs.configure.textContent = text("config"); refs.configure.disabled = !state.allowed;
       }
     }
     function renderConfigVisibility() {
       for (const [id, card] of configCards) { card.children[0].textContent = repoName(state.settings?.repositories.find(repo => repo.id === id)); card.hidden = Boolean(state.configRepoId && id !== state.configRepoId); if (state.configRepoId === id) card.open = true; }
-      addButton.hidden = Boolean(state.configRepoId); namingDetails.hidden = Boolean(state.configRepoId);
+      addButton.hidden = Boolean(state.configRepoId); namingDetails.hidden = Boolean(state.configRepoId && !state.diagnosticNaming);
       if (state.configRepoId) warningDetails.hidden = true;
     }
-    async function readVersions() {
+    async function readVersions(repoId = null) {
       if (state.destroyed || !state.allowed || !state.settings || state.versionBusy || workspacePanel.hidden || blocked()) return;
       if (state.dirty || state.saveBusy) { state.needsVersionsRead = true; return; }
-      const sources = sourceIdentities(state.settings), epoch = state.versionEpoch;
-      state.versionBusy = true; state.versionFailed = false; state.needsVersionsRead = false; state.catalog.clear(); render();
+      const selected = state.settings.repositories.filter(repo => !repoId || repo.id === repoId); if (!selected.length) return;
+      const sources = sourceIdentities(state.settings), epoch = state.versionEpoch, reads = new Map(selected.map(repo => [repo.id, { sourceIdentity: sources.get(repo.id), busy: true, error: null, checkedAt: readFor(repo)?.checkedAt || "" }]));
+      for (const [id, reading] of reads) state.versionReads.set(id, reading);
+      state.versionBusy = true; state.versionFailed = false; state.needsVersionsRead = false; render();
       try {
-        const value = await request("/versions"); if (state.destroyed) return;
+        const value = await request("/versions" + (repoId ? "?repoId=" + encodeURIComponent(repoId) : "")); if (state.destroyed) return;
         if (state.versionEpoch !== epoch) { state.needsVersionsRead = true; return; }
-        state.catalog = new Map();
-        for (const item of Array.isArray(value.repositories) ? value.repositories : []) {
-          const repo = state.settings.repositories.find(repo => repo.id === item?.repoId);
-          if (plain(item) && repo && sources.get(repo.id) === sourceIdentity(repo)) {
+        if (!Array.isArray(value.repositories)) { const error = new Error("invalid_versions_receipt"); error.kind = "invalid_response"; throw error; }
+        for (const selectedRepo of selected) {
+          const repo = state.settings.repositories.find(repo => repo.id === selectedRepo.id), items = value.repositories.filter(item => plain(item) && item.repoId === selectedRepo.id);
+          if (repo && sources.get(repo.id) === sourceIdentity(repo) && items.length === 1 && Array.isArray(items[0].components)) {
+            const item = items[0];
             const components = Array.isArray(item.components) ? clone(item.components.filter(plain)) : [];
             if (components.length > 1) state.multiBindings.add(displayIdentity(repo));
             else if (components.length === 1 || item.versionState === "missing") state.multiBindings.delete(displayIdentity(repo));
             state.catalog.set(repo.id, { ...clone(item), sourceIdentity: sources.get(repo.id), components });
+            reads.get(repo.id).checkedAt = new Date().toISOString();
+          } else if (repo && sources.get(repo.id) === sourceIdentity(repo)) {
+            const error = new Error("invalid_repository_receipt"); error.kind = "invalid_response"; reads.get(repo.id).error = error; state.versionFailed = true;
           }
         }
-      } catch { state.versionFailed = true; }
-      finally { state.versionBusy = false; render(); readCompletedSettings(); }
+      } catch (error) { if (epoch === state.versionEpoch) { state.versionFailed = true; for (const reading of reads.values()) reading.error = error; } else state.needsVersionsRead = true; }
+      finally { for (const reading of reads.values()) reading.busy = false; state.versionBusy = false; render(); readCompletedSettings(); }
     }
     function renderVersionPlans() {
       for (const repo of state.settings?.repositories || []) {
@@ -387,16 +472,22 @@
     }
     async function request(path = "", body) {
       const controller = new AbortController();
-      const timeoutMs = body === undefined ? path === "/versions" ? 60000 : 10000 : 20000;
+      const timeoutMs = body === undefined ? path.split("?")[0] === "/versions" ? 60000 : 10000 : 20000;
       const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+      let response;
       try {
-        const response = await window.fetch(BASE + path, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", referrerPolicy: "same-origin", headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal });
+        response = await window.fetch(BASE + path, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", referrerPolicy: "same-origin", headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal });
         const value = await response.json();
         if (!response.ok || !plain(value) && !(value === null && body === undefined && path.startsWith("/operation?"))) {
           const error = new Error(path === "/config" && (response.status === 409 || value?.code === "settings_changed") ? "configConflict" : "request_failed");
+          error.kind = response.ok ? "invalid_response" : "http"; error.httpStatus = response.status;
+          error.safeMessage = safeDiagnosticText(value?.error); error.code = clean(value?.code, 80); error.diagnostic = normalizedDiagnostic(value?.diagnostic);
           throw error;
         }
         return value;
+      } catch (error) {
+        if (!error.kind) error.kind = controller.signal.aborted ? "timeout" : response ? "invalid_response" : "network";
+        throw error;
       } finally { window.clearTimeout(timer); }
     }
     function stopPoll() { if (state.pollTimer) window.clearTimeout(state.pollTimer); state.pollTimer = 0; }
@@ -437,14 +528,15 @@
     }
     async function readStatus(reloadDraft = false) {
       if (state.destroyed || state.readBusy || state.postBusy || state.saveBusy) return;
-      const edit = state.edit;
+      const edit = state.edit, sourcesAtRead = state.settings ? sourceIdentities(state.settings) : new Map();
       state.readBusy = true; render();
       try {
         const value = await request(); if (state.destroyed) return;
+        state.statusReadError = null;
         state.allowed = value.allowed === true; state.serverBusy = value.busy === true;
         state.warnings = Array.isArray(value.warnings) ? value.warnings.slice(0, 100) : [];
         if ((!state.dirty || reloadDraft) && state.edit === edit) {
-          if (!plain(value.settings) || !/^[a-f0-9]{64}$/.test(value.settingsSha)) throw new Error("settings_receipt_missing");
+          if (!plain(value.settings) || !/^[a-f0-9]{64}$/.test(value.settingsSha)) { const error = new Error("settings_receipt_missing"); error.kind = "invalid_response"; throw error; }
           const saved = normalized(value.settings), sources = sourceIdentities(saved);
           if (state.settings && Array.from(sources).some(([id, identity]) => state.savedSources.get(id) !== identity)) { state.versionEpoch++; state.catalog.clear(); state.needsVersionsRead = true; previewResult.replaceChildren(); }
           state.settings = saved; state.settingsSha = value.settingsSha; state.savedSources = sources;
@@ -456,7 +548,7 @@
         const accepted = value.operation && acceptOperation(value.operation);
         if (!accepted && !state.dirty) { state.error = ""; state.notice = ""; }
         if (state.pendingId) schedulePoll();
-      } catch { state.error = "readFailed"; }
+      } catch (error) { state.error = "readFailed"; state.statusReadError = { error, sources: sourcesAtRead }; }
       finally { state.readBusy = false; render(); readCompletedSettings(); }
     }
     function readCompletedSettings() {
@@ -554,6 +646,7 @@
         const hint = node("p", "repository-publish-hint"); localize(hint, "syncHint"); ruleFields.append(hint);
         field(ruleFields, "excludes", repo.exclude.join("\n"), value => { repo.exclude = value.split(/\r?\n/).map(line => line.trim()).filter(Boolean); }, { multiline: true });
         const versionBox = node("div", "repository-publish-version-list"), versionHeading = node("h4"), versionButton = managed(node("button", "ghost-button")); versionButton.type = "button"; localize(versionHeading, "versions"); localize(versionButton, "addVersion"); controls.push(versionButton); rules.append(versionHeading, versionBox, versionButton);
+        configSections.get(repo.id).versions = versionBox;
         function versions() {
           for (let i = controls.length - 1; i >= 0; i--) if (versionBox.contains(controls[i])) controls.splice(i, 1);
           for (const invalid of state.invalid) if (versionBox.contains(invalid)) state.invalid.delete(invalid);
@@ -561,7 +654,7 @@
           state.localized = state.localized.filter(label => !versionBox.contains(label.item));
           versionBox.replaceChildren();
           for (const source of repo.versionSources) {
-            const row = node("div", "repository-publish-version-row"); versionBox.append(row);
+            const row = node("div", "repository-publish-version-row"); row.dataset.sourcePath = source.path; row.dataset.sourceKind = source.kind; row.dataset.sourceKey = source.key; versionBox.append(row);
             const formats = ["json", "xml", "unity", "unity_yaml", "python_ast", "text", "git_commit"];
             if (typeof source.kind === "string" && source.kind && !formats.includes(source.kind)) formats.push(source.kind);
             const inputs = new Map(), originHint = node("p", "repository-publish-hint repository-publish-version-origin");
@@ -662,13 +755,15 @@
       } catch { state.error = "previewFailed"; }
       finally { state.previewBusy = false; render(); if (state.dirty) void save(); }
     }
-    function open(repoId = null) {
+    function open(repoId = null, options = {}) {
       if (!state.allowed || state.destroyed) return;
       const selected = typeof repoId === "string" && state.settings?.repositories.some(repo => repo.id === repoId) ? repoId : null;
       if (selected !== state.configRepoId) previewResult.replaceChildren();
+      state.diagnosticNaming = false;
       state.configRepoId = selected;
       state.returnFocus = document.activeElement; if (state.settings && !dialog.open && !state.dirty) renderConfig();
-      if (!dialog.open) dialog.showModal(); renderResults(); render(); void readVersions(); if (state.pendingId) void poll(); else void readStatus();
+      if (!dialog.open) dialog.showModal(); renderResults(); render();
+      if (options.diagnose !== true) { void readVersions(); if (state.pendingId) void poll(); else void readStatus(); }
     }
     runButton.addEventListener("click", () => void run()); configButton.addEventListener("click", () => open()); closeButton.addEventListener("click", () => dialog.close());
     toggleButton.addEventListener("click", () => { if (!state.allowed || state.destroyed) return; state.expanded = !state.expanded; render(); if (state.expanded) void readVersions(); });
@@ -689,7 +784,7 @@
     }
     async function recheckVisible() {
       if (recheckBusy || !canRecheckVisible()) return;
-      recheckBusy = true; state.versionEpoch++; state.catalog.clear(); render();
+      recheckBusy = true; state.versionEpoch++; render();
       try {
         await readStatus();
         if (canRecheckVisible() && !state.error) await readVersions();

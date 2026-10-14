@@ -5,18 +5,22 @@ from contextlib import closing
 import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
 import sqlite3
 import stat
 import subprocess
+import time
 from console_repository_versions import VersionPlanError, parse_commit_history
 
 _URL = re.compile(r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 _VERSION = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _ACTIVE = {"pending", "claimed", "queued", "starting", "running", "working", "cancelling", "needs_review", "waiting"}
 _TERMINAL = {"completed", "succeeded", "success", "noop", "failed", "interrupted", "cancelled", "closed", "idle"}
+_BOOT_UNSET = object()
+_HISTORICAL_BOOT_MARGIN = 300
 
 
 def _path(value):
@@ -41,7 +45,7 @@ def _overlap(left, right):
     try:
         a, b = _path(left), _path(right)
         return a == b or a.is_relative_to(b) or b.is_relative_to(a)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, RuntimeError):
         return False
 
 
@@ -162,14 +166,78 @@ def rollout_activity(path, max_bytes=4 * 1024 * 1024):
             if not offset or budget >= max_bytes:
                 return {"state": "unknown", "reason": "no_boundary_in_bounded_tail", "bytesRead": len(raw)}
             budget = min(max_bytes, budget * 2)
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return {"state": "unknown", "reason": "rollout_unavailable", "unavailableKind": "missing"}
+    except (OSError, ValueError, TypeError, RuntimeError):
         return {"state": "unknown", "reason": "rollout_unavailable"}
 
 
-def desktop_codex_activity(root, state_paths=None):
-    """Inspect actual schema and nonarchived matching cwd; omit titles and all text."""
+def _trusted_windows_boot_epoch():
+    """Current Windows uptime + OS epoch; no age heuristic on other platforms."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetTickCount64.argtypes = []
+        kernel.GetTickCount64.restype = ctypes.c_ulonglong
+        wall_before = time.time()
+        tick_before = kernel.GetTickCount64()
+        wall_after = time.time()
+        tick_after = kernel.GetTickCount64()
+        if (tick_after < tick_before or not tick_after or wall_after < wall_before
+                or wall_after - wall_before > 1 or tick_after - tick_before > 1000):
+            return None  # Changing clock / slow sample cannot establish a boundary.
+        return wall_before - tick_after / 1000  # Conservative lower bound.
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _epoch(value):
+    try:
+        return value if type(value) in {int, float} and math.isfinite(value) and value > 0 else None
+    except OverflowError:
+        return None
+
+
+def _verified_missing_rollout(path):
+    """Recheck absence, including all existing parents; uncertainty stays current."""
+    try:
+        if not Path(path).expanduser().is_absolute():
+            return False
+        p = _unredirected(path)
+        p.lstat()
+        return False  # A file, directory or link now exists; recheck on next call.
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _historical_unavailable(activity, rollout, created, updated, boot, now):
+    if (activity.get("state") != "unknown" or activity.get("reason") != "rollout_unavailable"
+            or activity.get("unavailableKind") != "missing"):
+        return False
+    created, updated, boot = _epoch(created), _epoch(updated), _epoch(boot)
+    return (created is not None and updated is not None and boot is not None
+            and created <= now and updated <= now and boot <= now
+            and max(created, updated) < boot - _HISTORICAL_BOOT_MARGIN
+            and _verified_missing_rollout(rollout))
+
+
+def desktop_codex_activity(root, state_paths=None, *, trusted_boot_epoch=_BOOT_UNSET):
+    """Current candidates plus separately retained, unverified preboot history.
+
+    A missing old rollout is never called idle. Only exact FileNotFound evidence,
+    valid creation/update epochs before a trusted current OS boot (300s margin)
+    and a second unredirected absence check permit the historical bucket. Existing
+    files always retain the original typed-boundary gates, regardless of age.
+    The explicit boot injection is for isolated fixtures; no environment switch.
+    """
     paths = list(state_paths) if state_paths is not None else list((Path.home() / ".codex").glob("state_*.sqlite"))
-    records, warnings = [], []
+    boot = _trusted_windows_boot_epoch() if trusted_boot_epoch is _BOOT_UNSET else trusted_boot_epoch
+    now = time.time()
+    records, warnings, historical = [], [], []
     if not paths:
         warnings.append({"code": "desktop_codex_state_unavailable"})
     for database in paths:
@@ -181,17 +249,39 @@ def desktop_codex_activity(root, state_paths=None):
                     warnings.append({"code": "desktop_codex_schema_unverified", "database": str(p)})
                     continue
                 order = " ORDER BY updated_at DESC" if "updated_at" in columns else ""
-                rows = db.execute("SELECT id,cwd,rollout_path FROM threads WHERE archived=0" + order).fetchall()
-            for ident, cwd, rollout in rows:
+                created = "created_at" if "created_at" in columns else "NULL"
+                updated = "updated_at" if "updated_at" in columns else "NULL"
+                query = "SELECT id,cwd,rollout_path," + created + "," + updated + " FROM threads WHERE archived=0"
+                rows = db.execute(query + order).fetchall()
+            candidates = []
+            for ident, cwd, rollout, created_at, updated_at in rows:
                 if cwd and _overlap(root, cwd):
                     activity = rollout_activity(rollout)
-                    records.append({"threadId": ident, "cwd": str(_path(cwd)), **activity})
-                    # Actual active evidence is already sufficient to defer publication.
+                    record = {"threadId": ident, "cwd": str(_path(cwd)), **activity}
+                    if _historical_unavailable(activity, rollout, created_at, updated_at, boot, now):
+                        record.update(createdAt=created_at, updatedAt=updated_at, trustedBootEpoch=boot,
+                                      bootMarginSeconds=_HISTORICAL_BOOT_MARGIN,
+                                      historicalReason="preboot_missing_rollout_state_unverified")
+                        candidates.append((record, (ident, cwd, rollout, created_at, updated_at)))
+                    else:
+                        records.append(record)
+                    # Existing active evidence always blocks, even with old epochs.
                     if activity["state"] == "active":
-                        return {"records": records, "warnings": warnings}
+                        records.extend(record for record, _ in candidates)
+                        return {"records": records, "warnings": warnings, "historicalUnavailableRecords": historical}
+            if candidates:
+                # Do not hide a row whose runtime metadata changed during our read.
+                with closing(sqlite3.connect(p.as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+                    current = {row[0]: row for row in db.execute(query).fetchall()}
+                for record, before in candidates:
+                    if current.get(before[0]) == before and _verified_missing_rollout(before[2]):
+                        historical.append(record)
+                    else:
+                        record["reason"] = "desktop_record_or_rollout_changed_during_read"
+                        records.append(record)
         except (OSError, ValueError, sqlite3.Error):
             warnings.append({"code": "desktop_codex_state_unreadable", "database": str(database)})
-    return {"records": records, "warnings": warnings}
+    return {"records": records, "warnings": warnings, "historicalUnavailableRecords": historical}
 
 
 def _record_roots(record):

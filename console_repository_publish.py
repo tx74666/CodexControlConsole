@@ -41,18 +41,106 @@ _DEFAULT_NAMING = {"preset": "version", "fallbackTitle": "更新进度 {datetime
 _LIVE = {}
 
 
+# Diagnostics are presentation metadata, never a recovery instruction or a
+# configuration mutation. Codes come from explicit guards / sanitized Git codes;
+# message text (including changesReason and syncReason) is not a classifier.
+_DIAGNOSTICS = {
+    "repo_missing": ("connection", "error", "在配置中核对本地仓库根目录，然后重新核对。", ("connection", "path")),
+    "repo_root": ("connection", "warning", "选择真实仓库根目录，然后重新核对。", ("connection", "path")),
+    "branch_mismatch": ("connection", "warning", "核对当前分支与目标分支；保留工作后自行处理，再重新核对。", ("connection", "branch")),
+    "remote_config": ("connection", "warning", "核对远端名称及其读取和推送地址，然后重新核对。", ("connection", "remote")),
+    "remote_ownership": ("connection", "error", "核对本地读取、推送和配置地址的仓库归属，然后重新核对。", ("connection", "repositoryUrl")),
+    "duplicate_repository": ("connection", "warning", "在配置中保留该 Git 仓库的一个启用入口，再重新核对。", ("connection", "path")),
+    "sync_config": ("sync", "warning", "核对已明确配置的工作文件同步映射与清单，再重新核对。", ("sync", "sync")),
+    "sync_missing": ("sync", "warning", "保存并确认配置的来源文件存在，再重新核对。", ("sync", "sync")),
+    "sync_writing": ("sync", "warning", "等待工作文件保存完成，确认来源与目标后重新核对。", ("sync", "sync")),
+    "sync_changed": ("sync", "warning", "核对来源和目标的最新已保存内容，再重新核对；保留现有修改。", ("sync", "sync")),
+    "activity_unconfirmed": ("activity", "warning", "先确认或完成该仓库相关的 Codex 工作，再重新核对；活动边界尚不能安全确认。", None),
+    "git_history_operation": ("repository", "warning", "在该仓库完成或按原意取消现有 Git 历史操作，再重新核对。", None),
+    "git_lock": ("repository", "warning", "确认原 Git 操作已完成后重新核对；保留原锁和工作。", None),
+    "staged_selection": ("repository", "warning", "先按原意处理已有暂存选择，再重新核对；当前选择会保留。", None),
+    "merge_conflict": ("repository", "warning", "在仓库中处理现有冲突并完成相关 Git 操作，再重新核对。", None),
+    "worktree_changed": ("repository", "warning", "确认相关工作与保存已完成，重新预览并核对原提交。", None),
+    "version_authority": ("versions", "warning", "核对该组件的权威版本来源和关联声明，再重新核对。", ("versions", "versionPath")),
+    "version_plan_stale": ("versions", "warning", "重新读取当前版本，在配置中核对过期的版本计划。", ("versions", "versionPath")),
+    "version_plan_blocked": ("versions", "warning", "重新读取版本，核对提示涉及的实际组件和版本来源；不会猜测或再次升版。", ("versions", "versionPath")),
+    "version_fallback": ("naming", "info", "可继续使用已记住的备用标题；需要时在配置中补充权威版本来源。", ("naming", "fallbackTitle")),
+    "destination_changed": ("verification", "warning", "核对保留记录中的原目标与当前配置；确认原目标后再重试原提交。", None),
+    "receipt_unverified": ("verification", "warning", "核对保留的上传或提交记录及远端；重试会先核验原提交。", None),
+    "operation_interrupted": ("verification", "warning", "确认相关工作已完成后重试；先核对保留的原提交与操作记录。", None),
+    "background_unavailable": ("activity", "warning", "稍后重新核对并重试；此请求尚未开始提交或推送。", None),
+    "git_authentication": ("authentication", "error", "核对现有 Git 凭证的登录状态和仓库访问权限，再重试原提交。", None),
+    "git_permissions": ("permissions", "error", "核对当前账号的仓库权限，再重试原提交。", None),
+    "git_rules": ("rules", "warning", "核对 Git hook 或远端分支规则的拒绝原因，处理后重试原提交。", None),
+    "git_lfs": ("lfs", "error", "核对 Git LFS 安装、相关对象及认证，处理后重试原提交。", None),
+    "git_timeout": ("network", "warning", "确认网络及原 Git 操作状态；重试先核对远端是否收到原提交。", None),
+    "git_missing": ("repository", "error", "确认本机 Git 可用，再重新核对。", None),
+    "git_unavailable": ("repository", "warning", "确认本机 Git 能正常运行，再重新核对。", None),
+    "remote_changed": ("remote", "warning", "重新核对远端和本地历史；需要整合时自行处理后重试原提交。", None),
+    "remote_ahead": ("remote", "warning", "在仓库中核对并自行整合远端领先或分叉的历史，再重试原提交。", None),
+    "manual_check": ("unknown", "warning", "先核对原安全提示、仓库与保留记录；确认相关工作完成后重新核对。", None),
+}
+_GIT_DIAGNOSTIC_CODES = {"authentication": "git_authentication", "permissions": "git_permissions",
+                         "rules": "git_rules", "lfs": "git_lfs", "timeout": "git_timeout",
+                         "missing_git": "git_missing", "git_unavailable": "git_unavailable",
+                         "remote_changed": "remote_changed", "remote_config": "remote_config"}
+
+
+def _make_diagnostic(code, summary, *, source_id=None):
+    code = code if code in _DIAGNOSTICS else "manual_check"
+    category, severity, next_step, location = _DIAGNOSTICS[code]
+    target = {"section": location[0], "field": location[1]} if location else None
+    if target and target["section"] == "versions":
+        # A version control is addressable only with a known actual authority.
+        target = {**target, "sourceId": source_id} if isinstance(source_id, str) and source_id else None
+    return {"code": code, "category": category, "severity": severity,
+            "summary": str(summary), "nextStep": next_step, "target": target}
+
+
 class RepositoryPublishError(ValueError):
     """A sanitized, user-facing validation error."""
 
-    def __init__(self, message, *, code=""):
+    def __init__(self, message, *, code="", source_id=None):
         super().__init__(message)
         self.code = code
+        self.diagnostic = _make_diagnostic(code, message, source_id=source_id)
 
 
 class _GitFailure(Exception):
     def __init__(self, code, detail="", returncode=None):
         super().__init__(code)
         self.code, self.detail, self.returncode = code, detail, returncode
+
+
+def _git_error_category(stderr):
+    """Recognize error receipts, never words inside a path, URL or progress text.
+
+    Unknown output stays generic. The raw stderr is not included in diagnostics,
+    operation messages or durable receipts, and Git behavior is unchanged.
+    """
+    patterns = (
+        ("lfs", (r"^(?:error:\s*)?(?:git lfs upload failed|lfs upload failed|batch (?:request|response):)",
+                 r"^(?:fatal|error):\s*(?:external filter ['\"]git-lfs[^\n]*['\"] failed|smudge filter lfs failed)",
+                 r"^git-lfs(?: filter-process)?:[^\n]*(?:not found|not recognized|failed|error)",
+                 r"^git:\s*['\"]lfs['\"] is not a git command\b",
+                 r"^fatal:[^\n]*:\s*smudge filter lfs failed\b",
+                 r"^remote:\s*(?:error:\s*)?gh008:")),
+        ("authentication", (r"^(?:fatal|error):\s*authentication (?:failed|is required|required)\b",
+                            r"^fatal:\s*unable to access ['\"][^'\"\r\n]+['\"]:\s*the requested url returned error:\s*401\s*$",
+                            r"^fatal:\s*could not read (?:username|password) for ",
+                            r"^[^\n]*:\s*permission denied \(publickey(?:,[^)]+)?\)\.?$",
+                            r"^(?:fatal:\s*)?no supported authentication methods available\b")),
+        ("permissions", (r"^fatal:[^\n]*requested url returned error:\s*403\b",
+                         r"^remote:\s*(?:error:\s*)?(?:write access to repository not granted|permission to .+ denied to .+|access denied)\b")),
+        ("rules", (r"^remote:\s*(?:error:\s*)?(?:gh013:|gh006:|protected branch update failed\b|repository rule violations found\b)",
+                   r"^\s*!\s*\[remote rejected\][^\n]*\((?:pre-receive hook declined|hook declined|protected branch hook declined|repository rule[^)]*)\)")),
+        ("remote_changed", (r"^\s*!\s*\[rejected\][^\n]*\((?:non-fast-forward|fetch first|stale info)\)",)),
+        ("remote_config", (r"^error:\s*no such remote ['\"][^'\"\r\n]+['\"]\.?\s*$",)),
+    )
+    for category, receipts in patterns:
+        if any(re.search(pattern, stderr, re.MULTILINE | re.IGNORECASE) for pattern in receipts):
+            return category
+    return "git_failed"
 
 
 def _sha(data):
@@ -86,9 +174,9 @@ def _read(path, default=None):
     except FileNotFoundError:
         return default
     except (OSError, ValueError) as exc:
-        raise RepositoryPublishError("发布记录损坏或不可读，请保留记录后核对；不会重新提交。") from exc
+        raise RepositoryPublishError("发布记录损坏或不可读，请保留记录后核对；不会重新提交。", code="receipt_unverified") from exc
     if not isinstance(value, dict):
-        raise RepositoryPublishError("发布记录格式错误，请先核对；不会重新提交。")
+        raise RepositoryPublishError("发布记录格式错误，请先核对；不会重新提交。", code="receipt_unverified")
     return value
 
 
@@ -157,7 +245,7 @@ def _stable(path):
     after = path.stat()
     key = lambda s: (s.st_size, s.st_mtime_ns, s.st_ctime_ns, s.st_ino)
     if key(before) != key(after):
-        raise RepositoryPublishError("文件正在写入，请保存完成后重试。")
+        raise RepositoryPublishError("文件正在写入，请保存完成后重试。", code="worktree_changed")
     return {"bytes": after.st_size, "sha256": digest.hexdigest()}
 
 
@@ -182,7 +270,7 @@ def _read_lease(path):
     if handle == ctypes.c_void_p(-1).value:
         code = ctypes.get_last_error()
         if code in {32, 33}:
-            raise RepositoryPublishError("文件仍有写入句柄，请等待保存完成；不会关闭应用。")
+            raise RepositoryPublishError("文件仍有写入句柄，请等待保存完成；不会关闭应用。", code="worktree_changed")
         raise OSError(code, "Unable to hold read lease")
     try:
         yield
@@ -246,7 +334,7 @@ def _file_lock(path):
                 import fcntl
                 fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
-            raise RepositoryPublishError("另一处正在操作该仓库，请等待完成。") from exc
+            raise RepositoryPublishError("另一处正在操作该仓库，请等待完成。", code="git_lock") from exc
         try:
             yield
         finally:
@@ -356,10 +444,7 @@ class RepositoryPublishService:
             raise _GitFailure("git_unavailable") from exc
         if process.returncode:
             text = process.stderr.decode("utf-8", "replace").lower()
-            category = ("lfs" if "lfs" in text else "authentication" if any(v in text for v in ("authentication", "could not read username", "terminal prompts disabled", "publickey"))
-                        else "permissions" if any(v in text for v in ("permission denied", "403", "access denied"))
-                        else "rules" if any(v in text for v in ("protected branch", "repository rule", "gh013", "hook declined", "pre-receive"))
-                        else "remote_changed" if any(v in text for v in ("non-fast-forward", "fetch first", "stale info")) else "git_failed")
+            category = _git_error_category(text)
             raise _GitFailure(category, returncode=process.returncode)
         return process.stdout
 
@@ -613,14 +698,16 @@ class RepositoryPublishService:
             for mapping, source, target, proof in records:
                 target_proof = _stable(target) if target.exists() else None
                 if _stable(source) != proof:
-                    raise RepositoryPublishError("同步来源正在写入，请保存后重试。")
+                    raise RepositoryPublishError("同步来源正在写入，请保存后重试。", code="sync_writing")
                 if target_proof != proof:
                     result["syncDifferences"].append(mapping["target"])
             result.update(syncChanged=bool(result["syncDifferences"]),
                           syncState="changed" if result["syncDifferences"] else "unchanged",
                           syncReason="已保存工作文件与仓库快照不同；执行时先同步再确定本次版本。" if result["syncDifferences"] else "已保存工作文件与仓库快照相同。")
         except (RepositoryPublishError, OSError) as exc:
-            result.update(syncChanged=None, syncState="unknown", syncReason=self._error(exc), syncDifferences=[])
+            if isinstance(exc, RepositoryPublishError) and exc.code == "worktree_changed":
+                exc = RepositoryPublishError(str(exc), code="sync_writing")
+            result.update(syncChanged=None, syncState="unknown", syncReason=self._error(exc), syncDifferences=[], diagnostic=self._diagnostic(exc))
         return result
 
     def _local_changes(self, repo, context):
@@ -672,7 +759,7 @@ class RepositoryPublishService:
                 result.update(outgoingCommits=int(outgoing), outgoingBaselineSha=baseline, outgoingBaselineSource=baseline_source)
             result.update(self._saved_sync_changes(repo, root))
             if self._text(root, "rev-parse", "HEAD") != head or self._git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames") != status:
-                raise RepositoryPublishError("读取差异期间工作树或 HEAD 已变化。")
+                raise RepositoryPublishError("读取差异期间工作树或 HEAD 已变化。", code="worktree_changed")
             if result["worktreeChanged"] or result["syncChanged"] is True or result["outgoingCommits"] is not None and result["outgoingCommits"] > 0:
                 result.update(hasChanges=True, changeState="changed")
             elif result["outgoingCommits"] == 0 and result["syncChanged"] is False:
@@ -682,7 +769,7 @@ class RepositoryPublishService:
             if result["syncState"] in {"changed", "unknown"}:
                 result["changesReason"] += " " + result["syncReason"]
         except (RepositoryPublishError, _GitFailure, OSError) as exc:
-            result.update(hasChanges=None, changeState="unknown", worktreeChanged=None, changedFiles=[], changesReason=self._error(exc))
+            result.update(hasChanges=None, changeState="unknown", worktreeChanged=None, changedFiles=[], changesReason=self._error(exc), diagnostic=self._diagnostic(exc))
         return result
 
     def _version_details(self, repo, context):
@@ -706,16 +793,16 @@ class RepositoryPublishService:
                 if companion_path.encode("utf-8") in names:
                     component.update(canBump=False, companionState="blocked", reason="原 Blender 插件的另一版本声明已缺失，请协调一致；不会只升剩下的一份。")
             if any(entry["headSha"] != head for entry in component.get("consoleResourceEvidence", [])):
-                raise RepositoryPublishError("读取 Console 资源和版本期间 HEAD 已变化。")
+                raise RepositoryPublishError("读取 Console 资源和版本期间 HEAD 已变化。", code="worktree_changed")
             if any(entry["headSha"] != head for entry in component.get("applicationCompanionEvidence", {}).get("files", [])):
-                raise RepositoryPublishError("读取同一应用关联版本期间 HEAD 已变化。")
+                raise RepositoryPublishError("读取同一应用关联版本期间 HEAD 已变化。", code="worktree_changed")
             if not component.get("currentVersion") and source["kind"] != "git_commit":
                 try:
                     component["currentVersion"] = read_current_version(self._version_reader(root)(source["path"]), source)
                 except (VersionPlanError, OSError, ValueError, UnicodeError, SyntaxError, KeyError, TypeError):
                     pass  # Missing or ambiguous authorities remain unknown.
             if source["kind"] == "git_commit" and component.get("sourceHeadSha") not in (None, head):
-                raise RepositoryPublishError("提交版本读取期间 HEAD 已变化，请重新读取。")
+                raise RepositoryPublishError("提交版本读取期间 HEAD 已变化，请重新读取。", code="worktree_changed")
             if component.get("canBump") and component.get("expectedFiles"):
                 try:
                     self._version_write_scope(repo, root, component["expectedFiles"])
@@ -767,8 +854,24 @@ class RepositoryPublishService:
                 if component["planState"] == "valid":
                     component.update(planState="stale", plannedVersion="", transition=None)
         if self._text(root, "rev-parse", "HEAD") != head:
-            raise RepositoryPublishError("版本读取期间 HEAD 已变化，请重新读取。")
+            raise RepositoryPublishError("版本读取期间 HEAD 已变化，请重新读取。", code="worktree_changed")
+        for component in components:
+            if component["sourceId"] in by_id and not component.get("canBump"):
+                component["diagnostic"] = _make_diagnostic("version_authority", component.get("reason") or "权威版本无法安全读取。",
+                                                           source_id=component["sourceId"])
         return components
+
+    @staticmethod
+    def _catalog_diagnostic(item):
+        if (item.get("diagnostic") or {}).get("severity") not in {None, "info"}:
+            return
+        failed = next((component["diagnostic"] for component in item.get("components", [])
+                       if (component.get("diagnostic") or {}).get("severity") in {"warning", "error"}), None)
+        summary = item.get("uploadSummary") or {}
+        if failed:
+            item["diagnostic"] = failed
+        elif summary.get("state") in {"unknown", "pending"}:
+            item["diagnostic"] = _make_diagnostic("receipt_unverified", summary.get("reason") or "上传记录待核对。")
 
     def version_catalog(self, repo_id=None):
         """Read exact current versions; never sync, stage, fetch or change files."""
@@ -785,7 +888,7 @@ class RepositoryPublishService:
             item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "components": [], "message": "",
                     "uploadSummary": self._upload_summary(repo),
                     "hasChanges": None, "changeState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
-                    "planState": "none", "versionChanged": None, "versionState": "unknown",
+                    "diagnostic": None, "planState": "none", "versionChanged": None, "versionState": "unknown",
                     "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
             try:
                 context = self._repo(repo)
@@ -794,7 +897,7 @@ class RepositoryPublishService:
                 item["components"] = self._version_details(repo, context)
                 item.update(self._local_changes(repo, context))
                 if any(component["repositoryHeadSha"] != item["headSha"] for component in item["components"]):
-                    raise RepositoryPublishError("读取仓库差异和版本期间 HEAD 已变化，请重新读取。")
+                    raise RepositoryPublishError("读取仓库差异和版本期间 HEAD 已变化，请重新读取。", code="worktree_changed")
                 self._planned_versions(repo, context, item["components"], item["changedFiles"], settings["naming"],
                                        sync_pending=bool(repo["syncFiles"]), changes_known=item["worktreeChanged"] is not None)
                 states = {component["planState"] for component in item["components"]}
@@ -807,10 +910,13 @@ class RepositoryPublishService:
                 item["versionState"] = "missing" if not known else "known" if all(known) else "partial" if any(known) else "unknown"
                 if not sources:
                     item["message"] = "此仓库没有独立版本来源，使用已配置的进度标题；不会创建版本文件。"
+                    if not item.get("diagnostic"):
+                        item["diagnostic"] = _make_diagnostic("version_fallback", item["message"])
                 if item.get("syncState") == "unknown":
                     item["message"] = item["syncReason"]
             except (RepositoryPublishError, _GitFailure, OSError) as exc:
                 item["message"] = self._error(exc)
+                item["diagnostic"] = self._diagnostic(exc)
                 item.update(hasChanges=None, changeState="unknown", worktreeChanged=None)
                 for component in item["components"]:
                     component.update(canBump=False, reason=item["message"])
@@ -818,6 +924,7 @@ class RepositoryPublishService:
                         component["transition"] = None
                     component["autoPlan"] = {"state":"unknown", "fromVersion":component.get("currentVersion", ""),
                                              "targetVersion":"", "reason":item["message"]}
+            self._catalog_diagnostic(item)
             result.append(item)
         return {"repositories": result}
 
@@ -870,7 +977,7 @@ class RepositoryPublishService:
                                                      self._version_reader(context[0]), self._git_version_reader(context[0]),
                                                      self._console_resource_reader(context[0]), self._application_reader(repo, context[0], context[3]))
         except VersionPlanError as exc:
-            raise RepositoryPublishError(str(exc)) from exc
+            raise RepositoryPublishError(str(exc), code="version_plan_blocked") from exc
         self._version_write_scope(repo, context[0], updates)
         return updates, plans
 
@@ -951,13 +1058,17 @@ class RepositoryPublishService:
                 automatic.append(ident)
                 component["transition"] = {"kind": "auto", "fromVersion": component["currentVersion"], "toVersion": target}
                 reason = "根据当前已保存变化预览；同步和提交前会重新核对。"
+            if state == "blocked":
+                component["diagnostic"] = _make_diagnostic("version_plan_blocked", reason, source_id=ident)
+            elif component["planState"] == "stale":
+                component["diagnostic"] = _make_diagnostic("version_plan_stale", "一次性版本计划已过期，请重新配置。", source_id=ident)
             component["autoPlan"] = {"state": state, "fromVersion": component.get("currentVersion", ""), "targetVersion": target, "reason": reason}
             if state == "blocked":
                 blocked.append((component.get("name") or component["path"]) + ": " + reason)
         if explicit.keys() - {component["sourceId"] for component in components} and files:
             blocked.append("一次性版本来源已改变，请重新配置。")
         if strict and blocked:
-            raise RepositoryPublishError("自动升版暂缓本仓库：" + "；".join(dict.fromkeys(blocked)))
+            raise RepositoryPublishError("自动升版暂缓本仓库：" + "；".join(dict.fromkeys(blocked)), code="version_plan_blocked")
         return effective, automatic, blocked
 
     def _consume_version_plans(self, repo, pending):
@@ -1097,6 +1208,10 @@ class RepositoryPublishService:
             if not alive:
                 receipt["status"] = "verification_required"
                 receipt["message"] = "上次操作中断，请点击重试；先核对原提交，不会重复提交。"
+                receipt["diagnostic"] = _make_diagnostic("operation_interrupted", receipt["message"])
+                for row in receipt.get("repositories", []):
+                    if isinstance(row, dict) and row.get("status") in {"queued", "working"}:
+                        row["diagnostic"] = dict(receipt["diagnostic"])
         if receipt:
             rows = receipt.get("repositories", [])
             for row in rows if isinstance(rows, list) else []:
@@ -1106,6 +1221,8 @@ class RepositoryPublishService:
                     row["uploadSummary"] = self._upload_value(
                         {"repoId": row.get("repoId", ""), "path": "", "repositoryUrl": "", "remote": "", "branch": ""},
                         state="unknown", count=None, reason="旧操作未保留固定上传目标；请以当前仓库的确认记录为准。")
+                if row.get("status") in {"deferred", "push_failed", "verification_required"} and not row.get("diagnostic"):
+                    row["diagnostic"] = _make_diagnostic("manual_check", row.get("message", "请核对保留记录。"))
             receipt["progress"] = self._operation_progress(receipt)
         return receipt
 
@@ -1335,26 +1452,27 @@ class RepositoryPublishService:
                 pass  # The earlier durable delivered receipt is still kept.
             item["uploadSummary"] = summary
             item["message"] += " 上传序号记录待核对。"
+            item["diagnostic"] = _make_diagnostic("receipt_unverified", summary["reason"])
             return False
 
     def _repo(self, repo):
         if not repo["path"] or not Path(repo["path"]).exists():
-            raise RepositoryPublishError("仓库目录不存在，请检查设置。")
+            raise RepositoryPublishError("仓库目录不存在，请检查设置。", code="repo_missing")
         root = _safe_path(repo["path"])
         top = _safe_path(self._text(root, "rev-parse", "--show-toplevel"))
         if os.path.normcase(str(root)) != os.path.normcase(str(top)):
-            raise RepositoryPublishError("请选择仓库根目录，不能使用其子目录。")
+            raise RepositoryPublishError("请选择仓库根目录，不能使用其子目录。", code="repo_root")
         gitdir = _safe_path(self._text(root, "rev-parse", "--absolute-git-dir"))
         common_text = self._text(root, "rev-parse", "--git-common-dir")
         common = _safe_path(Path(common_text) if Path(common_text).is_absolute() else root / common_text)
         branch = self._text(root, "symbolic-ref", "--short", "HEAD")
         if not repo["branch"] or branch != repo["branch"]:
-            raise RepositoryPublishError("当前分支与设置不符，请自行切换或修正设置。")
+            raise RepositoryPublishError("当前分支与设置不符，请自行切换或修正设置。", code="branch_mismatch")
         self._git(root, "check-ref-format", "refs/heads/" + branch)
         fetch = self._text(root, "remote", "get-url", "--all", repo["remote"]).splitlines()
         push = self._text(root, "remote", "get-url", "--push", "--all", repo["remote"]).splitlines()
         if len(fetch) != 1 or len(push) != 1:
-            raise RepositoryPublishError("远端必须只有一个读取地址和一个推送地址。")
+            raise RepositoryPublishError("远端必须只有一个读取地址和一个推送地址。", code="remote_config")
         expected = repo["repositoryUrl"]
         if self._test_mode:
             for url in (*fetch, *push, expected):
@@ -1366,7 +1484,7 @@ class RepositoryPublishService:
         else:
             slugs = [self._github(v) for v in (*fetch, *push, expected)]
         if not slugs[0] or len(set(slugs)) != 1:
-            raise RepositoryPublishError("读取、推送和配置地址必须指向同一个 GitHub 仓库。")
+            raise RepositoryPublishError("读取、推送和配置地址必须指向同一个 GitHub 仓库。", code="remote_ownership")
         identity = {"root": str(root), "gitdir": str(gitdir), "common": str(common), "branch": branch,
                     "remote": repo["remote"], "fetchUrl": fetch[0], "pushUrl": push[0], "repository": slugs[0]}
         return root, gitdir, common, identity
@@ -1379,23 +1497,23 @@ class RepositoryPublishService:
     def _busy_reason(self, root):
         reason = self._busy_check(root) if self._busy_check else None
         if reason:
-            raise RepositoryPublishError(str(reason))
+            raise RepositoryPublishError(str(reason), code="activity_unconfirmed")
 
     def _sync_contract(self, repo):
         if repo.get("syncError"):
-            raise RepositoryPublishError("已保存同步清单无效，请修正并验证同步映射：" + repo["syncError"])
+            raise RepositoryPublishError("已保存同步清单无效，请修正并验证同步映射：" + repo["syncError"], code="sync_config")
         manifest = repo.get("syncManifest")
         if manifest:
             root = _safe_path(repo["path"])
             source = _safe_path(root / manifest["path"])
             if not source.is_relative_to(root):
-                raise RepositoryPublishError("同步清单来源超出仓库。")
+                raise RepositoryPublishError("同步清单来源超出仓库。", code="sync_config")
             try:
                 actual = _stable(source)
             except OSError as exc:
-                raise RepositoryPublishError("导入的同步清单已缺失，请重新核对配置。") from exc
+                raise RepositoryPublishError("导入的同步清单已缺失，请重新核对配置。", code="sync_missing") from exc
             if actual != {"bytes": manifest["bytes"], "sha256": manifest["sha256"]}:
-                raise RepositoryPublishError("导入的同步清单已变化，请重新保存并核对同步配置。")
+                raise RepositoryPublishError("导入的同步清单已变化，请重新保存并核对同步配置。", code="sync_config")
 
     def owns_developer_lock(self, root):
         """Internal callback hint; true only for this worker thread's held lock."""
@@ -1420,11 +1538,11 @@ class RepositoryPublishService:
         for base in {gitdir, common}:
             for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_START"):
                 if (base / name).exists():
-                    raise RepositoryPublishError("仓库正在合并、变基或处理历史，请先完成该操作。")
+                    raise RepositoryPublishError("仓库正在合并、变基或处理历史，请先完成该操作。", code="git_history_operation")
             locks = [base / "HEAD.lock", base / "config.lock", base / "packed-refs.lock"]
             locks.extend((base / "refs").rglob("*.lock") if (base / "refs").exists() else [])
             if any(p.exists() for p in locks) or not own_index_lock and (gitdir / "index.lock").exists():
-                raise RepositoryPublishError("Git 正在使用锁，请等待；不会移除其他操作的锁。")
+                raise RepositoryPublishError("Git 正在使用锁，请等待；不会移除其他操作的锁。", code="git_lock")
         # Existing Console developer-update uses this same lock file. Merely
         # existing isn't busy; taking its advisory lock detects a live owner.
         self._busy_reason(root)
@@ -1444,7 +1562,7 @@ class RepositoryPublishService:
                 continue
             xy = record[:2].decode("ascii", "replace")
             if xy != "??" and xy[0] != " ":
-                raise RepositoryPublishError("保留已有暂存选择，请先提交或取消该选择。")
+                raise RepositoryPublishError("保留已有暂存选择，请先提交或取消该选择。", code="merge_conflict" if xy in {"DD", "AU", "UD", "UA", "DU", "AA", "UU"} else "staged_selection")
             path = record[3:].decode("utf-8", "surrogateescape")
             if _excluded(path, repo["exclude"]):
                 continue
@@ -1452,9 +1570,9 @@ class RepositoryPublishService:
             proof = _stable(location) if location.exists() else {"deleted": True}
             changed.append({"path": path, "status": xy, **proof})
         if self._git(root, "ls-files", "--unmerged", "-z"):
-            raise RepositoryPublishError("仓库存在未解决冲突，请先处理。")
+            raise RepositoryPublishError("仓库存在未解决冲突，请先处理。", code="merge_conflict")
         if self._text(root, "rev-parse", "HEAD") != head or (_sha(index_path.read_bytes()) if index_path.exists() else None) != index_sha:
-            raise RepositoryPublishError("仓库在检查期间发生变化，请稍后重试。")
+            raise RepositoryPublishError("仓库在检查期间发生变化，请稍后重试。", code="worktree_changed")
         result = {"head": head, "indexSha": index_sha, "configSha": config_sha, "identity": identity,
                   "files": sorted(changed, key=lambda item: item["path"])}
         result["fingerprint"] = _json_sha(result)
@@ -1620,14 +1738,14 @@ class RepositoryPublishService:
             item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "title": "", "body": "", "versions": [], "files": [],
                     "uploadSummary": self._upload_summary(repo),
                     "components": [], "versionTransitions": [], "hasChanges": None, "changeState": "unknown", "planWillApply": None, "action": "unknown",
-                    "versionState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
+                    "diagnostic": None, "versionState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
                     "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
             try:
                 self._sync_contract(repo)
                 context = self._repo(repo)
                 key = os.path.normcase(str(context[2]))
                 if key in commons:
-                    raise RepositoryPublishError("重复仓库或共享 Git 目录，请只配置一个入口。")
+                    raise RepositoryPublishError("重复仓库或共享 Git 目录，请只配置一个入口。", code="duplicate_repository")
                 commons[key] = repo["id"]
                 snapshot = self._snapshot(repo, context)
                 components = self._version_details(repo, context)
@@ -1636,7 +1754,7 @@ class RepositoryPublishService:
                 item["versionState"] = "missing" if not known else "known" if all(known) else "partial" if any(known) else "unknown"
                 item.update(self._local_changes(repo, context))
                 if item["headSha"] != snapshot["head"] or any(component["repositoryHeadSha"] != snapshot["head"] for component in components):
-                    raise RepositoryPublishError("预览期间 HEAD 已变化，请重新读取。")
+                    raise RepositoryPublishError("预览期间 HEAD 已变化，请重新读取。", code="worktree_changed")
                 effective, automatic, blocked = self._planned_versions(repo, context, components, snapshot["files"], settings["naming"],
                                                                       sync_pending=bool(repo["syncFiles"]))
                 item["planWillApply"] = bool(effective) and bool(snapshot["files"])
@@ -1656,7 +1774,8 @@ class RepositoryPublishService:
                                              (component["transition"]["kind"] not in {"planned", "auto"} or item["planWillApply"] is True)]
                 item.update(files=snapshot["files"], fingerprint=snapshot["fingerprint"], status="ready", message="预览已保存文件；提交时会重新核对。")
                 if blocked:
-                    item.update(status="deferred", message="自动升版暂缓本仓库：" + "；".join(blocked))
+                    item.update(status="deferred", message="自动升版暂缓本仓库：" + "；".join(blocked),
+                                diagnostic=_make_diagnostic("version_plan_blocked", "自动升版暂缓本仓库：" + "；".join(blocked)))
                 elif item["action"] == "sync_pending":
                     item["message"] = "先同步已保存工作文件，再确定实际改动及本次版本。"
                 elif item["action"] == "push_only" and repo.get("versionPlans"):
@@ -1664,7 +1783,8 @@ class RepositoryPublishService:
                 if not repo["enabled"]:
                     item.update(status="disabled", message="该仓库未启用，请先启用再提交。")
             except (RepositoryPublishError, _GitFailure, OSError) as exc:
-                item.update(status="deferred", message=self._error(exc))
+                item.update(status="deferred", message=self._error(exc), diagnostic=self._diagnostic(exc))
+            self._catalog_diagnostic(item)
             results.append(item)
         return {"previews": results}
 
@@ -1709,9 +1829,10 @@ class RepositoryPublishService:
                 if not self._worker or not self._worker.is_alive():
                     self._queue.clear()
                     _LIVE.pop(self._owner, None)
-                    receipt.update(status="attention", phase="dispatch_failed", message="后台暂时无法启动，请稍后重试；尚未提交或推送。")
+                    receipt.update(status="attention", phase="dispatch_failed", message="后台暂时无法启动，请稍后重试；尚未提交或推送。",
+                                   diagnostic=_make_diagnostic("background_unavailable", "后台暂时无法启动，请稍后重试；尚未提交或推送。"))
                     for item in receipt["repositories"]:
-                        item.update(status="deferred", phase="dispatch_failed", message=receipt["message"])
+                        item.update(status="deferred", phase="dispatch_failed", message=receipt["message"], diagnostic=receipt["diagnostic"])
                     self._save(receipt)
             finally:
                 self._starting = False
@@ -1723,7 +1844,7 @@ class RepositoryPublishService:
         _atomic(self._ops / (receipt["requestId"] + ".json"), receipt)
 
     def _phase(self, receipt, item, phase, message):
-        item.update(status="working", phase=phase, message=message)
+        item.update(status="working", phase=phase, message=message, diagnostic=None)
         item["logs"].append({"at": _now(), "phase": phase, "message": message})
         self._save(receipt)
 
@@ -1758,18 +1879,18 @@ class RepositoryPublishService:
                             if not repo["enabled"]:
                                 raise RepositoryPublishError("该仓库未启用，请先启用再重试。")
                             if repo["id"] in duplicates:
-                                raise RepositoryPublishError("重复仓库或共享 Git 目录，请只启用一个入口。")
+                                raise RepositoryPublishError("重复仓库或共享 Git 目录，请只启用一个入口。", code="duplicate_repository")
                             self._run_repo(repo, settings["naming"], receipt, item)
                         except (RepositoryPublishError, _GitFailure, OSError) as exc:
-                            item.update(status="deferred", message=self._error(exc))
+                            item.update(status="deferred", message=self._error(exc), diagnostic=self._diagnostic(exc))
                         except Exception:
-                            item.update(status="verification_required", message="操作中断，保留核对记录；重试会先检查原提交。")
+                            item.update(status="verification_required", message="操作中断，保留核对记录；重试会先检查原提交。", diagnostic=_make_diagnostic("operation_interrupted", "操作中断，保留核对记录；重试会先检查原提交。"))
                         try:
                             pending = _read(self._pending_path(repo["id"]))
                             if pending and pending.get("state") != "delivered":
                                 item.update(commitSha=pending.get("commitSha", item["commitSha"]), title=pending["title"], body=pending["body"])
                         except RepositoryPublishError as exc:
-                            item.update(status="verification_required", message=str(exc))
+                            item.update(status="verification_required", message=str(exc), diagnostic=self._diagnostic(exc))
                         item["logs"].append({"at": _now(), "phase": item["phase"], "message": item["message"]})
                         self._save(receipt)
                     states = {i["status"] for i in receipt["repositories"]}
@@ -1777,11 +1898,18 @@ class RepositoryPublishService:
                                    message="所有仓库已完成。" if states <= {"success", "noop"} else "部分仓库需要处理，其他仓库已继续完成。")
                     self._save(receipt)
             except (RepositoryPublishError, OSError) as exc:
-                receipt.update(status="attention", phase="deferred", message=self._error(exc))
+                receipt.update(status="attention", phase="deferred", message=self._error(exc), diagnostic=self._diagnostic(exc))
                 for item in receipt["repositories"]:
                     if item["status"] in {"queued", "working"}:
-                        item.update(status="deferred", message=receipt["message"])
+                        item.update(status="deferred", message=receipt["message"], diagnostic=receipt["diagnostic"])
                 self._save(receipt)
+
+    @staticmethod
+    def _diagnostic(exc):
+        if isinstance(exc, RepositoryPublishError):
+            return dict(exc.diagnostic)
+        code = _GIT_DIAGNOSTIC_CODES.get(exc.code, "manual_check") if isinstance(exc, _GitFailure) else "manual_check"
+        return _make_diagnostic(code, RepositoryPublishService._error(exc))
 
     @staticmethod
     def _error(exc):
@@ -1790,6 +1918,7 @@ class RepositoryPublishService:
         if isinstance(exc, _GitFailure):
             return {"authentication": "认证失败，请检查已配置的 Git 凭证后重试原提交。", "permissions": "没有推送权限，请检查仓库权限。",
                     "rules": "远端规则或 Git hook 拒绝操作，请处理规则后重试。", "lfs": "Git LFS 处理失败，请检查 LFS 安装、对象或认证。",
+                    "remote_config": "配置的远端名称不存在，请核对该仓库的远端名称后重新核对。",
                     "remote_changed": "远端发生变化，请自行整合；不会强制推送。", "timeout": "Git 操作超时，保留原提交核对状态。",
                     "missing_git": "未找到 Git。"}.get(exc.code, "Git 操作失败，请检查仓库或 Git hook；已保留文件和原提交。")
         return "文件或发布记录不可用，请保存完成后重试。"
@@ -1803,7 +1932,7 @@ class RepositoryPublishService:
         for mapping, source, target, proof in preflight:
             try:
                 if _stable(source) != proof:
-                    raise RepositoryPublishError("同步来源正在写入，请保存后重试。")
+                    raise RepositoryPublishError("同步来源正在写入，请保存后重试。", code="sync_writing")
                 target_before = _stable(target) if target.exists() else None
                 target.parent.mkdir(parents=True, exist_ok=True)
                 temporary = target.with_name("." + target.name + ".console-sync-" + uuid.uuid4().hex)
@@ -1813,9 +1942,9 @@ class RepositoryPublishService:
                         dst.flush()
                         os.fsync(dst.fileno())
                     if _stable(source) != proof or _stable(temporary) != proof:
-                        raise RepositoryPublishError("同步来源在复制期间发生变化。")
+                        raise RepositoryPublishError("同步来源在复制期间发生变化。", code="sync_changed")
                     if (_stable(target) if target.exists() else None) != target_before:
-                        raise RepositoryPublishError("同步目标被另一处修改，保留该修改。")
+                        raise RepositoryPublishError("同步目标被另一处修改，保留该修改。", code="sync_changed")
                     self._busy_reason(root)
                     if source != target and target_before != proof:
                         os.replace(temporary, target)
@@ -1823,7 +1952,7 @@ class RepositoryPublishService:
                 finally:
                     temporary.unlink(missing_ok=True)
             except FileNotFoundError as exc:
-                raise RepositoryPublishError("同步来源缺失，请先保存来源文件；本仓库延期。") from exc
+                raise RepositoryPublishError("同步来源缺失，请先保存来源文件；本仓库延期。", code="sync_missing") from exc
         self._verify_sync(repo, context, records)
         return records
 
@@ -1836,17 +1965,21 @@ class RepositoryPublishService:
                 raise RepositoryPublishError("测试同步来源超出隔离目录。")
             key = os.path.normcase(str(target))
             if source == target or key in targets or not target.is_relative_to(root):
-                raise RepositoryPublishError("同步目标重复、与来源相同或超出仓库。")
+                raise RepositoryPublishError("同步目标重复、与来源相同或超出仓库。", code="sync_config")
             if _excluded(mapping["target"], repo["exclude"]):
-                raise RepositoryPublishError("同步目标属于排除或私人范围。")
+                raise RepositoryPublishError("同步目标属于排除或私人范围。", code="sync_config")
             targets.add(key)
             try:
                 records.append((mapping, source, target, _stable(source)))
+            except RepositoryPublishError as exc:
+                if exc.code == "worktree_changed":
+                    raise RepositoryPublishError(str(exc), code="sync_writing") from exc
+                raise
             except FileNotFoundError as exc:
-                raise RepositoryPublishError("同步来源缺失，请先保存来源文件；本仓库延期。") from exc
+                raise RepositoryPublishError("同步来源缺失，请先保存来源文件；本仓库延期。", code="sync_missing") from exc
         time.sleep(.02 if records else 0)
         if any(_stable(source) != proof for _, source, _, proof in records):
-            raise RepositoryPublishError("同步来源正在写入，请保存后重试。")
+            raise RepositoryPublishError("同步来源正在写入，请保存后重试。", code="sync_writing")
         return records
 
     def _verify_sync(self, repo, context, records):
@@ -1855,9 +1988,9 @@ class RepositoryPublishService:
             expected = {"bytes": record["bytes"], "sha256": record["sha256"]}
             try:
                 if _stable(Path(record["source"])) != expected or _stable(context[0] / record["target"]) != expected:
-                    raise RepositoryPublishError("同步来源或目标在处理期间变化，请保存后重试；不会发布混合快照。")
+                    raise RepositoryPublishError("同步来源或目标在处理期间变化，请保存后重试；不会发布混合快照。", code="sync_changed")
             except FileNotFoundError as exc:
-                raise RepositoryPublishError("同步来源或目标在处理期间缺失，本仓库延期。") from exc
+                raise RepositoryPublishError("同步来源或目标在处理期间缺失，本仓库延期。", code="sync_missing") from exc
 
     def _remote(self, repo, root):
         alias, config = self._transport(repo, root)
@@ -1867,7 +2000,7 @@ class RepositoryPublishService:
             return None
         rows = output.splitlines()
         if len(rows) != 1 or len(rows[0].split()) != 2 or rows[0].split()[1] != "refs/heads/" + repo["branch"] or not _SHA.fullmatch(rows[0].split()[0]):
-            raise RepositoryPublishError("远端分支回执无效。")
+            raise RepositoryPublishError("远端分支回执无效。", code="receipt_unverified")
         return rows[0].split()[0]
 
     def _fetch(self, repo, context, expected):
@@ -1880,7 +2013,7 @@ class RepositoryPublishService:
                   "refs/heads/" + repo["branch"] + ":" + private_ref, timeout=65, config=config)
         fetched = self._text(root, "rev-parse", private_ref)
         if fetched != expected or self._remote(repo, root) != expected:
-            raise RepositoryPublishError("远端在核对期间发生变化，请稍后重试。")
+            raise RepositoryPublishError("远端在核对期间发生变化，请稍后重试。", code="remote_changed")
         return fetched
 
     def _remote_options(self, repo, root):
@@ -1898,7 +2031,7 @@ class RepositoryPublishService:
             key, value = entry.decode("utf-8", "surrogateescape").split("\n", 1)
             key = key[len(prefix):]
             if key == "mirror" and value.lower() not in {"false", "no", "off", "0"}:
-                raise RepositoryPublishError("远端启用了镜像推送，不适用于单分支提交。")
+                raise RepositoryPublishError("远端启用了镜像推送，不适用于单分支提交。", code="remote_config")
             if key not in {"url", "pushurl", "fetch", "mirror"}:
                 options.append((key, value))
         return options
@@ -1981,7 +2114,7 @@ class RepositoryPublishService:
                 item.update(commitSha=pending.get("commitSha", ""), title=pending.get("title", ""), body=pending.get("body", ""),
                             status="success", phase="complete", message="原提交已确认送达，正在保存上传序号。")
                 if not self._delivery_evidence(pending, self._upload_destination(pending)):
-                    item.update(status="verification_required", phase="verify", message="原上传确认记录不完整，保留原提交和回执，请先核对。")
+                    item.update(status="verification_required", phase="verify", message="原上传确认记录不完整，保留原提交和回执，请先核对。", diagnostic=_make_diagnostic("receipt_unverified", "原上传确认记录不完整，保留原提交和回执，请先核对。"))
                     return
                 recovering_counter = pending.get("uploadCounterPending") is True or not self._delivery_acknowledged(pending)
                 if not self._record_delivery(repo, pending, pending_path, item):
@@ -1995,16 +2128,16 @@ class RepositoryPublishService:
             if (pending and (pending.get("versionUpdates") or pending.get("versionPlans")) and not pending.get("commitSha")
                     and pending.get("state") in {"version_prepared", "version_applying", "prepared", "cancelled_before_commit"}):
                 if pending["identity"] != identity or pending["repositorySettingsSha"] != _repo_settings_sha(repo):
-                    raise RepositoryPublishError("原版本计划的仓库或配置变化，请恢复后重试；不会重新升版。")
+                    raise RepositoryPublishError("原版本计划的仓库或配置变化，请恢复后重试；不会重新升版。", code="destination_changed")
                 if pending.get("transportOptionsSha", transport["optionsSha"]) != transport["optionsSha"]:
-                    raise RepositoryPublishError("原版本计划的 LFS 或传输配置已变化，请恢复后重试。")
+                    raise RepositoryPublishError("原版本计划的 LFS 或传输配置已变化，请恢复后重试。", code="destination_changed")
                 self._continue_version_intent(repo, context, pending, pending_path, receipt, item)
                 return
             if pending and pending.get("state") not in {"delivered", "cancelled_before_commit"}:
                 if pending["identity"] != identity or pending["repositorySettingsSha"] != _repo_settings_sha(repo):
-                    raise RepositoryPublishError("原提交的仓库或配置已变化，请恢复原配置后重试；不会推送到新目标。")
+                    raise RepositoryPublishError("原提交的仓库或配置已变化，请恢复原配置后重试；不会推送到新目标。", code="destination_changed")
                 if pending.get("transportOptionsSha", transport["optionsSha"]) != transport["optionsSha"]:
-                    raise RepositoryPublishError("原提交的 LFS 或传输配置已变化，请恢复后重试。")
+                    raise RepositoryPublishError("原提交的 LFS 或传输配置已变化，请恢复后重试。", code="destination_changed")
                 self._phase(receipt, item, "verify", "先核对并继续上次原提交。")
                 pending = self._recover_commit(repo, context, pending, pending_path)
                 if pending.get("state") == "cancelled_before_commit" and (pending.get("versionUpdates") or pending.get("versionPlans")):
@@ -2013,7 +2146,7 @@ class RepositoryPublishService:
                 if pending.get("state") != "cancelled_before_commit":
                     item.update(commitSha=pending.get("commitSha", ""), title=pending["title"], body=pending["body"])
                     if not pending.get("commitSha"):
-                        raise RepositoryPublishError("上次提交结果尚未确认，请核对保留的记录和 Git 锁。")
+                        raise RepositoryPublishError("上次提交结果尚未确认，请核对保留的记录和 Git 锁。", code="receipt_unverified")
                     self._consume_version_plans(repo, pending)
                     self._push(repo, context, pending, pending_path, receipt, item)
                     return
@@ -2026,7 +2159,7 @@ class RepositoryPublishService:
             snapshot = self._snapshot(repo, context)
             components = self._version_details(repo, context)
             if any(component["repositoryHeadSha"] != snapshot["head"] for component in components):
-                raise RepositoryPublishError("同步后读取版本期间 HEAD 已变化，请重新核对。")
+                raise RepositoryPublishError("同步后读取版本期间 HEAD 已变化，请重新核对。", code="worktree_changed")
             effective, automatic, _ = self._planned_versions(repo, context, components, snapshot["files"], naming, strict=True)
             apply_plans = bool(effective) and bool(snapshot["files"])
             title, body, versions = self._message(repo, snapshot, naming, version_plans=effective if apply_plans else [],
@@ -2037,7 +2170,7 @@ class RepositoryPublishService:
             self._fetch(repo, context, remote)
             self._verify_sync(repo, context, item["syncFiles"])
             if remote and not self._ancestor(root, remote, snapshot["head"]):
-                raise RepositoryPublishError("远端领先或分叉，请先自行整合；本仓库延期。")
+                raise RepositoryPublishError("远端领先或分叉，请先自行整合；本仓库延期。", code="remote_ahead")
             self._outgoing_safe(root, remote, snapshot["head"], repo)
             if not snapshot["files"] and remote == snapshot["head"] and not apply_plans:
                 item.update(status="noop", phase="complete", message="没有需要提交或推送的文件；一次性标题计划保留。" if repo.get("versionPlans") else "没有需要提交或推送的文件。")
@@ -2083,7 +2216,7 @@ class RepositoryPublishService:
         self._verify_sync(repo, context, pending.get("syncProofs", []))
         self._verify_version_evidence(root, pending)
         if self._repo(repo)[3] != identity or self._snapshot(repo, context)["fingerprint"] != snapshot["fingerprint"]:
-            raise RepositoryPublishError("文件或仓库在提交前变化，请重新预览后重试。")
+            raise RepositoryPublishError("文件或仓库在提交前变化，请重新预览后重试。", code="worktree_changed")
         lock_path = gitdir / "index.lock"
         marker = ("console-repository-publish:" + uuid.uuid4().hex).encode()
         descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -2100,7 +2233,7 @@ class RepositoryPublishService:
             paths = b"".join(item["path"].encode("utf-8", "surrogateescape") + b"\0" for item in snapshot["files"])
             self._git(root, "--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul", data=paths, index=temp_index, timeout=90)
             if self._snapshot(repo, context, own_index_lock=True)["fingerprint"] != snapshot["fingerprint"] or self._repo(repo)[3] != identity:
-                raise RepositoryPublishError("文件在暂存期间变化，保留工作文件；本仓库延期。")
+                raise RepositoryPublishError("文件在暂存期间变化，保留工作文件；本仓库延期。", code="worktree_changed")
             self._busy_reason(root)
             self._verify_sync(repo, context, pending.get("syncProofs", []))
             self._verify_version_evidence(root, pending)
@@ -2122,7 +2255,7 @@ class RepositoryPublishService:
                 recovered = self._recover_commit(repo, context, pending, pending_path, allow_no_commit=True)
                 if not recovered.get("commitSha"):
                     if exc.code == "timeout":
-                        raise RepositoryPublishError("提交超时，保留提交记录和自有锁，需先核对后重试。")
+                        raise RepositoryPublishError("提交超时，保留提交记录和自有锁，需先核对后重试。", code="receipt_unverified")
                     # Definite hook rejection with unchanged HEAD is not a commit.
                     if recovered.get("state") == "no_commit":
                         attempted = False
@@ -2146,15 +2279,15 @@ class RepositoryPublishService:
             if unexpected:
                 pending["heldReason"] = "Git hook 或另一处新增了工作变更，原提交已保留；请核对后重试原提交。"
                 _atomic(pending_path, pending)
-                raise RepositoryPublishError(pending["heldReason"])
+                raise RepositoryPublishError(pending["heldReason"], code="worktree_changed")
             for path, old in before_files.items():
                 actual = {"path": path, **(_stable(root / path) if (root / path).exists() else {"deleted": True})}
                 if actual != old:
                     pending["heldReason"] = "Git hook 或另一处改变了工作文件，原提交已保留；请核对后重试原提交。"
                     _atomic(pending_path, pending)
-                    raise RepositoryPublishError(pending["heldReason"])
+                    raise RepositoryPublishError(pending["heldReason"], code="worktree_changed")
             if after["configSha"] != snapshot["configSha"] or after["head"] != head:
-                raise RepositoryPublishError("提交期间仓库配置或 HEAD 变化，已保留原提交。")
+                raise RepositoryPublishError("提交期间仓库配置或 HEAD 变化，已保留原提交。", code="worktree_changed")
         finally:
             if descriptor is not None:
                 os.close(descriptor)
@@ -2173,15 +2306,15 @@ class RepositoryPublishService:
     def _recognize_commit(self, root, pending, head):
         info = self._text(root, "show", "-s", "--format=%P%n%T", head).splitlines()
         if len(info) != 2 or info[0] != pending["parentSha"] or info[1] != pending.get("treeSha"):
-            raise RepositoryPublishError("提交结果与记录不符，请核对 HEAD；不会重新提交或推送。")
+            raise RepositoryPublishError("提交结果与记录不符，请核对 HEAD；不会重新提交或推送。", code="receipt_unverified")
         if pending.get("messageSha") and _sha(self._git(root, "stripspace", data=self._git(root, "show", "-s", "--format=%B", head)).strip()) != pending["messageSha"]:
-            raise RepositoryPublishError("提交消息与记录不符，请核对 hook 或并发提交；不会重新提交或推送。")
+            raise RepositoryPublishError("提交消息与记录不符，请核对 hook 或并发提交；不会重新提交或推送。", code="receipt_unverified")
 
     def _recover_commit(self, repo, context, pending, pending_path, allow_no_commit=False):
         root = context[0]
         if pending.get("commitSha"):
             if not self._ancestor(root, pending["commitSha"], self._text(root, "rev-parse", "HEAD")):
-                raise RepositoryPublishError("原提交已不在当前历史中，请人工核对；不会重新提交。")
+                raise RepositoryPublishError("原提交已不在当前历史中，请人工核对；不会重新提交。", code="receipt_unverified")
         else:
             head = self._text(root, "rev-parse", "HEAD")
             if head != pending["parentSha"]:
@@ -2200,7 +2333,7 @@ class RepositoryPublishService:
                 lock = gitdir / "index.lock"
                 temporary = _safe_path(pending.get("temporaryIndex", ""))
                 if not temporary.is_relative_to(self.state_dir) or Path(str(temporary) + ".lock").exists():
-                    raise RepositoryPublishError("上次暂存仍有索引写入，请先核对；不会移除锁。")
+                    raise RepositoryPublishError("上次暂存仍有索引写入，请先核对；不会移除锁。", code="git_lock")
                 original = _sha(index.read_bytes()) if index.exists() else None
                 lock_owned = lock.exists() and _sha(lock.read_bytes()) == pending.get("lockMarkerSha")
                 already_releasing = pending.get("state") == "releasing_before_commit"
@@ -2217,7 +2350,7 @@ class RepositoryPublishService:
                 _atomic(pending_path, pending)
                 return pending
             else:
-                raise RepositoryPublishError("上次提交未确认，保留自有记录和锁；请先核对 Git 操作是否结束。")
+                raise RepositoryPublishError("上次提交未确认，保留自有记录和锁；请先核对 Git 操作是否结束。", code="receipt_unverified")
         if not pending.get("indexReconciled"):
             self._reconcile(context, pending, pending_path)
         return pending
@@ -2228,7 +2361,7 @@ class RepositoryPublishService:
         current = _sha(index.read_bytes()) if index.exists() else None
         temporary = _safe_path(pending["temporaryIndex"])
         if not temporary.is_relative_to(self.state_dir) or not temporary.is_file():
-            raise RepositoryPublishError("原提交的索引恢复文件缺失，请先核对。")
+            raise RepositoryPublishError("原提交的索引恢复文件缺失，请先核对。", code="receipt_unverified")
         expected = _sha(temporary.read_bytes())
         lock = gitdir / "index.lock"
         if current == expected:
@@ -2239,9 +2372,9 @@ class RepositoryPublishService:
             temporary.unlink(missing_ok=True)
             return
         if current != pending["snapshot"]["indexSha"]:
-            raise RepositoryPublishError("已有新的暂存选择，原提交保留；不会覆盖索引。")
+            raise RepositoryPublishError("已有新的暂存选择，原提交保留；不会覆盖索引。", code="staged_selection")
         if not lock.exists() or _sha(lock.read_bytes()) not in {pending.get("lockMarkerSha"), pending.get("reconciledIndexSha")}:
-            raise RepositoryPublishError("Git 索引锁不属于此任务，原提交保留；不会移除该锁。")
+            raise RepositoryPublishError("Git 索引锁不属于此任务，原提交保留；不会移除该锁。", code="git_lock")
         pending["reconciledIndexSha"] = expected
         _atomic(pending_path, pending)
         with lock.open("wb") as stream:
@@ -2249,7 +2382,7 @@ class RepositoryPublishService:
             stream.flush()
             os.fsync(stream.fileno())
         if (_sha(index.read_bytes()) if index.exists() else None) != current:
-            raise RepositoryPublishError("暂存选择在恢复期间变化，保留原提交与锁。")
+            raise RepositoryPublishError("暂存选择在恢复期间变化，保留原提交与锁。", code="staged_selection")
         os.replace(lock, index)
         pending["indexReconciled"] = True
         _atomic(pending_path, pending)
@@ -2261,7 +2394,7 @@ class RepositoryPublishService:
         # A retry may coexist with newly edited files, but never new staging.
         self._snapshot(repo, context)
         if self._repo(repo)[3] != pending["identity"]:
-            raise RepositoryPublishError("原提交目标已变化，请恢复配置后重试。")
+            raise RepositoryPublishError("原提交目标已变化，请恢复配置后重试。", code="destination_changed")
         sha = pending["commitSha"]
         item["commitSha"] = sha
         self._phase(receipt, item, "verify", "核对原提交是否已送达。")
@@ -2271,7 +2404,7 @@ class RepositoryPublishService:
         except _GitFailure as exc:
             pending.update(state="verification_required", pushError=exc.code)
             _atomic(pending_path, pending)
-            item.update(status="verification_required", message=self._error(exc))
+            item.update(status="verification_required", message=self._error(exc), diagnostic=self._diagnostic(exc))
             return
         if remote and self._ancestor(root, sha, remote):
             pending.update(state="delivered", verifiedAt=_now(), verifiedRemote=remote)
@@ -2280,11 +2413,11 @@ class RepositoryPublishService:
             self._record_delivery(repo, pending, pending_path, item)
             return
         if remote and not self._ancestor(root, remote, sha):
-            raise RepositoryPublishError("远端领先或分叉，请自行整合；保留原提交。")
+            raise RepositoryPublishError("远端领先或分叉，请自行整合；保留原提交。", code="remote_ahead")
         self._outgoing_safe(root, remote, sha, repo)
         self._busy_reason(root)
         if self._repo(repo)[3] != identity or self._text(root, "rev-parse", "HEAD") != pending["snapshot"]["head"] and not self._ancestor(root, sha, self._text(root, "rev-parse", "HEAD")):
-            raise RepositoryPublishError("仓库历史或目标变化，请先核对原提交。")
+            raise RepositoryPublishError("仓库历史或目标变化，请先核对原提交。", code="destination_changed")
         self._phase(receipt, item, "push", "推送原提交并核对远端回执。")
         pending.update(state="push_attempt", pushAttemptAt=_now(), remoteBeforePush=remote)
         _atomic(pending_path, pending)
@@ -2298,7 +2431,7 @@ class RepositoryPublishService:
         except RepositoryPublishError:
             pending.update(state="verification_required", pushError="destination_changed")
             _atomic(pending_path, pending)
-            item.update(status="verification_required", phase="verify", message="传输配置在处理期间变化，原提交和固定目标已保留；请恢复配置后核对。")
+            item.update(status="verification_required", phase="verify", message="传输配置在处理期间变化，原提交和固定目标已保留；请恢复配置后核对。", diagnostic=_make_diagnostic("destination_changed", "传输配置在处理期间变化，原提交和固定目标已保留；请恢复配置后核对。"))
             return
         try:
             after = self._remote(repo, root)
@@ -2311,10 +2444,10 @@ class RepositoryPublishService:
             item.update(status="success", phase="complete", message="原提交已推送并核对成功。")
         elif error and error.code != "timeout" and after == remote:
             pending.update(state="push_failed", pushError=error.code)
-            item.update(status="push_failed", phase="push", message=self._error(error))
+            item.update(status="push_failed", phase="push", message=self._error(error), diagnostic=self._diagnostic(error))
         else:
             pending.update(state="verification_required", pushError=error.code if error else "verification")
-            item.update(status="verification_required", phase="verify", message="推送结果尚未确认；重试会先核对远端并继续原提交。")
+            item.update(status="verification_required", phase="verify", message="推送结果尚未确认；重试会先核对远端并继续原提交。", diagnostic=_make_diagnostic("receipt_unverified", "推送结果尚未确认；重试会先核对远端并继续原提交。"))
         _atomic(pending_path, pending)
         if delivered:
             self._record_delivery(repo, pending, pending_path, item)

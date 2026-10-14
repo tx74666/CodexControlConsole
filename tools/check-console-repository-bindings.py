@@ -8,9 +8,12 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import console_repository_bindings as bindings
 from console_repository_bindings import RepositoryBindingDiscovery, ReadOnlyGit, desktop_codex_activity, probe_existing_lock, rollout_activity
 
 
@@ -289,6 +292,140 @@ class BindingTests(unittest.TestCase):
         result = desktop_codex_activity(self.root, [dbpath])
         self.assertEqual(result["records"], [])
         self.assertEqual(result["warnings"][0]["code"], "desktop_codex_schema_unverified")
+
+
+    def activity_db(self, records, *, created_column=True):
+        dbpath = self.base / "historical-state.sqlite"
+        with closing(sqlite3.connect(dbpath)) as db:
+            db.execute("CREATE TABLE threads(id TEXT,cwd TEXT,rollout_path TEXT,archived INT,updated_at" +
+                       (",created_at" if created_column else "") + ")")
+            for record in records:
+                row = (record["id"], str(self.root), str(record.get("rollout", self.base / (record["id"] + ".jsonl"))), 0, record.get("updated"))
+                if created_column:
+                    row += (record.get("created"),)
+                db.execute("INSERT INTO threads VALUES(" + ",".join("?" for _ in row) + ")", row)
+            db.commit()
+        return dbpath
+
+    def historical_read(self, dbpath, boot):
+        return desktop_codex_activity(self.root, [dbpath], trusted_boot_epoch=boot)
+
+    def test_preboot_missing_history_keeps_unknown_and_database_bytes(self):
+        boot = time.time() - 1000
+        dbpath = self.activity_db([{"id":"old", "created":boot-10000, "updated":boot-5000}])
+        before = dbpath.read_bytes()
+        result = self.historical_read(dbpath, boot)
+        self.assertEqual(result["records"], [])
+        row = result["historicalUnavailableRecords"][0]
+        self.assertEqual((row["threadId"], row["state"], row["reason"], row["unavailableKind"]),
+                         ("old", "unknown", "rollout_unavailable", "missing"))
+        self.assertEqual(row["historicalReason"], "preboot_missing_rollout_state_unverified")
+        self.assertGreaterEqual(row["bootMarginSeconds"], 300)
+        self.assertIsNone(self.discovery(desktop_activity=result).busy_reason(self.root))
+        self.assertEqual(dbpath.read_bytes(), before)
+
+    def test_recent_missing_and_boot_margin_still_block(self):
+        boot = time.time() - 1000
+        dbpath = self.activity_db([{"id":"recent", "created":boot-10000, "updated":boot+1},
+                                  {"id":"margin", "created":boot-10000, "updated":boot-299},
+                                  {"id":"boundary", "created":boot-10000, "updated":boot-300}])
+        result = self.historical_read(dbpath, boot)
+        self.assertEqual({r["threadId"] for r in result["records"]}, {"recent", "margin", "boundary"})
+        self.assertEqual(result["historicalUnavailableRecords"], [])
+        self.assertIn("unverified", self.discovery(desktop_activity=result).busy_reason(self.root))
+
+    def test_boot_unavailable_invalid_and_missing_epochs_fail_closed(self):
+        boot, now = time.time()-1000, time.time()
+        records = [{"id":"old", "created":boot-10000, "updated":boot-5000},
+                   {"id":"new_creation", "created":boot+1, "updated":boot-5000},
+                   {"id":"missing_created", "updated":boot-5000},
+                   {"id":"missing_updated", "created":boot-10000},
+                   {"id":"invalid_created", "created":"not_an_epoch", "updated":boot-5000},
+                   {"id":"future_updated", "created":boot-10000, "updated":now+1000}]
+        dbpath = self.activity_db(records)
+        for bad_boot in (None, float("inf"), float("nan"), True, "old", now+1000):
+            result = self.historical_read(dbpath, bad_boot)
+            self.assertEqual(len(result["records"]), len(records), bad_boot)
+            self.assertEqual(result["historicalUnavailableRecords"], [])
+        result = self.historical_read(dbpath, boot)
+        self.assertEqual([r["threadId"] for r in result["historicalUnavailableRecords"]], ["old"])
+        self.assertEqual(len(result["records"]), len(records)-1)
+        with patch.object(bindings, "_trusted_windows_boot_epoch", return_value=None):
+            self.assertEqual(len(desktop_codex_activity(self.root, [dbpath])["records"]), len(records))
+
+    def test_schema_without_creation_epoch_does_not_exempt_missing(self):
+        boot = time.time()-1000
+        dbpath = self.activity_db([{"id":"old", "updated":boot-5000}], created_column=False)
+        result = self.historical_read(dbpath, boot)
+        self.assertEqual([r["threadId"] for r in result["records"]], ["old"])
+        self.assertEqual(result["historicalUnavailableRecords"], [])
+
+    def test_existing_active_and_unverified_rollouts_never_become_history(self):
+        boot = time.time()-1000
+        active = self.base / "active.jsonl"
+        active.write_text('{"type":"event_msg","payload":{"type":"task_started"}}\n', encoding="utf-8")
+        dbpath = self.activity_db([{"id":"active", "rollout":active, "created":boot-10000, "updated":boot-5000}])
+        result = self.historical_read(dbpath, boot)
+        self.assertEqual(result["records"][0]["state"], "active")
+        self.assertEqual(result["historicalUnavailableRecords"], [])
+        for raw, reason in (('{"type":"event_msg","payload":{"type":"task_complete"}}', "rollout_partial_tail"),
+                            ('{"type":"event_msg","payload":{"type":"token_count"}}\n', "no_boundary_in_bounded_tail")):
+            active.write_text(raw, encoding="utf-8")
+            result = self.historical_read(dbpath, boot)
+            self.assertEqual(result["records"][0]["reason"], reason)
+            self.assertEqual(result["historicalUnavailableRecords"], [])
+        with patch.object(bindings, "rollout_activity", return_value={"state":"unknown", "reason":"rollout_changed_during_read"}):
+            result = self.historical_read(dbpath, boot)
+            self.assertEqual(result["records"][0]["reason"], "rollout_changed_during_read")
+            self.assertEqual(result["historicalUnavailableRecords"], [])
+
+    def test_epoch_update_and_new_rollout_revive_current_candidate(self):
+        boot = time.time()-1000
+        rollout = self.base / "revive.jsonl"
+        dbpath = self.activity_db([{"id":"revive", "rollout":rollout, "created":boot-10000, "updated":boot-5000}])
+        self.assertEqual(self.historical_read(dbpath, boot)["records"], [])
+        with closing(sqlite3.connect(dbpath)) as db:
+            db.execute("UPDATE threads SET updated_at=?", (boot+1,));db.commit()
+        result = self.historical_read(dbpath, boot)
+        self.assertEqual(result["records"][0]["state"], "unknown")
+        self.assertEqual(result["historicalUnavailableRecords"], [])
+        with closing(sqlite3.connect(dbpath)) as db:
+            db.execute("UPDATE threads SET updated_at=?", (boot-5000,));db.commit()
+        rollout.write_text('{"type":"event_msg","payload":{"type":"task_started"}}\n', encoding="utf-8")
+        self.assertEqual(self.historical_read(dbpath, boot)["records"][0]["state"], "active")
+
+    def test_redirected_or_permission_uncertainty_is_not_missing_history(self):
+        boot = time.time()-1000
+        rollout = self.base / "missing.jsonl"
+        dbpath = self.activity_db([{"id":"missing", "rollout":rollout, "created":boot-10000, "updated":boot-5000}])
+        original = bindings._unredirected
+        for uncertainty in (ValueError("redirected_path"), PermissionError("access is unverified")):
+            def guarded(path):
+                if Path(path) == rollout:
+                    raise uncertainty
+                return original(path)
+            with patch.object(bindings, "_unredirected", side_effect=guarded):
+                result = self.historical_read(dbpath, boot)
+            self.assertEqual(result["historicalUnavailableRecords"], [])
+            self.assertEqual(result["records"][0]["state"], "unknown")
+            self.assertNotIn("unavailableKind", result["records"][0])
+
+    def test_metadata_changes_during_read_are_not_hidden_as_history(self):
+        boot = time.time()-1000
+        dbpath = self.activity_db([{"id":"old", "created":boot-10000, "updated":boot-5000}])
+        original = bindings._verified_missing_rollout
+        calls = []
+        def changed(path):
+            calls.append(path)
+            if len(calls) == 1:
+                with closing(sqlite3.connect(dbpath)) as db:
+                    db.execute("UPDATE threads SET updated_at=?", (boot+1,));db.commit()
+            return original(path)
+        with patch.object(bindings, "_verified_missing_rollout", side_effect=changed):
+            result = self.historical_read(dbpath, boot)
+        self.assertEqual(result["historicalUnavailableRecords"], [])
+        self.assertEqual(result["records"][0]["state"], "unknown")
+        self.assertEqual(result["records"][0]["reason"], "desktop_record_or_rollout_changed_during_read")
 
 
 if __name__ == "__main__":

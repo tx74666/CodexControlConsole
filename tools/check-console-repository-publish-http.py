@@ -21,9 +21,19 @@ spec.loader.exec_module(fixture)
 
 
 class RepositoryPublishError(ValueError):
-    def __init__(self, message, *, code=""):
+    def __init__(self, message, *, code="", diagnostic=None):
         super().__init__(message)
         self.code = code
+        self.diagnostic = diagnostic
+
+
+PATH_DIAGNOSTIC = {"code": "repo_path_missing", "category": "configuration", "severity": "error",
+                   "summary": "Fixture repository folder does not exist.",
+                   "nextStep": "Check the configured local folder.",
+                   "target": {"section": "connection", "field": "path"}}
+CONFLICT_DIAGNOSTIC = {"code": "settings_changed", "category": "configuration", "severity": "warning",
+                       "summary": "Fixture configuration changed elsewhere.",
+                       "nextStep": "Keep the draft and review current configuration.", "target": None}
 
 
 class Spy:
@@ -41,7 +51,7 @@ class Spy:
     def configure(self, settings, *, expected_settings_sha=None):
         self.calls.append(("configure", settings) if expected_settings_sha is None else ("configure", settings, expected_settings_sha))
         if expected_settings_sha == "b" * 64:
-            raise RepositoryPublishError("Configuration changed", code="settings_changed")
+            raise RepositoryPublishError("Configuration changed", code="settings_changed", diagnostic=CONFLICT_DIAGNOSTIC)
         return self.status()
 
     def preview(self, repo_id=None):
@@ -50,6 +60,8 @@ class Spy:
 
     def version_catalog(self, repo_id=None):
         self.calls.append(("version_catalog", repo_id))
+        if repo_id == "diagnostic-fixture":
+            raise RepositoryPublishError(PATH_DIAGNOSTIC["summary"], diagnostic=PATH_DIAGNOSTIC)
         return {"repositories": []}
 
     def run(self, request_id, repo_ids=None):
@@ -156,6 +168,11 @@ def main():
             check(service.calls[-1] == ("version_catalog", None), "Version catalog invoked a mutation")
             check(request("GET", base + "/versions?repoId=one")[0] == 200, "Single repository version catalog failed")
             check(service.calls[-1] == ("version_catalog", "one"), "Version catalog repository identity changed")
+            diagnostic_status, diagnostic_body = request("GET", base + "/versions?repoId=diagnostic-fixture")
+            check(diagnostic_status == 400 and json.loads(diagnostic_body).get("diagnostic") == PATH_DIAGNOSTIC,
+                  "Read-only repository failure lost its explicit cause and setting target")
+            check(service.calls[-1] == ("version_catalog", "diagnostic-fixture"),
+                  "Reading a diagnostic triggered a mutation or changed the repository identity")
             for headers in ({"X-Test-LAN": "1"}, {"Host": "evil.invalid"},
                             {"Origin": "https://evil.invalid"}, {"Sec-Fetch-Site": "cross-site"}):
                 reject("GET", base, headers=headers, code=403)
@@ -172,6 +189,8 @@ def main():
                 "settings": config, "expectedSettingsSha": "b" * 64})
             check(conflict_code == 409 and json.loads(conflict_body).get("code") == "settings_changed",
                   "CAS conflict must preserve a structured reload-required result")
+            check(json.loads(conflict_body).get("diagnostic") == CONFLICT_DIAGNOSTIC,
+                  "CAS diagnostic lost its next step or changed the conflict status")
             for malformed in (None, "", "not-a-sha", [], "A" * 64):
                 reject("POST", base + "/config", {"settings": config, "expectedSettingsSha": malformed})
             check(request("POST", base + "/preview", {"repoId": "one"})[0] == 200, "Preview failed")

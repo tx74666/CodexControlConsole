@@ -1752,7 +1752,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                     raise RepositoryPublishError("仓库提交读取地址无效。")
                 self.send_json(result)
             except RepositoryPublishError as error:
-                self.send_json({"error": str(error)}, status=400)
+                failure = {"error": str(error)}
+                if isinstance(getattr(error, "diagnostic", None), dict):
+                    failure["diagnostic"] = error.diagnostic
+                self.send_json(failure, status=400)
             except (OSError, RuntimeError):
                 self.send_json({"error": "暂时无法读取仓库操作，请核对原请求。"}, status=503)
             return
@@ -2291,10 +2294,14 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             except RequestBodyError as error:
                 self.send_json({"error": str(error)}, status=error.status)
             except RepositoryPublishError as error:
+                failure = {"error": str(error)}
+                if isinstance(getattr(error, "diagnostic", None), dict):
+                    failure["diagnostic"] = error.diagnostic
                 if getattr(error, "code", "") == "settings_changed":
-                    self.send_json({"error": str(error), "code": "settings_changed"}, status=409)
+                    failure["code"] = "settings_changed"
+                    self.send_json(failure, status=409)
                 else:
-                    self.send_json({"error": str(error)}, status=400)
+                    self.send_json(failure, status=400)
             except (OSError, RuntimeError):
                 self.send_json({"error": "请求回执暂时不明确，请读取同一次请求，勿重复提交。"}, status=503)
             return

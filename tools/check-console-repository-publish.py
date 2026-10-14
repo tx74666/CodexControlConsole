@@ -145,6 +145,7 @@ def test_any_staging_and_mixed_batch():
         (other / "new.fbx").write_bytes(b"FBX fixture")
         receipt = f.run(f.service())
         require(child(receipt)["status"] == "deferred" and "暂存" in child(receipt)["message"], receipt)
+        require(child(receipt)["diagnostic"]["code"] == "staged_selection" and child(receipt)["diagnostic"]["target"] is None, receipt)
         require((root / ".git" / "index").read_bytes() == index)
         require(child(receipt, 1)["status"] == "success", receipt)
         require(receipt["progress"] == {"total": 2, "completed": 2, "succeeded": 1, "skipped": 0,
@@ -168,6 +169,7 @@ def test_sync_missing_and_preview_no_sync():
         source.unlink()
         result = f.run(service, "request_00000002")
         require(child(result)["status"] == "deferred" and "来源缺失" in child(result)["message"], result)
+        require(child(result)["diagnostic"]["code"] == "sync_missing", result)
 
 
 def test_duplicate_and_restart_failed_push():
@@ -183,6 +185,7 @@ def test_duplicate_and_restart_failed_push():
         first = f.run(service)
         sha = child(first)["commitSha"]
         require(child(first)["status"] == "push_failed" and sha, first)
+        require(child(first)["diagnostic"]["code"] == "git_authentication" and child(first)["diagnostic"]["target"] is None, first)
         require(child(first)["uploadSummary"]["count"] == 0, first)
         require(service.run("request_00000001") == first)
         (root / "tracked.txt").write_text("later edit must remain\n")
@@ -232,6 +235,7 @@ def test_unknown_push_then_verified_original():
         (root / "new.txt").write_text("one\n")
         first = f.run(f.service(Unknown))
         require(child(first)["status"] == "verification_required", first)
+        require(child(first)["diagnostic"]["code"] == "receipt_unverified" and child(first)["diagnostic"]["target"] is None, first)
         require(child(first)["uploadSummary"]["count"] == 0, first)
         sha = child(first)["commitSha"]
         (root / "new.txt").write_text("later\n")
@@ -257,6 +261,7 @@ def test_remote_ahead_and_during_fetch():
         (root / "new.txt").write_text("local\n")
         result = f.run(f.service())
         require(child(result)["status"] == "deferred" and "领先" in child(result)["message"], result)
+        require(child(result)["diagnostic"]["code"] == "remote_ahead" and child(result)["diagnostic"]["target"] is None, result)
         require(f.git(root, "rev-parse", "HEAD") == original)
         require(not (root / ".git" / "FETCH_HEAD").exists())
     class Race(Service):
@@ -972,6 +977,7 @@ def test_upload_counter_lfs_failure_does_not_advance():
         (root / "asset.blend").write_bytes(b"saved LFS fixture asset")
         failed = f.run(f.service(FailedLfs))
         require(child(failed)["status"] == "push_failed" and child(failed)["uploadSummary"]["count"] == 0, failed)
+        require(child(failed)["diagnostic"]["code"] == "git_lfs" and child(failed)["diagnostic"]["target"] is None, failed)
         require(f.git(remote, "rev-parse", "main") == original)
         resumed = f.run(f.service(), "request_00000002")
         require(child(resumed)["commitSha"] == child(failed)["commitSha"] and child(resumed)["uploadSummary"]["count"] == 1, resumed)
@@ -1109,6 +1115,190 @@ def test_upload_counter_deleted_ledger_retry_preserves_later_work():
         require(child(fourth)["status"] == "success" and child(fourth)["uploadSummary"]["count"] == 2, fourth)
         require(service.pushes == 2 and child(fourth)["commitSha"] == sha)
         require((root / "new.txt").read_text() == "later edit must remain\n" and f.git(root, "rev-list", "--count", "HEAD") == "3")
+
+
+def test_diagnostic_known_targets_and_unknown_safety():
+    cases = [("repo_missing", "connection", "error", {"section":"connection", "field":"path"}),
+             ("branch_mismatch", "connection", "warning", {"section":"connection", "field":"branch"}),
+             ("remote_config", "connection", "warning", {"section":"connection", "field":"remote"}),
+             ("remote_ownership", "connection", "error", {"section":"connection", "field":"repositoryUrl"}),
+             ("sync_missing", "sync", "warning", {"section":"sync", "field":"sync"}),
+             ("staged_selection", "repository", "warning", None),
+             ("remote_ahead", "remote", "warning", None),
+             ("receipt_unverified", "verification", "warning", None)]
+    for code, category, severity, target in cases:
+        error = Error("actual safe guard", code=code)
+        value = Service._diagnostic(error)
+        require(value["code"] == code and value["category"] == category and value["severity"] == severity, value)
+        require(value["target"] == target and value["summary"] == str(error) and bool(value["nextStep"]), value)
+    # Text is not evidence for auth/LFS/remote ownership, even if it names them.
+    error = Error("authentication / LFS / wrong remote: still an untyped safe error")
+    value = Service._diagnostic(error)
+    require(value["code"] == "manual_check" and value["category"] == "unknown" and value["target"] is None)
+    require(value["summary"] == str(error))
+    require(module._make_diagnostic("new_unrecognized_code", "safe", source_id="made_up")["target"] is None)
+    require(module._make_diagnostic("version_authority", "missing authority")["target"] is None)
+    authority = module._make_diagnostic("version_authority", "missing authority", source_id="actual_source")
+    require(authority["target"] == {"section":"versions", "field":"versionPath", "sourceId":"actual_source"})
+
+
+def test_diagnostic_git_categories_do_not_expose_details():
+    expected = {"authentication":("git_authentication", "authentication"), "permissions":("git_permissions", "permissions"),
+                "rules":("git_rules", "rules"), "lfs":("git_lfs", "lfs"), "timeout":("git_timeout", "network"),
+                "remote_changed":("remote_changed", "remote"), "missing_git":("git_missing", "repository")}
+    private_detail = "https://credential@private.invalid/repo authentication lfs"
+    for code, (expected_code, category) in expected.items():
+        value = Service._diagnostic(module._GitFailure(code, detail=private_detail))
+        require(value["code"] == expected_code and value["category"] == category and value["target"] is None, value)
+        require("credential" not in json.dumps(value) and "private.invalid" not in json.dumps(value), value)
+    value = Service._diagnostic(module._GitFailure("git_failed", detail=private_detail))
+    require(value["code"] == "manual_check" and value["target"] is None and value["category"] == "unknown", value)
+    require("credential" not in json.dumps(value))
+    require(Service._diagnostic(OSError("private filesystem path"))["target"] is None)
+
+
+def test_diagnostic_git_receipts_ignore_keyword_paths():
+    # Exercise the actual _git boundary with fake subprocess output. No process,
+    # network, Git repository, API, user data or service is touched.
+    cases = [
+        ("fatal: repository 'https://github.com/owner/lfs-publickey-403-authentication' not found", "git_failed"),
+        ("fatal: cannot open D:/lfs/publickey/403/repository rule: unknown failure", "git_failed"),
+        ("Uploading LFS objects: 100% (1/1)\nfatal: repository not found", "git_failed"),
+        ("fatal: Authentication failed for 'https://github.com/owner/repo'", "authentication"),
+        ("git@github.com: Permission denied (publickey).", "authentication"),
+        ("fatal: could not read Username for 'https://github.com': terminal prompts disabled", "authentication"),
+        ("fatal: unable to access 'https://github.com/owner/repo/': The requested URL returned error: 401", "authentication"),
+        ("fatal: unable to access 'https://github.com/owner/repo/': The requested URL returned error: 403", "permissions"),
+        ("error: No such remote 'origin'", "remote_config"),
+        ("remote: Write access to repository not granted.", "permissions"),
+        ("Git LFS upload failed: missing local object", "lfs"),
+        ("error: external filter 'git-lfs filter-process' failed", "lfs"),
+        ("remote: error: GH008: Your push referenced unknown Git LFS objects", "lfs"),
+        ("remote: error: GH013: Repository rule violations found for refs/heads/main.", "rules"),
+        (" ! [remote rejected] main -> main (pre-receive hook declined)", "rules"),
+        (" ! [rejected] main -> main (fetch first)", "remote_changed"),
+        ("hint: unrelated text mentions non-fast-forward / publickey / lfs / 403", "git_failed"),
+        ("fatal: unable to access 'https://github.com/owner/401/': The requested URL returned error: 404", "git_failed"),
+        ("fatal: cannot open 'D:/401/error: No such remote origin': unknown failure", "git_failed"),
+        ("hint: error: No such remote 'origin'", "git_failed"),
+        ("Uploading error: No such remote 'origin'", "git_failed"),
+    ]
+    actual_which, actual_run = module.shutil.which, module.subprocess.run
+    service = object.__new__(Service)
+    service._test_mode = False
+    calls = []
+    try:
+        module.shutil.which = lambda name: "fixture-git"
+        for stderr, expected in cases:
+            def fake_run(arguments, **kwargs):
+                calls.append(arguments)
+                require(arguments[:3] == ["fixture-git", "-C", "fixture"] and arguments[3] == "status")
+                return type("Receipt", (), {"returncode":1, "stderr":stderr.encode(), "stdout":b""})()
+            module.subprocess.run = fake_run
+            try:
+                service._git(Path("fixture"), "status")
+                require(False, "Nonzero Git receipt must remain a failure")
+            except module._GitFailure as exc:
+                require(exc.code == expected and exc.returncode == 1, (stderr, exc.code, expected))
+                value = Service._diagnostic(exc)
+                expected_target = {"section":"connection", "field":"remote"} if expected == "remote_config" else None
+                require(value["target"] == expected_target and stderr not in json.dumps(value), value)
+                if expected == "remote_config":
+                    require(value["code"] == "remote_config" and value["category"] == "connection", value)
+                    require("不存在" in value["summary"] and "origin" not in json.dumps(value), value)
+                if expected == "git_failed":
+                    require(value["category"] == "unknown" and value["code"] == "manual_check", value)
+        require(len(calls) == len(cases))
+    finally:
+        module.shutil.which, module.subprocess.run = actual_which, actual_run
+
+
+def test_diagnostic_activity_is_an_unconfirmed_boundary():
+    service = object.__new__(Service)
+    service._busy_check = lambda root: "Desktop Codex lifecycle boundary is unverified; publication deferred."
+    try:
+        service._busy_reason(Path("fixture"))
+        require(False, "Unverified activity must still defer")
+    except Error as exc:
+        value = Service._diagnostic(exc)
+        require(value["code"] == "activity_unconfirmed" and value["target"] is None, value)
+        require(value["summary"] == str(exc) and "确认或完成" in value["nextStep"] and "Codex" in value["nextStep"], value)
+        require(not any(word in value["nextStep"] for word in ("关闭", "强制", "绕过", "移除锁")), value)
+
+
+class DiagnosticReadFixture(Service):
+    # Pure read contract fixture: any unexpected Git/write/busy call is a failure.
+    def __init__(self, *, error=None, sources=None, components=None, sync_state="changed"):
+        self.allowed = True
+        self.error = error
+        self.sources = sources or []
+        self.components = components or []
+        self.sync_state = sync_state
+        self.repo = {"id":"fixture", "path":"fixture", "enabled":True, "versionPlans":[], "syncFiles":[]}
+
+    def _settings(self):
+        return {"repositories":[self.repo], "naming":dict(module._DEFAULT_NAMING)}
+
+    def _upload_summary(self, repo):
+        return {"state":"recorded", "count":0}
+
+    def _repo(self, repo):
+        if self.error:
+            raise self.error
+        return Path("fixture"), Path("fixture/git"), Path("fixture/common"), {}
+
+    def _sync_contract(self, repo):
+        if self.error:
+            raise self.error
+
+    def _version_sources(self, repo, root):
+        return self.sources
+
+    def _version_details(self, repo, context):
+        return [dict(component) for component in self.components]
+
+    def _local_changes(self, repo, context):
+        return {"hasChanges":True, "changeState":"changed", "worktreeChanged":True, "outgoingCommits":0,
+                "changedFiles":[], "headSha":"fixture_head", "syncState":self.sync_state, "syncChanged":True,
+                "changesReason":"Normal informational difference; mentions authentication without any failed receipt.",
+                "syncReason":"Saved source differs; will synchronize before determining version."}
+
+    def _planned_versions(self, *args, **kwargs):
+        return [], [], []
+
+    def _git(self, *args, **kwargs):
+        raise AssertionError("Diagnostic read fixture must not invoke Git")
+
+    def _save(self, *args):
+        raise AssertionError("Diagnostic read fixture must not write")
+
+
+def test_diagnostic_catalog_and_preview_guard_contract():
+    missing = DiagnosticReadFixture(error=Error("仓库目录不存在，请检查设置。", code="repo_missing"))
+    catalog = missing.version_catalog("fixture")["repositories"][0]
+    preview = missing.preview("fixture")["previews"][0]
+    require(catalog["diagnostic"]["code"] == "repo_missing" and catalog["message"] == str(missing.error), catalog)
+    require(preview["status"] == "deferred" and preview["diagnostic"]["target"] == {"section":"connection", "field":"path"}, preview)
+    sync = DiagnosticReadFixture(error=Error("同步来源缺失，请先保存来源文件；本仓库延期。", code="sync_missing"))
+    require(sync.preview()["previews"][0]["diagnostic"]["category"] == "sync")
+    unknown = DiagnosticReadFixture(error=module._GitFailure("git_failed", detail="authentication"))
+    require(unknown.version_catalog()["repositories"][0]["diagnostic"]["code"] == "manual_check")
+
+
+def test_diagnostic_normal_reasons_and_fallback_are_not_failures():
+    fallback = DiagnosticReadFixture().version_catalog()["repositories"][0]
+    require(fallback["diagnostic"]["code"] == "version_fallback" and fallback["diagnostic"]["severity"] == "info", fallback)
+    require(fallback["changeState"] == "changed" and fallback["syncState"] == "changed", fallback)
+    component = {"sourceId":"actual", "currentVersion":"1.2.3", "planState":"none", "versionChanged":False,
+                 "repositoryHeadSha":"fixture_head"}
+    normal = DiagnosticReadFixture(sources=[{"path":"manifest.json"}], components=[component]).version_catalog()["repositories"][0]
+    require(normal["diagnostic"] is None, "Nonempty normal reasons must not become an error: " + str(normal))
+    failure = {**component, "diagnostic":module._make_diagnostic("version_authority", "Cannot uniquely read actual authority", source_id="actual")}
+    identified = DiagnosticReadFixture(sources=[{"path":"manifest.json"}], components=[failure]).version_catalog()["repositories"][0]
+    require(identified["diagnostic"]["target"]["sourceId"] == "actual" and identified["diagnostic"]["severity"] == "warning", identified)
+    item = {"diagnostic":module._make_diagnostic("repo_missing", "missing root"), "components":[failure]}
+    Service._catalog_diagnostic(item)
+    require(item["diagnostic"]["code"] == "repo_missing", "Original repository failure has priority")
 
 
 TESTS = [v for k, v in tuple(globals().items()) if k.startswith("test_") and callable(v)]

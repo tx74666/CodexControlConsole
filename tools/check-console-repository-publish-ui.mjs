@@ -30,7 +30,7 @@ function harness(options = {}) {
   const timers = new Map(), calls = [], observers = [], listeners = new Map(), windowListeners = new Map(), storage = options.storage || new Map();
   let document, hook = options.hook, timerId = 0;
   class Element {
-    constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.parentElement = null; this.listeners = new Map(); this.attributes = {}; this.dataset = {}; this.style = {}; this.hidden = false; this.disabled = false; this.open = false; this.checked = false; this.value = ""; this.textContent = ""; this.className = ""; }
+    constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.parentElement = null; this.listeners = new Map(); this.attributes = {}; this.dataset = {}; this.style = {}; this.hidden = false; this.disabled = false; this.open = false; this.checked = false; this.value = ""; this.textContent = ""; this.className = ""; this.scrollTop = 0; this.scrollIntoViewCount = 0; this.focusCount = 0; }
     append(...items) { for (const item of items) { item.remove(); item.parentElement = this; this.children.push(item); } }
     replaceChildren(...items) { for (const old of this.children) old.parentElement = null; this.children = []; this.append(...items); }
     remove() { if (this.parentElement) { const parent = this.parentElement; parent.children.splice(parent.children.indexOf(this), 1); this.parentElement = null; } }
@@ -44,7 +44,8 @@ function harness(options = {}) {
     click() { const event = this.dispatch("click"); if (event && !event.defaultPrevented && this.tagName === "SUMMARY" && this.parentElement?.tagName === "DETAILS") { this.parentElement.open = !this.parentElement.open; this.parentElement.dispatch("toggle"); } }
     showModal() { this.open = true; }
     close() { this.open = false; this.dispatch("close"); }
-    focus() { document.activeElement = this; }
+    focus() { this.focusCount++; document.activeElement = this; }
+    scrollIntoView(options) { this.scrollIntoViewCount++; this.lastScrollIntoView = options; }
     set innerHTML(_) { throw new Error("Unsafe HTML assignment"); }
   }
   // Match the native DOM contract: HTMLTextAreaElement.type is getter-only.
@@ -84,7 +85,7 @@ function harness(options = {}) {
     const call = { url, method: init.method, body: init.body ? JSON.parse(init.body) : null, options: init }; calls.push(call);
     if (hook) { const value = await hook(call); if (value !== undefined) return value; }
     if (url === BASE && init.method === "GET") return response(snapshot);
-    if (url === BASE + "/versions" && init.method === "GET") return response(versionReply());
+    if ((url === BASE + "/versions" || url.startsWith(BASE + "/versions?")) && init.method === "GET") { const value = versionReply(), selected = new URL(url, "http://fixture.invalid").searchParams.get("repoId"); if (selected) value.repositories = value.repositories.filter(item => item.repoId === selected); return response(value); }
     if (url === BASE + "/config") {
       assert.equal(call.body.expectedSettingsSha, snapshot.settingsSha, "Configuration writes must compare the acknowledged service settings");
       snapshot.settings = structuredClone(call.body.settings); snapshot.settingsSha = settingsSha(snapshot.settings);
@@ -758,5 +759,91 @@ await test("old failed or unbound receipts have no cross-target retry while a bo
   }
   const h = harness({ snapshot: { settings: settings([current]), operation: operation(randomUUID(), "attention", [progressItem(current, "push_failed", "push")]) } }); await h.ready(); await h.expand();
   const status = h.byClass("repository-publish-compact-status"); assert.match(status.textContent, /失败/); assert.doesNotMatch(status.textContent, /历史回执/); status.click(); await settle(); const retry = h.button("继续此仓库"); assert.ok(retry); assert.equal(h.posts().length, 0); retry.click(); await settle(); assert.equal(h.posts("/run").length, 1); assert.deepEqual(h.posts("/run")[0].body.repoIds, [current.id]); assert.equal(h.posts("/config").length, 0);
+});
+const diagnostic = (extra = {}) => ({ code: "branch_mismatch", category: "connection", severity: "warning", summary: "Checked branch differs from configured branch.", nextStep: "Review the branch setting; preserve your work.", target: { section: "connection", field: "branch" }, ...extra });
+await test("status opens the reason at the dialog top and only explicit Locate focuses the named setting", async () => {
+  const h = harness({ catalog: { repositories: [{ repoId: "repository-001", hasChanges: null, changeState: "unknown", components: [], diagnostic: diagnostic(), message: "Checked branch differs from configured branch." }] } }); await h.ready(); await h.expand();
+  h.byClass("repository-publish-dialog").scrollTop = 460;
+  const calls = h.calls.length, button = h.byClass("repository-publish-compact-status"); assert.equal(button.disabled, false); button.click(); await settle();
+  assert.equal(h.byClass("repository-publish-dialog").open, true); assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, "Checked branch differs from configured branch."); assert.match(h.byClass("repository-publish-diagnosis-next").textContent, /Review the branch/);
+  assert.equal(h.byClass("repository-publish-dialog").scrollTop, 0); assert.equal(h.byClass("repository-publish-diagnosis").hidden, false); assert.equal(h.byClass("repository-publish-connection").open, false); assert.notEqual(h.document.activeElement, h.fields("branch")[0]); assert.equal(h.fields("branch")[0].scrollIntoViewCount, 0);
+  h.byClass("repository-publish-diagnosis-locate").click();
+  assert.equal(h.byClass("repository-publish-connection").open, true); assert.equal(h.document.activeElement, h.fields("branch")[0]); assert.equal(h.fields("branch")[0].value, "feature/music"); assert.ok(h.fields("branch")[0].getAttribute("aria-describedby"));
+  assert.equal(h.fields("branch")[0].scrollIntoViewCount, 1);
+  assert.equal(h.calls.length, calls); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
+});
+await test("explicit sync diagnostics open the mapping while preserving saved paths and raw drafts", async () => {
+  const repo = repository({ syncFiles: [{ source: "D:/Saved/Builder6.blend", target: "Build.blend" }] }), value = diagnostic({ code: "sync_missing", category: "sync", severity: "error", summary: "The configured saved work file is missing.", nextStep: "Save it in Blender or correct its source path.", target: { section: "sync", field: "sync" } });
+  const h = harness({ snapshot: { settings: settings([repo]) }, catalog: { repositories: [{ repoId: repo.id, components: [], syncState: "unknown", syncReason: value.summary, diagnostic: value }] } }); await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle();
+  assert.notEqual(h.document.activeElement, h.fields("sync")[0]); h.byClass("repository-publish-diagnosis-locate").click();
+  assert.equal(h.document.activeElement, h.fields("sync")[0]); assert.equal(h.fields("sync")[0].value, "D:/Saved/Builder6.blend -> Build.blend"); assert.equal(h.posts().length, 0);
+  await h.change("sync", "unfinished ->"); const raw = h.fields("sync")[0], posts = h.posts().length; h.byClass("repository-publish-compact-status").click(); await settle();
+  assert.equal(h.fields("sync")[0], raw); assert.equal(raw.value, "unfinished ->"); assert.equal(h.api.hasDraft(), true); assert.equal(h.posts().length, posts); assert.equal(h.posts("/run").length, 0);
+});
+await test("the trusted component source ID selects its own version field instead of the first plugin", async () => {
+  const sources = [{ path: "first.json", kind: "json", key: "version", name: "First" }, { path: "second.json", kind: "json", key: "version", name: "Second" }], repo = repository({ versionSources: sources });
+  const components = sources.map((source, i) => component({ ...source, sourceId: `version-authority-${i + 1}` })), value = diagnostic({ code: "version_authority", category: "versions", summary: "The second authority needs review.", target: { section: "versions", field: "versionPath", sourceId: components[1].sourceId } });
+  const h = harness({ snapshot: { settings: settings([repo]) }, catalog: { repositories: [{ repoId: repo.id, components, diagnostic: value }] } }); await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle();
+  assert.notEqual(h.document.activeElement, h.fields("versionPath")[1]); h.byClass("repository-publish-diagnosis-locate").click();
+  assert.equal(h.document.activeElement, h.fields("versionPath")[1]); assert.equal(h.fields("versionPath")[0].value, "first.json"); assert.equal(h.fields("versionPath")[1].value, "second.json"); assert.equal(h.posts().length, 0);
+});
+await test("fallback naming is informative and opens the existing global title without a failure or write", async () => {
+  const value = diagnostic({ code: "version_fallback", category: "naming", severity: "info", summary: "No independent version source; the saved progress title is used.", nextStep: "Keep the saved title or review naming.", target: { section: "naming", field: "fallbackTitle" } });
+  const h = harness({ catalog: { repositories: [{ repoId: "repository-001", components: [], hasChanges: false, changeState: "unchanged", versionState: "missing", diagnostic: value }] } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "无改动"); h.byClass("repository-publish-compact-status").click(); await settle();
+  assert.notEqual(h.document.activeElement, h.fields("fallback")[0]); h.byClass("repository-publish-diagnosis-locate").click();
+  assert.equal(h.document.activeElement, h.fields("fallback")[0]); assert.equal(h.fields("fallback")[0].value, "更新进度 {datetime}"); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
+});
+await test("unknown messages and benign nonempty reasons never generate a configuration fix or failure", async () => {
+  for (const item of [{ message: "A binary file changed; no feature diagnosis is known." }, { changesReason: "Read from a saved local tracking reference." }, { syncState: "unchanged", syncReason: "The saved source and snapshot match." }]) {
+    const h = harness({ catalog: { repositories: [{ repoId: "repository-001", components: [component()], hasChanges: false, changeState: "unchanged", ...item }] } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "无改动"); h.byClass("repository-publish-compact-status").click(); await settle();
+    assert.equal(h.byClass("repository-publish-diagnosis-locate").hidden, true); assert.equal(h.byClass("repository-publish-diagnosis").dataset.severity, "info"); assert.equal(h.posts().length, 0);
+  }
+});
+await test("malicious or unsupported diagnostic targets remain inert text and cannot choose arbitrary controls", async () => {
+  for (const value of [diagnostic({ target: { section: "__proto__", field: "path" } }), diagnostic({ target: { section: "connection", field: "notes" } }), diagnostic({ code: "manual_check", category: "unknown" }), diagnostic({ code: "version_authority", category: "versions", target: { section: "versions", field: "versionPath" } }), diagnostic({ code: "branch_mismatch", target: { section: "connection", field: "path" } })]) {
+    value.summary = '<img src=x onerror="evil()">'; const h = harness({ catalog: { repositories: [{ repoId: "repository-001", components: [], diagnostic: value }] } }); await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle();
+    assert.equal(h.byClass("repository-publish-diagnosis-locate").hidden, true); assert.ok(h.byClass("repository-publish-diagnosis-summary").textContent.includes("<img")); assert.equal(h.all().some(item => item.tagName === "IMG"), false); assert.equal(h.document.activeElement, null); assert.equal(h.posts().length, 0);
+  }
+});
+await test("single-repository recheck uses only a scoped GET and preserves the version deadline", async () => {
+  const pending = deferred(), repos = [repository(), repository({ id: "repository-002", path: "D:/Other" })], h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: repos.map(repo => ({ repoId: repo.id, components: [component()] })) }, hook(call) { if (call.url === BASE + "/versions?repoId=repository-001") return pending.promise; } });
+  await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); const calls = h.calls.length; h.byClass("repository-publish-diagnosis-recheck").click(); await settle();
+  assert.equal(h.calls.length, calls + 1); assert.equal(h.calls.at(-1).method, "GET"); assert.equal(h.calls.at(-1).url, BASE + "/versions?repoId=repository-001"); assert.equal([...h.timers.values()].filter(timer => timer.delay === 60000).length, 1); assert.equal([...h.timers.values()].some(timer => timer.delay === 10000), false);
+  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "2.3.4"); assert.match(h.byClass("repository-publish-compact-status", rowFor(h, repos[0].id)).textContent, /更新核对中/); assert.equal(h.byClass("repository-publish-compact-status", rowFor(h, repos[1].id)).textContent, "无改动");
+  pending.resolve(response({ repositories: [{ repoId: repos[0].id, components: [component({ currentVersion: "2.3.5" })], hasChanges: true, changeState: "changed", worktreeChanged: true }] })); await settle();
+  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "2.3.5"); assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).textContent, "2.3.4"); assert.equal(h.posts().length, 0); assert.equal(h.timers.size, 0);
+});
+await test("reading status is clickable while the actual request is pending and leaves no infinite spinner after timeout", async () => {
+  const h = harness({ hook(call) { if (call.url === BASE + "/versions") return new Promise((resolve, reject) => call.options.signal.addEventListener("abort", () => reject(new Error("Fixture timeout")), { once: true })); } }); await h.ready(); await h.expand();
+  const status = h.byClass("repository-publish-compact-status"); assert.equal(status.disabled, false); assert.match(status.textContent, /读取版本与本地差异/); status.click(); assert.match(h.byClass("repository-publish-diagnosis-next").textContent, /60 秒/);
+  const [[timerId, timer]] = h.timers; assert.equal(timer.delay, 60000); timer.fn(); await settle(); assert.equal(h.timers.has(timerId), false); assert.equal(h.timers.size, 0); assert.match(status.textContent, /超时/); assert.match(h.byClass("repository-publish-diagnosis-summary").textContent, /超时/); assert.equal(h.posts().length, 0); assert.equal(h.byClass("repository-publish-diagnosis-recheck").disabled, false);
+});
+await test("a failed refresh retains last known versions and the safe HTTP reason instead of relabeling it authentication", async () => {
+  const h = harness({ catalog: { repositories: [{ repoId: "repository-001", components: [component()] }] } }); await h.ready(); await h.expand();
+  h.hook(call => call.url === BASE + "/versions" ? { ok: false, status: 503, json: async () => ({ error: "Local repository service unavailable; retain original receipts.", code: "service_unavailable" }) } : undefined); await h.emitWindow("focus");
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4"); h.byClass("repository-publish-compact-status").click(); await settle(); assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, "Local repository service unavailable; retain original receipts."); assert.match(h.byClass("repository-publish-diagnosis-meta").textContent, /上次读取/); assert.equal(h.byClass("repository-publish-diagnosis-locate").hidden, true); assert.equal(h.posts().length, 0);
+});
+await test("late scoped diagnostics cannot focus or replace a newly saved branch and another repository", async () => {
+  const pending = deferred(), h = harness({ catalog: { repositories: [{ repoId: "repository-001", components: [component()] }] }, hook(call) { if (call.url === BASE + "/versions?repoId=repository-001") return pending.promise; } }); await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); h.byClass("repository-publish-diagnosis-recheck").click(); await settle();
+  await h.change("branch", "feature/reviewed-new-target"); const before = h.document.activeElement;
+  pending.resolve(response({ repositories: [{ repoId: "repository-001", components: [], diagnostic: diagnostic({ code: "repo_missing", severity: "error", summary: "Stale old checkout is missing", target: { section: "connection", field: "path" } }) }] })); await settle();
+  assert.doesNotMatch(h.byClass("repository-publish-diagnosis-summary").textContent, /Stale old checkout/); assert.equal(h.document.activeElement, before); assert.equal(h.fields("branch")[0].value, "feature/reviewed-new-target"); assert.equal(h.posts("/run").length, 0);
+});
+await test("diagnosis viewing and locating preserve an unsaved configuration and never autosave it", async () => {
+  const h = harness({ catalog: { repositories: [{ repoId: "repository-001", components: [], diagnostic: diagnostic() }] }, hook(call) { if (call.url === BASE + "/config") throw new Error("Fixture save failed"); } }); await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await h.change("notes", "Protected unsaved notes");
+  const field = h.fields("notes")[0], writes = h.posts().length; h.byClass("repository-publish-compact-status").click(); h.byClass("repository-publish-diagnosis-locate").click(); await settle(); assert.equal(h.fields("notes")[0], field); assert.equal(field.value, "Protected unsaved notes"); assert.equal(h.api.hasDraft(), true); assert.equal(h.posts().length, writes); assert.equal(h.byClass("repository-publish-diagnosis-recheck").disabled, true); assert.equal(h.posts("/run").length, 0);
+});
+await test("a historical diagnosis does not focus new-target settings or offer a cross-target retry", async () => {
+  const previous = repository(), current = { ...previous, branch: "feature/new-target" }, result = { ...progressItem(previous, "push_failed", "push"), diagnostic: diagnostic() }, h = harness({ snapshot: { settings: settings([current]), operation: operation(randomUUID(), "attention", [result]) } }); await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle();
+  assert.match(h.byClass("repository-publish-compact-status").textContent, /历史回执/); assert.equal(h.byClass("repository-publish-diagnosis-locate").hidden, true); assert.equal(h.button("继续此仓库"), undefined); assert.equal(h.posts().length, 0); assert.notEqual(h.document.activeElement, h.fields("branch")[0]);
+});
+await test("an asynchronous recheck updates the reason without stealing focus, scrolling or reopening a setting", async () => {
+  const pending = deferred(), value = diagnostic({ code: "remote_config", summary: "The configured remote needs review.", target: { section: "connection", field: "remote" } }), h = harness({ catalog: { repositories: [{ repoId: "repository-001", components: [component()], diagnostic: value }] }, hook(call) { if (call.url === BASE + "/versions?repoId=repository-001") return pending.promise; } });
+  await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); h.byClass("repository-publish-diagnosis-locate").click();
+  const remote = h.fields("remote")[0], notes = h.fields("notes")[0], dialog = h.byClass("repository-publish-dialog"); assert.equal(h.document.activeElement, remote); assert.equal(remote.scrollIntoViewCount, 1);
+  h.byClass("repository-publish-diagnosis-recheck").click(); await settle(); notes.focus(); notes.value = "Protected typing during recheck"; notes.dispatch("input"); dialog.scrollTop = 240; h.byClass("repository-publish-connection").open = false;
+  const focused = notes.focusCount, remoteFocus = remote.focusCount, remoteScroll = remote.scrollIntoViewCount;
+  pending.resolve(response({ repositories: [{ repoId: "repository-001", components: [component()], diagnostic: diagnostic({ code: "repo_missing", severity: "error", summary: "The new local check needs a path review.", target: { section: "connection", field: "path" } }) }] })); await settle();
+  assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, "The new local check needs a path review."); assert.equal(h.document.activeElement, notes); assert.equal(notes.focusCount, focused); assert.equal(remote.focusCount, remoteFocus); assert.equal(remote.scrollIntoViewCount, remoteScroll); assert.equal(h.fields("path")[0].scrollIntoViewCount, 0); assert.equal(h.byClass("repository-publish-connection").open, false); assert.equal(dialog.scrollTop, 240); assert.equal(notes.value, "Protected typing during recheck"); assert.equal(h.api.hasDraft(), true); assert.equal(h.posts().length, 0);
 });
 console.log(`PASS ${count} isolated repository-publish UI fixtures`);
