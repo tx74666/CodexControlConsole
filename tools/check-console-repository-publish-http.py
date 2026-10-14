@@ -69,6 +69,19 @@ class Spy:
         return {"requestId": request_id, "status": "working"}
 
 
+class CatalogSpy:
+    def __init__(self, publisher):
+        self.publisher = publisher
+
+    def status(self):
+        return self.publisher.status()
+
+    def snapshot(self, repo_id=None, *, refresh=False):
+        self.publisher.calls.append(("catalog_snapshot", repo_id, refresh))
+        return {"cacheIdentity": "a" * 64, "versionSnapshots": [], "versionSources": [],
+                "versionReadStates": {}, "complete": True}
+
+
 def main():
     count = 0
     def check(value, message):
@@ -129,6 +142,7 @@ def main():
             "RepositoryPublishError": RepositoryPublishError,
             "DeveloperUpdateError": fixture.DeveloperUpdateError,
             "CONSOLE_REPOSITORY_PUBLISH": service,
+            "CONSOLE_REPOSITORY_CATALOG": CatalogSpy(service),
             "CONSOLE_DEVELOPER_UPDATE": SimpleNamespace(busy=False, state_dir=root / "cache/developer-update-private"),
             "BLENDER_MUTATION_API_PATHS": frozenset(),
             "PHONE_DEVICE_STORE": SimpleNamespace(directory=root / "phone-private"),
@@ -173,11 +187,18 @@ def main():
                   "Read-only repository failure lost its explicit cause and setting target")
             check(service.calls[-1] == ("version_catalog", "diagnostic-fixture"),
                   "Reading a diagnostic triggered a mutation or changed the repository identity")
+            snapshot_status, snapshot_body = request("GET", base + "/versions?snapshot=1&refresh=1&repoId=one")
+            check(snapshot_status == 200 and json.loads(snapshot_body).get("complete") is True,
+                  "Fast snapshot route did not return immediately")
+            check(service.calls[-1] == ("catalog_snapshot", "one", True), "Snapshot refresh changed repository scope")
+            check(request("GET", base + "/versions?snapshot=1&repoId=one")[0] == 200,
+                  "Snapshot polling failed")
+            check(service.calls[-1] == ("catalog_snapshot", "one", False), "Snapshot polling scheduled another scan")
             for headers in ({"X-Test-LAN": "1"}, {"Host": "evil.invalid"},
                             {"Origin": "https://evil.invalid"}, {"Sec-Fetch-Site": "cross-site"}):
                 reject("GET", base, headers=headers, code=403)
                 reject("POST", base + "/run", {"requestId": "one"}, headers, 403)
-            for path in ("?command=push", "/operation?requestId=a&requestId=b", "/operation?remote=evil", "/versions?repoId=", "/versions?repoId=a&repoId=b", "/versions?targetVersion=evil", "/unknown"):
+            for path in ("?command=push", "/operation?requestId=a&requestId=b", "/operation?remote=evil", "/versions?repoId=", "/versions?repoId=a&repoId=b", "/versions?targetVersion=evil", "/versions?snapshot=0", "/versions?refresh=1", "/versions?snapshot=1&refresh=2", "/versions?snapshot=1&snapshot=1", "/versions?snapshot=1&repoId=a&repoId=b", "/unknown"):
                 reject("GET", base + path)
             config = {"repositories": [], "naming": {"preset": "version"}}
             check(request("POST", base + "/config", {"settings": config})[0] == 200, "Config failed")

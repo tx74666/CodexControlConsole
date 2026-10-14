@@ -13,7 +13,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import queue
 import re
+import signal
 import shutil
 import stat
 import subprocess
@@ -143,12 +145,81 @@ def _git_error_category(stderr):
     return "git_failed"
 
 
+def _parse_transfer_progress(record, *, lfs_file=False):
+    """Only numeric Git/LFS receipts become progress; never retain file names.
+
+    A transfer substep reaching 100% is not a verified repository delivery.
+    LFS's file count is estimated, and its byte percentage covers one file.
+    """
+    text = record.decode("utf-8", "replace") if isinstance(record, bytes) else str(record)
+    if len(text) > 8192:
+        return None
+    if lfs_file:
+        match = re.fullmatch(r"upload (\d{1,16})/(\d{1,16}) (\d{1,16})/(\d{1,16})(?:\s+.*)?", text.strip())
+        if not match:
+            return None
+        number, files, current, total = map(int, match.groups())
+        if not 0 < number <= files < 2 ** 53 or not 0 <= current <= total < 2 ** 53 or not total:
+            return None
+        return {"state": "measured", "scope": "file", "unit": "bytes", "current": current, "total": total,
+                "percent": min(99.9, round(current * 100 / total, 1)) if current < total else 100,
+                "source": "git-lfs", "step": "lfs_upload",
+                "fileIndex": number, "fileTotal": files, "estimatedFileTotal": True}
+    match = re.fullmatch(r"(Counting objects|Compressing objects|Writing objects|Uploading LFS objects):\s*(\d{1,3})%\s*\((\d{1,16})/(\d{1,16})\)(?:[,\s].*)?", text.strip())
+    if not match:
+        return None
+    label, percent, current, total = match.groups()
+    percent, current, total = int(percent), int(current), int(total)
+    if not 0 <= current <= total < 2 ** 53 or not total or not 0 <= percent <= 100:
+        return None
+    if abs(percent - current * 100 / total) > 1:
+        return None
+    return {"state": "measured", "scope": "phase", "unit": "objects", "current": current, "total": total,
+            "percent": percent, "source": "git-lfs" if label == "Uploading LFS objects" else "git",
+            "step": {"Counting objects": "counting_objects", "Compressing objects": "compressing_objects",
+                     "Writing objects": "writing_objects", "Uploading LFS objects": "lfs_upload"}[label]}
+
+
+def _windows_git_job(process):
+    """Own this Git child's descendants, without touching shared processes.
+
+    Closing the job normally does not terminate children. Timeout explicitly
+    terminates only processes in this newly created, unnamed job.
+    """
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel.TerminateJobObject.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.CreateJobObjectW(None, None)
+    if not handle:
+        raise OSError(ctypes.get_last_error(), "Cannot own Git process job")
+    if not kernel.AssignProcessToJobObject(handle, wintypes.HANDLE(int(process._handle))):
+        code = ctypes.get_last_error()
+        kernel.CloseHandle(handle)
+        raise OSError(code, "Cannot assign owned Git process job")
+    return lambda: kernel.TerminateJobObject(handle, 1), lambda: kernel.CloseHandle(handle)
+
+
 def _sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
 def _json_sha(value):
     return _sha(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+
+
+def catalog_source_identity(repository, naming):
+    """Bind display results to the exact configuration used during this read."""
+    value = {"repository": repository, "naming": naming}
+    return _sha(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                           allow_nan=False).encode("utf-8"))
 
 
 def _repo_settings_sha(repo):
@@ -233,7 +304,9 @@ def _excluded(path, patterns):
             or pieces[-1].startswith(".env.") or any(_matches(path, p) for p in patterns))
 
 
-def _stable(path):
+def _stable(path, *, check=None):
+    if check:
+        check()
     path = _safe_path(path)
     before = path.stat()
     if not path.is_file():
@@ -241,11 +314,15 @@ def _stable(path):
     digest = hashlib.sha256()
     with _read_lease(path), path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
+            if check:
+                check()
             digest.update(block)
     after = path.stat()
     key = lambda s: (s.st_size, s.st_mtime_ns, s.st_ctime_ns, s.st_ino)
     if key(before) != key(after):
         raise RepositoryPublishError("文件正在写入，请保存完成后重试。", code="worktree_changed")
+    if check:
+        check()
     return {"bytes": after.st_size, "sha256": digest.hexdigest()}
 
 
@@ -411,7 +488,10 @@ class RepositoryPublishService:
                 settings["warnings"] = self._warnings
                 _atomic(self._settings_path, settings)
 
-    def _git(self, root, *arguments, data=None, index=None, timeout=35, config=None):
+    def _git(self, root, *arguments, data=None, index=None, timeout=35, config=None, progress=None):
+        remaining = self._catalog_remaining()
+        if remaining is not None:
+            timeout = min(timeout, remaining)
         executable = shutil.which("git")
         if not executable:
             raise _GitFailure("missing_git")
@@ -435,18 +515,189 @@ class RepositoryPublishService:
             if not Path(root).resolve().is_relative_to(self._sandbox):
                 raise RepositoryPublishError("测试操作超出隔离目录。")
         try:
-            process = subprocess.run([executable, "-C", str(root), *arguments], input=data,
-                                     capture_output=True, env=env, timeout=timeout,
-                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            command = [executable, "-C", str(root), *arguments]
+            process = (self._stream_git(command, env, data, timeout, progress) if progress is not None else
+                       subprocess.run(command, input=data, capture_output=True, env=env, timeout=timeout,
+                                      creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
         except subprocess.TimeoutExpired as exc:
             raise _GitFailure("timeout") from exc
         except OSError as exc:
             raise _GitFailure("git_unavailable") from exc
         if process.returncode:
-            text = process.stderr.decode("utf-8", "replace").lower()
+            text = process.stderr.decode("utf-8", "replace").replace("\r", "\n").lower()
             category = _git_error_category(text)
             raise _GitFailure(category, returncode=process.returncode)
         return process.stdout
+
+    def _catalog_remaining(self):
+        deadline = getattr(getattr(self, "_lease", None), "catalog_deadline", None)
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _GitFailure("timeout")
+        return remaining
+
+    def _catalog_stable(self, path):
+        if self._catalog_remaining() is None:
+            return _stable(path)
+        return _stable(path, check=self._catalog_remaining)
+
+    def _stream_git(self, command, env, data, timeout, progress):
+        """Drain both byte pipes while the worker can publish live snapshots.
+
+        Hooks, filters, credentials and exact push arguments remain unchanged.
+        Transfer telemetry is optional and cannot turn a push into a success.
+        """
+        events, stop = queue.Queue(maxsize=128), threading.Event()
+        chunks = {"stdout": [], "stderr": []}
+        readers, child, lfs_path, lfs_stream = [], None, None, None
+        terminate_job, close_job = None, None
+        trace_buffer = b""
+        env = dict(env)
+        env.setdefault("GIT_LFS_FORCE_PROGRESS", "1")
+        # Preserve any user-supplied telemetry destination, never read it.
+        if not env.get("GIT_LFS_PROGRESS"):
+            descriptor, name = tempfile.mkstemp(prefix="lfs-progress-", suffix=".tmp", dir=self.state_dir)
+            os.close(descriptor)
+            lfs_path = Path(name)
+            env["GIT_LFS_PROGRESS"] = str(lfs_path)
+            lfs_stream = lfs_path.open("rb")
+
+        def emit(record):
+            while not stop.is_set():
+                try:
+                    events.put(record, timeout=.05)
+                    return
+                except queue.Full:
+                    pass
+
+        def read_pipe(name, stream):
+            pending = b""
+            try:
+                while not stop.is_set():
+                    block = os.read(stream.fileno(), 65536)
+                    if not block:
+                        break
+                    chunks[name].append(block)
+                    records = re.split(br"[\r\n]", pending + block)
+                    pending = records.pop()
+                    for record in records:
+                        if record:
+                            value = _parse_transfer_progress(record)
+                            if value:
+                                emit(value)
+                    # A malformed huge output line never becomes telemetry.
+                    if len(pending) > 8192:
+                        pending = b""
+                if pending:
+                    value = _parse_transfer_progress(pending)
+                    if value:
+                        emit(value)
+            except OSError:
+                emit({"pipeError": True})
+            finally:
+                stream.close()
+                emit({"pipeDone": name})
+
+        def write_input():
+            try:
+                if data:
+                    remaining = memoryview(data)
+                    while remaining and not stop.is_set():
+                        written = child.stdin.write(remaining)
+                        if not written:
+                            break
+                        remaining = remaining[written:]
+            except (BrokenPipeError, OSError):
+                pass  # The actual process receipt remains authoritative.
+            finally:
+                child.stdin.close()
+
+        def read_lfs():
+            nonlocal trace_buffer
+            if lfs_stream is None:
+                return
+            block = lfs_stream.read(65536)
+            if block:
+                records = (trace_buffer + block).split(b"\n")
+                trace_buffer = records.pop()
+                for record in records:
+                    value = _parse_transfer_progress(record.rstrip(b"\r"), lfs_file=True)
+                    if value:
+                        progress(value)
+                if len(trace_buffer) > 8192:
+                    trace_buffer = b""
+
+        def stop_owned():
+            if terminate_job is not None:
+                terminate_job()
+            elif child is not None and os.name != "nt":
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if child is not None and child.poll() is None:
+                child.kill()
+            if child is not None:
+                child.wait(timeout=5)
+
+        try:
+            child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     env=env, bufsize=0, start_new_session=os.name != "nt",
+                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            if os.name == "nt":
+                terminate_job, close_job = _windows_git_job(child)
+            for name in ("stdout", "stderr"):
+                reader = threading.Thread(target=read_pipe, args=(name, getattr(child, name)), daemon=True,
+                                          name="repository-git-" + name)
+                readers.append(reader)
+                reader.start()
+            writer = threading.Thread(target=write_input, daemon=True, name="repository-git-stdin")
+            readers.append(writer)
+            writer.start()
+            deadline = time.monotonic() + timeout
+            done, pipe_error = set(), False
+            while len(done) < 2 or child.poll() is None:
+                if time.monotonic() >= deadline:
+                    stop_owned()
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    value = events.get(timeout=min(.05, max(.001, deadline - time.monotonic())))
+                    if "pipeDone" in value:
+                        done.add(value["pipeDone"])
+                    elif "pipeError" in value:
+                        pipe_error = True
+                    else:
+                        progress(value)
+                except queue.Empty:
+                    pass
+                read_lfs()
+            while not events.empty():
+                value = events.get_nowait()
+                if "state" in value:
+                    progress(value)
+            read_lfs()
+            if pipe_error:
+                raise OSError("Git output pipe became unreadable")
+            return subprocess.CompletedProcess(command, child.returncode, b"".join(chunks["stdout"]), b"".join(chunks["stderr"]))
+        except BaseException:
+            if child is not None:
+                stop_owned()
+            raise
+        finally:
+            stop.set()
+            for reader in readers:
+                reader.join(timeout=1)
+            if close_job is not None:
+                close_job()
+            if lfs_stream is not None:
+                lfs_stream.close()
+            if lfs_path is not None:
+                try:
+                    lfs_path.unlink(missing_ok=True)
+                except OSError:
+                    pass  # An owned trace is not a repository upload file.
 
     def _text(self, root, *args, **kwargs):
         return self._git(root, *args, **kwargs).decode("utf-8", "replace").strip()
@@ -603,9 +854,9 @@ class RepositoryPublishService:
             if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > VERSION_MAX_BYTES:
                 raise RepositoryPublishError("版本文件缺失、超出仓库或过大，请手动准备版本。")
             with _read_lease(path):
-                before = _stable(path)
+                before = self._catalog_stable(path)
                 raw = path.read_bytes()
-                if _stable(path) != before or _sha(raw) != before["sha256"]:
+                if self._catalog_stable(path) != before or _sha(raw) != before["sha256"]:
                     raise RepositoryPublishError("版本文件正在变化，请保存完成后重试。")
             return raw
         return read
@@ -696,8 +947,9 @@ class RepositoryPublishService:
                 return result
             records = self._sync_preflight(repo, root)
             for mapping, source, target, proof in records:
-                target_proof = _stable(target) if target.exists() else None
-                if _stable(source) != proof:
+                self._catalog_remaining()
+                target_proof = self._catalog_stable(target) if target.exists() else None
+                if self._catalog_stable(source) != proof:
                     raise RepositoryPublishError("同步来源正在写入，请保存后重试。", code="sync_writing")
                 if target_proof != proof:
                     result["syncDifferences"].append(mapping["target"])
@@ -710,16 +962,32 @@ class RepositoryPublishService:
             result.update(syncChanged=None, syncState="unknown", syncReason=self._error(exc), syncDifferences=[], diagnostic=self._diagnostic(exc))
         return result
 
+    def _head_commit(self, root, head):
+        """Read this exact commit's committer time, never a refresh timestamp."""
+        if not _SHA.fullmatch(str(head)):
+            return None
+        try:
+            raw = self._git(root, "show", "-s", "--no-show-signature", "--format=%H%x00%ct", head).strip()
+            fields = raw.split(b"\0")
+            if (len(fields) != 2 or fields[0].decode("ascii") != head
+                    or not re.fullmatch(br"-?\d{1,16}", fields[1])):
+                return None
+            committed_at = datetime.fromtimestamp(int(fields[1]), timezone.utc).isoformat()
+            return {"sha": head, "committedAt": committed_at}
+        except (_GitFailure, UnicodeError, ValueError, OverflowError, OSError):
+            return None
+
     def _local_changes(self, repo, context):
         """Display-only Git state; no fetch, synchronization, staging or locks."""
         root = context[0]
         result = {"hasChanges": None, "changeState": "unknown", "worktreeChanged": None,
                   "outgoingCommits": None, "remoteReference": "", "changesReason": "", "changedFiles": [], "headSha": "",
-                  "outgoingBaselineSha": "", "outgoingBaselineSource": "", "deliveryVerifiedAt": "",
+                  "outgoingBaselineSha": "", "outgoingBaselineSource": "", "deliveryVerifiedAt": "", "lastCommit": None,
                   "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
         try:
             head = self._text(root, "rev-parse", "HEAD")
             result["headSha"] = head
+            last_commit = self._head_commit(root, head)
             status = self._git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames")
             records = [record for record in status.split(b"\0") if record]
             if any(len(record) < 4 or record[2:3] != b" " for record in records):
@@ -760,6 +1028,7 @@ class RepositoryPublishService:
             result.update(self._saved_sync_changes(repo, root))
             if self._text(root, "rev-parse", "HEAD") != head or self._git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames") != status:
                 raise RepositoryPublishError("读取差异期间工作树或 HEAD 已变化。", code="worktree_changed")
+            result["lastCommit"] = last_commit
             if result["worktreeChanged"] or result["syncChanged"] is True or result["outgoingCommits"] is not None and result["outgoingCommits"] > 0:
                 result.update(hasChanges=True, changeState="changed")
             elif result["outgoingCommits"] == 0 and result["syncChanged"] is False:
@@ -873,7 +1142,25 @@ class RepositoryPublishService:
         elif summary.get("state") in {"unknown", "pending"}:
             item["diagnostic"] = _make_diagnostic("receipt_unverified", summary.get("reason") or "上传记录待核对。")
 
-    def version_catalog(self, repo_id=None):
+    def version_catalog(self, repo_id=None, *, deadline_seconds=None):
+        """A bounded optional display read never limits a later real upload."""
+        if deadline_seconds is None:
+            return self._version_catalog_read(repo_id)
+        if type(deadline_seconds) not in {int, float} or not 0 < deadline_seconds <= 120:
+            raise RepositoryPublishError("版本读取时限无效。")
+        sentinel = object()
+        previous = getattr(self._lease, "catalog_deadline", sentinel)
+        deadline = time.monotonic() + deadline_seconds
+        self._lease.catalog_deadline = min(previous, deadline) if previous is not sentinel else deadline
+        try:
+            return self._version_catalog_read(repo_id)
+        finally:
+            if previous is sentinel:
+                del self._lease.catalog_deadline
+            else:
+                self._lease.catalog_deadline = previous
+
+    def _version_catalog_read(self, repo_id=None):
         """Read exact current versions; never sync, stage, fetch or change files."""
         if not self.allowed:
             raise RepositoryPublishError("当前入口不允许读取版本配置。")
@@ -886,11 +1173,15 @@ class RepositoryPublishService:
             if repo_id is not None and repo["id"] != repo_id:
                 continue
             item = {"repoId": repo["id"], "name": Path(repo["path"]).name or repo["id"], "components": [], "message": "",
+                    "readState": "ready",
+                    "sourceIdentity": catalog_source_identity(repo, settings.get("naming", {})),
+                    "lastCommit": None,
                     "uploadSummary": self._upload_summary(repo),
                     "hasChanges": None, "changeState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
                     "diagnostic": None, "planState": "none", "versionChanged": None, "versionState": "unknown",
                     "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
             try:
+                self._catalog_remaining()
                 context = self._repo(repo)
                 root = context[0]
                 sources = self._version_sources(repo, root)
@@ -914,7 +1205,9 @@ class RepositoryPublishService:
                         item["diagnostic"] = _make_diagnostic("version_fallback", item["message"])
                 if item.get("syncState") == "unknown":
                     item["message"] = item["syncReason"]
+                self._catalog_remaining()
             except (RepositoryPublishError, _GitFailure, OSError) as exc:
+                item["readState"] = "error"
                 item["message"] = self._error(exc)
                 item["diagnostic"] = self._diagnostic(exc)
                 item.update(hasChanges=None, changeState="unknown", worktreeChanged=None)
@@ -941,6 +1234,7 @@ class RepositoryPublishService:
         paths = [item["path"] for item in files]
         sync_paths, sync_identities = set(), set()
         for mapping in repo["syncFiles"]:
+            self._catalog_remaining()
             for location in (mapping["source"], root / mapping["target"]):
                 location = _safe_path(location)
                 sync_paths.add(os.path.normcase(str(location)))
@@ -1223,6 +1517,7 @@ class RepositoryPublishService:
                         state="unknown", count=None, reason="旧操作未保留固定上传目标；请以当前仓库的确认记录为准。")
                 if row.get("status") in {"deferred", "push_failed", "verification_required"} and not row.get("diagnostic"):
                     row["diagnostic"] = _make_diagnostic("manual_check", row.get("message", "请核对保留记录。"))
+                row["progress"] = self._item_progress(row, interrupted=receipt.get("status") == "verification_required")
             receipt["progress"] = self._operation_progress(receipt)
         return receipt
 
@@ -1237,6 +1532,44 @@ class RepositoryPublishService:
                 "skipped": sum(row.get("status") == "noop" for row in terminal),
                 "needsAttention": sum(row.get("status") not in {"success", "noop"} for row in terminal),
                 "currentRepoId": current.get("repoId", ""), "currentPhase": current.get("phase", "")}
+
+    @staticmethod
+    def _item_progress(item, *, interrupted=False):
+        status, phase = item.get("status"), item.get("phase", "queued")
+        summary = item.get("uploadSummary") if isinstance(item.get("uploadSummary"), dict) else {}
+        verified = (bool(_SHA.fullmatch(str(item.get("commitSha", "")))) and
+                    (bool(_SHA.fullmatch(str(item.get("verifiedRemote", "")))) and
+                     RepositoryPublishService._upload_time(item.get("deliveryVerifiedAt")) or
+                     summary.get("state") == "recorded" and summary.get("commitSha") == item.get("commitSha") and
+                     RepositoryPublishService._upload_time(summary.get("verifiedAt"))))
+        previous = item.get("progress") if isinstance(item.get("progress"), dict) else {}
+        state = ("blocked" if interrupted and status in {"queued", "working"} else
+                 "complete" if status == "success" else "skipped" if status == "noop" else
+                 "queued" if status == "queued" else "indeterminate" if status == "working" else "blocked")
+        if state == "indeterminate" and previous.get("state") == "measured" and previous.get("phase") == phase:
+            value = dict(previous)
+        elif (previous.get("state") == state and previous.get("phase") == phase and
+              (state != "complete" or previous.get("percent") == (100 if verified else None) and
+               previous.get("source") == ("receipt" if verified else "historical_receipt"))):
+            value = dict(previous)
+        else:
+            value = {"state": state, "phase": phase, "scope": "repository" if state == "complete" else "phase",
+                     "unit": None, "current": None, "total": None, "percent": 100 if state == "complete" and verified else None,
+                     "source": "historical_receipt" if state == "complete" and not verified else "receipt",
+                     "step": None, "startedAt": item.get("startedAt"),
+                     "phaseStartedAt": previous.get("phaseStartedAt") if previous.get("phase") == phase else _now(),
+                     "updatedAt": _now()}
+            if previous.get("state") == "measured" and state == "blocked":
+                value["lastTransfer"] = {key: previous.get(key) for key in
+                                         ("scope", "unit", "current", "total", "percent", "source", "step", "updatedAt")}
+        # GET computes elapsed time without pretending there is a new event.
+        try:
+            started = datetime.fromisoformat(str(value.get("startedAt")))
+            end = datetime.now(timezone.utc) if status in {"queued", "working"} and not interrupted else datetime.fromisoformat(value["updatedAt"])
+            value["elapsedSeconds"] = max(0, int((end - started).total_seconds()))
+        except (ValueError, TypeError):
+            value["elapsedSeconds"] = 0
+        return value
 
     @staticmethod
     def _upload_binding(repo):
@@ -1811,6 +2144,8 @@ class RepositoryPublishService:
                        "repositories": [{"repoId": r["id"], "name": Path(r["path"]).name or r["id"], "status": "queued", "phase": "queued",
                                          "message": "等待处理", "commitSha": "", "title": "", "body": "", "logs": [],
                                          "uploadSummary": self._upload_summary(r)} for r in selected]}
+            for item in receipt["repositories"]:
+                item["progress"] = self._item_progress(item)
             self._starting = True
             _LIVE[self._owner] = weakref.ref(self)
             try:
@@ -1840,13 +2175,48 @@ class RepositoryPublishService:
 
     def _save(self, receipt):
         receipt["updatedAt"] = _now()
+        for item in receipt.get("repositories", []):
+            item["progress"] = self._item_progress(item)
         receipt["progress"] = self._operation_progress(receipt)
         _atomic(self._ops / (receipt["requestId"] + ".json"), receipt)
 
     def _phase(self, receipt, item, phase, message):
         item.update(status="working", phase=phase, message=message, diagnostic=None)
+        item.setdefault("startedAt", _now())
+        item["progress"] = {"state": "indeterminate", "phase": phase, "scope": "phase", "unit": None,
+                            "current": None, "total": None, "percent": None, "source": "receipt", "step": None,
+                            "startedAt": item["startedAt"], "phaseStartedAt": _now(), "updatedAt": _now()}
         item["logs"].append({"at": _now(), "phase": phase, "message": message})
         self._save(receipt)
+
+    def _transfer_progress(self, receipt, item):
+        """One worker owns mutation; pipe readers only enqueue numeric events."""
+        last_saved = 0.
+        pending = None
+
+        def update(value):
+            nonlocal last_saved, pending
+            if item.get("status") != "working" or item.get("phase") != "push":
+                return
+            # Byte telemetry is finer than the LFS console object summary.
+            previous = item.get("progress", {})
+            if (previous.get("scope") == "file" and value.get("source") == "git-lfs"
+                    and value.get("scope") != "file"):
+                return
+            pending = {**value, "phase": "push", "startedAt": item.get("startedAt"),
+                       "phaseStartedAt": previous.get("phaseStartedAt", _now()), "updatedAt": _now()}
+            item["progress"] = pending
+            now = time.monotonic()
+            # The newest event stays in memory; durable transfer snapshots are
+            # throttled to four per second. Phase/terminal writes are separate.
+            if now - last_saved >= .25:
+                last_saved = now
+                try:
+                    self._save(receipt)
+                except (OSError, RepositoryPublishError):
+                    pass  # Telemetry failure never retries or alters a push.
+
+        return update
 
     def _drain(self):
         try:
@@ -1959,6 +2329,7 @@ class RepositoryPublishService:
     def _sync_preflight(self, repo, root):
         records, targets = [], set()
         for mapping in repo["syncFiles"]:
+            self._catalog_remaining()
             source = _safe_path(mapping["source"])
             target = _safe_path(root / mapping["target"])
             if self._test_mode and not source.is_relative_to(self._sandbox):
@@ -1970,7 +2341,7 @@ class RepositoryPublishService:
                 raise RepositoryPublishError("同步目标属于排除或私人范围。", code="sync_config")
             targets.add(key)
             try:
-                records.append((mapping, source, target, _stable(source)))
+                records.append((mapping, source, target, self._catalog_stable(source)))
             except RepositoryPublishError as exc:
                 if exc.code == "worktree_changed":
                     raise RepositoryPublishError(str(exc), code="sync_writing") from exc
@@ -1978,7 +2349,7 @@ class RepositoryPublishService:
             except FileNotFoundError as exc:
                 raise RepositoryPublishError("同步来源缺失，请先保存来源文件；本仓库延期。", code="sync_missing") from exc
         time.sleep(.02 if records else 0)
-        if any(_stable(source) != proof for _, source, _, proof in records):
+        if any(self._catalog_stable(source) != proof for _, source, _, proof in records):
             raise RepositoryPublishError("同步来源正在写入，请保存后重试。", code="sync_writing")
         return records
 
@@ -2116,6 +2487,7 @@ class RepositoryPublishService:
                 if not self._delivery_evidence(pending, self._upload_destination(pending)):
                     item.update(status="verification_required", phase="verify", message="原上传确认记录不完整，保留原提交和回执，请先核对。", diagnostic=_make_diagnostic("receipt_unverified", "原上传确认记录不完整，保留原提交和回执，请先核对。"))
                     return
+                item.update(deliveryVerifiedAt=pending["verifiedAt"], verifiedRemote=pending["verifiedRemote"])
                 recovering_counter = pending.get("uploadCounterPending") is True or not self._delivery_acknowledged(pending)
                 if not self._record_delivery(repo, pending, pending_path, item):
                     return
@@ -2409,7 +2781,8 @@ class RepositoryPublishService:
         if remote and self._ancestor(root, sha, remote):
             pending.update(state="delivered", verifiedAt=_now(), verifiedRemote=remote)
             _atomic(pending_path, pending)
-            item.update(status="success", phase="complete", message="已核对原提交在远端，无需重复推送。")
+            item.update(status="success", phase="complete", message="已核对原提交在远端，无需重复推送。",
+                        deliveryVerifiedAt=pending["verifiedAt"], verifiedRemote=remote)
             self._record_delivery(repo, pending, pending_path, item)
             return
         if remote and not self._ancestor(root, remote, sha):
@@ -2424,7 +2797,8 @@ class RepositoryPublishService:
         error = None
         try:
             alias, config = self._transport(repo, root)
-            self._git(root, "push", "--no-follow-tags", alias, sha + ":refs/heads/" + repo["branch"], timeout=100, config=config)
+            self._git(root, "push", "--progress", "--no-follow-tags", alias, sha + ":refs/heads/" + repo["branch"],
+                      timeout=100, config=config, progress=self._transfer_progress(receipt, item))
             self._transport_identity(repo, root)
         except _GitFailure as exc:
             error = exc
@@ -2433,6 +2807,7 @@ class RepositoryPublishService:
             _atomic(pending_path, pending)
             item.update(status="verification_required", phase="verify", message="传输配置在处理期间变化，原提交和固定目标已保留；请恢复配置后核对。", diagnostic=_make_diagnostic("destination_changed", "传输配置在处理期间变化，原提交和固定目标已保留；请恢复配置后核对。"))
             return
+        self._phase(receipt, item, "verify", "传输步骤结束，正在核对远端是否收到原提交。")
         try:
             after = self._remote(repo, root)
             self._fetch(repo, context, after)
@@ -2441,7 +2816,8 @@ class RepositoryPublishService:
             after, delivered = None, False
         if delivered:
             pending.update(state="delivered", verifiedAt=_now(), verifiedRemote=after)
-            item.update(status="success", phase="complete", message="原提交已推送并核对成功。")
+            item.update(status="success", phase="complete", message="原提交已推送并核对成功。",
+                        deliveryVerifiedAt=pending["verifiedAt"], verifiedRemote=after)
         elif error and error.code != "timeout" and after == remote:
             pending.update(state="push_failed", pushError=error.code)
             item.update(status="push_failed", phase="push", message=self._error(error), diagnostic=self._diagnostic(error))

@@ -39,6 +39,10 @@
   Object.assign(copy.en, { historicalReceipt: "Historical receipt", historicalHint: "This receipt does not match the current repository target. Its original result is kept; retrying against the new configuration is unavailable.", originalTarget: "Original upload target" });
   Object.assign(copy.zh, { diagnosis: "原因与下一步", diagnosisRead: "当前读取", diagnosisOperation: "本次执行", diagnosisHistory: "历史执行", diagnosisNext: "下一步", locateSetting: "查看对应设置", recheckRepository: "重新核对此仓库", readingLocal: "读取版本与本地差异…", readingHint: "正在读取本机状态，最多等待 60 秒；不会同步、提交或推送。", updatingLocal: "更新核对中…", readTimeout: "读取已超时", readInvalid: "仓库状态回执不完整", readConnection: "暂时无法读取仓库状态", readNext: "稍后重新核对。原工作、配置与操作回执已保留。", notRead: "此仓库状态尚未核对", notReadNext: "点击重新核对，只读取本机仓库状态。", publishingRead: "上传处理中，结束后可重新核对版本。", waitOperation: "等待原操作完成；不要重复提交。", knownBefore: "显示上次读取结果，当前尚未重新核对。", checkedAt: "上次核对", inspectOriginal: "查看下方原回执。只在确认原目标后继续原请求。", configDraftRead: "配置草稿尚未保存；保留草稿，保存后再核对。" });
   Object.assign(copy.en, { diagnosis: "Reason and next step", diagnosisRead: "Current check", diagnosisOperation: "Operation receipt", diagnosisHistory: "Historical receipt", diagnosisNext: "Next step", locateSetting: "View the relevant setting", recheckRepository: "Recheck this repository", readingLocal: "Reading versions and local changes…", readingHint: "Reading local state, with a 60-second deadline. No sync, commit or push is performed.", updatingLocal: "Rechecking…", readTimeout: "Read timed out", readInvalid: "Repository receipt is incomplete", readConnection: "Repository state could not be read", readNext: "Recheck later. Your work, configuration and operation receipts are retained.", notRead: "This repository has not been checked", notReadNext: "Recheck to read local repository state only.", publishingRead: "Publishing is active; versions can be rechecked when it finishes.", waitOperation: "Wait for the original operation; do not submit it again.", knownBefore: "Showing the last reading; the current state is not yet rechecked.", checkedAt: "Last checked", inspectOriginal: "Inspect the original receipt below. Continue only after confirming its original target.", configDraftRead: "Configuration has an unsaved draft. Keep it and recheck after saving." });
+  Object.assign(copy.zh, { refreshing: "正在核对", lastKnown: "上次状态", refreshFailed: "核对失败", gitObjects: "Git 对象", lfsObjects: "LFS 对象", lfsFile: "LFS 文件 {n}/{total}", phasePercent: "当前传输阶段", elapsed: "已用时 {time}", checkingReceipt: "回执待核对", repoProgress: "{name} · {phase}" });
+  Object.assign(copy.en, { refreshing: "Refreshing", lastKnown: "Last known", refreshFailed: "Refresh failed", gitObjects: "Git objects", lfsObjects: "LFS objects", lfsFile: "LFS file {n}/{total}", phasePercent: "Current transfer phase", elapsed: "Elapsed {time}", checkingReceipt: "Receipt needs verification", repoProgress: "{name} · {phase}" });
+  Object.assign(copy.zh, { commitAge: "提交 {age}", commitTime: "本机 HEAD 提交时间", commitUnknown: "尚无可核对的提交时间", commitClock: "提交时间晚于本机时间，请核对时钟。" });
+  Object.assign(copy.en, { commitAge: "Commit {age}", commitTime: "Local HEAD commit time", commitUnknown: "No verified commit time is available", commitClock: "The commit time is ahead of this computer's clock; check the timestamp." });
   const clone = value => JSON.parse(JSON.stringify(value));
   const plain = value => value && typeof value === "object" && !Array.isArray(value);
   const clean = (value, length = 2000) => typeof value === "string" ? value.slice(0, length) : "";
@@ -103,6 +107,8 @@
     state.expanded = false; state.configRepoId = null; state.versionBusy = false; state.versionFailed = false; state.versionEpoch = 0; state.catalog = new Map(); state.savedSources = new Map(); state.operatedRepoIds = new Set();
     state.uploadSummaries = new Map(); state.multiBindings = new Set();
     state.versionReads = new Map(); state.statusReadError = null;
+    state.cacheIdentity = ""; state.serverVersionSources = new Map(); state.snapshotMode = false; state.versionRefresh = null; state.versionPollTimer = 0;
+    state.commitAgeTimer = 0; state.ageSuspended = false;
     const controls = [], resultRetries = [], syncDrafts = new Map(), inputPending = new Set();
     const compactRefs = new Map(), configCards = new Map(), configSections = new Map(), planBoxes = new Map();
     const managed = item => { item.setAttribute("data-console-management", ""); return item; };
@@ -111,8 +117,7 @@
     const toggleButton = managed(node("button", "ghost-button repository-publish-toggle")); toggleButton.type = "button";
     const configButton = managed(node("button", "ghost-button repository-publish-config")); configButton.type = "button";
     const shortStatus = node("span", "repository-publish-status"); shortStatus.setAttribute("role", "status"); shortStatus.setAttribute("aria-live", "polite");
-    const progress = node("div", "repository-publish-progress"), progressFill = node("span", "repository-publish-progress-fill"); progress.hidden = true;
-    progress.setAttribute("role", "progressbar"); progress.append(progressFill); bar.append(runButton, toggleButton, shortStatus, progress);
+    bar.append(runButton, toggleButton, shortStatus);
     const expanded = managed(node("div", "repository-publish-expanded")), expandedToolbar = node("div", "repository-publish-expanded-toolbar"), compactRows = node("div", "repository-publish-compact-rows");
     expanded.id = "consoleRepositoryPublish-repositories-" + (uniqueId() || "list"); expanded.hidden = true; expandedToolbar.append(configButton); expanded.append(expandedToolbar, compactRows);
     const dialog = managed(node("dialog", "repository-publish-dialog")); dialog.id = "consoleRepositoryPublish-" + (uniqueId() || "config");
@@ -184,8 +189,6 @@
       const toggleLabel = text(state.expanded ? "collapse" : "expand"); toggleButton.disabled = !state.allowed; toggleButton.setAttribute("aria-label", toggleLabel); toggleButton.title = toggleLabel; toggleButton.setAttribute("aria-expanded", String(state.expanded)); toggleButton.setAttribute("aria-controls", expanded.id);
       configButton.setAttribute("aria-controls", dialog.id); configButton.setAttribute("aria-expanded", String(dialog.open));
       shortStatus.textContent = statusText(); detailStatus.textContent = statusText(); shortStatus.dataset.state = state.error ? "error" : blocked() ? "working" : "ready";
-      const info = operationProgress(); progress.hidden = !state.allowed || !info;
-      if (info) { progress.setAttribute("aria-label", text("progressLabel")); progress.setAttribute("aria-valuemin", "0"); progress.setAttribute("aria-valuemax", String(info.total)); progress.setAttribute("aria-valuenow", String(info.completed)); progress.setAttribute("aria-valuetext", statusText()); progress.dataset.completed = String(info.completed); progress.dataset.total = String(info.total); progress.dataset.active = String(activeStatuses.has(state.operation?.status)); progress.dataset.outcome = info.attention || info.review || info.completed < info.total && !activeStatuses.has(state.operation?.status) ? "attention" : "success"; progressFill.style.width = String(Math.round(100 * info.completed / info.total)) + "%"; }
       runButton.disabled = !state.allowed || !state.settings || !enabled().length || blocked() || state.readBusy || state.saveBusy || state.dirty || state.invalid.size > 0;
       configButton.disabled = !state.allowed; addButton.disabled = blocked() || state.saveBusy || inputPending.size > 0; refreshButton.disabled = state.readBusy || state.postBusy || state.saveBusy;
       previewButton.disabled = blocked() || state.previewBusy || state.saveBusy || state.dirty || !enabled().length;
@@ -207,6 +210,31 @@
     function sourceIdentity(repo, naming = state.settings?.naming) { return JSON.stringify([repo.path, repo.repositoryUrl, repo.remote, repo.branch, repo.versionSources, repo.syncFiles, repo.exclude, repo.versionPlans, naming?.autoBump]); }
     function sourceIdentities(settings) { return new Map(settings.repositories.map(repo => [repo.id, sourceIdentity(repo, settings.naming)])); }
     function catalogFor(repo) { const catalog = state.catalog.get(repo.id); return catalog?.sourceIdentity === sourceIdentity(repo) ? catalog : null; }
+    function acceptVersionSnapshots(value, sources = sourceIdentities(state.settings), initial = false) {
+      if (!plain(value) || !/^[a-f0-9]{64}$/.test(value.cacheIdentity || "") || !Array.isArray(value.versionSources) || !Array.isArray(value.versionSnapshots) || !plain(value.versionReadStates)) return false;
+      if (initial) {
+        if (state.cacheIdentity && state.cacheIdentity !== value.cacheIdentity) { state.catalog.clear(); state.versionReads.clear(); state.multiBindings.clear(); }
+        state.cacheIdentity = value.cacheIdentity; state.snapshotMode = true;
+        state.serverVersionSources = new Map(value.versionSources.filter(item => plain(item) && typeof item.repoId === "string" && typeof item.sourceIdentity === "string" && item.sourceIdentity.length <= 200).map(item => [item.repoId, item.sourceIdentity]));
+      } else if (state.cacheIdentity !== value.cacheIdentity) return false;
+      for (const repo of state.settings.repositories) {
+        if (sources.get(repo.id) !== sourceIdentity(repo)) continue;
+        const expected = state.serverVersionSources.get(repo.id), receivedSource = value.versionSources.find(item => item?.repoId === repo.id);
+        if (!expected || receivedSource?.sourceIdentity !== expected) continue;
+        const values = value.versionSnapshots.filter(item => plain(item) && item.repoId === repo.id && item.sourceIdentity === expected && Array.isArray(item.components));
+        if (values.length === 1) {
+          const item = values[0], components = clone(item.components.filter(plain));
+          state.catalog.set(repo.id, { ...clone(item), sourceIdentity: sources.get(repo.id), components, cached: item.displayOnly === true });
+          if (components.length > 1) state.multiBindings.add(displayIdentity(repo)); else if (components.length === 1 || item.versionState === "missing") state.multiBindings.delete(displayIdentity(repo));
+        }
+        const read = value.versionReadStates[repo.id];
+        if (plain(read) && read.sourceIdentity === expected) {
+          const error = read.state === "error" ? Object.assign(new Error("snapshot_read_failed"), { safeMessage: safeDiagnosticText(read.message), kind: read.errorKind === "timeout" ? "timeout" : "network", diagnostic: normalizedDiagnostic(read.diagnostic) }) : null;
+          state.versionReads.set(repo.id, { sourceIdentity: sources.get(repo.id), busy: ["queued", "reading"].includes(read.state), error, checkedAt: clean(read.checkedAt, 100), startedAt: clean(read.startedAt, 100) });
+        }
+      }
+      return true;
+    }
     const diagnosticCategories = new Set(["connection", "sync", "activity", "repository", "versions", "naming", "verification", "authentication", "permissions", "rules", "lfs", "network", "remote", "unknown"]);
     const diagnosticTargets = new Map([
       ...[["repo_missing", "path"], ["repo_root", "path"], ["branch_mismatch", "branch"], ["remote_config", "remote"], ["remote_ownership", "repositoryUrl"], ["duplicate_repository", "path"]].map(([code, field]) => [code, ["connection", new Set([field])]]),
@@ -340,7 +368,10 @@
       const catalog = catalogFor(repo), components = catalog?.components || [];
       if (hasMultipleVersions(repo, catalog)) return uploadNumber(uploadSummary(repo, catalog));
       if (!components.length && catalog?.versionState === "missing") return text("authorityMissing");
-      if (!components.length) return text(state.versionBusy ? "loading" : state.versionFailed || catalog?.message ? "versionFailed" : catalog ? "noVersion" : "versionPending");
+      if (!components.length) {
+        if (state.snapshotMode && repo.versionSources.length && !state.versionFailed) return repo.versionSources.length === 1 ? clean(repo.versionSources[0].name, 80) || text("versions") : uploadNumber(uploadSummary(repo, catalog));
+        return text(state.versionBusy ? "loading" : state.versionFailed || catalog?.message ? "versionFailed" : catalog ? "noVersion" : "versionPending");
+      }
       return componentVersionText(components[0], components.length, catalog);
     }
     function renderVersionPicker(refs, repo, catalog) {
@@ -370,16 +401,79 @@
       refs.menu.append(node("p", "repository-publish-version-note", text("uploadHint")));
       if (uploaded?.state !== "recorded") refs.menu.append(node("p", "repository-publish-version-note", clean(uploaded?.reason, 240) || text("uploadPending")));
     }
+    function durationText(seconds) {
+      const n = Math.floor(seconds); return n < 60 ? n + "s" : Math.floor(n / 60) + "m " + n % 60 + "s";
+    }
+    function lastCommitFor(repo) {
+      const value = catalogFor(repo)?.lastCommit;
+      if (!plain(value) || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value.sha || "") || typeof value.committedAt !== "string"
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value.committedAt)) return null;
+      const [year, month, day] = value.committedAt.slice(0, 10).split("-").map(Number), calendarYear = year < 100 ? year + 400 : year;
+      if (month < 1 || month > 12 || day < 1 || day > new Date(Date.UTC(calendarYear, month, 0)).getUTCDate()) return null;
+      const timestamp = Date.parse(value.committedAt); return Number.isFinite(timestamp) ? { ...value, timestamp } : null;
+    }
+    function stopCommitAgeTimer() { if (state.commitAgeTimer) window.clearTimeout(state.commitAgeTimer); state.commitAgeTimer = 0; }
+    function renderCommitAges() {
+      let hasCommit = false;
+      for (const repo of state.settings?.repositories || []) {
+        const refs = compactRefs.get(repo.id); if (!refs) continue;
+        const commit = lastCommitFor(repo), catalog = catalogFor(repo), reading = readFor(repo);
+        let age = "—", hint = text("commitUnknown");
+        if (commit) {
+          hasCommit = true; const seconds = Math.floor((Date.now() - commit.timestamp) / 1000);
+          age = seconds < 0 ? "?" : seconds < 60 ? seconds + "s" : seconds < 3600 ? Math.floor(seconds / 60) + "m" : seconds < 86400 ? Math.floor(seconds / 3600) + "h" : Math.floor(seconds / 86400) + "d";
+          hint = [text("commitTime"), commit.committedAt, commit.sha, seconds < 0 ? text("commitClock") : "", catalog?.displayOnly === true || reading?.busy || reading?.error ? text("knownBefore") : ""].filter(Boolean).join(" · ");
+        }
+        refs.commitAge.textContent = text("commitAge").replace("{age}", age); refs.commitAge.title = hint;
+        refs.commitAge.dataset.state = !commit ? "unknown" : commit.timestamp > Date.now() ? "future" : "known";
+        refs.commitAge.dataset.freshness = catalog?.displayOnly === true || reading?.busy || reading?.error ? "last-known" : "current";
+      }
+      if (!hasCommit || state.destroyed || state.ageSuspended || workspacePanel.hidden || document.hidden === true || !state.allowed || !state.expanded) { stopCommitAgeTimer(); return; }
+      if (!state.commitAgeTimer) state.commitAgeTimer = window.setTimeout(() => { state.commitAgeTimer = 0; renderCommitAges(); }, 1000);
+    }
+    function renderRepositoryProgress(refs, repo, result, reading, catalog) {
+      const value = plain(result?.progress) ? result.progress : null;
+      const phase = phaseText(result?.phase), current = Number(value?.current), total = Number(value?.total);
+      // Only transfer measurements are percentages. Phase completion is not repository completion.
+      const measured = result?.status === "working" && result.phase === "push" && value?.phase === "push" && value.state === "measured"
+        && ["phase", "file"].includes(value.scope) && ["objects", "bytes"].includes(value.unit) && ["git", "git-lfs"].includes(value.source)
+        && typeof value.current === "number" && typeof value.total === "number" && Number.isFinite(current) && Number.isFinite(total) && total > 0 && current >= 0 && current <= total;
+      const completed = successfulRepoStatuses.has(result?.status) && value?.state === "complete" && value.scope === "repository" && value.source === "receipt" && value.percent === 100;
+      const active = result?.status === "working", queued = result?.status === "queued";
+      const awaitingReceipt = active && !activeStatuses.has(state.operation?.status) || state.notice === "pendingUnavailable" && active;
+      const refreshing = !result && reading?.busy;
+      refs.refresh.hidden = !(reading?.busy && !active && !queued); refs.refresh.title = text("refreshing");
+      refs.refresh.setAttribute("aria-label", text("refreshing")); refs.cell.dataset.freshness = reading?.busy || reading?.error || catalog?.cached === true ? "last-known" : "current";
+      refs.activity.hidden = !(result || refreshing);
+      refs.track.hidden = !(result || refreshing);
+      refs.track.dataset.mode = awaitingReceipt ? "unconfirmed" : measured ? "measured" : completed ? "complete" : queued ? "queued" : active || refreshing ? "indeterminate" : "blocked";
+      const percent = awaitingReceipt ? null : measured ? Math.floor(100 * current / total) : completed ? 100 : null;
+      refs.fill.style.width = percent === null ? "" : String(percent) + "%";
+      refs.track.setAttribute("role", "progressbar"); refs.track.setAttribute("aria-valuemin", "0"); refs.track.setAttribute("aria-valuemax", "100");
+      if (percent === null || awaitingReceipt) refs.track.removeAttribute("aria-valuenow"); else refs.track.setAttribute("aria-valuenow", String(percent));
+      const step = measured ? value.source === "git" ? text("gitObjects") : value.scope === "file" && Number.isSafeInteger(value.fileIndex) && value.fileIndex > 0 && Number.isSafeInteger(value.fileTotal) && value.fileTotal >= value.fileIndex
+        ? text("lfsFile").replace("{n}", String(value.fileIndex)).replace("{total}", value.estimatedFileTotal === true ? "~" + value.fileTotal : String(value.fileTotal)) : text("lfsObjects") : "";
+      let seconds = Number(value?.elapsedSeconds);
+      if (typeof value?.elapsedSeconds !== "number" || !Number.isFinite(seconds) || seconds < 0) seconds = typeof value?.startedAt === "string" && Number.isFinite(Date.parse(value.startedAt)) ? (Date.now() - Date.parse(value.startedAt)) / 1000 : null;
+      const elapsed = seconds !== null && seconds >= 0 && seconds <= 7 * 86400 && active ? durationText(seconds) : "";
+      const metrics = [awaitingReceipt ? text("checkingReceipt") : percent !== null ? percent + "%" : "", step, elapsed].filter(Boolean).join(" · ");
+      refs.metric.textContent = metrics;
+      refs.metric.title = [measured ? text("phasePercent") : "", elapsed ? text("elapsed").replace("{time}", elapsed) : "", awaitingReceipt ? text("knownBefore") : ""].filter(Boolean).join(" · ");
+      refs.track.setAttribute("aria-label", text("repoProgress").replace("{name}", repoName(repo)).replace("{phase}", refreshing ? text("refreshing") : phase));
+      refs.track.setAttribute("aria-valuetext", [refreshing ? text("refreshing") : phase, metrics, measured ? text("phasePercent") : ""].filter(Boolean).join(" · "));
+    }
     function renderCompactRows() {
       const repos = state.settings?.repositories || [];
       for (const [id, refs] of compactRefs) if (!repos.some(repo => repo.id === id)) { refs.row.remove(); compactRefs.delete(id); }
       for (const repo of repos) {
         let refs = compactRefs.get(repo.id);
         if (!refs) {
-          const row = node("div", "repository-publish-compact-row"), name = node("strong", "repository-publish-compact-name"), version = node("span", "repository-publish-compact-version"), status = managed(node("button", "repository-publish-compact-status")), configure = managed(node("button", "ghost-button repository-publish-row-config")); configure.type = status.type = "button";
+          const row = node("div", "repository-publish-compact-row"), name = node("strong", "repository-publish-compact-name"), nameCell = node("div", "repository-publish-name-cell"), commitAge = node("span", "repository-publish-commit-age"), version = node("span", "repository-publish-compact-version"), status = managed(node("button", "repository-publish-compact-status")), configure = managed(node("button", "ghost-button repository-publish-row-config")); configure.type = status.type = "button";
           const cell = node("div", "repository-publish-version-cell"), picker = managed(node("details", "repository-publish-version-picker")), summary = node("summary", "repository-publish-version-trigger"), arrow = node("span", "repository-publish-version-arrow", "⌄"), menu = node("div", "repository-publish-version-menu");
-          arrow.setAttribute("aria-hidden", "true"); picker.append(summary, menu); cell.append(version, picker);
-          row.dataset.repoId = repo.id; row.append(name, cell, status, configure); compactRows.append(row); refs = { row, name, version, status, configure, cell, picker, summary, arrow, menu, menuSignature: "" }; compactRefs.set(repo.id, refs);
+          const refresh = node("span", "repository-publish-refresh-indicator"), statusCell = node("div", "repository-publish-status-cell"), activity = node("div", "repository-publish-row-activity"), track = node("div", "repository-publish-row-progress"), fill = node("span", "repository-publish-row-progress-fill"), metric = node("span", "repository-publish-row-metric");
+          refresh.hidden = true; arrow.setAttribute("aria-hidden", "true"); picker.append(summary, menu); cell.append(version, picker, refresh);
+          track.append(fill); activity.append(track, metric); statusCell.append(status, activity);
+          nameCell.append(name, commitAge); row.dataset.repoId = repo.id; row.append(nameCell, cell, statusCell, configure); compactRows.append(row); refs = { row, name, commitAge, version, status, configure, cell, picker, summary, arrow, menu, refresh, activity, track, fill, metric, menuSignature: "" }; compactRefs.set(repo.id, refs);
           picker.addEventListener("toggle", () => { if (picker.open) for (const other of compactRefs.values()) if (other !== refs) other.picker.open = false; });
           picker.addEventListener("keydown", event => { if (event.key === "Escape" && picker.open) { event.preventDefault(); picker.open = false; summary.focus(); } });
           configure.addEventListener("click", () => open(repo.id));
@@ -387,21 +481,23 @@
         }
         const originalResult = state.operation?.results.find(item => item.repoId === repo.id);
         const result = uploadBindingMatches(originalResult?.uploadSummary, repo) ? originalResult : null;
-        const catalog = catalogFor(repo), reading = readFor(repo), changeState = reading?.busy || reading?.error ? "unknown" : repoChangeState(catalog), diagnostic = normalizedDiagnostic(catalog?.diagnostic);
+        const catalog = catalogFor(repo), reading = readFor(repo), changeState = repoChangeState(catalog), diagnostic = normalizedDiagnostic(catalog?.diagnostic);
         refs.name.textContent = repoName(repo); refs.version.textContent = versionSummary(repo); refs.version.dataset.changeState = changeState;
-        refs.version.title = [refs.version.textContent, hasMultipleVersions(repo, catalog) ? text("uploadHint") : changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
+        refs.version.title = [refs.version.textContent, catalog?.displayOnly === true || reading?.busy || reading?.error ? text("knownBefore") : "", hasMultipleVersions(repo, catalog) ? text("uploadHint") : changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
         renderVersionPicker(refs, repo, catalog);
         refs.status.textContent = repo.enabled !== true ? text("disabledRepo") : originalResult && !result ? text("historicalReceipt") : result && activeStatuses.has(result.status) ? phaseText(result.phase)
           : result && successfulRepoStatuses.has(result.status) ? text("uploaded") + (result.uploadSummary?.state === "pending" ? " · " + text("uploadPending") : "")
             : result && skippedRepoStatuses.has(result.status) ? text("repoNoChanges")
               : result && reviewRepoStatuses.has(result.status) ? text("verifyRequired")
                 : result && failedRepoStatuses.has(result.status) ? text(result.status === "deferred" ? "deferred" : "failed")
-                  : reading?.busy ? text(catalog ? "updatingLocal" : "readingLocal") : reading?.error ? readErrorDiagnostic(reading.error).summary
+                  : reading?.busy ? catalog ? changeHint(catalog) : text("readingLocal") : reading?.error ? catalog ? changeHint(catalog) + " · " + text("refreshFailed") : readErrorDiagnostic(reading.error).summary
                     : diagnostic && diagnostic.severity !== "info" ? text("repoAttention") : catalog ? changeHint(catalog) : text(blocked() ? "publishingRead" : "notRead");
         refs.status.dataset.changeState = changeState;
         refs.status.dataset.status = originalResult && !result ? "historical" : clean(result?.status, 60); refs.status.disabled = !state.allowed;
         refs.status.title = [text("diagnosis"), diagnosisFor(repo).summary, reading?.busy && catalog ? text("knownBefore") : ""].filter(Boolean).join(" · "); refs.configure.textContent = text("config"); refs.configure.disabled = !state.allowed;
+        renderRepositoryProgress(refs, repo, result, reading, catalog);
       }
+      renderCommitAges();
     }
     function renderConfigVisibility() {
       for (const [id, card] of configCards) { card.children[0].textContent = repoName(state.settings?.repositories.find(repo => repo.id === id)); card.hidden = Boolean(state.configRepoId && id !== state.configRepoId); if (state.configRepoId === id) card.open = true; }
@@ -411,6 +507,7 @@
     async function readVersions(repoId = null) {
       if (state.destroyed || !state.allowed || !state.settings || state.versionBusy || workspacePanel.hidden || blocked()) return;
       if (state.dirty || state.saveBusy) { state.needsVersionsRead = true; return; }
+      if (state.snapshotMode) { await readVersionSnapshots(repoId); return; }
       const selected = state.settings.repositories.filter(repo => !repoId || repo.id === repoId); if (!selected.length) return;
       const sources = sourceIdentities(state.settings), epoch = state.versionEpoch, reads = new Map(selected.map(repo => [repo.id, { sourceIdentity: sources.get(repo.id), busy: true, error: null, checkedAt: readFor(repo)?.checkedAt || "" }]));
       for (const [id, reading] of reads) state.versionReads.set(id, reading);
@@ -435,6 +532,39 @@
       } catch (error) { if (epoch === state.versionEpoch) { state.versionFailed = true; for (const reading of reads.values()) reading.error = error; } else state.needsVersionsRead = true; }
       finally { for (const reading of reads.values()) reading.busy = false; state.versionBusy = false; render(); readCompletedSettings(); }
     }
+    function stopVersionRefresh() {
+      if (state.versionPollTimer) window.clearTimeout(state.versionPollTimer); state.versionPollTimer = 0;
+      state.versionRefresh = null; state.versionBusy = false;
+      for (const read of state.versionReads.values()) read.busy = false;
+    }
+    async function readVersionSnapshots(repoId = null) {
+      const selected = state.settings.repositories.filter(repo => !repoId || repo.id === repoId); if (!selected.length) return;
+      const refresh = { repoId, epoch: state.versionEpoch, sources: sourceIdentities(state.settings), ids: selected.map(repo => repo.id), deadline: Date.now() + 60000 };
+      state.versionRefresh = refresh; state.versionBusy = true; state.versionFailed = false; state.needsVersionsRead = false;
+      for (const repo of selected) state.versionReads.set(repo.id, { ...readFor(repo), sourceIdentity: refresh.sources.get(repo.id), busy: true, error: null });
+      render(); await readVersionSnapshotStep(refresh, true);
+    }
+    async function readVersionSnapshotStep(refresh, start = false) {
+      if (state.versionRefresh !== refresh) return;
+      if (state.destroyed || workspacePanel.hidden || state.versionEpoch !== refresh.epoch || blocked()) { stopVersionRefresh(); if (!state.destroyed) render(); return; }
+      try {
+        const value = await request("/versions?snapshot=1" + (start ? "&refresh=1" : "") + (refresh.repoId ? "&repoId=" + encodeURIComponent(refresh.repoId) : ""));
+        if (state.versionRefresh !== refresh || state.destroyed) return;
+        if (state.versionEpoch !== refresh.epoch) { stopVersionRefresh(); state.needsVersionsRead = true; render(); readCompletedSettings(); return; }
+        if (!acceptVersionSnapshots(value, refresh.sources)) { const error = new Error("invalid_versions_snapshot"); error.kind = "invalid_response"; throw error; }
+        if (value.complete === true) { stopVersionRefresh(); state.versionFailed = refresh.ids.some(id => Boolean(state.versionReads.get(id)?.error)); render(); readCompletedSettings(); return; }
+        if (Date.now() >= refresh.deadline) { const error = new Error("snapshot_deadline"); error.kind = "timeout"; throw error; }
+        render(); state.versionPollTimer = window.setTimeout(() => { state.versionPollTimer = 0; void readVersionSnapshotStep(refresh); }, 1200);
+      } catch (error) {
+        if (state.versionRefresh !== refresh || state.destroyed) return;
+        stopVersionRefresh(); state.versionFailed = true;
+        for (const id of refresh.ids) {
+          const repo = state.settings.repositories.find(item => item.id === id);
+          if (repo && refresh.sources.get(id) === sourceIdentity(repo)) state.versionReads.set(id, { ...readFor(repo), sourceIdentity: sourceIdentity(repo), busy: false, error });
+        }
+        render(); readCompletedSettings();
+      }
+    }
     function renderVersionPlans() {
       for (const repo of state.settings?.repositories || []) {
         const box = planBoxes.get(repo.id); if (!box) continue;
@@ -449,7 +579,7 @@
             : plan ? text("planUnverified") + " · " + text("planTarget") + " " + clean(plan.targetVersion, 80) : text("keepCurrent");
           if (!plan && !transition && component.canBump === true && clean(component.currentVersion, 80) && clean(component.nextVersion, 80)) hint.textContent += " · " + text("candidateVersion") + " " + clean(component.nextVersion, 80);
           if (component.kind === "git_commit") hint.textContent += " · " + text("gitCommitHint");
-          action.textContent = text(plan ? "cancelPlan" : "nextPatch"); action.disabled = blocked() || state.saveBusy || inputPending.size > 0 || state.versionBusy || !plan && (component.canBump !== true || typeof component.sourceId !== "string" || !component.sourceId || typeof component.currentVersion !== "string" || !component.currentVersion || typeof component.nextVersion !== "string" || !component.nextVersion || !/^[a-f0-9]{64}$/.test(component.planProof) || !/^[a-f0-9]{64}$/.test(component.expectedSha256) || !Number.isSafeInteger(component.expectedBytes) || component.expectedBytes < 0);
+          action.textContent = text(plan ? "cancelPlan" : "nextPatch"); action.disabled = blocked() || state.saveBusy || inputPending.size > 0 || state.versionBusy || !plan && (catalog?.displayOnly === true || component.canBump !== true || typeof component.sourceId !== "string" || !component.sourceId || typeof component.currentVersion !== "string" || !component.currentVersion || typeof component.nextVersion !== "string" || !component.nextVersion || !/^[a-f0-9]{64}$/.test(component.planProof) || !/^[a-f0-9]{64}$/.test(component.expectedSha256) || !Number.isSafeInteger(component.expectedBytes) || component.expectedBytes < 0);
           action.addEventListener("click", () => { if (action.disabled || blocked() || state.saveBusy || inputPending.size) return; repo.versionPlans = repo.versionPlans.filter(item => item.sourceId !== component.sourceId); if (!plan) repo.versionPlans.push({ sourceId: component.sourceId, currentVersion: component.currentVersion, targetVersion: component.nextVersion, expectedSha256: component.expectedSha256, expectedBytes: component.expectedBytes, planProof: component.planProof }); changed(); });
           row.append(label, action, hint); if (component.canBump !== true) row.append(node("span", "repository-publish-plan-reason", clean(component.reason, 300) || text("versionUnsupported"))); box.append(row);
         }
@@ -472,7 +602,7 @@
     }
     async function request(path = "", body) {
       const controller = new AbortController();
-      const timeoutMs = body === undefined ? path.split("?")[0] === "/versions" ? 60000 : 10000 : 20000;
+      const timeoutMs = body === undefined ? path.split("?")[0] === "/versions" && !path.includes("snapshot=1") ? 60000 : 10000 : 20000;
       const timer = window.setTimeout(() => controller.abort(), timeoutMs);
       let response;
       try {
@@ -544,6 +674,7 @@
           state.dirty = false; state.configConflict = false; inputPending.clear();
           if (state.pendingRequest) for (const repo of state.settings.repositories) if (state.pendingRequest.repoIds.includes(repo.id)) state.operatedRepoIds.add(repo.id);
           syncDrafts.clear(); state.invalid.clear(); if (dialog.open) renderConfig();
+          acceptVersionSnapshots(value, sources, true);
         }
         const accepted = value.operation && acceptOperation(value.operation);
         if (!accepted && !state.dirty) { state.error = ""; state.notice = ""; }
@@ -579,7 +710,7 @@
         if (!plain(value.settings) || !/^[a-f0-9]{64}$/.test(value.settingsSha)) throw new Error("settings_receipt_missing");
         succeeded = true;
         const saved = normalized(value.settings), sources = sourceIdentities(saved);
-        if (Array.from(sources).some(([id, identity]) => state.savedSources.get(id) !== identity)) { state.versionEpoch++; state.needsVersionsRead = true; previewResult.replaceChildren(); }
+        if (Array.from(sources).some(([id, identity]) => state.savedSources.get(id) !== identity)) { state.versionEpoch++; state.needsVersionsRead = true; if (state.snapshotMode) { stopVersionRefresh(); state.needsSettingsRead = true; } previewResult.replaceChildren(); }
         state.savedSources = sources; state.settingsSha = value.settingsSha;
         if (state.edit === edit) { state.settings = saved; state.dirty = false; state.error = ""; state.notice = "saved"; syncDrafts.clear(); if (dialog.open) renderConfig(); }
       } catch (error) { if (error?.message === "configConflict") state.configConflict = true; state.error = state.configConflict ? "configConflict" : "saveFailed"; }
@@ -594,6 +725,7 @@
     async function sendOriginal(original) {
       const requestId = original.requestId;
       state.operatedRepoIds = new Set(original.repoIds);
+      if (state.snapshotMode) { stopVersionRefresh(); state.versionEpoch++; }
       stopPoll(); state.pendingId = requestId; state.notFound = false; state.operation = null; state.postBusy = true; state.error = ""; state.notice = "working"; renderResults(); render();
       try { const value = await request("/run", { requestId, repoIds: original.repoIds }); if (!acceptOperation(value.operation || value)) state.notice = "unknown"; }
       catch { state.notice = "unknown"; }
@@ -766,7 +898,7 @@
       if (options.diagnose !== true) { void readVersions(); if (state.pendingId) void poll(); else void readStatus(); }
     }
     runButton.addEventListener("click", () => void run()); configButton.addEventListener("click", () => open()); closeButton.addEventListener("click", () => dialog.close());
-    toggleButton.addEventListener("click", () => { if (!state.allowed || state.destroyed) return; state.expanded = !state.expanded; render(); if (state.expanded) void readVersions(); });
+    toggleButton.addEventListener("click", () => { if (!state.allowed || state.destroyed) return; state.expanded = !state.expanded; if (!state.expanded && !dialog.open && state.snapshotMode) stopVersionRefresh(); render(); if (state.expanded) void readVersions(); });
     dialog.addEventListener("close", () => { render(); state.returnFocus?.focus(); });
     addButton.addEventListener("click", () => {
       if (!state.settings || blocked() || state.saveBusy || inputPending.size) return;
@@ -793,16 +925,18 @@
     if (typeof MutationObserver === "function") {
       visibilityObserver = new MutationObserver(() => {
         const hidden = workspacePanel.hidden; if (hidden === wasHidden) return; wasHidden = hidden;
-        if (hidden) { state.versionEpoch++; for (const refs of compactRefs.values()) refs.picker.open = false; } else void recheckVisible();
+        if (hidden) { state.versionEpoch++; stopCommitAgeTimer(); if (state.snapshotMode) stopVersionRefresh(); for (const refs of compactRefs.values()) refs.picker.open = false; } else { renderCommitAges(); void recheckVisible(); }
       });
       visibilityObserver.observe(workspacePanel, { attributes: true, attributeFilter: ["hidden"] });
     }
-    function suspend() { stopPoll(); }
-    function resume() { if (workspacePanel.hidden || state.destroyed) return; if (state.pendingId) schedulePoll(); else void recheckVisible(); }
+    function suspend() { state.ageSuspended = true; stopPoll(); stopVersionRefresh(); stopCommitAgeTimer(); }
+    function resume() { state.ageSuspended = false; if (workspacePanel.hidden || state.destroyed) return; renderCommitAges(); if (state.pendingId) schedulePoll(); else void recheckVisible(); }
+    function ageVisibility() { if (document.hidden === true) stopCommitAgeTimer(); else renderCommitAges(); }
     window.addEventListener("pagehide", suspend); window.addEventListener("pageshow", resume); window.addEventListener("focus", recheckVisible);
     function dismissVersionPickers(event) { for (const refs of compactRefs.values()) if (!refs.picker.contains(event.target)) refs.picker.open = false; }
     document.addEventListener("click", dismissVersionPickers);
-    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; stopPoll(); observer?.disconnect(); visibilityObserver?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); window.removeEventListener("focus", recheckVisible); document.removeEventListener("click", dismissVersionPickers); bar.remove(); expanded.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
+    document.addEventListener("visibilitychange", ageVisibility);
+    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; stopPoll(); stopVersionRefresh(); stopCommitAgeTimer(); observer?.disconnect(); visibilityObserver?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); window.removeEventListener("focus", recheckVisible); document.removeEventListener("click", dismissVersionPickers); document.removeEventListener("visibilitychange", ageVisibility); bar.remove(); expanded.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
     mounted.set(host, api); instances.add(api); render(); void readStatus(); return api;
   }
   window.ConsoleRepositoryPublish = { mount, hasDraft: () => Array.from(instances).some(item => item.hasDraft()), canReload: () => Array.from(instances).every(item => item.canReload()) };

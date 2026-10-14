@@ -138,28 +138,19 @@ def main():
     )
     release_defaults = json.loads(defaults_files[0].read_text(encoding="utf-8"))
     default_music = release_defaults.get("music") or {}
-    expected_order = [
-        "Outrun.mp3",
-        "Redline.mp3",
-        "Liquid Roller.mp3",
-        "Get Lucky.mp3",
-        "Around the World.mp3",
-        "Airborne.mp3",
-        "Ma rose éternelle.mp3",
-        "Luminescence.mp3",
-        "Fire Inside.mp3",
-        "Toxic.mp3",
-        "Never Be Alone.mp3",
-        "Stasis.mp3",
-        "Final Step.mp3",
-        "Dancin.mp3",
-        "House of Memories.mp3",
-        "Never Slow Me Down.mp3",
-    ]
-    expected_tiers = {
-        **{name: "first" for name in expected_order[:3]},
-        **{name: "second" for name in expected_order[3:9]},
-    }
+    # release-defaults.json is the publisher's saved layout authority. A
+    # historical hard-coded order must not force a newer valid layout back.
+    source_defaults = json.loads((ROOT / "release-defaults.json").read_text(encoding="utf-8"))
+    source_music = source_defaults.get("music") or {}
+    expected_order = source_music.get("order") or []
+    expected_tiers = source_music.get("tiers") or {}
+    require(source_music.get("layoutVersion") == 1 and
+            len(expected_order) == len(PUBLIC_MUSIC) and set(expected_order) == PUBLIC_MUSIC,
+            "publisher music layout authority is incomplete or duplicated")
+    require(set(expected_tiers) <= PUBLIC_MUSIC and
+            set(expected_tiers.values()) <= {"first", "second", "third"},
+            "publisher music tiers are invalid")
+    require(release_defaults == source_defaults, "packaged release defaults differ from their source authority")
     require(default_music.get("layoutVersion") == 1, "release music layout version is missing")
     require(set(default_music.get("order") or []) == PUBLIC_MUSIC, "release music order is incomplete")
     require(len(default_music.get("order") or []) == len(PUBLIC_MUSIC), "release music order contains duplicates")

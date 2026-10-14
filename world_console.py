@@ -44,6 +44,7 @@ from console_update import ConsoleUpdateService
 from console_developer_update import ConsoleDeveloperUpdateService, DeveloperUpdateError
 from console_repository_publish import RepositoryPublishService, RepositoryPublishError
 from console_repository_bindings import RepositoryBindingDiscovery
+from console_repository_catalog_cache import RepositoryCatalogCache
 from world_update import WorldUpdateService
 from desktop_layout import DesktopLayoutService
 from feedback_service import FeedbackService, FeedbackServiceError
@@ -880,6 +881,10 @@ CONSOLE_REPOSITORY_PUBLISH = RepositoryPublishService(
     discovery=REPOSITORY_BINDING_DISCOVERY.discover,
     busy_check=repository_publish_busy_reason,
     allowed=current_console_edition() in {"public", "developer"} and APP_INSTALL_MODE != "store",
+)
+CONSOLE_REPOSITORY_CATALOG = RepositoryCatalogCache(
+    CONSOLE_REPOSITORY_PUBLISH,
+    identity_scope=INSTALLATION_STATE.get("installationId", ""),
 )
 WORLD_UPDATE = WorldUpdateService(
     APP_DIR,
@@ -1739,7 +1744,14 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             try:
                 query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
                 if parsed.path == "/api/console/repository-publish" and not parsed.query:
-                    result = CONSOLE_REPOSITORY_PUBLISH.status()
+                    result = CONSOLE_REPOSITORY_CATALOG.status()
+                elif (parsed.path == "/api/console/repository-publish/versions"
+                        and query.get("snapshot") == ["1"]
+                        and not set(query) - {"repoId", "snapshot", "refresh"}
+                        and query.get("refresh", ["0"]) in (["0"], ["1"])
+                        and all(len(value) == 1 and value[0] for value in query.values())):
+                    result = CONSOLE_REPOSITORY_CATALOG.snapshot(
+                        query.get("repoId", [None])[0], refresh=query.get("refresh") == ["1"])
                 elif (parsed.path == "/api/console/repository-publish/versions"
                         and not set(query) - {"repoId"}
                         and all(len(value) == 1 and value[0] for value in query.values())):
@@ -12966,6 +12978,7 @@ def main():
         except BaseException:
             SUBSCRIPTION_BROKER.close()
             CHAT_RELAY_BROKER.close()
+            CONSOLE_REPOSITORY_CATALOG.close()
             if server_thread.is_alive():
                 server.shutdown()
             CONSOLE_WINDOW_SESSIONS.stop()
@@ -12990,6 +13003,7 @@ def main():
     finally:
         SUBSCRIPTION_BROKER.close()
         CHAT_RELAY_BROKER.close()
+        CONSOLE_REPOSITORY_CATALOG.close()
         WORKFLOW_SERVICE.shutdown()
         PHONE_COMPANION.shutdown()
         CONSOLE_WINDOW_SESSIONS.stop()
