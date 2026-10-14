@@ -332,7 +332,9 @@ if ($BuildApplication) {
   @{ Source = "tools\NativeFileDrag.cs"; Destination = "tools" },
   @{ Source = "tools\blender_live_selection_bridge.py"; Destination = "tools" },
   @{ Source = "tools\DesktopLayout.ps1"; Destination = "tools" },
-  @{ Source = "tools\Collect-DeviceSnapshot.ps1"; Destination = "tools" }
+  @{ Source = "tools\Collect-DeviceSnapshot.ps1"; Destination = "tools" },
+  @{ Source = "console_repository_activity.py"; Destination = "." },
+  @{ Source = "tools\console-repository-edit-scope.py"; Destination = "tools" }
 )
 
   if ($InstallMode -ne "store") {

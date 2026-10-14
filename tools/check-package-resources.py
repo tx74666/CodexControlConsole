@@ -123,6 +123,11 @@ def main():
     for name in ('DevRoomConsoleBridge.cs', 'DevRoomConsoleBridge.contract.json'):
         require((app_dir / '_internal' / 'unity' / 'Editor' / name).is_file(),
                 f'packaged content bridge source is missing: {name}')
+    for relative in ('console_repository_activity.py', 'tools/console-repository-edit-scope.py'):
+        packaged = app_dir / '_internal' / relative
+        require(packaged.is_file(), f'packaged repository scope utility is missing: {relative}')
+        require(packaged.read_bytes() == (ROOT / relative).read_bytes(),
+                f'packaged repository scope utility differs from verified source: {relative}')
     manifests = list(app_dir.rglob("app-manifest.json"))
     require(len(manifests) == 1, "packaged manifest is missing or duplicated")
     manifest = json.loads(manifests[0].read_text(encoding="utf-8"))

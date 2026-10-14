@@ -31,6 +31,8 @@
 .repository-publish-refresh-indicator { flex: 0 0 9px; width: 9px; height: 9px; border: 1.5px solid var(--line, #3b4a5b); border-top-color: var(--muted, #92a2b5); border-radius: 50%; animation: repository-publish-spin 1s linear infinite; }
 .repository-publish-refresh-indicator[hidden] { display: none; }
 .repository-publish-status-cell { min-width: 0; }
+.repository-publish-row-reason { display: block; margin-top: 3px; color: var(--muted, #92a2b5); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.repository-publish-row-reason[hidden] { display: none; }
 .repository-publish-row-activity { display: flex; align-items: center; gap: 7px; min-height: 14px; margin-top: 3px; }
 .repository-publish-row-activity[hidden], .repository-publish-row-progress[hidden] { display: none; }
 .repository-publish-row-progress { flex: 1 1 44px; min-width: 36px; max-width: 100px; height: 3px; overflow: hidden; border-radius: 4px; background: var(--line, #3b4a5b); }
@@ -69,6 +71,15 @@
 .repository-publish-diagnosis-summary { color: var(--text, #edf2fa); }
 .repository-publish-diagnosis-next, .repository-publish-diagnosis-meta { color: var(--muted, #92a2b5); }
 .repository-publish-diagnosis-meta { font-size: 11px; }
+.repository-publish-diagnosis-blockers[hidden] { display: none; }
+.repository-publish-current-activity { padding: 0 0 9px; margin-bottom: 9px; border-bottom: 1px solid var(--line, #3b4a5b); }
+.repository-publish-current-activity[hidden] { display: none; }
+.repository-publish-current-activity-summary { color: var(--text, #edf2fa); }
+.repository-publish-diagnosis-work-heading { display: block; margin: 8px 0 5px; }
+.repository-publish-diagnosis-work { padding: 7px 0 7px 10px; border-left: 2px solid var(--line, #3b4a5b); }
+.repository-publish-diagnosis-work + .repository-publish-diagnosis-work { margin-top: 5px; }
+.repository-publish-diagnosis-work-path, .repository-publish-diagnosis-work-reason { color: var(--text, #edf2fa); }
+.repository-publish-diagnosis-work-hint { color: var(--muted, #92a2b5); }
 .repository-publish-diagnosis-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .repository-publish-diagnosis-actions .ghost-button { min-height: 28px; padding: 4px 9px; font-size: 12px; }
 .repository-publish-diagnosis-actions [hidden] { display: none; }

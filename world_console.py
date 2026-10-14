@@ -871,7 +871,7 @@ REPOSITORY_BINDING_DISCOVERY = RepositoryBindingDiscovery(
 
 def repository_publish_busy_reason(root):
     publisher = globals().get("CONSOLE_REPOSITORY_PUBLISH")
-    return REPOSITORY_BINDING_DISCOVERY.busy_reason(
+    return REPOSITORY_BINDING_DISCOVERY.busy_diagnostic(
         root, developer_operation=CONSOLE_DEVELOPER_UPDATE.operation(),
         owned_developer_lock=bool(publisher and publisher.owns_developer_lock(root)))
 
@@ -1756,6 +1756,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                         and not set(query) - {"repoId"}
                         and all(len(value) == 1 and value[0] for value in query.values())):
                     result = CONSOLE_REPOSITORY_PUBLISH.version_catalog(query.get("repoId", [None])[0])
+                elif (parsed.path == "/api/console/repository-publish/activity"
+                        and set(query) == {"repoId"}
+                        and len(query["repoId"]) == 1 and query["repoId"][0]):
+                    result = CONSOLE_REPOSITORY_PUBLISH.activity_status(query["repoId"][0])
                 elif (parsed.path == "/api/console/repository-publish/operation"
                         and not set(query) - {"requestId"}
                         and all(len(value) == 1 for value in query.values())):

@@ -57,7 +57,9 @@ _DIAGNOSTICS = {
     "sync_missing": ("sync", "warning", "保存并确认配置的来源文件存在，再重新核对。", ("sync", "sync")),
     "sync_writing": ("sync", "warning", "等待工作文件保存完成，确认来源与目标后重新核对。", ("sync", "sync")),
     "sync_changed": ("sync", "warning", "核对来源和目标的最新已保存内容，再重新核对；保留现有修改。", ("sync", "sync")),
-    "activity_unconfirmed": ("activity", "warning", "先确认或完成该仓库相关的 Codex 工作，再重新核对；活动边界尚不能安全确认。", None),
+    "activity_unconfirmed": ("activity", "warning", "先查看具体聊天与原因；确认或完成该仓库相关的 Codex 工作后重新核对。", None),
+    "activity_active": ("activity", "warning", "等待列出的聊天完成或交还本仓库的编辑范围，再重新核对并重试。", None),
+    "activity_scope_unknown": ("activity", "warning", "列出的聊天尚未声明本轮编辑范围；由该聊天登记实际仓库或完成本轮工作后重新核对。", None),
     "git_history_operation": ("repository", "warning", "在该仓库完成或按原意取消现有 Git 历史操作，再重新核对。", None),
     "git_lock": ("repository", "warning", "确认原 Git 操作已完成后重新核对；保留原锁和工作。", None),
     "staged_selection": ("repository", "warning", "先按原意处理已有暂存选择，再重新核对；当前选择会保留。", None),
@@ -97,6 +99,30 @@ def _make_diagnostic(code, summary, *, source_id=None):
         target = {**target, "sourceId": source_id} if isinstance(source_id, str) and source_id else None
     return {"code": code, "category": category, "severity": severity,
             "summary": str(summary), "nextStep": next_step, "target": target}
+
+
+def _activity_blockers(value):
+    """Retain bounded actor metadata for display, never as execution permission."""
+    if not isinstance(value, list):
+        return []
+    result = []
+    limits = {"threadId": 100, "title": 200, "agentPath": 200, "cwd": 4096, "reason": 300}
+    for item in value[:20]:
+        if not isinstance(item, dict):
+            continue
+        scope = item.get("scope")
+        if isinstance(scope, dict) and scope.get("status") == "verified":
+            item = {**item, "mode": scope.get("mode"), "roots": scope.get("editRoots", [])}
+        actor = {key: text[:limit] for key, limit in limits.items()
+                 if isinstance((text := item.get(key)), str) and not any(ord(c) < 32 for c in text)}
+        for key, allowed in (("state", {"active", "unknown"}), ("mode", {"edit", "read_only", "unknown"})):
+            if item.get(key) in allowed:
+                actor[key] = item[key]
+        actor["roots"] = [path[:4096] for path in item.get("roots", [])[:8]
+                          if isinstance(path, str) and path and not any(ord(c) < 32 for c in path)] if isinstance(item.get("roots"), list) else []
+        if actor.get("threadId") or actor.get("title") or actor.get("cwd"):
+            result.append(actor)
+    return result
 
 
 class RepositoryPublishError(ValueError):
@@ -1827,9 +1853,36 @@ class RepositoryPublishService:
         match = re.fullmatch(r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?", url)
         return match.group(1).lower() if match else ""
 
+    def activity_status(self, repo_id):
+        """Explicit scoped inspection only; no sync, stage, commit or remote I/O."""
+        settings = self._settings()
+        repo = next((item for item in settings["repositories"] if item["id"] == repo_id), None)
+        if repo is None:
+            raise RepositoryPublishError("此仓库配置已改变，请重新读取列表。", code="destination_changed")
+        root = _safe_path(repo["path"])
+        diagnostic = None
+        try:
+            if not root.is_dir():
+                raise RepositoryPublishError("本地仓库目录不存在，请核对路径。", code="repo_missing")
+            self._busy_reason(root)
+        except RepositoryPublishError as error:
+            diagnostic = error.diagnostic
+        return {"repoId": repo_id, "sourceIdentity": catalog_source_identity(repo, settings["naming"]),
+                "activityClear": diagnostic is None, "diagnostic": diagnostic, "checkedAt": _now()}
+
     def _busy_reason(self, root):
         reason = self._busy_check(root) if self._busy_check else None
         if reason:
+            if isinstance(reason, dict):
+                code = reason.get("code")
+                code = code if code in {"activity_active", "activity_scope_unknown", "activity_unconfirmed"} else "activity_unconfirmed"
+                summary = reason.get("summary")
+                summary = summary[:1000] if isinstance(summary, str) and summary else "无法确认本仓库的编辑活动，请查看具体原因后重试。"
+                error = RepositoryPublishError(summary, code=code)
+                blockers = _activity_blockers(reason.get("blockers"))
+                if blockers:
+                    error.diagnostic["blockers"] = blockers
+                raise error
             raise RepositoryPublishError(str(reason), code="activity_unconfirmed")
 
     def _sync_contract(self, repo):

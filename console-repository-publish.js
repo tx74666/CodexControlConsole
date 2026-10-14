@@ -41,6 +41,10 @@
   Object.assign(copy.en, { diagnosis: "Reason and next step", diagnosisRead: "Current check", diagnosisOperation: "Operation receipt", diagnosisHistory: "Historical receipt", diagnosisNext: "Next step", locateSetting: "View the relevant setting", recheckRepository: "Recheck this repository", readingLocal: "Reading versions and local changes…", readingHint: "Reading local state, with a 60-second deadline. No sync, commit or push is performed.", updatingLocal: "Rechecking…", readTimeout: "Read timed out", readInvalid: "Repository receipt is incomplete", readConnection: "Repository state could not be read", readNext: "Recheck later. Your work, configuration and operation receipts are retained.", notRead: "This repository has not been checked", notReadNext: "Recheck to read local repository state only.", publishingRead: "Publishing is active; versions can be rechecked when it finishes.", waitOperation: "Wait for the original operation; do not submit it again.", knownBefore: "Showing the last reading; the current state is not yet rechecked.", checkedAt: "Last checked", inspectOriginal: "Inspect the original receipt below. Continue only after confirming its original target.", configDraftRead: "Configuration has an unsaved draft. Keep it and recheck after saving." });
   Object.assign(copy.zh, { refreshing: "正在核对", lastKnown: "上次状态", refreshFailed: "核对失败", gitObjects: "Git 对象", lfsObjects: "LFS 对象", lfsFile: "LFS 文件 {n}/{total}", phasePercent: "当前传输阶段", elapsed: "已用时 {time}", checkingReceipt: "回执待核对", repoProgress: "{name} · {phase}" });
   Object.assign(copy.en, { refreshing: "Refreshing", lastKnown: "Last known", refreshFailed: "Refresh failed", gitObjects: "Git objects", lfsObjects: "LFS objects", lfsFile: "LFS file {n}/{total}", phasePercent: "Current transfer phase", elapsed: "Elapsed {time}", checkingReceipt: "Receipt needs verification", repoProgress: "{name} · {phase}" });
+  Object.assign(copy.zh, { uploadPaused: "暂停上传 · 查看原因", waitingCodex: "等待 Codex 完成", activityScope: "聊天范围待核对", activityCheck: "Codex 活动待核对", stagedSelection: "已有暂存选择", historyOperation: "Git 操作未完成", gitLocked: "Git 正在占用仓库", mergeConflict: "先处理合并冲突", workChanged: "改动还在变化", folderCheck: "核对仓库目录", branchCheck: "核对目标分支", remoteCheck: "核对远端", syncMissing: "先保存工作文件", syncWriting: "等待文件保存完成", syncCheck: "核对文件同步", versionCheck: "核对版本来源", versionPlanCheck: "核对版本计划", authCheck: "Git 登录待处理", permissionCheck: "仓库权限待处理", rulesCheck: "上传规则未满足", lfsCheck: "LFS 上传待处理", networkCheck: "网络状态待核对", remoteHistory: "先整合远端历史", gitCheck: "Git 运行待核对", whyPaused: "为什么暂停上传", blockingWork: "相关 Codex 工作", notConfigIssue: "这是工作状态检查，无需修改仓库配置。", activityUnknown: "活动信息尚未确认；查看原原因，不会猜测聊天归属。" });
+  Object.assign(copy.en, { uploadPaused: "Upload paused · See why", waitingCodex: "Waiting for Codex", activityScope: "Check the chat's scope", activityCheck: "Check Codex activity", stagedSelection: "Review staged changes", historyOperation: "Finish the Git operation", gitLocked: "Git is using this repository", mergeConflict: "Resolve merge conflicts", workChanged: "Files are still changing", folderCheck: "Check the repository folder", branchCheck: "Check the target branch", remoteCheck: "Check the remote", syncMissing: "Save the work file first", syncWriting: "Waiting for the file to finish saving", syncCheck: "Check file sync", versionCheck: "Check the version source", versionPlanCheck: "Check the version plan", authCheck: "Git sign-in needs fixing", permissionCheck: "Check repository permissions", rulesCheck: "Upload rules need review", lfsCheck: "Check the LFS upload", networkCheck: "Check the network", remoteHistory: "Integrate remote changes first", gitCheck: "Check Git", whyPaused: "Why the upload is paused", blockingWork: "Related Codex work", notConfigIssue: "This is a work-state check. No repository setting needs changing.", activityUnknown: "Activity is not confirmed. See the original reason; no chat ownership is assumed." });
+  Object.assign(copy.zh, { currentActivity: "当前 Codex 活动", checkingActivity: "正在核对当前聊天活动…", lastAttempt: "上次上传尝试", activityCleared: "聊天活动已解除；重试后继续核对仓库。", activityRetry: "重试以继续仓库检查", activityFailed: "当前活动未能核对，上次尝试的原因仍保留。", activityOnly: "本次只核对聊天活动，不代表 Git、文件或远端已就绪。" });
+  Object.assign(copy.en, { currentActivity: "Current Codex activity", checkingActivity: "Checking current chat activity…", lastAttempt: "Last upload attempt", activityCleared: "Chat activity cleared; retry continues repository checks.", activityRetry: "Retry repository checks", activityFailed: "Current activity could not be checked. The last attempt's reason is retained.", activityOnly: "This checks chat activity only. Git, files and the remote still need checking." });
   Object.assign(copy.zh, { commitAge: "提交 {age}", commitTime: "本机 HEAD 提交时间", commitUnknown: "尚无可核对的提交时间", commitClock: "提交时间晚于本机时间，请核对时钟。" });
   Object.assign(copy.en, { commitAge: "Commit {age}", commitTime: "Local HEAD commit time", commitUnknown: "No verified commit time is available", commitClock: "The commit time is ahead of this computer's clock; check the timestamp." });
   const clone = value => JSON.parse(JSON.stringify(value));
@@ -108,7 +112,7 @@
     state.uploadSummaries = new Map(); state.multiBindings = new Set();
     state.versionReads = new Map(); state.statusReadError = null;
     state.cacheIdentity = ""; state.serverVersionSources = new Map(); state.snapshotMode = false; state.versionRefresh = null; state.versionPollTimer = 0;
-    state.commitAgeTimer = 0; state.ageSuspended = false;
+    state.commitAgeTimer = 0; state.ageSuspended = false; state.activityCheck = null;
     const controls = [], resultRetries = [], syncDrafts = new Map(), inputPending = new Set();
     const compactRefs = new Map(), configCards = new Map(), configSections = new Map(), planBoxes = new Map();
     const managed = item => { item.setAttribute("data-console-management", ""); return item; };
@@ -131,8 +135,8 @@
     const refreshButton = managed(node("button", "ghost-button")), previewButton = managed(node("button", "ghost-button")); refreshButton.type = previewButton.type = "button";
     const resumeButton = managed(node("button", "ghost-button")); resumeButton.type = "button"; resumeButton.hidden = true;
     const previewHint = node("p", "repository-publish-hint"), previewResult = node("div", "repository-publish-preview");
-    const diagnosisBox = node("div", "repository-publish-diagnosis"), diagnosisHeading = node("strong"), diagnosisSummary = node("p", "repository-publish-diagnosis-summary"), diagnosisNext = node("p", "repository-publish-diagnosis-next"), diagnosisMeta = node("p", "repository-publish-diagnosis-meta"), diagnosisActions = node("div", "repository-publish-diagnosis-actions"), diagnosisLocate = managed(node("button", "ghost-button repository-publish-diagnosis-locate")), diagnosisRecheck = managed(node("button", "ghost-button repository-publish-diagnosis-recheck"));
-    diagnosisLocate.type = diagnosisRecheck.type = "button"; diagnosisBox.hidden = true; diagnosisSummary.id = "repository-publish-reason-" + (uniqueId() || "current"); diagnosisActions.append(diagnosisLocate, diagnosisRecheck); diagnosisBox.append(diagnosisHeading, diagnosisSummary, diagnosisNext, diagnosisMeta, diagnosisActions);
+    const diagnosisBox = node("div", "repository-publish-diagnosis"), diagnosisHeading = node("strong", "repository-publish-diagnosis-heading"), diagnosisSummary = node("p", "repository-publish-diagnosis-summary"), diagnosisNext = node("p", "repository-publish-diagnosis-next"), diagnosisMeta = node("p", "repository-publish-diagnosis-meta"), diagnosisBlockers = node("div", "repository-publish-diagnosis-blockers"), diagnosisActivity = node("div", "repository-publish-current-activity"), diagnosisActions = node("div", "repository-publish-diagnosis-actions"), diagnosisLocate = managed(node("button", "ghost-button repository-publish-diagnosis-locate")), diagnosisRecheck = managed(node("button", "ghost-button repository-publish-diagnosis-recheck"));
+    diagnosisLocate.type = diagnosisRecheck.type = "button"; diagnosisBox.hidden = true; diagnosisBlockers.hidden = diagnosisActivity.hidden = true; diagnosisSummary.id = "repository-publish-reason-" + (uniqueId() || "current"); diagnosisActions.append(diagnosisLocate, diagnosisRecheck); diagnosisBox.append(diagnosisActivity, diagnosisHeading, diagnosisSummary, diagnosisBlockers, diagnosisNext, diagnosisMeta, diagnosisActions);
     detail.append(detailSummary, detailStatus, refreshButton, previewButton, resumeButton, previewHint, previewResult, results);
     form.append(diagnosisBox, repositories, addButton, namingDetails, warningDetails, detail); dialog.append(header, form); host.append(bar, expanded, dialog);
     const blocked = () => state.postBusy || state.previewBusy || state.serverBusy || Boolean(state.pendingId) || activeStatuses.has(state.operation?.status);
@@ -183,6 +187,7 @@
       const n = enabled().length; return n ? text("ready").replace("{n}", String(n)) : text("empty");
     }
     function render() {
+      if (state.activityCheck && !activityCheckMatches(state.activityCheck)) cancelActivityCheck();
       bar.hidden = state.allowed !== true; if (!state.allowed && dialog.open) dialog.close();
       expanded.hidden = !state.allowed || !state.expanded;
       runButton.textContent = text("run"); configButton.textContent = text("configAll"); heading.textContent = state.configRepoId ? repoName(state.settings?.repositories.find(repo => repo.id === state.configRepoId)) + " · " + text("config") : text("configAll"); closeButton.textContent = text("close");
@@ -236,6 +241,16 @@
       return true;
     }
     const diagnosticCategories = new Set(["connection", "sync", "activity", "repository", "versions", "naming", "verification", "authentication", "permissions", "rules", "lfs", "network", "remote", "unknown"]);
+    const activityCodes = new Set(["activity_active", "activity_scope_unknown", "activity_unconfirmed"]);
+    const diagnosticLabels = new Map([
+      ...[["activity_active", "waitingCodex"], ["activity_scope_unknown", "activityScope"], ["activity_unconfirmed", "activityCheck"]].map(([code, key]) => [code, ["activity", key]]),
+      ...[["repo_missing", "folderCheck"], ["repo_root", "folderCheck"], ["branch_mismatch", "branchCheck"], ["remote_config", "remoteCheck"], ["remote_ownership", "remoteCheck"], ["duplicate_repository", "folderCheck"]].map(([code, key]) => [code, ["connection", key]]),
+      ...[["sync_config", "syncCheck"], ["sync_missing", "syncMissing"], ["sync_writing", "syncWriting"], ["sync_changed", "syncCheck"]].map(([code, key]) => [code, ["sync", key]]),
+      ...[["git_history_operation", "historyOperation"], ["git_lock", "gitLocked"], ["staged_selection", "stagedSelection"], ["merge_conflict", "mergeConflict"], ["worktree_changed", "workChanged"], ["git_missing", "gitCheck"], ["git_unavailable", "gitCheck"]].map(([code, key]) => [code, ["repository", key]]),
+      ["version_authority", ["versions", "versionCheck"]], ["version_plan_stale", ["versions", "versionPlanCheck"]], ["version_plan_blocked", ["versions", "versionPlanCheck"]],
+      ["git_authentication", ["authentication", "authCheck"]], ["git_permissions", ["permissions", "permissionCheck"]], ["git_rules", ["rules", "rulesCheck"]], ["git_lfs", ["lfs", "lfsCheck"]], ["git_timeout", ["network", "networkCheck"]], ["remote_ahead", ["remote", "remoteHistory"]], ["remote_changed", ["remote", "remoteCheck"]],
+      ...["destination_changed", "receipt_unverified", "operation_interrupted"].map(code => [code, ["verification", "verifyRequired"]])
+    ]);
     const diagnosticTargets = new Map([
       ...[["repo_missing", "path"], ["repo_root", "path"], ["branch_mismatch", "branch"], ["remote_config", "remote"], ["remote_ownership", "repositoryUrl"], ["duplicate_repository", "path"]].map(([code, field]) => [code, ["connection", new Set([field])]]),
       ...["sync_config", "sync_missing", "sync_writing", "sync_changed"].map(code => [code, ["sync", new Set(["sync"])]]),
@@ -243,6 +258,15 @@
       ["version_fallback", ["naming", new Set(["fallbackTitle"])]]
     ]);
     function safeDiagnosticText(value, length = 1200) { return clean(value, length).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, ""); }
+    function normalizedBlockers(value) {
+      if (!Array.isArray(value)) return [];
+      const localPath = value => typeof value === "string" && /^(?:[A-Za-z]:[\\/]|\/(?!\/))/.test(value) ? safeDiagnosticText(value, 1000) : "";
+      return value.slice(0, 20).filter(plain).map(item => {
+        const title = safeDiagnosticText(item.title, 160).trim(), agentPath = typeof item.agentPath === "string" && /^\/[A-Za-z0-9_./-]{1,199}$/.test(item.agentPath) ? item.agentPath : "", threadId = idOK(item.threadId) ? item.threadId : "";
+        return { title, agentPath, threadId, cwd: localPath(item.cwd), roots: Array.isArray(item.roots) ? item.roots.slice(0, 12).map(localPath).filter(Boolean) : [],
+          state: /^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(item.state || "") ? item.state : "", mode: /^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(item.mode || "") ? item.mode : "", reason: safeDiagnosticText(item.reason, 600) };
+      }).filter(item => item.title || item.agentPath || item.threadId);
+    }
     function normalizedDiagnostic(value) {
       if (!plain(value) || !/^[a-z][a-z0-9_]{0,79}$/.test(value.code || "") || !["info", "warning", "error"].includes(value.severity) || !safeDiagnosticText(value.summary)) return null;
       const category = diagnosticCategories.has(value.category) ? value.category : "unknown", allowed = diagnosticTargets.get(value.code);
@@ -251,7 +275,59 @@
         && (value.target.sourceId === undefined && allowed[0] !== "versions" || typeof value.target.sourceId === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(value.target.sourceId))) {
         target = { section: allowed[0], field: value.target.field, ...(value.target.sourceId ? { sourceId: value.target.sourceId } : {}) };
       }
-      return { code: value.code, category, severity: value.severity, summary: safeDiagnosticText(value.summary), nextStep: safeDiagnosticText(value.nextStep), target };
+      const activity = category === "activity" && activityCodes.has(value.code);
+      return { code: value.code, category, severity: value.severity, summary: safeDiagnosticText(value.summary), nextStep: safeDiagnosticText(value.nextStep), target: activity ? null : target, blockers: activity ? normalizedBlockers(value.blockers) : [] };
+    }
+    function diagnosticStatus(value, fallback = "uploadPaused") {
+      const label = value && diagnosticLabels.get(value.code);
+      return text(label && label[0] === value.category ? label[1] : fallback);
+    }
+    function compactReason(value) {
+      const actors = (value?.blockers || []).map(item => item.title || item.agentPath || item.threadId).filter(Boolean).join(", ");
+      return [actors, safeDiagnosticText(value?.summary).replace(/\s+/g, " ")].filter(Boolean).join(" · ");
+    }
+    function stoppedResult(repo) {
+      const result = state.operation?.results.find(item => item.repoId === repo.id);
+      return uploadBindingMatches(result?.uploadSummary, repo) && (failedRepoStatuses.has(result.status) || reviewRepoStatuses.has(result.status)) ? result : null;
+    }
+    function activityCheckMatches(check) {
+      const repo = state.settings?.repositories.find(item => item.id === check?.repoId);
+      return Boolean(repo && !state.destroyed && state.allowed && !state.dirty && dialog.open && !workspacePanel.hidden && state.configRepoId === repo.id && check.epoch === state.versionEpoch && check.edit === state.edit && check.settingsSha === state.settingsSha && check.cacheIdentity === state.cacheIdentity && check.localIdentity === sourceIdentity(repo) && check.serverIdentity === state.serverVersionSources.get(repo.id));
+    }
+    function cancelActivityCheck() {
+      const check = state.activityCheck; state.activityCheck = null; check?.controller.abort(); diagnosisActivity.hidden = true; diagnosisActivity.replaceChildren();
+    }
+    function currentActivityFor(repo) {
+      const check = state.activityCheck;
+      return check?.repoId === repo.id && activityCheckMatches(check) ? check : null;
+    }
+    async function readCurrentActivity(repoId, explicit = false) {
+      const repo = state.settings?.repositories.find(item => item.id === repoId), serverIdentity = state.serverVersionSources.get(repoId);
+      if (!repo || !dialog.open || state.configRepoId !== repoId || state.destroyed || !state.allowed || workspacePanel.hidden || state.dirty || state.saveBusy || !/^[a-f0-9]{64}$/.test(serverIdentity || "") || !explicit && !stoppedResult(repo)) return;
+      if (currentActivityFor(repo)?.busy) return;
+      cancelActivityCheck();
+      const check = { repoId, serverIdentity, localIdentity: sourceIdentity(repo), settingsSha: state.settingsSha, cacheIdentity: state.cacheIdentity, edit: state.edit, epoch: state.versionEpoch, controller: new AbortController(), busy: true, value: null, error: false };
+      state.activityCheck = check; render();
+      try {
+        const value = await request("/activity?repoId=" + encodeURIComponent(repoId), undefined, check.controller.signal);
+        if (state.activityCheck !== check || !activityCheckMatches(check)) return;
+        const diagnostic = value?.diagnostic === null ? null : normalizedDiagnostic(value?.diagnostic);
+        if (value?.repoId !== repoId || value.sourceIdentity !== serverIdentity || typeof value.activityClear !== "boolean" || typeof value.checkedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value.checkedAt) || !Number.isFinite(Date.parse(value.checkedAt)) || value.activityClear && value.diagnostic !== null || !value.activityClear && (!diagnostic || diagnostic.category !== "activity" || !activityCodes.has(diagnostic.code))) throw new Error("invalid_activity_receipt");
+        check.value = { activityClear: value.activityClear, diagnostic, checkedAt: safeDiagnosticText(value.checkedAt, 100) };
+      } catch { if (state.activityCheck === check && activityCheckMatches(check)) check.error = true; }
+      finally { if (state.activityCheck === check) { check.busy = false; render(); } }
+    }
+    function appendActivityBlockers(parent, blockers) {
+      for (const blocker of blockers) {
+        const item = node("div", "repository-publish-diagnosis-work"), title = node("strong", "", blocker.title || blocker.agentPath || blocker.threadId);
+        item.append(title);
+        const paths = [...new Set([blocker.cwd, ...blocker.roots].filter(Boolean))];
+        for (const path of paths) item.append(node("p", "repository-publish-diagnosis-work-path", path));
+        const metadata = [blocker.agentPath, blocker.threadId, blocker.state, blocker.mode].filter(Boolean).join(" · ");
+        if (metadata) item.append(node("p", "repository-publish-diagnosis-meta", metadata));
+        if (blocker.reason) item.append(node("p", "repository-publish-diagnosis-work-reason", blocker.reason));
+        parent.append(item);
+      }
     }
     function readFor(repo) { const value = state.versionReads.get(repo.id); return value?.sourceIdentity === sourceIdentity(repo) ? value : null; }
     function readErrorDiagnostic(error) {
@@ -264,13 +340,14 @@
         const located = target?.section !== "versions" || component && repo.versionSources.some(source => source.path === component.path && source.kind === component.kind && source.key === component.key);
         return { ...diagnostic, target: located ? target : null, origin, metadata, repoId: repo.id, sourceIdentity: sourceIdentity(repo) };
       };
+      // A refreshing display snapshot must not hide the reason an actual upload stopped.
+      if (result && (failedRepoStatuses.has(result.status) || reviewRepoStatuses.has(result.status) || result.uploadSummary?.state === "pending")) return wrap(normalizedDiagnostic(result.diagnostic) || { summary: safeDiagnosticText(result.message) || text(result.uploadSummary?.state === "pending" ? "uploadPending" : "uploadPaused"), nextStep: text("inspectOriginal"), severity: "warning", target: null }, "diagnosisOperation");
       if (reading?.busy) return wrap({ summary: text(catalog ? "updatingLocal" : "readingLocal"), nextStep: text("readingHint"), severity: "info", target: null }, "diagnosisRead", catalog ? text("knownBefore") : "");
       if (reading?.error) return wrap(readErrorDiagnostic(reading.error), "diagnosisRead", catalog ? text("knownBefore") : "");
       if (state.statusReadError?.sources.get(repo.id) === sourceIdentity(repo)) return wrap(readErrorDiagnostic(state.statusReadError.error), "diagnosisRead");
       if (result && activeStatuses.has(result.status)) return wrap(normalizedDiagnostic(result.diagnostic) || { summary: [phaseText(result.phase), safeDiagnosticText(result.message)].filter(Boolean).join(" · "), nextStep: text("waitOperation"), severity: "info", target: null }, "diagnosisOperation");
       const currentDiagnostic = normalizedDiagnostic(catalog?.diagnostic);
       if (currentDiagnostic && currentDiagnostic.severity !== "info") return wrap(currentDiagnostic, "diagnosisRead");
-      if (result && (failedRepoStatuses.has(result.status) || reviewRepoStatuses.has(result.status) || result.uploadSummary?.state === "pending")) return wrap(normalizedDiagnostic(result.diagnostic) || { summary: safeDiagnosticText(result.message) || text(result.uploadSummary?.state === "pending" ? "uploadPending" : "repoAttention"), nextStep: text("inspectOriginal"), severity: "warning", target: null }, "diagnosisOperation");
       if (currentDiagnostic) return wrap(currentDiagnostic, "diagnosisRead");
       if (catalog) return wrap({ summary: safeDiagnosticText(catalog.message) || safeDiagnosticText(catalog.syncState === "unknown" ? catalog.syncReason : "") || safeDiagnosticText(catalog.components?.find(item => !item.currentVersion && item.reason)?.reason) || safeDiagnosticText(catalog.changesReason) || changeHint(catalog), nextStep: text("notReadNext"), severity: "info", target: null }, "diagnosisRead", reading?.checkedAt ? text("checkedAt") + " · " + reading.checkedAt : "");
       if (original && !result) return wrap({ summary: text("historicalHint"), nextStep: text("inspectOriginal"), severity: "info", target: null }, "diagnosisHistory");
@@ -280,10 +357,31 @@
       const repo = state.settings?.repositories.find(item => item.id === state.configRepoId);
       diagnosisBox.hidden = !dialog.open || !repo; if (!repo || !dialog.open) return;
       const value = diagnosisFor(repo); state.diagnosisPresentation = value;
-      diagnosisHeading.textContent = text("diagnosis"); diagnosisSummary.textContent = value.summary; diagnosisNext.textContent = value.nextStep ? text("diagnosisNext") + " · " + value.nextStep : "";
+      const currentActivity = currentActivityFor(repo); diagnosisActivity.replaceChildren(); diagnosisActivity.hidden = !currentActivity;
+      if (currentActivity) {
+        diagnosisActivity.append(node("strong", "", text("currentActivity")));
+        const current = currentActivity.value, currentDiagnostic = current?.diagnostic;
+        diagnosisActivity.append(node("p", "repository-publish-current-activity-summary", currentActivity.busy ? text("checkingActivity") : currentActivity.error ? text("activityFailed") : current?.activityClear ? text("activityCleared") : compactReason(currentDiagnostic)));
+        if (currentDiagnostic) {
+          appendActivityBlockers(diagnosisActivity, currentDiagnostic.blockers);
+          if (currentDiagnostic.nextStep) diagnosisActivity.append(node("p", "repository-publish-diagnosis-next", text("diagnosisNext") + " · " + currentDiagnostic.nextStep));
+        }
+        if (current) diagnosisActivity.append(node("p", "repository-publish-diagnosis-meta", text("checkedAt") + " · " + current.checkedAt), node("p", "repository-publish-diagnosis-meta", text("activityOnly")));
+      }
+      diagnosisHeading.textContent = text(currentActivity && stoppedResult(repo) ? "lastAttempt" : value.origin === "diagnosisOperation" && value.severity !== "info" ? "whyPaused" : "diagnosis"); diagnosisSummary.textContent = value.summary; diagnosisNext.textContent = value.nextStep ? text("diagnosisNext") + " · " + value.nextStep : "";
+      diagnosisBlockers.replaceChildren();
+      const activity = value.category === "activity" && activityCodes.has(value.code), blockers = value.blockers || [];
+      diagnosisBlockers.hidden = !activity;
+      if (activity) {
+        diagnosisBlockers.append(node("p", "repository-publish-diagnosis-work-hint", text("notConfigIssue")));
+        if (blockers.length) {
+          diagnosisBlockers.append(node("strong", "repository-publish-diagnosis-work-heading", text("blockingWork")));
+          appendActivityBlockers(diagnosisBlockers, blockers);
+        } else diagnosisBlockers.append(node("p", "repository-publish-diagnosis-work-hint", text("activityUnknown")));
+      }
       diagnosisNext.hidden = !value.nextStep; diagnosisMeta.textContent = [text(value.origin), value.metadata].filter(Boolean).join(" · "); diagnosisBox.dataset.severity = value.severity;
       diagnosisLocate.textContent = text("locateSetting"); diagnosisLocate.hidden = !value.target; diagnosisLocate.disabled = !state.allowed;
-      diagnosisRecheck.textContent = text("recheckRepository"); diagnosisRecheck.disabled = blocked() || state.versionBusy || state.readBusy || state.saveBusy || state.dirty || state.invalid.size > 0;
+      diagnosisRecheck.textContent = text("recheckRepository"); diagnosisRecheck.disabled = blocked() || state.versionBusy || state.readBusy || state.saveBusy || state.dirty || state.invalid.size > 0 || currentActivity?.busy === true;
     }
     function childrenOf(parent) { return parent ? [parent, ...Array.from(parent.children || []).flatMap(childrenOf)] : []; }
     function focusDiagnosticTarget(value = state.diagnosisPresentation) {
@@ -306,7 +404,7 @@
       if (focus) { if (field) field.setAttribute("aria-describedby", diagnosisSummary.id); focus.scrollIntoView?.({ block: "center" }); focus.focus(); }
     }
     diagnosisLocate.addEventListener("click", () => focusDiagnosticTarget());
-    diagnosisRecheck.addEventListener("click", () => { if (!diagnosisRecheck.disabled && state.configRepoId) void readVersions(state.configRepoId); });
+    diagnosisRecheck.addEventListener("click", () => { if (!diagnosisRecheck.disabled && state.configRepoId) { void readCurrentActivity(state.configRepoId, true); void readVersions(state.configRepoId); } });
     function repoChangeState(catalog) {
       if (!catalog || typeof catalog.hasChanges !== "boolean") return "unknown";
       const expected = catalog.hasChanges ? "changed" : "unchanged";
@@ -470,10 +568,11 @@
         if (!refs) {
           const row = node("div", "repository-publish-compact-row"), name = node("strong", "repository-publish-compact-name"), nameCell = node("div", "repository-publish-name-cell"), commitAge = node("span", "repository-publish-commit-age"), version = node("span", "repository-publish-compact-version"), status = managed(node("button", "repository-publish-compact-status")), configure = managed(node("button", "ghost-button repository-publish-row-config")); configure.type = status.type = "button";
           const cell = node("div", "repository-publish-version-cell"), picker = managed(node("details", "repository-publish-version-picker")), summary = node("summary", "repository-publish-version-trigger"), arrow = node("span", "repository-publish-version-arrow", "⌄"), menu = node("div", "repository-publish-version-menu");
-          const refresh = node("span", "repository-publish-refresh-indicator"), statusCell = node("div", "repository-publish-status-cell"), activity = node("div", "repository-publish-row-activity"), track = node("div", "repository-publish-row-progress"), fill = node("span", "repository-publish-row-progress-fill"), metric = node("span", "repository-publish-row-metric");
+          const refresh = node("span", "repository-publish-refresh-indicator"), statusCell = node("div", "repository-publish-status-cell"), reason = node("span", "repository-publish-row-reason"), activity = node("div", "repository-publish-row-activity"), track = node("div", "repository-publish-row-progress"), fill = node("span", "repository-publish-row-progress-fill"), metric = node("span", "repository-publish-row-metric");
           refresh.hidden = true; arrow.setAttribute("aria-hidden", "true"); picker.append(summary, menu); cell.append(version, picker, refresh);
-          track.append(fill); activity.append(track, metric); statusCell.append(status, activity);
-          nameCell.append(name, commitAge); row.dataset.repoId = repo.id; row.append(nameCell, cell, statusCell, configure); compactRows.append(row); refs = { row, name, commitAge, version, status, configure, cell, picker, summary, arrow, menu, refresh, activity, track, fill, metric, menuSignature: "" }; compactRefs.set(repo.id, refs);
+          reason.id = "repository-publish-row-reason-" + (uniqueId() || repo.id); reason.hidden = true;
+          track.append(fill); activity.append(track, metric); statusCell.append(status, reason, activity);
+          nameCell.append(name, commitAge); row.dataset.repoId = repo.id; row.append(nameCell, cell, statusCell, configure); compactRows.append(row); refs = { row, name, commitAge, version, status, reason, configure, cell, picker, summary, arrow, menu, refresh, activity, track, fill, metric, menuSignature: "" }; compactRefs.set(repo.id, refs);
           picker.addEventListener("toggle", () => { if (picker.open) for (const other of compactRefs.values()) if (other !== refs) other.picker.open = false; });
           picker.addEventListener("keydown", event => { if (event.key === "Escape" && picker.open) { event.preventDefault(); picker.open = false; summary.focus(); } });
           configure.addEventListener("click", () => open(repo.id));
@@ -489,12 +588,19 @@
           : result && successfulRepoStatuses.has(result.status) ? text("uploaded") + (result.uploadSummary?.state === "pending" ? " · " + text("uploadPending") : "")
             : result && skippedRepoStatuses.has(result.status) ? text("repoNoChanges")
               : result && reviewRepoStatuses.has(result.status) ? text("verifyRequired")
-                : result && failedRepoStatuses.has(result.status) ? text(result.status === "deferred" ? "deferred" : "failed")
+                : result && failedRepoStatuses.has(result.status) ? diagnosticStatus(normalizedDiagnostic(result.diagnostic), result.status === "deferred" ? "uploadPaused" : "failed")
                   : reading?.busy ? catalog ? changeHint(catalog) : text("readingLocal") : reading?.error ? catalog ? changeHint(catalog) + " · " + text("refreshFailed") : readErrorDiagnostic(reading.error).summary
-                    : diagnostic && diagnostic.severity !== "info" ? text("repoAttention") : catalog ? changeHint(catalog) : text(blocked() ? "publishingRead" : "notRead");
+                    : diagnostic && diagnostic.severity !== "info" ? diagnosticStatus(diagnostic, "repoAttention") : catalog ? changeHint(catalog) : text(blocked() ? "publishingRead" : "notRead");
+        const diagnosis = diagnosisFor(repo), hasReason = repo.enabled === true && !(originalResult && !result) && (result && (failedRepoStatuses.has(result.status) || reviewRepoStatuses.has(result.status)) || !result && !reading?.busy && (reading?.error || diagnostic && diagnostic.severity !== "info"));
+        const attemptDiagnostic = normalizedDiagnostic(result?.diagnostic), checkedActivity = currentActivityFor(repo)?.value;
+        // Current chat activity cannot erase an independently diagnosed Git, sync or remote blocker.
+        const activity = hasReason && result?.status === "deferred" && (!attemptDiagnostic || ["activity", "unknown"].includes(attemptDiagnostic.category)) ? checkedActivity : null;
+        if (hasReason && activity) refs.status.textContent = activity.activityClear ? text("activityRetry") : diagnosticStatus(activity.diagnostic);
+        refs.reason.textContent = hasReason ? activity ? activity.activityClear ? text("activityCleared") : compactReason(activity.diagnostic) : compactReason(diagnosis) : ""; refs.reason.hidden = !hasReason || !refs.reason.textContent; refs.reason.title = refs.reason.textContent;
+        if (refs.reason.hidden) refs.status.removeAttribute("aria-describedby"); else refs.status.setAttribute("aria-describedby", refs.reason.id);
         refs.status.dataset.changeState = changeState;
         refs.status.dataset.status = originalResult && !result ? "historical" : clean(result?.status, 60); refs.status.disabled = !state.allowed;
-        refs.status.title = [text("diagnosis"), diagnosisFor(repo).summary, reading?.busy && catalog ? text("knownBefore") : ""].filter(Boolean).join(" · "); refs.configure.textContent = text("config"); refs.configure.disabled = !state.allowed;
+        refs.status.title = [text("diagnosis"), activity ? activity.activityClear ? text("activityCleared") : compactReason(activity.diagnostic) : compactReason(diagnosis), activity?.diagnostic?.nextStep || diagnosis.nextStep, reading?.busy && catalog ? text("knownBefore") : ""].filter(Boolean).join(" · "); refs.configure.textContent = text("config"); refs.configure.disabled = !state.allowed;
         renderRepositoryProgress(refs, repo, result, reading, catalog);
       }
       renderCommitAges();
@@ -600,10 +706,12 @@
       }
       warningDetails.hidden = warningRows.children.length === 0;
     }
-    async function request(path = "", body) {
+    async function request(path = "", body, externalSignal) {
       const controller = new AbortController();
-      const timeoutMs = body === undefined ? path.split("?")[0] === "/versions" && !path.includes("snapshot=1") ? 60000 : 10000 : 20000;
+      const timeoutMs = body === undefined ? path.split("?")[0] === "/activity" ? 30000 : path.split("?")[0] === "/versions" && !path.includes("snapshot=1") ? 60000 : 10000 : 20000;
       const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+      const abort = () => { controller.abort(); window.clearTimeout(timer); }; externalSignal?.addEventListener("abort", abort, { once: true });
+      if (externalSignal?.aborted) abort();
       let response;
       try {
         response = await window.fetch(BASE + path, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error", referrerPolicy: "same-origin", headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal });
@@ -618,7 +726,7 @@
       } catch (error) {
         if (!error.kind) error.kind = controller.signal.aborted ? "timeout" : response ? "invalid_response" : "network";
         throw error;
-      } finally { window.clearTimeout(timer); }
+      } finally { window.clearTimeout(timer); externalSignal?.removeEventListener("abort", abort); }
     }
     function stopPoll() { if (state.pollTimer) window.clearTimeout(state.pollTimer); state.pollTimer = 0; }
     function schedulePoll() {
@@ -836,7 +944,8 @@
         const repo = state.settings?.repositories.find(item => item.id === result.repoId);
         const currentTarget = Boolean(repo && uploadBindingMatches(result.uploadSummary, repo));
         card.dataset.target = currentTarget ? "current" : "historical";
-        title.textContent = clean(result.name || result.repoId, 200); summary.textContent = [clean(result.status, 60), clean(result.phase, 60), clean(result.message, 500)].filter(Boolean).join(" · "); localize(expandedTitle, "details");
+        const resultDiagnostic = normalizedDiagnostic(result.diagnostic), statusLabel = failedRepoStatuses.has(result.status) ? diagnosticStatus(resultDiagnostic, result.status === "deferred" ? "uploadPaused" : "failed") : successfulRepoStatuses.has(result.status) ? text("uploaded") : skippedRepoStatuses.has(result.status) ? text("repoNoChanges") : reviewRepoStatuses.has(result.status) ? text("verifyRequired") : activeStatuses.has(result.status) ? phaseText(result.phase) : clean(result.status, 60);
+        title.textContent = clean(result.name || result.repoId, 200); summary.textContent = [statusLabel, compactReason(resultDiagnostic) || safeDiagnosticText(result.message, 500)].filter(Boolean).join(" · "); localize(expandedTitle, "details");
         if (!currentTarget) card.append(node("p", "repository-publish-hint", text("historicalReceipt") + " · " + text("historicalHint")));
         const binding = result.uploadSummary?.binding;
         if (plain(binding)) {
@@ -890,16 +999,17 @@
     function open(repoId = null, options = {}) {
       if (!state.allowed || state.destroyed) return;
       const selected = typeof repoId === "string" && state.settings?.repositories.some(repo => repo.id === repoId) ? repoId : null;
-      if (selected !== state.configRepoId) previewResult.replaceChildren();
+      if (selected !== state.configRepoId) { previewResult.replaceChildren(); cancelActivityCheck(); }
       state.diagnosticNaming = false;
       state.configRepoId = selected;
       state.returnFocus = document.activeElement; if (state.settings && !dialog.open && !state.dirty) renderConfig();
       if (!dialog.open) dialog.showModal(); renderResults(); render();
+      if (options.diagnose === true && selected) void readCurrentActivity(selected);
       if (options.diagnose !== true) { void readVersions(); if (state.pendingId) void poll(); else void readStatus(); }
     }
     runButton.addEventListener("click", () => void run()); configButton.addEventListener("click", () => open()); closeButton.addEventListener("click", () => dialog.close());
     toggleButton.addEventListener("click", () => { if (!state.allowed || state.destroyed) return; state.expanded = !state.expanded; if (!state.expanded && !dialog.open && state.snapshotMode) stopVersionRefresh(); render(); if (state.expanded) void readVersions(); });
-    dialog.addEventListener("close", () => { render(); state.returnFocus?.focus(); });
+    dialog.addEventListener("close", () => { cancelActivityCheck(); render(); state.returnFocus?.focus(); });
     addButton.addEventListener("click", () => {
       if (!state.settings || blocked() || state.saveBusy || inputPending.size) return;
       const id = uniqueId(); if (!id) { state.error = "noIdentity"; render(); return; }
@@ -908,7 +1018,7 @@
     refreshButton.addEventListener("click", () => { if (state.configConflict) void readStatus(true); else if (state.dirty) void save(); else { void readVersions(); if (state.pendingId) void poll(); else void readStatus(); } }); previewButton.addEventListener("click", () => void preview(state.configRepoId));
     resumeButton.addEventListener("click", () => void resumeOriginal());
     let observer = null;
-    if (typeof MutationObserver === "function") { observer = new MutationObserver(() => { render(); }); observer.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] }); }
+    if (typeof MutationObserver === "function") { observer = new MutationObserver(() => { if (dialog.open) renderResults(); render(); }); observer.observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] }); }
     let visibilityObserver = null, wasHidden = workspacePanel.hidden, recheckBusy = false;
     function canRecheckVisible() {
       return !state.destroyed && !workspacePanel.hidden && (state.expanded || dialog.open) && state.allowed && state.settings
@@ -925,18 +1035,18 @@
     if (typeof MutationObserver === "function") {
       visibilityObserver = new MutationObserver(() => {
         const hidden = workspacePanel.hidden; if (hidden === wasHidden) return; wasHidden = hidden;
-        if (hidden) { state.versionEpoch++; stopCommitAgeTimer(); if (state.snapshotMode) stopVersionRefresh(); for (const refs of compactRefs.values()) refs.picker.open = false; } else { renderCommitAges(); void recheckVisible(); }
+        if (hidden) { state.versionEpoch++; cancelActivityCheck(); stopCommitAgeTimer(); if (state.snapshotMode) stopVersionRefresh(); for (const refs of compactRefs.values()) refs.picker.open = false; } else { renderCommitAges(); void recheckVisible(); }
       });
       visibilityObserver.observe(workspacePanel, { attributes: true, attributeFilter: ["hidden"] });
     }
-    function suspend() { state.ageSuspended = true; stopPoll(); stopVersionRefresh(); stopCommitAgeTimer(); }
+    function suspend() { state.ageSuspended = true; cancelActivityCheck(); stopPoll(); stopVersionRefresh(); stopCommitAgeTimer(); }
     function resume() { state.ageSuspended = false; if (workspacePanel.hidden || state.destroyed) return; renderCommitAges(); if (state.pendingId) schedulePoll(); else void recheckVisible(); }
     function ageVisibility() { if (document.hidden === true) stopCommitAgeTimer(); else renderCommitAges(); }
     window.addEventListener("pagehide", suspend); window.addEventListener("pageshow", resume); window.addEventListener("focus", recheckVisible);
     function dismissVersionPickers(event) { for (const refs of compactRefs.values()) if (!refs.picker.contains(event.target)) refs.picker.open = false; }
     document.addEventListener("click", dismissVersionPickers);
     document.addEventListener("visibilitychange", ageVisibility);
-    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; stopPoll(); stopVersionRefresh(); stopCommitAgeTimer(); observer?.disconnect(); visibilityObserver?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); window.removeEventListener("focus", recheckVisible); document.removeEventListener("click", dismissVersionPickers); document.removeEventListener("visibilitychange", ageVisibility); bar.remove(); expanded.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
+    const api = { open, refresh: readStatus, hasDraft: () => state.dirty || state.invalid.size > 0, canReload: () => !state.dirty && !state.saveBusy && !state.postBusy && !state.previewBusy, destroy() { state.destroyed = true; cancelActivityCheck(); stopPoll(); stopVersionRefresh(); stopCommitAgeTimer(); observer?.disconnect(); visibilityObserver?.disconnect(); window.removeEventListener("pagehide", suspend); window.removeEventListener("pageshow", resume); window.removeEventListener("focus", recheckVisible); document.removeEventListener("click", dismissVersionPickers); document.removeEventListener("visibilitychange", ageVisibility); bar.remove(); expanded.remove(); dialog.remove(); mounted.delete(host); instances.delete(api); } };
     mounted.set(host, api); instances.add(api); render(); void readStatus(); return api;
   }
   window.ConsoleRepositoryPublish = { mount, hasDraft: () => Array.from(instances).some(item => item.hasDraft()), canReload: () => Array.from(instances).every(item => item.canReload()) };

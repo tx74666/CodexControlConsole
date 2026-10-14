@@ -64,6 +64,10 @@ class Spy:
             raise RepositoryPublishError(PATH_DIAGNOSTIC["summary"], diagnostic=PATH_DIAGNOSTIC)
         return {"repositories": []}
 
+    def activity_status(self, repo_id):
+        self.calls.append(("activity_status", repo_id))
+        return {"repoId": repo_id, "sourceIdentity": "c" * 64, "activityClear": True, "diagnostic": None}
+
     def run(self, request_id, repo_ids=None):
         self.calls.append(("run", request_id, repo_ids))
         return {"requestId": request_id, "status": "working"}
@@ -182,6 +186,10 @@ def main():
             check(service.calls[-1] == ("version_catalog", None), "Version catalog invoked a mutation")
             check(request("GET", base + "/versions?repoId=one")[0] == 200, "Single repository version catalog failed")
             check(service.calls[-1] == ("version_catalog", "one"), "Version catalog repository identity changed")
+            activity_status, activity_body = request("GET", base + "/activity?repoId=one")
+            check(activity_status == 200 and json.loads(activity_body).get("activityClear") is True,
+                  "Scoped activity inspection failed")
+            check(service.calls[-1] == ("activity_status", "one"), "Activity inspection changed scope or invoked a mutation")
             diagnostic_status, diagnostic_body = request("GET", base + "/versions?repoId=diagnostic-fixture")
             check(diagnostic_status == 400 and json.loads(diagnostic_body).get("diagnostic") == PATH_DIAGNOSTIC,
                   "Read-only repository failure lost its explicit cause and setting target")
@@ -197,8 +205,9 @@ def main():
             for headers in ({"X-Test-LAN": "1"}, {"Host": "evil.invalid"},
                             {"Origin": "https://evil.invalid"}, {"Sec-Fetch-Site": "cross-site"}):
                 reject("GET", base, headers=headers, code=403)
+                reject("GET", base + "/activity?repoId=one", headers=headers, code=403)
                 reject("POST", base + "/run", {"requestId": "one"}, headers, 403)
-            for path in ("?command=push", "/operation?requestId=a&requestId=b", "/operation?remote=evil", "/versions?repoId=", "/versions?repoId=a&repoId=b", "/versions?targetVersion=evil", "/versions?snapshot=0", "/versions?refresh=1", "/versions?snapshot=1&refresh=2", "/versions?snapshot=1&snapshot=1", "/versions?snapshot=1&repoId=a&repoId=b", "/unknown"):
+            for path in ("?command=push", "/operation?requestId=a&requestId=b", "/operation?remote=evil", "/versions?repoId=", "/versions?repoId=a&repoId=b", "/versions?targetVersion=evil", "/versions?snapshot=0", "/versions?refresh=1", "/versions?snapshot=1&refresh=2", "/versions?snapshot=1&snapshot=1", "/versions?snapshot=1&repoId=a&repoId=b", "/activity", "/activity?repoId=", "/activity?repoId=a&repoId=b", "/activity?repoId=a&ignore=1", "/unknown"):
                 reject("GET", base + path)
             config = {"repositories": [], "naming": {"preset": "version"}}
             check(request("POST", base + "/config", {"settings": config})[0] == 200, "Config failed")

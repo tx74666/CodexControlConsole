@@ -14,6 +14,7 @@ import stat
 import subprocess
 import time
 from console_repository_versions import VersionPlanError, parse_commit_history
+from console_repository_activity import ScopeStore, scan_rollout
 
 _URL = re.compile(r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 _VERSION = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
@@ -123,14 +124,14 @@ def _lifecycle(event):
             return "active"
         if kind in {"task_complete", "turn_complete", "turn_aborted", "turn_finished"}:
             return "idle"
-        if kind == "agent_message" and payload.get("phase") == "final":
+        if kind == "agent_message" and payload.get("phase") in {"final", "final_answer"}:
             return "idle"
     if typ == "turn_context":
         return "active"
     if typ == "response_item" and kind == "message":
         if payload.get("role") == "user":
             return "active"
-        if payload.get("role") == "assistant" and payload.get("phase") == "final":
+        if payload.get("role") == "assistant" and payload.get("phase") in {"final", "final_answer"}:
             return "idle"
     return None
 
@@ -138,34 +139,7 @@ def _lifecycle(event):
 def rollout_activity(path, max_bytes=4 * 1024 * 1024):
     """Bounded tail. A missing boundary or changing file means unverified, not idle."""
     try:
-        p = _unredirected(path)
-        first = p.stat()
-        budget = min(65536, max_bytes)
-        while True:
-            offset = max(0, first.st_size - budget)
-            with p.open("rb") as stream:
-                stream.seek(offset)
-                raw = stream.read(budget)
-            if offset:
-                raw = raw.partition(b"\n")[2]
-            state = None
-            for line in raw.splitlines():
-                try:
-                    current = _lifecycle(json.loads(line))
-                except (ValueError, UnicodeError):
-                    continue
-                if current is not None:
-                    state = current
-            last = p.stat()
-            if (first.st_size, first.st_mtime_ns) != (last.st_size, last.st_mtime_ns):
-                return {"state": "unknown", "reason": "rollout_changed_during_read"}
-            if raw and not raw.endswith(b"\n"):
-                return {"state": "unknown", "reason": "rollout_partial_tail"}
-            if state is not None:
-                return {"state": state, "reason": "typed_rollout_boundary", "bytesRead": len(raw)}
-            if not offset or budget >= max_bytes:
-                return {"state": "unknown", "reason": "no_boundary_in_bounded_tail", "bytesRead": len(raw)}
-            budget = min(max_bytes, budget * 2)
+        return scan_rollout(_unredirected(path), max_bytes=max_bytes)
     except FileNotFoundError:
         return {"state": "unknown", "reason": "rollout_unavailable", "unavailableKind": "missing"}
     except (OSError, ValueError, TypeError, RuntimeError):
@@ -225,7 +199,7 @@ def _historical_unavailable(activity, rollout, created, updated, boot, now):
             and _verified_missing_rollout(rollout))
 
 
-def desktop_codex_activity(root, state_paths=None, *, trusted_boot_epoch=_BOOT_UNSET):
+def desktop_codex_activity(root, state_paths=None, *, trusted_boot_epoch=_BOOT_UNSET, scope_store=None):
     """Current candidates plus separately retained, unverified preboot history.
 
     A missing old rollout is never called idle. Only exact FileNotFound evidence,
@@ -235,9 +209,23 @@ def desktop_codex_activity(root, state_paths=None, *, trusted_boot_epoch=_BOOT_U
     The explicit boot injection is for isolated fixtures; no environment switch.
     """
     paths = list(state_paths) if state_paths is not None else list((Path.home() / ".codex").glob("state_*.sqlite"))
+    scopes = scope_store if scope_store is not None else ScopeStore(state_paths=paths)
     boot = _trusted_windows_boot_epoch() if trusted_boot_epoch is _BOOT_UNSET else trusted_boot_epoch
     now = time.time()
     records, warnings, historical = [], [], []
+    if not scopes.begin_snapshot():
+        warnings.append({"code": "desktop_edit_scopes_unreadable"})
+    canonical_root, cwd_paths = _path(root), {}
+    def matches(value):
+        # Ephemeral path memoization only; the next snapshot resolves again.
+        try:
+            key = str(value)
+            if key not in cwd_paths:
+                cwd_paths[key] = _path(value)
+            p = cwd_paths[key]
+            return canonical_root == p or canonical_root.is_relative_to(p) or p.is_relative_to(canonical_root)
+        except (OSError, ValueError, TypeError, RuntimeError):
+            return False
     if not paths:
         warnings.append({"code": "desktop_codex_state_unavailable"})
     for database in paths:
@@ -251,24 +239,31 @@ def desktop_codex_activity(root, state_paths=None, *, trusted_boot_epoch=_BOOT_U
                 order = " ORDER BY updated_at DESC" if "updated_at" in columns else ""
                 created = "created_at" if "created_at" in columns else "NULL"
                 updated = "updated_at" if "updated_at" in columns else "NULL"
-                query = "SELECT id,cwd,rollout_path," + created + "," + updated + " FROM threads WHERE archived=0"
+                display_name = "name" if "name" in columns else "NULL"
+                title = "title" if "title" in columns else "NULL"
+                agent_path = "agent_path" if "agent_path" in columns else "NULL"
+                query = ("SELECT id,cwd,rollout_path," + created + "," + updated + "," + display_name + "," + title + "," + agent_path
+                         + " FROM threads WHERE archived=0")
                 rows = db.execute(query + order).fetchall()
             candidates = []
-            for ident, cwd, rollout, created_at, updated_at in rows:
-                if cwd and _overlap(root, cwd):
+            for ident, cwd, rollout, created_at, updated_at, display_name, title, agent_path in rows:
+                declared_roots = scopes.candidate_roots(ident)
+                if cwd and (matches(cwd) or any(matches(p) for p in declared_roots)):
                     activity = rollout_activity(rollout)
-                    record = {"threadId": ident, "cwd": str(_path(cwd)), **activity}
+                    if activity.get("ownerThreadId") and activity["ownerThreadId"] != ident:
+                        activity.update(state="unknown", reason="rollout_owner_mismatch")
+                    scope = scopes.resolve(ident, rollout, scan=activity)
+                    record = {"threadId": ident, "title": display_name or title or agent_path or str(ident),
+                              "agentPath": agent_path, "cwd": str(cwd_paths[str(cwd)]), "scope": scope,
+                              "declaredRoots": declared_roots,
+                              **{k: v for k, v in activity.items() if k not in {"fingerprint", "identity", "starts"}}}
                     if _historical_unavailable(activity, rollout, created_at, updated_at, boot, now):
                         record.update(createdAt=created_at, updatedAt=updated_at, trustedBootEpoch=boot,
                                       bootMarginSeconds=_HISTORICAL_BOOT_MARGIN,
                                       historicalReason="preboot_missing_rollout_state_unverified")
-                        candidates.append((record, (ident, cwd, rollout, created_at, updated_at)))
+                        candidates.append((record, (ident, cwd, rollout, created_at, updated_at, display_name, title, agent_path)))
                     else:
                         records.append(record)
-                    # Existing active evidence always blocks, even with old epochs.
-                    if activity["state"] == "active":
-                        records.extend(record for record, _ in candidates)
-                        return {"records": records, "warnings": warnings, "historicalUnavailableRecords": historical}
             if candidates:
                 # Do not hide a row whose runtime metadata changed during our read.
                 with closing(sqlite3.connect(p.as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
@@ -517,34 +512,57 @@ class RepositoryBindingDiscovery:
         return sources
 
     def busy_reason(self, root, *, developer_operation=None, owned_developer_lock=False):
-        """Reason string or None. Unverified overlapping activity is explicitly deferred."""
+        """Legacy string API; new callers retain the structured diagnostic."""
+        diagnostic = self.busy_diagnostic(root, developer_operation=developer_operation,
+                                          owned_developer_lock=owned_developer_lock)
+        return diagnostic["summary"] if diagnostic else None
+
+    def busy_diagnostic(self, root, *, developer_operation=None, owned_developer_lock=False):
+        """Exact current-turn scopes can narrow activity; uncertainty still blocks."""
         root = _path(root)
+        def issue(summary, blockers=(), code="activity_unconfirmed"):
+            return {"code": code, "category": "activity", "severity": "warning", "summary": summary,
+                    "blockers": list(blockers), "target": {"kind": "activity", "repositoryPath": str(root)},
+                    "nextStep": "完成或协调下面列出的仓库编辑；重新核对后可重试。"}
         try:
             snapshot = self._get(self.workflow_snapshot, {})  # exactly one callback read
             ownership = self._get(self.edit_ownership, [])
+            if not isinstance(snapshot, dict) or not isinstance(ownership, (list, tuple)):
+                return issue("Work/edit ownership state could not be verified.")
         except (OSError, ValueError, TypeError):
-            return "Work/edit ownership state could not be verified."
+            return issue("Work/edit ownership state could not be verified.")
         records = []
         for key in ("jobs", "nativeDispatches", "threads", "editOwnership"):
-            records.extend(snapshot.get(key, []))
+            values = snapshot.get(key, [])
+            if not isinstance(values, (list, tuple)):
+                return issue("Work/edit ownership state could not be verified.")
+            records.extend(values)
         for key in ("nativeApp", "native_app"):
             native = snapshot.get(key, {})
             if isinstance(native, dict):
-                records.extend(native.get("threads", []))
+                values = native.get("threads", [])
+                if not isinstance(values, (list, tuple)):
+                    return issue("Work/edit ownership state could not be verified.")
+                records.extend(values)
         records.extend(ownership)
         if developer_operation:
             records.append(developer_operation)
         for item in records:
-            if not isinstance(item, dict) or item.get("archived") is True:
+            if not isinstance(item, dict):
+                return issue("Work/edit ownership state could not be verified.")
+            if item.get("archived") is True:
                 continue
             paths = _record_roots(item)
             if paths and not any(_overlap(root, p) for p in paths):
                 continue
             status = item.get("status") or item.get("state")
             if item.get("active") is True or status in _ACTIVE:
-                return "An active or unresolved Work/edit operation overlaps this repository."
+                return issue("An active or unresolved Work/edit operation overlaps this repository.",
+                             [{"threadId": item.get("threadId", item.get("id")), "title": item.get("title", item.get("name", "Work")),
+                               "cwd": paths[0] if paths else "", "state": status or "active", "scope": None,
+                               "reason": "active_work_or_edit_ownership"}], "activity_active")
             if status not in _TERMINAL and item.get("active") is not False:
-                return "Work/edit operation state is unverified; publication deferred."
+                return issue("Work/edit operation state is unverified; publication deferred.")
         try:
             common = Path(self.git(root, "rev-parse", "--git-common-dir"))
             common = common if common.is_absolute() else root / common
@@ -552,22 +570,44 @@ class RepositoryBindingDiscovery:
             # this exact lock. Other Work/Desktop ownership checks still run.
             state = "owned" if owned_developer_lock is True else self.lock_probe(common / "console-developer-update.lock")
             if state in {"held", "unknown"}:
-                return "The shared Git developer-update lock is held or could not be verified."
+                return issue("The shared Git developer-update lock is held or could not be verified.")
         except (OSError, ValueError, subprocess.SubprocessError):
-            return "Shared Git operation state could not be verified."
+            return issue("Shared Git operation state could not be verified.")
         try:
             native = self.desktop_activity(root) if callable(self.desktop_activity) else self.desktop_activity
             if native is None:
                 native = desktop_codex_activity(root, self.state_paths)
         except (OSError, ValueError, TypeError):
-            return "Desktop Codex activity could not be verified; publication deferred."
+            return issue("Desktop Codex activity could not be verified; publication deferred.")
+        if (not isinstance(native, dict) or not isinstance(native.get("records", []), (list, tuple))
+                or not isinstance(native.get("warnings", []), (list, tuple))):
+            return issue("Desktop Codex activity could not be verified; publication deferred.")
+        blockers = []
         for item in native.get("records", []):
-            if item.get("archived") is True or not item.get("cwd") or not _overlap(root, item["cwd"]):
+            if not isinstance(item, dict) or not isinstance(item.get("declaredRoots", []), (list, tuple)):
+                return issue("Desktop Codex activity could not be verified; publication deferred.")
+            if (item.get("archived") is True or not item.get("cwd")
+                    or not (_overlap(root, item["cwd"]) or any(_overlap(root, p) for p in item.get("declaredRoots", [])))):
                 continue
-            if item.get("state") == "active":
-                return "Desktop Codex has an active turn in this repository or an overlapping parent directory."
-            if item.get("state") != "idle":
-                return "Desktop Codex lifecycle boundary is unverified; publication deferred."
+            scope = item.get("scope") if isinstance(item.get("scope"), dict) else {}
+            if scope.get("status") == "terminal":
+                continue
+            if item.get("state") == "idle":
+                continue
+            if item.get("state") == "active" and scope.get("status") == "verified":
+                if scope.get("mode") == "read_only":
+                    continue
+                if scope.get("mode") == "edit" and scope.get("editRoots") and not any(_overlap(root, p) for p in scope["editRoots"]):
+                    continue
+            blockers.append({k: item.get(k) for k in ("threadId", "title", "agentPath", "cwd", "state", "scope", "reason", "currentTurnId")})
+        if blockers:
+            active = any(b.get("state") == "active" for b in blockers)
+            summary = ("Desktop Codex has an active turn in this repository or an overlapping parent directory." if active else
+                       "Desktop Codex lifecycle boundary is unverified; publication deferred.")
+            actual_edit = any(b.get("state") == "active" and isinstance(b.get("scope"), dict)
+                              and b["scope"].get("status") == "verified" and b["scope"].get("mode") == "edit" for b in blockers)
+            code = "activity_active" if actual_edit else "activity_scope_unknown" if active else "activity_unconfirmed"
+            return issue(summary, blockers, code)
         if native.get("warnings"):
-            return "Desktop Codex state schema or availability is unverified; publication deferred."
+            return issue("Desktop Codex state schema or availability is unverified; publication deferred.")
         return None
