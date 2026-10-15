@@ -694,6 +694,12 @@ def check_idle_connection_timeout():
 def check_request_thread_limit():
     started = threading.Event()
     release = threading.Event()
+    server_request_finished = threading.Event()
+    original_process_request_thread = world_console.ConsoleHTTPServer.process_request_thread
+
+    def observed_process_request_thread(server, request, client_address):
+        original_process_request_thread(server, request, client_address)
+        server_request_finished.set()
     handler_calls = []
 
     class HoldingHandler(BoundaryHandler):
@@ -716,7 +722,12 @@ def check_request_thread_limit():
         except Exception as error:
             first_result["error"] = error
 
-    with running_server(HoldingHandler, max_request_threads=1) as port:
+    with (
+        mock.patch.object(
+            world_console.ConsoleHTTPServer, "process_request_thread", observed_process_request_thread,
+        ),
+        running_server(HoldingHandler, max_request_threads=1) as port,
+    ):
         first_thread = threading.Thread(
             target=run_first_request,
             args=(port,),
@@ -757,6 +768,8 @@ def check_request_thread_limit():
         require(not first_thread.is_alive(), "request thread did not finish after release")
         require("error" not in first_result, f"admitted request failed: {first_result.get('error')}")
         require(first_result.get("response", (None,))[0] == 200, "admitted request did not finish normally")
+        # The client can finish reading before the server releases its request slot.
+        require(server_request_finished.wait(2), "server request thread did not finish after release")
 
         status, _, _ = request(port, "GET", "/")
         require(status == 200, f"released request slot was not reusable ({status})")
