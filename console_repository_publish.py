@@ -1734,9 +1734,23 @@ class RepositoryPublishService:
             return False
         original = _read(self._ops / (request_id + ".json"), {})
         rows = original.get("repositories", [])
-        return isinstance(rows, list) and any(isinstance(row, dict) and row.get("repoId") == pending.get("repoId")
-                                             and row.get("status") == "success" and row.get("commitSha") == pending.get("commitSha")
-                                             for row in rows)
+        if not isinstance(rows, list):
+            return False
+        for row in rows:
+            if not isinstance(row, dict) or row.get("repoId") != pending.get("repoId"):
+                continue
+            if row.get("status") == "success" and row.get("commitSha") == pending.get("commitSha"):
+                return True
+            recovered = row.get("recoveredDelivery")
+            if (isinstance(recovered, dict) and recovered.get("repoId") == pending.get("repoId")
+                    and recovered.get("status") == "success" and recovered.get("phase") == "complete"
+                    and recovered.get("commitSha") == pending.get("commitSha")
+                    and recovered.get("verifiedRemote") == pending.get("verifiedRemote")
+                    and recovered.get("deliveryVerifiedAt") == pending.get("verifiedAt")
+                    and self._upload_time(recovered.get("deliveryVerifiedAt"))
+                    and recovered.get("destination") == self._upload_destination(pending)):
+                return True
+        return False
 
     def _upload_anchors(self, pending, destination):
         anchors = []
@@ -2280,16 +2294,20 @@ class RepositoryPublishService:
             results.append(item)
         return {"previews": results}
 
-    def run(self, request_id, repo_ids=None):
+    def run(self, request_id, repo_ids=None, *, intent=None):
         if not self.allowed:
             raise RepositoryPublishError("当前入口不允许提交推送。")
         if not _REQUEST.fullmatch(str(request_id)):
             raise RepositoryPublishError("请求编号须为 8–100 个安全字符。")
         if repo_ids is not None and (not isinstance(repo_ids, list) or not repo_ids or any(not isinstance(v, str) for v in repo_ids)):
             raise RepositoryPublishError("仓库选择必须是编号列表。")
+        if intent not in (None, "commit_and_push"):
+            raise RepositoryPublishError("提交推送意图无法识别。")
         with self._mutex, _file_lock(self.state_dir / "requests.lock"):
             existing = self.operation(request_id)
             if existing:
+                if existing.get("intent") != intent:
+                    raise RepositoryPublishError("原请求的提交意图不能改变，请继续核对原回执。", code="request_conflict")
                 return existing
             if self.busy:
                 raise RepositoryPublishError("正在处理，请等待原回执；不会重复排队或混入新修改。")
@@ -2303,6 +2321,8 @@ class RepositoryPublishService:
                        "repositories": [{"repoId": r["id"], "name": Path(r["path"]).name or r["id"], "status": "queued", "phase": "queued",
                                          "message": "等待处理", "commitSha": "", "title": "", "body": "", "logs": [],
                                          "uploadSummary": self._upload_summary(r)} for r in selected]}
+            if intent is not None:
+                receipt["intent"] = intent
             for item in receipt["repositories"]:
                 item.update(activityPolicy="allow_saved_snapshot" if settings["naming"].get("allowActiveWork", True) is True else "strict",
                             activityNotice=None)
@@ -2653,6 +2673,36 @@ class RepositoryPublishService:
         item.update(commitSha=pending["commitSha"], title=pending["title"], body=pending["body"], versions=pending["versions"])
         self._push(repo, context, pending, pending_path, receipt, item)
 
+    def _continue_current_after_delivery(self, repo, context, transport, pending_path, receipt, item):
+        """A new explicit submission may proceed only after durable old delivery."""
+        if receipt.get("intent") != "commit_and_push":
+            return False
+        pending = _read(pending_path, {})
+        if pending.get("requestId") == receipt["requestId"]:
+            return False  # Recovering this same request cannot consume fresh work twice.
+        if (item.get("status") != "success" or pending.get("uploadCounterPending") is not False
+                or not self._delivery_evidence(pending, self._upload_destination(pending))
+                or pending.get("uploadSummary", {}).get("state") != "recorded"):
+            return False
+        if (self._upload_destination(pending) != self._upload_destination(repo)
+                or pending.get("identity") != context[3] or pending.get("repositorySettingsSha") != _repo_settings_sha(repo)
+                or pending.get("transportOptionsSha", transport["optionsSha"]) != transport["optionsSha"]):
+            raise RepositoryPublishError("原提交的固定目标或配置已变化，保留回执，不混入新修改。", code="destination_changed")
+        item["recoveredDelivery"] = {"repoId": repo["id"], "status": "success", "phase": "complete",
+                                     "commitSha": pending["commitSha"], "verifiedRemote": pending["verifiedRemote"],
+                                     "deliveryVerifiedAt": pending["verifiedAt"], "originalRequestId": pending["requestId"],
+                                     "destination": self._upload_destination(pending)}
+        # Save the old success before clearing the primary row. If new work is
+        # deferred or the process exits, its exact delivery acknowledgement stays.
+        self._save(receipt)
+        for key in ("versions", "deliveryVerifiedAt", "verifiedRemote", "syncFiles"):
+            item.pop(key, None)
+        item.update(commitSha="", title="", body="", diagnostic=None)
+        used = pending.get("versionPlans", [])
+        repo["versionPlans"] = [plan for plan in repo.get("versionPlans", []) if plan not in used]
+        self._phase(receipt, item, "check", "原提交已确认，继续本次已保存内容的提交与推送。")
+        return True
+
     def _run_repo(self, repo, naming, receipt, item):
         with self._activity_policy(naming, item):
             return self._run_repo_frozen(repo, naming, receipt, item)
@@ -2668,6 +2718,9 @@ class RepositoryPublishService:
             self._busy_reason(root)
             pending_path = self._pending_path(repo["id"])
             pending = _read(pending_path)
+            # Capture prior use before this run can update its recovery pointer.
+            request_already_used = bool(pending and receipt["requestId"] in
+                                        {pending.get("requestId"), pending.get("deliveryRecoveryRequestId")})
             if pending and pending.get("state") == "delivered":
                 # Repair a previous ledger-only failure before replacing its
                 # sole durable delivery receipt with another submission.
@@ -2684,6 +2737,12 @@ class RepositoryPublishService:
                     pending["deliveryRecoveryRequestId"] = receipt["requestId"]
                     _atomic(pending_path, pending)
                     item["message"] = "原提交已确认送达，上传序号已恢复；新修改保留，未再次提交或推送。"
+                if request_already_used:
+                    return
+                if receipt.get("intent") == "commit_and_push":
+                    if not self._continue_current_after_delivery(repo, context, transport, pending_path, receipt, item):
+                        return
+                elif recovering_counter:
                     return
                 item.update(status="working", phase="check", message="核对仓库、分支和活动任务。")
             if (pending and (pending.get("versionUpdates") or pending.get("versionPlans")) and not pending.get("commitSha")
@@ -2693,7 +2752,9 @@ class RepositoryPublishService:
                 if pending.get("transportOptionsSha", transport["optionsSha"]) != transport["optionsSha"]:
                     raise RepositoryPublishError("原版本计划的 LFS 或传输配置已变化，请恢复后重试。", code="destination_changed")
                 self._continue_version_intent(repo, context, pending, pending_path, receipt, item)
-                return
+                pending = _read(pending_path, {})
+                if request_already_used or not self._continue_current_after_delivery(repo, context, transport, pending_path, receipt, item):
+                    return
             if pending and pending.get("state") not in {"delivered", "cancelled_before_commit"}:
                 if pending["identity"] != identity or pending["repositorySettingsSha"] != _repo_settings_sha(repo):
                     raise RepositoryPublishError("原提交的仓库或配置已变化，请恢复原配置后重试；不会推送到新目标。", code="destination_changed")
@@ -2703,14 +2764,22 @@ class RepositoryPublishService:
                 pending = self._recover_commit(repo, context, pending, pending_path)
                 if pending.get("state") == "cancelled_before_commit" and (pending.get("versionUpdates") or pending.get("versionPlans")):
                     self._continue_version_intent(repo, context, pending, pending_path, receipt, item)
-                    return
-                if pending.get("state") != "cancelled_before_commit":
+                    pending = _read(pending_path, {})
+                elif pending.get("state") != "cancelled_before_commit":
                     item.update(commitSha=pending.get("commitSha", ""), title=pending["title"], body=pending["body"])
                     if not pending.get("commitSha"):
                         raise RepositoryPublishError("上次提交结果尚未确认，请核对保留的记录和 Git 锁。", code="receipt_unverified")
                     self._consume_version_plans(repo, pending)
                     self._push(repo, context, pending, pending_path, receipt, item)
-                    return
+                    pending = _read(pending_path, {})
+                if pending.get("state") != "cancelled_before_commit":
+                    if request_already_used or not self._continue_current_after_delivery(repo, context, transport, pending_path, receipt, item):
+                        return
+            if request_already_used:
+                item.update(status="verification_required", phase="verify",
+                            message="原请求已使用，保留原记录；不会复用原请求提交后续修改。",
+                            diagnostic=_make_diagnostic("receipt_unverified", "原请求已使用，保留原记录；不会复用原请求提交后续修改。"))
+                return
             self._blockers(root, gitdir, common)
             # Staged work is checked before any explicit source synchronization.
             self._snapshot(repo, context)
@@ -2968,7 +3037,8 @@ class RepositoryPublishService:
             item.update(status="verification_required", message=self._error(exc), diagnostic=self._diagnostic(exc))
             return
         if remote and self._ancestor(root, sha, remote):
-            pending.update(state="delivered", verifiedAt=_now(), verifiedRemote=remote)
+            pending.update(state="delivered", verifiedAt=_now(), verifiedRemote=remote,
+                           deliveryRecoveryRequestId=receipt["requestId"])
             _atomic(pending_path, pending)
             item.update(status="success", phase="complete", message="已核对原提交在远端，无需重复推送。",
                         deliveryVerifiedAt=pending["verifiedAt"], verifiedRemote=remote)
@@ -3004,7 +3074,8 @@ class RepositoryPublishService:
         except (_GitFailure, RepositoryPublishError):
             after, delivered = None, False
         if delivered:
-            pending.update(state="delivered", verifiedAt=_now(), verifiedRemote=after)
+            pending.update(state="delivered", verifiedAt=_now(), verifiedRemote=after,
+                           deliveryRecoveryRequestId=receipt["requestId"])
             item.update(status="success", phase="complete", message="原提交已推送并核对成功。",
                         deliveryVerifiedAt=pending["verifiedAt"], verifiedRemote=after)
         elif error and error.code != "timeout" and after == remote:

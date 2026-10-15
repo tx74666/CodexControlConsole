@@ -2300,10 +2300,15 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                         raise RepositoryPublishError("说明预览内容无效。")
                     result = CONSOLE_REPOSITORY_PUBLISH.preview(payload.get("repoId"))
                 elif parsed.path == "/api/console/repository-publish/run":
-                    if (set(payload) - {"requestId", "repoIds"} or "requestId" not in payload
-                            or not isinstance(payload["requestId"], str)):
+                    if (set(payload) - {"requestId", "repoIds", "intent"} or "requestId" not in payload
+                            or not isinstance(payload["requestId"], str)
+                            or ("intent" in payload and payload["intent"] != "commit_and_push")):
                         raise RepositoryPublishError("提交请求无效。")
-                    result = CONSOLE_REPOSITORY_PUBLISH.run(payload["requestId"], payload.get("repoIds"))
+                    if "intent" in payload:
+                        result = CONSOLE_REPOSITORY_PUBLISH.run(
+                            payload["requestId"], payload.get("repoIds"), intent=payload["intent"])
+                    else:
+                        result = CONSOLE_REPOSITORY_PUBLISH.run(payload["requestId"], payload.get("repoIds"))
                 else:
                     raise RepositoryPublishError("仓库提交地址无效。")
                 self.send_json(result)

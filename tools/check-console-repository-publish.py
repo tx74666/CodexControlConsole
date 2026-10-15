@@ -77,8 +77,8 @@ class Fixture:
     def service(self, cls=Service, **kwargs):
         return cls(self.base / "state", test_mode=True, discovery=lambda: {"repositories": self.repositories, "warnings": ["fixture"]}, **kwargs)
 
-    def run(self, service, identifier="request_00000001", ids=None):
-        service.run(identifier, ids)
+    def run(self, service, identifier="request_00000001", ids=None, *, intent=None):
+        service.run(identifier, ids, **({"intent": intent} if intent is not None else {}))
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             receipt = service.operation(identifier)
@@ -858,6 +858,310 @@ def retained_delivery(f, *, name="one", branch="main", sha="a" * 40):
                             "branch": branch, "remote": "origin", "fetchUrl": str(remote), "pushUrl": str(remote),
                             "repository": os.path.normcase(str(remote.resolve()))}}
     return repo, pending
+
+
+def synthetic_delivery_service(f, *, already_remote=True):
+    """Exercise real delivery journals/ledgers/acks without launching Git."""
+    repo, pending = retained_delivery(f)
+    service = f.service()
+    path = service._pending_path(repo["id"])
+    identity = pending["identity"]
+    context = tuple(Path(identity[key]) for key in ("root", "gitdir", "common")) + (identity,)
+    pending.update(state="committed", snapshot={"head": pending["commitSha"]},
+                   repositorySettingsSha=module._repo_settings_sha(repo), transportOptionsSha="fixture-transport")
+    module._atomic(path, pending)
+    request_id = "request_recovered_0002"
+    item = {"repoId": repo["id"], "status": "working", "phase": "verify", "message": "", "logs": [],
+            "commitSha": pending["commitSha"], "title": pending["title"], "body": pending["body"]}
+    receipt = {"requestId": request_id, "status": "working", "repositories": [item]}
+    module._atomic(service._ops / (pending["requestId"] + ".json"),
+                   {"requestId": pending["requestId"], "status": "attention", "repositories": [dict(item, status="push_failed")]})
+    remotes = iter([pending["commitSha"]] if already_remote else ["b" * 40, pending["commitSha"]])
+    launches = []
+    service._blockers = lambda *args: None
+    service._snapshot = lambda *args: {}
+    service._repo = lambda *args: context
+    service._remote = lambda *args: next(remotes)
+    service._fetch = lambda *args: None
+    service._ancestor = lambda root, first, second: first == second or first == "b" * 40
+    service._outgoing_safe = lambda *args: None
+    service._busy_reason = lambda *args: None
+    service._text = lambda *args, **kwargs: pending["commitSha"]
+    service._transport = lambda *args: ("fixture-alias", [])
+    service._transport_identity = lambda *args: {"optionsSha": "fixture-transport"}
+    service._git = lambda *args, **kwargs: launches.append(args[1:]) or b""
+    return service, repo, context, pending, path, receipt, item, launches
+
+
+def test_resumed_delivery_ack_tracks_successful_request_without_git():
+    for already_remote in (True, False):
+        with Fixture() as f:
+            service, repo, context, pending, path, receipt, item, launches = synthetic_delivery_service(f, already_remote=already_remote)
+            service._push(repo, context, pending, path, receipt, item)
+            require(item["status"] == "success" and pending["uploadCounterPending"] is False)
+            require(pending["requestId"] == "request_00000001" and pending["deliveryRecoveryRequestId"] == receipt["requestId"])
+            require(module._read(path)["deliveryRecoveryRequestId"] == receipt["requestId"])
+            require(not service._delivery_acknowledged(pending), "Journal alone cannot fabricate a durable successful row")
+            service._save(receipt)
+            require(service._delivery_acknowledged(pending), "The new successful verification must acknowledge the original commit")
+            require(len(launches) == (0 if already_remote else 1))
+
+
+def test_commit_and_push_continuation_preserves_old_ack_on_new_failure_without_git():
+    with Fixture() as f:
+        service, repo, context, pending, path, receipt, item, launches = synthetic_delivery_service(f)
+        service._push(repo, context, pending, path, receipt, item)
+        item["versions"] = [{"version": "old"}]
+        require(not service._continue_current_after_delivery(repo, context, {"optionsSha": "fixture-transport"}, path, receipt, item),
+                "An omitted legacy intent must remain recovery-only")
+        receipt["intent"] = "commit_and_push"
+        recovery_request = receipt["requestId"]
+        receipt["requestId"] = pending["requestId"]
+        require(not service._continue_current_after_delivery(repo, context, {"optionsSha": "fixture-transport"}, path, receipt, item),
+                "Even with a missing operation file, the same pending request cannot consume another fresh submission")
+        receipt["requestId"] = recovery_request
+        wrong_context = context[:3] + ({**context[3], "branch": "different"},)
+        try:
+            service._continue_current_after_delivery(repo, wrong_context, {"optionsSha": "fixture-transport"}, path, receipt, item)
+            raise AssertionError("Changed fixed context cannot authorize fresh work")
+        except Error as exc:
+            require(exc.code == "destination_changed")
+        require(service._continue_current_after_delivery(repo, context, {"optionsSha": "fixture-transport"}, path, receipt, item))
+        saved = module._read(service._ops / (receipt["requestId"] + ".json"))
+        row = saved["repositories"][0]
+        require(row["status"] == "working" and row["commitSha"] == "" and row["title"] == row["body"] == "")
+        require("versions" not in row and "verifiedRemote" not in row and "deliveryVerifiedAt" not in row)
+        require(row["recoveredDelivery"]["status"] == "success" and row["recoveredDelivery"]["phase"] == "complete")
+        require(row["recoveredDelivery"]["commitSha"] == pending["commitSha"])
+        item.update(status="deferred", message="new saved work changed while being checked")
+        service._save(receipt)
+        require(service._delivery_acknowledged(pending), "Later WIP deferral must not lose the durable old success")
+        item["recoveredDelivery"]["destination"] = {"repository": "wrong", "branch": "main"}
+        service._save(receipt)
+        require(not service._delivery_acknowledged(pending), "A different destination cannot acknowledge the original commit")
+        require(not launches)
+
+
+def test_commit_and_push_waits_for_delivery_and_ledger_without_git():
+    with Fixture() as f:
+        service, repo, context, pending, path, receipt, item, launches = synthetic_delivery_service(f)
+        receipt["intent"] = "commit_and_push"
+        require(not service._continue_current_after_delivery(repo, context, {"optionsSha": "fixture-transport"}, path, receipt, item))
+        original_atomic = module._atomic
+        def fail_ledger(target, value):
+            if target.parent == service._uploads and target.suffix == ".json":
+                raise PermissionError("synthetic ledger failure")
+            return original_atomic(target, value)
+        module._atomic = fail_ledger
+        try:
+            service._push(repo, context, pending, path, receipt, item)
+        finally:
+            module._atomic = original_atomic
+        require(item["status"] == "success" and pending["uploadCounterPending"] is True)
+        require(not service._continue_current_after_delivery(repo, context, {"optionsSha": "fixture-transport"}, path, receipt, item),
+                "A successful remote check with a failed ledger cannot replace the original receipt")
+        require("recoveredDelivery" not in item and not launches)
+
+
+def test_request_intent_is_durable_and_cannot_upgrade_replay_without_git():
+    with Fixture() as f:
+        repo, pending = retained_delivery(f)
+        service = f.service()
+        original = {"requestId": "request_legacy_0001", "status": "success", "repositories": []}
+        module._atomic(service._ops / (original["requestId"] + ".json"), original)
+        restored = service.run(original["requestId"])
+        require(restored["requestId"] == original["requestId"] and restored.get("intent") is None)
+        try:
+            service.run(original["requestId"], intent="commit_and_push")
+            raise AssertionError("A legacy request ID must not gain a new submission intent")
+        except Error:
+            pass
+        explicit = dict(original, requestId="request_explicit_0002", intent="commit_and_push")
+        module._atomic(service._ops / (explicit["requestId"] + ".json"), explicit)
+        restored = service.run(explicit["requestId"], intent="commit_and_push")
+        require(restored["requestId"] == explicit["requestId"] and restored["intent"] == "commit_and_push")
+        for intent in (None, "push_only", True):
+            try:
+                service.run(explicit["requestId"], intent=intent)
+                raise AssertionError("A replayed or unknown intent cannot change the request")
+            except Error:
+                pass
+        require(not service.busy and not service._queue)
+
+
+def test_explicit_intent_enters_fresh_work_once_after_recovery_without_git():
+    from contextlib import nullcontext
+    for retained_state in ("committed", "delivered", "version_prepared", "staging"):
+        for intent in (None, "commit_and_push"):
+            with Fixture() as f:
+                service, repo, context, pending, path, receipt, item, launches = synthetic_delivery_service(f)
+                # Seed a durable successful old delivery, but leave its operation
+                # unacknowledged to model the historical separate verify request.
+                service._push(repo, context, pending, path, receipt, item)
+                delivered = module._read(path)
+                retained = dict(delivered, state=retained_state)
+                if retained_state in {"version_prepared", "staging"}:
+                    retained.update(commitSha="", versionPlans=[{"sourceId": "old-consumed-plan"}])
+                module._atomic(path, retained)
+                receipt["requestId"] = "request_fresh_submission_0003"
+                if intent:
+                    receipt["intent"] = intent
+                fresh, continued_versions = [], []
+                saved_work = f.base / "later-saved-work.txt"
+                saved_work.write_text("version45 and current saved work remain until fresh CAS")
+                service._sync_contract = lambda *args: None
+                service._repo_locks = lambda *args: nullcontext()
+                service._recover_commit = lambda *args, **kwargs: (
+                    dict(retained, state="cancelled_before_commit") if retained_state == "staging" else retained)
+                def resume_version(*args):
+                    continued_versions.append(True)
+                    # Deliberately persist a NEW dictionary, without mutating the
+                    # caller's no-SHA/cancelled object or returning this journal.
+                    replacement = dict(delivered, deliveryRecoveryRequestId=receipt["requestId"])
+                    module._atomic(path, replacement)
+                    item.update(status="success", phase="complete", commitSha=replacement["commitSha"],
+                                deliveryVerifiedAt=replacement["verifiedAt"], verifiedRemote=replacement["verifiedRemote"])
+                service._continue_version_intent = resume_version
+                def verify_old(*args):
+                    replacement = dict(delivered, deliveryRecoveryRequestId=receipt["requestId"])
+                    module._atomic(path, replacement)
+                    item.update(status="success", phase="complete", commitSha=replacement["commitSha"],
+                                deliveryVerifiedAt=replacement["verifiedAt"], verifiedRemote=replacement["verifiedRemote"])
+                service._push = verify_old
+                def fresh_sync(*args):
+                    fresh.append(True)
+                    raise Error("Synthetic fresh-WIP CAS boundary", code="worktree_changed")
+                service._sync = fresh_sync
+                try:
+                    service._run_repo_frozen(repo, {}, receipt, item)
+                except Error as exc:
+                    require(intent == "commit_and_push" and exc.code == "worktree_changed")
+                else:
+                    require(intent is None, "Explicit intent must enter the fresh work path")
+                require(len(fresh) == (1 if intent else 0), (retained_state, intent, fresh))
+                require(len(continued_versions) == (1 if retained_state in {"version_prepared", "staging"} else 0))
+                require(saved_work.read_text() == "version45 and current saved work remain until fresh CAS")
+                if intent:
+                    require(item["commitSha"] == "" and item["recoveredDelivery"]["commitSha"] == delivered["commitSha"])
+                    item.update(status="deferred")
+                    service._save(receipt)
+                    require(service._delivery_acknowledged(module._read(path)))
+                require(not launches)
+
+
+def test_legacy_verify_then_explicit_current_submission_bumps_once():
+    class FailedOriginal(Service):
+        def _git(self, root, *arguments, **kwargs):
+            if arguments and arguments[0] == "push":
+                raise module._GitFailure("timeout")
+            return super()._git(root, *arguments, **kwargs)
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        manifest = root / "app-manifest.json"
+        manifest.write_text('{"version":"1.6.44"}\n')
+        f.git(root, "add", "app-manifest.json")
+        f.git(root, "commit", "-m", "Initial version")
+        f.git(root, "push", "origin", "main")
+        repo["versionSources"] = [{"path": "app-manifest.json", "kind": "json", "key": "version", "name": "App", "scope": "**"}]
+        (root / "tracked.txt").write_text("original saved batch\n")
+        first = f.run(f.service(FailedOriginal))
+        original_sha = child(first)["commitSha"]
+        require(child(first)["status"] == "verification_required" and original_sha)
+        require(json.loads(manifest.read_text())["version"] == "1.6.45")
+        f.git(root, "push", "origin", original_sha + ":refs/heads/main")
+        (root / "tracked.txt").write_text("current saved batch\n")
+        service = f.service()
+        verified = f.run(service, "request_verify_original_0002")
+        require(child(verified)["status"] == "success" and child(verified)["commitSha"] == original_sha)
+        require(json.loads(manifest.read_text())["version"] == "1.6.45")
+        require(f.git(root, "show", "HEAD:tracked.txt") == "original saved batch")
+        current = f.run(service, "request_current_saved_0003", intent="commit_and_push")
+        new_sha = child(current)["commitSha"]
+        require(child(current)["status"] == "success" and new_sha != original_sha)
+        require(child(current)["recoveredDelivery"]["commitSha"] == original_sha)
+        require(json.loads(manifest.read_text())["version"] == "1.6.46")
+        require(json.loads(f.git(remote, "show", "main:app-manifest.json"))["version"] == "1.6.46")
+        require(f.git(remote, "show", "main:tracked.txt") == "current saved batch")
+        count = f.git(root, "rev-list", "--count", "HEAD")
+        replay = f.run(service, "request_current_saved_0003", intent="commit_and_push")
+        require(child(replay)["commitSha"] == new_sha and f.git(root, "rev-list", "--count", "HEAD") == count)
+
+
+def test_missing_operation_replay_never_consumes_fresh_work_without_git():
+    from contextlib import nullcontext
+    for replay_id_kind in ("original", "recovery"):
+        for intent in (None, "commit_and_push"):
+            with Fixture() as f:
+                service, repo, context, pending, path, receipt, item, launches = synthetic_delivery_service(f)
+                service._push(repo, context, pending, path, receipt, item)
+                original_id, recovery_id = pending["requestId"], "request_prior_recovery_0002"
+                pending["deliveryRecoveryRequestId"] = recovery_id
+                module._atomic(path, pending)
+                module._atomic(service._ops / (recovery_id + ".json"),
+                               {"requestId": recovery_id, "status": "success", "repositories": [dict(item)]})
+                request_id = original_id if replay_id_kind == "original" else recovery_id
+                (service._ops / (request_id + ".json")).unlink(missing_ok=True)
+                receipt["requestId"] = request_id
+                if intent:
+                    receipt["intent"] = intent
+                service._sync_contract = lambda *args: None
+                service._repo_locks = lambda *args: nullcontext()
+                fresh_reads = []
+                def forbidden_fresh_snapshot(*args):
+                    fresh_reads.append(True)
+                    raise AssertionError("A used request cannot freeze later saved work again")
+                service._snapshot = forbidden_fresh_snapshot
+                saved = f.base / "later-saved-work.txt"
+                saved.write_bytes(b"saved version45 plus new work must remain untouched")
+                service._run_repo_frozen(repo, {}, receipt, item)
+                service._save(receipt)
+                require(item["status"] == "success" and item["commitSha"] == pending["commitSha"])
+                require(not fresh_reads and not launches and "recoveredDelivery" not in item,
+                        (replay_id_kind, intent, fresh_reads))
+                require(saved.read_bytes() == b"saved version45 plus new work must remain untouched")
+                retained = module._read(path)
+                require(service._delivery_acknowledged(retained) and retained["uploadSummary"]["count"] == 1)
+
+
+def test_unknown_old_delivery_never_enters_fresh_work_without_git():
+    from contextlib import nullcontext
+    with Fixture() as f:
+        service, repo, context, pending, path, receipt, item, launches = synthetic_delivery_service(f)
+        receipt.update(requestId="request_new_explicit_0003", intent="commit_and_push")
+        service._sync_contract = lambda *args: None
+        service._repo_locks = lambda *args: nullcontext()
+        service._recover_commit = lambda *args, **kwargs: pending
+        def still_unknown(*args):
+            pending["state"] = "verification_required"
+            module._atomic(path, pending)
+            item.update(status="verification_required", phase="verify")
+        service._push = still_unknown
+        fresh_reads = []
+        def forbidden_snapshot(*args):
+            fresh_reads.append(True)
+            raise AssertionError("Unknown original delivery cannot authorize a fresh snapshot")
+        service._snapshot = forbidden_snapshot
+        service._run_repo_frozen(repo, {}, receipt, item)
+        require(item["status"] == "verification_required" and not fresh_reads and not launches)
+
+
+def test_used_cancelled_request_has_terminal_receipt_without_git():
+    from contextlib import nullcontext
+    for intent in (None, "commit_and_push"):
+        with Fixture() as f:
+            service, repo, context, pending, path, receipt, item, launches = synthetic_delivery_service(f)
+            pending.update(state="cancelled_before_commit", commitSha="")
+            module._atomic(path, pending)
+            receipt["requestId"] = pending["requestId"]
+            if intent:
+                receipt["intent"] = intent
+            service._sync_contract = lambda *args: None
+            service._repo_locks = lambda *args: nullcontext()
+            def forbidden_snapshot(*args):
+                raise AssertionError("A used cancelled request cannot resnapshot fresh work")
+            service._snapshot = forbidden_snapshot
+            service._run_repo_frozen(repo, {}, receipt, item)
+            require(item["status"] == "verification_required" and item["phase"] == "verify" and not launches)
 
 
 def test_upload_counter_retained_seed_read_only_and_scopes():

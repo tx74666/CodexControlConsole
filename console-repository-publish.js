@@ -10,9 +10,9 @@
     zh: { run: "提交并推送", config: "配置", close: "关闭", heading: "提交并推送", ready: "已启用 {n} 个仓库", loading: "正在读取…", saving: "正在保存配置…", saved: "配置已保存", saveFailed: "配置未保存，草稿保留", readFailed: "状态读取失败", unknown: "结果待核对，正在追踪原请求", working: "正在提交并推送…", interrupted: "操作中断，请查看详情", complete: "本次操作已完成", unavailable: "此处不可用", empty: "先配置一个仓库", add: "添加仓库", enabled: "启用", path: "本机仓库目录", repositoryUrl: "仓库网址", remote: "远端名称", branch: "分支", currentBranch: "当前分支（读取后保存）", rules: "同步文件与版本规则", sync: "同步文件（每行 来源 -> 目标）", syncHint: "相对本机仓库目录；仅执行提交时同步。", versions: "版本来源", addVersion: "添加版本来源", versionPath: "文件", kind: "格式", key: "字段 / 匹配式", name: "模块名称", scope: "适用范围", remove: "移除", excludes: "排除路径（每行一项）", naming: "提交命名", preset: "命名方式", version: "版本", module_version: "模块 + 版本", fallback: "无版本时的标题", subtitle: "副标题（可选）", notes: "备注（可选）", includeSummary: "包含改动摘要", preview: "预览标题与改动", previewing: "正在预览…", previewFailed: "预览失败，请查看状态", previewHint: "预览不执行文件同步。", details: "状态与详情", refresh: "重新读取", retry: "继续此仓库", noResults: "尚无操作回执", invalidSync: "同步规则需填写：来源 -> 目标", invalidConfig: "请检查未完成的配置", duplicate: "此仓库目录重复，请修改或禁用其中一项", serial: "配置尚未保存，请稍后再提交", noIdentity: "无法创建安全的请求身份", pendingUnavailable: "原请求回执尚未确认", disabledRepo: "未启用", previewTitle: "预览", repo: "仓库", defaultFallback: "更新进度 {datetime}" },
     en: { run: "Commit & push", config: "Configure", close: "Close", heading: "Commit & push", ready: "{n} repositories enabled", loading: "Reading…", saving: "Saving configuration…", saved: "Configuration saved", saveFailed: "Not saved; draft kept", readFailed: "Could not read status", unknown: "Checking the original request", working: "Committing and pushing…", interrupted: "Interrupted; see details", complete: "Operation completed", unavailable: "Unavailable here", empty: "Configure a repository first", add: "Add repository", enabled: "Enabled", path: "Local repository folder", repositoryUrl: "Repository URL", remote: "Remote name", branch: "Branch", currentBranch: "Current branch (read and save)", rules: "Sync files and version rules", sync: "Sync files (one source -> target per line)", syncHint: "Relative to the repository; synced only when running.", versions: "Version sources", addVersion: "Add version source", versionPath: "File", kind: "Format", key: "Key / pattern", name: "Module name", scope: "Scope", remove: "Remove", excludes: "Excluded paths (one per line)", naming: "Commit naming", preset: "Naming", version: "Version", module_version: "Module + version", fallback: "Title when no version is found", subtitle: "Subtitle (optional)", notes: "Notes (optional)", includeSummary: "Include change summary", preview: "Preview title and changes", previewing: "Previewing…", previewFailed: "Preview failed; see status", previewHint: "Preview does not sync files.", details: "Status and details", refresh: "Refresh", retry: "Continue this repository", noResults: "No operation receipt yet", invalidSync: "Use source -> target for each sync rule", invalidConfig: "Check the unfinished configuration", duplicate: "Duplicate repository folder; change or disable one", serial: "Wait for configuration to finish saving", noIdentity: "Could not create a secure request ID", pendingUnavailable: "Original request receipt remains unconfirmed", disabledRepo: "Disabled", previewTitle: "Preview", repo: "Repository", defaultFallback: "更新进度 {datetime}" }
   };
-  copy.zh.run = copy.zh.heading = "推送到 GitHub";
-  copy.en.run = copy.en.heading = "Push to GitHub";
-  copy.zh.working = "正在推送到 GitHub…"; copy.en.working = "Pushing to GitHub…";
+  copy.zh.run = copy.zh.heading = "提交并上传";
+  copy.en.run = copy.en.heading = "Commit & Push";
+  copy.zh.working = "正在提交并上传…"; copy.en.working = "Committing and pushing…";
   copy.zh.repoNoChanges = "无改动"; copy.en.repoNoChanges = "No changes";
   Object.assign(copy.zh, { expand: "展开仓库", collapse: "收起仓库", configAll: "配置全部", connection: "路径与远端", versionPlan: "版本计划", nextPatch: "使用下一个补丁版本", cancelPlan: "取消计划", noVersion: "未配置版本", versionPending: "版本待读取", versionFailed: "版本读取失败", noVersionChange: "不改版本", repoReady: "就绪", repoDone: "已完成", repoAttention: "需查看", repoWorking: "进行中", component: "组件", planned: "已计划", versionUnsupported: "此版本暂不能自动递增" });
   Object.assign(copy.en, { expand: "Show repositories", collapse: "Hide repositories", configAll: "Configure all", connection: "Folder and remote", versionPlan: "Version plan", nextPatch: "Use next patch", cancelPlan: "Cancel plan", noVersion: "No version configured", versionPending: "Version not read yet", versionFailed: "Could not read versions", noVersionChange: "Keep version", repoReady: "Ready", repoDone: "Completed", repoAttention: "Needs attention", repoWorking: "In progress", component: "Component", planned: "Planned", versionUnsupported: "Automatic version bump is unavailable" });
@@ -41,6 +41,7 @@
   Object.assign(copy.en, { diagnosis: "Reason and next step", diagnosisRead: "Current check", diagnosisOperation: "Operation receipt", diagnosisHistory: "Historical receipt", diagnosisNext: "Next step", locateSetting: "View the relevant setting", recheckRepository: "Recheck this repository", readingLocal: "Reading versions and local changes…", readingHint: "Reading local state, with a 60-second deadline. No sync, commit or push is performed.", updatingLocal: "Rechecking…", readTimeout: "Read timed out", readInvalid: "Repository receipt is incomplete", readConnection: "Repository state could not be read", readNext: "Recheck later. Your work, configuration and operation receipts are retained.", notRead: "This repository has not been checked", notReadNext: "Recheck to read local repository state only.", publishingRead: "Publishing is active; versions can be rechecked when it finishes.", waitOperation: "Wait for the original operation; do not submit it again.", knownBefore: "Showing the last reading; the current state is not yet rechecked.", checkedAt: "Last checked", inspectOriginal: "Inspect the original receipt below. Continue only after confirming its original target.", configDraftRead: "Configuration has an unsaved draft. Keep it and recheck after saving." });
   Object.assign(copy.zh, { refreshing: "正在核对", lastKnown: "上次状态", refreshFailed: "核对失败", gitObjects: "Git 对象", lfsObjects: "LFS 对象", lfsFile: "LFS 文件 {n}/{total}", phasePercent: "当前传输阶段", elapsed: "已用时 {time}", checkingReceipt: "回执待核对", repoProgress: "{name} · {phase}" });
   Object.assign(copy.en, { refreshing: "Refreshing", lastKnown: "Last known", refreshFailed: "Refresh failed", gitObjects: "Git objects", lfsObjects: "LFS objects", lfsFile: "LFS file {n}/{total}", phasePercent: "Current transfer phase", elapsed: "Elapsed {time}", checkingReceipt: "Receipt needs verification", repoProgress: "{name} · {phase}" });
+  copy.zh.lastUpload = "上次上传"; copy.en.lastUpload = "Last upload";
   Object.assign(copy.zh, { uploadPaused: "暂停上传 · 查看原因", waitingCodex: "等待 Codex 完成", activityScope: "聊天范围待核对", activityCheck: "Codex 活动待核对", stagedSelection: "已有暂存选择", historyOperation: "Git 操作未完成", gitLocked: "Git 正在占用仓库", mergeConflict: "先处理合并冲突", workChanged: "改动还在变化", folderCheck: "核对仓库目录", branchCheck: "核对目标分支", remoteCheck: "核对远端", syncMissing: "先保存工作文件", syncWriting: "等待文件保存完成", syncCheck: "核对文件同步", versionCheck: "核对版本来源", versionPlanCheck: "核对版本计划", authCheck: "Git 登录待处理", permissionCheck: "仓库权限待处理", rulesCheck: "上传规则未满足", lfsCheck: "LFS 上传待处理", networkCheck: "网络状态待核对", remoteHistory: "先整合远端历史", gitCheck: "Git 运行待核对", whyPaused: "为什么暂停上传", blockingWork: "相关 Codex 工作", notConfigIssue: "这是工作状态检查，无需修改仓库配置。", activityUnknown: "活动信息尚未确认；查看原原因，不会猜测聊天归属。" });
   Object.assign(copy.en, { uploadPaused: "Upload paused · See why", waitingCodex: "Waiting for Codex", activityScope: "Check the chat's scope", activityCheck: "Check Codex activity", stagedSelection: "Review staged changes", historyOperation: "Finish the Git operation", gitLocked: "Git is using this repository", mergeConflict: "Resolve merge conflicts", workChanged: "Files are still changing", folderCheck: "Check the repository folder", branchCheck: "Check the target branch", remoteCheck: "Check the remote", syncMissing: "Save the work file first", syncWriting: "Waiting for the file to finish saving", syncCheck: "Check file sync", versionCheck: "Check the version source", versionPlanCheck: "Check the version plan", authCheck: "Git sign-in needs fixing", permissionCheck: "Check repository permissions", rulesCheck: "Upload rules need review", lfsCheck: "Check the LFS upload", networkCheck: "Check the network", remoteHistory: "Integrate remote changes first", gitCheck: "Check Git", whyPaused: "Why the upload is paused", blockingWork: "Related Codex work", notConfigIssue: "This is a work-state check. No repository setting needs changing.", activityUnknown: "Activity is not confirmed. See the original reason; no chat ownership is assumed." });
   Object.assign(copy.zh, { currentActivity: "当前 Codex 活动", checkingActivity: "正在核对当前聊天活动…", lastAttempt: "上次上传尝试", activityCleared: "聊天活动已解除；重试后继续核对仓库。", activityRetry: "重试以继续仓库检查", activityFailed: "当前活动未能核对，上次尝试的原因仍保留。", activityOnly: "本次只核对聊天活动，不代表 Git、文件或远端已就绪。" });
@@ -74,7 +75,8 @@
     for (const name of ["localStorage", "sessionStorage"]) {
       try {
         const storage = window[name], parsed = JSON.parse(storage?.getItem(KEY + ".payload") || "null");
-        if (plain(parsed) && idOK(parsed.requestId) && storage.getItem(KEY) === parsed.requestId && Array.isArray(parsed.repoIds) && parsed.repoIds.length && parsed.repoIds.every(id => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/.test(id)) && Number.isFinite(parsed.createdAt)) candidates.push(parsed);
+        if (plain(parsed) && idOK(parsed.requestId) && storage.getItem(KEY) === parsed.requestId && Array.isArray(parsed.repoIds) && parsed.repoIds.length && parsed.repoIds.every(id => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/.test(id)) && Number.isFinite(parsed.createdAt)
+          && (parsed.intent === undefined || parsed.intent === "commit_and_push")) candidates.push(parsed);
       } catch { /* Missing or unavailable storage is not a receipt. */ }
     }
     candidates.sort((a, b) => b.createdAt - a.createdAt); return candidates[0] || null;
@@ -222,6 +224,10 @@
     function sourceIdentity(repo, naming = state.settings?.naming) { return JSON.stringify([repo.path, repo.repositoryUrl, repo.remote, repo.branch, repo.versionSources, repo.syncFiles, repo.exclude, repo.versionPlans, naming?.autoBump]); }
     function sourceIdentities(settings) { return new Map(settings.repositories.map(repo => [repo.id, sourceIdentity(repo, settings.naming)])); }
     function catalogFor(repo) { const catalog = state.catalog.get(repo.id); return catalog?.sourceIdentity === sourceIdentity(repo) ? catalog : null; }
+    function displayCatalogFor(repo) {
+      const catalog = catalogFor(repo), reading = readFor(repo);
+      return catalog && (reading?.busy || reading?.error) ? { ...catalog, displayOnly: true } : catalog;
+    }
     function acceptVersionSnapshots(value, sources = sourceIdentities(state.settings), initial = false) {
       if (!plain(value) || !/^[a-f0-9]{64}$/.test(value.cacheIdentity || "") || !Array.isArray(value.versionSources) || !Array.isArray(value.versionSnapshots) || !plain(value.versionReadStates)) return false;
       if (initial) {
@@ -461,7 +467,8 @@
     }
     function componentTransition(component, catalog) {
       const transition = component?.transition;
-      if (!plain(transition) || !["planned", "working", "auto"].includes(transition.kind)
+      if (catalog?.displayOnly === true || catalog?.cached === true
+        || !plain(transition) || !["planned", "working", "auto"].includes(transition.kind)
         || !clean(component.currentVersion, 80) || !clean(transition.fromVersion, 80)
         || !clean(transition.toVersion, 80) || transition.fromVersion === transition.toVersion) return null;
       if (transition.kind === "planned" && (component.planState !== "valid"
@@ -504,7 +511,7 @@
       return component.worktreeChanged === false || repoChangeState(catalog) === "unchanged" ? "unchanged" : "unknown";
     }
     function versionSummary(repo) {
-      const catalog = catalogFor(repo), components = catalog?.components || [];
+      const catalog = displayCatalogFor(repo), components = catalog?.components || [];
       if (hasMultipleVersions(repo, catalog)) return uploadNumber(uploadSummary(repo, catalog));
       if (!components.length && catalog?.versionState === "missing") return text("authorityMissing");
       if (!components.length) {
@@ -521,7 +528,7 @@
       if (refs.version.parentElement !== refs.summary) refs.summary.append(refs.version, refs.arrow);
       refs.summary.setAttribute("aria-label", [refs.version.textContent, text("displayVersion")].join(" · "));
       const uploaded = uploadSummary(repo, catalog);
-      const reading = readFor(repo), signature = JSON.stringify([language(), displayIdentity(repo), components, state.settings.naming.autoBump, uploaded, Boolean(reading?.busy), Boolean(reading?.error)]);
+      const reading = readFor(repo), signature = JSON.stringify([language(), displayIdentity(repo), components, state.settings.naming.autoBump, uploaded, Boolean(reading?.busy), Boolean(reading?.error), Boolean(catalog?.displayOnly), Boolean(catalog?.cached)]);
       if (signature === refs.menuSignature) return;
       refs.menuSignature = signature; refs.picker.open = false; refs.menu.replaceChildren();
       refs.menu.append(node("h4", "repository-publish-version-group", text("pluginDetails")));
@@ -533,7 +540,7 @@
         refs.menu.append(node("hr", "repository-publish-version-divider"), node("h4", "repository-publish-version-group", text(key)));
         for (const component of items) {
           const option = node("div", "repository-publish-version-option", componentVersionText(component, components.length, catalog));
-          option.dataset.sourceId = clean(component.sourceId, 120); option.dataset.changeState = componentChangeState(component, catalog);
+          option.dataset.sourceId = clean(component.sourceId, 120); option.dataset.changeState = catalog?.displayOnly === true || catalog?.cached === true ? "unknown" : componentChangeState(component, catalog);
           option.title = clean(component.path, 200); refs.menu.append(option);
         }
       }
@@ -570,6 +577,17 @@
       if (!hasCommit || state.destroyed || state.ageSuspended || workspacePanel.hidden || document.hidden === true || !state.allowed || !state.expanded) { stopCommitAgeTimer(); return; }
       if (!state.commitAgeTimer) state.commitAgeTimer = window.setTimeout(() => { state.commitAgeTimer = 0; renderCommitAges(); }, 1000);
     }
+    function repositoryProgressComplete(result) {
+      const value = result?.progress;
+      return successfulRepoStatuses.has(result?.status) && value?.state === "complete" && value.scope === "repository" && value.source === "receipt" && value.percent === 100;
+    }
+    function currentRepositoryStatus(catalog, reading, diagnostic) {
+      if (reading?.busy) return text(catalog ? "updatingLocal" : "readingLocal");
+      if (reading?.error) return text("refreshFailed") + (catalog ? " · " + text("lastKnown") : "");
+      if (catalog?.displayOnly === true || catalog?.cached === true) return text("lastKnown");
+      if (diagnostic && diagnostic.severity !== "info") return diagnosticStatus(diagnostic, "repoAttention");
+      return catalog ? changeHint(catalog) : text(blocked() ? "publishingRead" : "notRead");
+    }
     function renderRepositoryProgress(refs, repo, result, reading, catalog) {
       const value = plain(result?.progress) ? result.progress : null;
       const phase = phaseText(result?.phase), current = Number(value?.current), total = Number(value?.total);
@@ -577,7 +595,7 @@
       const measured = result?.status === "working" && result.phase === "push" && value?.phase === "push" && value.state === "measured"
         && ["phase", "file"].includes(value.scope) && ["objects", "bytes"].includes(value.unit) && ["git", "git-lfs"].includes(value.source)
         && typeof value.current === "number" && typeof value.total === "number" && Number.isFinite(current) && Number.isFinite(total) && total > 0 && current >= 0 && current <= total;
-      const completed = successfulRepoStatuses.has(result?.status) && value?.state === "complete" && value.scope === "repository" && value.source === "receipt" && value.percent === 100;
+      const completed = repositoryProgressComplete(result);
       const active = result?.status === "working", queued = result?.status === "queued";
       const awaitingReceipt = active && !activeStatuses.has(state.operation?.status) || state.notice === "pendingUnavailable" && active;
       const refreshing = !result && reading?.busy;
@@ -608,12 +626,12 @@
         let refs = compactRefs.get(repo.id);
         if (!refs) {
           const row = node("div", "repository-publish-compact-row"), name = node("strong", "repository-publish-compact-name"), nameCell = node("div", "repository-publish-name-cell"), commitAge = node("span", "repository-publish-commit-age"), version = node("span", "repository-publish-compact-version"), status = managed(node("button", "repository-publish-compact-status")), configure = managed(node("button", "ghost-button repository-publish-row-config")); configure.type = status.type = "button";
-          const cell = node("div", "repository-publish-version-cell"), picker = managed(node("details", "repository-publish-version-picker")), summary = node("summary", "repository-publish-version-trigger"), arrow = node("span", "repository-publish-version-arrow", "⌄"), menu = node("div", "repository-publish-version-menu");
-          const refresh = node("span", "repository-publish-refresh-indicator"), statusCell = node("div", "repository-publish-status-cell"), reason = node("span", "repository-publish-row-reason"), activity = node("div", "repository-publish-row-activity"), track = node("div", "repository-publish-row-progress"), fill = node("span", "repository-publish-row-progress-fill"), metric = node("span", "repository-publish-row-metric");
-          refresh.hidden = true; arrow.setAttribute("aria-hidden", "true"); picker.append(summary, menu); cell.append(version, picker, refresh);
+          const cell = node("div", "repository-publish-version-cell"), picker = managed(node("details", "repository-publish-version-picker")), summary = node("summary", "repository-publish-version-trigger"), arrow = node("span", "repository-publish-version-arrow", "⌄"), menu = node("div", "repository-publish-version-menu"), freshness = node("span", "repository-publish-version-freshness");
+          const refresh = node("span", "repository-publish-refresh-indicator"), statusCell = node("div", "repository-publish-status-cell"), reason = node("span", "repository-publish-row-reason"), history = node("span", "repository-publish-row-history"), activity = node("div", "repository-publish-row-activity"), track = node("div", "repository-publish-row-progress"), fill = node("span", "repository-publish-row-progress-fill"), metric = node("span", "repository-publish-row-metric");
+          refresh.hidden = freshness.hidden = history.hidden = true; arrow.setAttribute("aria-hidden", "true"); picker.append(summary, menu); cell.append(version, picker, refresh, freshness);
           reason.id = "repository-publish-row-reason-" + (uniqueId() || repo.id); reason.hidden = true;
-          track.append(fill); activity.append(track, metric); statusCell.append(status, reason, activity);
-          nameCell.append(name, commitAge); row.dataset.repoId = repo.id; row.append(nameCell, cell, statusCell, configure); compactRows.append(row); refs = { row, name, commitAge, version, status, reason, configure, cell, picker, summary, arrow, menu, refresh, activity, track, fill, metric, menuSignature: "" }; compactRefs.set(repo.id, refs);
+          track.append(fill); activity.append(track, metric); statusCell.append(status, reason, history, activity);
+          nameCell.append(name, commitAge); row.dataset.repoId = repo.id; row.append(nameCell, cell, statusCell, configure); compactRows.append(row); refs = { row, name, commitAge, version, status, reason, history, configure, cell, picker, summary, arrow, menu, refresh, freshness, activity, track, fill, metric, menuSignature: "" }; compactRefs.set(repo.id, refs);
           picker.addEventListener("toggle", () => { if (picker.open) for (const other of compactRefs.values()) if (other !== refs) other.picker.open = false; });
           picker.addEventListener("keydown", event => { if (event.key === "Escape" && picker.open) { event.preventDefault(); picker.open = false; summary.focus(); } });
           configure.addEventListener("click", () => open(repo.id));
@@ -622,11 +640,17 @@
         const originalResult = state.operation?.results.find(item => item.repoId === repo.id);
         const result = uploadBindingMatches(originalResult?.uploadSummary, repo) ? originalResult : null;
         const catalog = catalogFor(repo), reading = readFor(repo), changeState = repoChangeState(catalog), diagnostic = normalizedDiagnostic(catalog?.diagnostic);
-        refs.name.textContent = repoName(repo); refs.version.textContent = versionSummary(repo); refs.version.dataset.changeState = changeState;
+        const lastCompletion = result && !activeStatuses.has(state.operation?.status) && !state.pendingId && !state.postBusy
+          && (successfulRepoStatuses.has(result.status) || skippedRepoStatuses.has(result.status));
+        const lastKnown = Boolean(catalog && (catalog.displayOnly === true || catalog.cached === true || reading?.busy || reading?.error));
+        const displayChangeState = lastKnown ? "unknown" : changeState;
+        refs.name.textContent = repoName(repo); refs.version.textContent = versionSummary(repo); refs.version.dataset.changeState = displayChangeState;
+        refs.freshness.hidden = !lastKnown; refs.freshness.textContent = lastKnown ? text(reading?.error ? "refreshFailed" : "lastKnown") : "";
         refs.version.title = [refs.version.textContent, catalog?.displayOnly === true || reading?.busy || reading?.error ? text("knownBefore") : "", hasMultipleVersions(repo, catalog) ? text("uploadHint") : changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
-        renderVersionPicker(refs, repo, catalog);
+        renderVersionPicker(refs, repo, displayCatalogFor(repo));
         refs.status.textContent = repo.enabled !== true ? text("disabledRepo") : originalResult && !result ? text("historicalReceipt") : result && activeStatuses.has(result.status) ? phaseText(result.phase)
-          : result && successfulRepoStatuses.has(result.status) ? text("uploaded") + (result.uploadSummary?.state === "pending" ? " · " + text("uploadPending") : "")
+          : lastCompletion ? currentRepositoryStatus(catalog, reading, diagnostic)
+            : result && successfulRepoStatuses.has(result.status) ? text("uploaded") + (result.uploadSummary?.state === "pending" ? " · " + text("uploadPending") : "")
             : result && skippedRepoStatuses.has(result.status) ? text("repoNoChanges")
               : result && reviewRepoStatuses.has(result.status) ? text("verifyRequired")
                 : result && failedRepoStatuses.has(result.status) ? diagnosticStatus(normalizedDiagnostic(result.diagnostic), result.status === "deferred" ? "uploadPaused" : "failed")
@@ -643,10 +667,13 @@
         if (policyRetry) refs.status.textContent = text("previousPause");
         refs.reason.textContent = hasReason ? activity ? currentActivityText(activity) : policyRetry ? text("policyRetryHint") : compactReason(diagnosis) : savedWorkNotice ? text("activeAllowed") : ""; refs.reason.hidden = !refs.reason.textContent; refs.reason.title = refs.reason.textContent;
         if (refs.reason.hidden) refs.status.removeAttribute("aria-describedby"); else refs.status.setAttribute("aria-describedby", refs.reason.id);
-        refs.status.dataset.changeState = changeState;
-        refs.status.dataset.status = policyRetry || activity?.publicationAllowed ? "snapshot_available" : originalResult && !result ? "historical" : clean(result?.status, 60); refs.status.disabled = !state.allowed;
+        refs.status.dataset.changeState = displayChangeState;
+        refs.status.dataset.status = policyRetry || activity?.publicationAllowed ? "snapshot_available" : originalResult && !result ? "historical" : lastCompletion ? "last_upload" : clean(result?.status, 60); refs.status.disabled = !state.allowed;
+        refs.history.hidden = !(repo.enabled === true && lastCompletion && successfulRepoStatuses.has(result.status));
+        refs.history.textContent = refs.history.hidden ? "" : [text("lastUpload"), repositoryProgressComplete(result) ? "100%" : "", result.uploadSummary?.state === "pending" ? text("uploadPending") : ""].filter(Boolean).join(" · ");
+        refs.history.title = refs.history.textContent;
         refs.status.title = [text("diagnosis"), activity ? currentActivityText(activity) : policyRetry ? text("policyRetryHint") : compactReason(diagnosis), activity ? activity.publicationAllowed ? "" : activity.diagnostic?.nextStep : policyRetry ? "" : diagnosis.nextStep, reading?.busy && catalog ? text("knownBefore") : ""].filter(Boolean).join(" · "); refs.configure.textContent = text("config"); refs.configure.disabled = !state.allowed;
-        renderRepositoryProgress(refs, repo, result, reading, catalog);
+        renderRepositoryProgress(refs, repo, lastCompletion ? null : result, reading, catalog);
       }
       renderCommitAges();
     }
@@ -720,7 +747,7 @@
       for (const repo of state.settings?.repositories || []) {
         const box = planBoxes.get(repo.id); if (!box) continue;
         box.replaceChildren(); const heading = node("h4", "repository-publish-plan-heading", text("versionSummary")); box.append(heading);
-        const catalog = catalogFor(repo), components = catalog?.components || [], seen = new Set();
+        const catalog = displayCatalogFor(repo), components = catalog?.components || [], seen = new Set();
         for (const component of components) {
           const plan = repo.versionPlans.find(item => item.sourceId === component.sourceId), row = node("div", "repository-publish-plan-row"), label = node("span"), action = managed(node("button", "ghost-button repository-publish-plan-action")); action.type = "button"; seen.add(component.sourceId);
           const transition = componentTransition(component, catalog), hint = node("span", "repository-publish-plan-reason");
@@ -871,7 +898,7 @@
     }
     async function run(repoIds) {
       if (!state.allowed || !state.settings || blocked() || state.readBusy || state.saveBusy || state.dirty || state.invalid.size || !enabled().length) return;
-      const requestId = uniqueId(), original = { requestId, repoIds: repoIds || enabled().map(repo => repo.id), createdAt: Date.now() };
+      const requestId = uniqueId(), original = { requestId, repoIds: repoIds || enabled().map(repo => repo.id), createdAt: Date.now(), intent: "commit_and_push" };
       if (!requestId || !persistRequest(original)) { state.error = "noIdentity"; render(); return; }
       state.pendingRequest = original; await sendOriginal(original);
     }
@@ -880,7 +907,11 @@
       state.operatedRepoIds = new Set(original.repoIds);
       if (state.snapshotMode) { stopVersionRefresh(); state.versionEpoch++; }
       stopPoll(); state.pendingId = requestId; state.notFound = false; state.operation = null; state.postBusy = true; state.error = ""; state.notice = "working"; renderResults(); render();
-      try { const value = await request("/run", { requestId, repoIds: original.repoIds }); if (!acceptOperation(value.operation || value)) state.notice = "unknown"; }
+      try {
+        const payload = { requestId, repoIds: original.repoIds };
+        if (original.intent === "commit_and_push") payload.intent = original.intent;
+        const value = await request("/run", payload); if (!acceptOperation(value.operation || value)) state.notice = "unknown";
+      }
       catch { state.notice = "unknown"; }
       finally { state.postBusy = false; render(); schedulePoll(); readCompletedSettings(); }
     }

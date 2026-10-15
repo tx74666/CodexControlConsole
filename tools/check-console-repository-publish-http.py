@@ -68,8 +68,8 @@ class Spy:
         self.calls.append(("activity_status", repo_id))
         return {"repoId": repo_id, "sourceIdentity": "c" * 64, "activityClear": True, "diagnostic": None}
 
-    def run(self, request_id, repo_ids=None):
-        self.calls.append(("run", request_id, repo_ids))
+    def run(self, request_id, repo_ids=None, *, intent=None):
+        self.calls.append(("run", request_id, repo_ids) if intent is None else ("run", request_id, repo_ids, intent))
         return {"requestId": request_id, "status": "working"}
 
 
@@ -227,6 +227,12 @@ def main():
             check(service.calls[-1] == ("preview", "one"), "Preview invoked run")
             check(request("POST", base + "/run", {"requestId": "one", "repoIds": ["one"]})[0] == 200, "Run failed")
             check(service.calls[-1] == ("run", "one", ["one"]), "Selected scope changed")
+            check(request("POST", base + "/run", {"requestId": "new-intent", "repoIds": ["one"],
+                  "intent": "commit_and_push"})[0] == 200, "Commit and push intent rejected")
+            check(service.calls[-1] == ("run", "new-intent", ["one"], "commit_and_push"),
+                  "Explicit commit and push intent was lost")
+            for malformed in (None, "", "push", "resume", True, [], {}):
+                reject("POST", base + "/run", {"requestId": "bad-intent", "intent": malformed})
             for path, value in (("/run", {}), ("/run", {"requestId": 1}),
                     ("/run", {"requestId": "one", "command": "push"}),
                     ("/config", config), ("/config", {"settings": []}),
