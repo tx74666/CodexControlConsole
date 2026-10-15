@@ -190,6 +190,8 @@ $PythonChecks = @(
   "tools/check-conversations.py",
   "tools/check-thread-cache-import.py",
   "tools/check-workflow.py",
+  "tools/check-workflow-read-performance.py",
+  "tools/check-music-library-scan.py",
   "tools/check-package-runtime.py",
   "tools/check-workflow-subscription.py",
   "tools/check-workflow-codex-work.py",
@@ -342,11 +344,13 @@ finally:
   }
 
   Invoke-QualityStep "Application JavaScript syntax" { & $Node --check app.js }
+  Invoke-QualityStep "Music card clicks and lyric language switching" { & $Node tools/check-music-card-interactions.mjs }
   Invoke-QualityStep "RandomRealm music order synchronization UI" { & $Node tools/check-randomrealm-music-order-ui.mjs }
   Invoke-QualityStep "Developer Update JavaScript syntax" { & $Node --check console-developer-update.js }
   Invoke-QualityStep "Developer Update UI behavior" { & $Node tools/check-console-developer-update-ui.mjs }
   Invoke-QualityStep "Repository publish UI syntax" { & $Node --check console-repository-publish.js }
   Invoke-QualityStep "Repository publish UI behavior" { & $Node tools/check-console-repository-publish-ui.mjs }
+  Invoke-QualityStep "Foreground data and Builder polling performance" { & $Node tools/check-console-foreground-performance.mjs }
   Invoke-QualityStep "Desktop Console header control policy" { & $Node tools/check-console-header-controls.mjs }
   Invoke-QualityStep "Whole-line lyric playback and vocal rests" { & $Node tools/check-lyrics-playback-timing.mjs }
   Invoke-QualityStep "Manual sentence marking editor" { & $Node tools/check-lyrics-sentence-editor.mjs }

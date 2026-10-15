@@ -11085,14 +11085,14 @@ def music_track_from_path(path):
     return record
 
 
-def library_tracks_for_record(record, hide_local_duplicates=True):
+def library_tracks_for_record(record, hide_local_duplicates=True, *, local_keys_reader=None):
     clean = str(record.get("path") or "").replace("\\", "/").lstrip("/")
     if not clean:
         return []
     library_dir = (MUSIC_DIR / clean).resolve()
     if not is_path_inside(library_dir, MUSIC_DIR) or not library_dir.exists():
         return []
-    local_keys = local_music_name_keys() if hide_local_duplicates else set()
+    local_keys = (local_keys_reader or local_music_name_keys)() if hide_local_duplicates else set()
     tracks = []
     for path in library_dir.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in MUSIC_EXTENSIONS:
@@ -11130,9 +11130,9 @@ def prune_duplicate_library_files(library_dir):
     return removed
 
 
-def public_music_library_record(record):
+def public_music_library_record(record, *, local_keys_reader=None):
     public = dict(record)
-    tracks = library_tracks_for_record(record)
+    tracks = library_tracks_for_record(record, local_keys_reader=local_keys_reader)
     public["count"] = len(tracks)
     public["tracks"] = tracks
     return public
@@ -11141,7 +11141,18 @@ def public_music_library_record(record):
 def list_music_libraries():
     with MUSIC_LIBRARY_LOCK:
         records = read_music_library_records()
-    libraries = [public_music_library_record(record) for record in records]
+    local_keys = None
+
+    def read_catalog_local_keys():
+        # Share one live scan within this response; the next request scans again.
+        # Resolve lazily so absent/invalid library paths retain their early return.
+        nonlocal local_keys
+        if local_keys is None:
+            local_keys = local_music_name_keys()
+        return local_keys
+
+    libraries = [public_music_library_record(record, local_keys_reader=read_catalog_local_keys)
+                 for record in records]
     libraries.sort(key=lambda item: item.get("updatedAt") or item.get("createdAt") or "", reverse=True)
     return libraries
 

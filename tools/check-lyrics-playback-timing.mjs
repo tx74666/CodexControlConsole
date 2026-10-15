@@ -159,6 +159,17 @@ check("all words light at the onset, stay equal through the phrase, and dim toge
   }
   assert.equal(JSON.stringify(h.runtime.musicLyricsAnalysis), before, "text/times/spans/marks unchanged");
 });
+check("stable sentence frames do not rewrite lyric styles, and a line change still paints the next sentence", () => {
+  const h = harness(); h.paint(1.5); h.assertLine(0);
+  const before = h.lineNodes.map(line => line.mutations.length);
+  for (const time of [1.6, 1.9, 2.5, 3.49]) h.paint(time);
+  assert.deepEqual(h.lineNodes.map(line => line.mutations.length), before);
+  h.paint(5); h.assertLine(1);
+  assert.ok(h.lineNodes.every((line, index) => line.mutations.length > before[index]));
+  const after = h.lineNodes.map(line => line.mutations.length);
+  h.runtime.els.audioPlayer.paused = true; h.paint(5);
+  assert.deepEqual(h.lineNodes.map(line => line.mutations.length), after);
+});
 check("pause and real backwards sentence seek preserve simultaneous highlight", () => {
   const h = harness(); h.paint(5.4); h.assertLine(1);
   h.runtime.els.audioPlayer.paused = true;

@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.1.14";
+const consoleUiVersion = "1.1.15";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -2525,6 +2525,11 @@ let blenderGithubCardClickTimer = null;
 let blenderGithubDraggedPath = "";
 let blenderGithubDropCommitted = false;
 let githubDownloadsInfo = null;
+let githubDownloadsLoaded = false;
+let githubDownloadsLoading = null;
+const loadingConsoleWorkspaceViews = new Map();
+let workspaceDesktopLayoutIdleCallback = 0;
+let workspaceDesktopLayoutScheduleTimer = 0;
 let downloadMapState = null;
 let downloadMapBusy = false;
 let downloadMapLoaded = false;
@@ -2617,6 +2622,8 @@ let randomRealmTextureApplyPollInFlight = false;
 let randomRealmProjectSearchTimer = null;
 let randomRealmObjectPickerOpen = false;
 let randomRealmLiveSelectionTimer = null;
+let randomRealmLiveSelectionEpoch = 0;
+let randomRealmLiveSelectionRequest = null;
 let randomRealmLiveSelectionFailureCount = 0;
 let randomRealmLastLiveObject = "";
 let randomRealmLiveSelectedObjects = [];
@@ -2913,18 +2920,10 @@ async function loadModuleData(id) {
     case "music":
       return hasMusic ? (await loadMusic()) !== false : true;
     case "workspace": {
-      const requests = [];
-      if (hasWorkspace) requests.push(loadGithubDownloadsInfo());
-      if (els.consoleUpdateStatus && !productUpdateStatusesLoaded) {
-        requests.push(scheduleProductUpdateStatusCheck({ immediate: true }));
-      }
-      if (els.desktopLayoutPlan && !desktopLayoutState) requests.push(loadDesktopLayout({ quiet: true }));
-      if (els.builtinMediaMusicSync && !builtinMediaState) requests.push(loadBuiltinMedia({ quiet: true }));
-      if (els.feedbackForm && !feedbackConfigLoaded) requests.push(loadFeedbackConfig({ quiet: true }));
-      if (hasMaterialWorkspace && downloadIntakeEnabled) requests.push(loadMaterialCandidates());
-      const results = await Promise.all(requests);
-      const activeViewLoaded = await loadActiveConsoleWorkspaceViewData();
-      return results.every(result => result !== false) && activeViewLoaded !== false;
+      // Layout history is an existing background feature. Keep its initializer
+      // without making the active workspace view wait for unrelated controls.
+      scheduleWorkspaceDesktopLayoutInitialization();
+      return loadActiveConsoleWorkspaceViewData();
     }
     case "blender":
       if (activeBlenderView === "document") return loadBlenderDocuments();
@@ -2967,6 +2966,7 @@ function syncRuntimeActivity(options = {}) {
   if (!document.hidden) {
     ensureModuleDataLoaded(activeModuleId);
     if (activeModuleId === "workspace") {
+      scheduleWorkspaceDesktopLayoutInitialization();
       void loadActiveConsoleWorkspaceViewData();
     }
   }
@@ -2990,15 +2990,14 @@ function syncRuntimeActivity(options = {}) {
 
   if (isModuleForeground("blender")) {
     if (activeBlenderView === "document") void loadBlenderDocuments({ force: Boolean(options.resume || options.moduleChanged) });
-    startRandomRealmLiveSelectionPolling({ immediate: Boolean(options.resume || options.moduleChanged) });
     if (randomRealmPackedPackagePaths().length && !randomRealmTextureApplyPollTimer && !randomRealmTextureApplyPollInFlight) {
       scheduleRandomRealmTextureApplyPoll(options.resume || options.moduleChanged ? 250 : 2600);
     }
   } else {
-    stopRandomRealmLiveSelectionPolling();
     stopRandomRealmTextureApplyPolling();
     clearRandomRealmTextureDragFileCache();
   }
+  syncRandomRealmLiveSelectionActivity({ immediate: Boolean(options.resume || options.moduleChanged) });
 
   if (feedbackInboxPollingAllowed()) {
     scheduleFeedbackInboxPolling(options.resume || options.moduleChanged ? 250 : 30000);
@@ -3059,25 +3058,66 @@ function normalizeConsoleWorkspaceView(value) {
   return "work";
 }
 
+function cancelWorkspaceDesktopLayoutInitialization() {
+  if (workspaceDesktopLayoutIdleCallback && typeof window.cancelIdleCallback === "function") {
+    window.cancelIdleCallback(workspaceDesktopLayoutIdleCallback);
+  }
+  if (workspaceDesktopLayoutScheduleTimer) window.clearTimeout(workspaceDesktopLayoutScheduleTimer);
+  workspaceDesktopLayoutIdleCallback = 0;
+  workspaceDesktopLayoutScheduleTimer = 0;
+}
+
+function scheduleWorkspaceDesktopLayoutInitialization() {
+  if (!hasWorkspace || !els.desktopLayoutPlan || desktopLayoutState || desktopLayoutBusy
+      || workspaceDesktopLayoutIdleCallback || workspaceDesktopLayoutScheduleTimer) return;
+  const run = () => {
+    workspaceDesktopLayoutIdleCallback = 0;
+    workspaceDesktopLayoutScheduleTimer = 0;
+    if (!desktopLayoutState && !desktopLayoutBusy) void loadDesktopLayout({ quiet: true });
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    workspaceDesktopLayoutIdleCallback = window.requestIdleCallback(run, { timeout: 1200 });
+  } else {
+    workspaceDesktopLayoutScheduleTimer = window.setTimeout(run, 350);
+  }
+}
+
 async function loadActiveConsoleWorkspaceViewData() {
   if (!runtimeActivityReady || !isModuleForeground("workspace")) return true;
   if (["work", "transfer"].includes(activeConsoleView)) { syncConsoleTransferActivity(); return true; }
   if (activeConsoleView === "document") return loadDocumentLibrary();
-  if (activeConsoleView !== "collaboration") return true;
-  const requests = [];
-  if (!feedbackConfigLoaded && !feedbackConfigBusy) {
-    requests.push(loadFeedbackConfig({ quiet: true }));
-  } else if (feedbackInboxPollingAllowed() && !feedbackInboxBusy) {
-    requests.push(loadFeedbackInbox({ quiet: true }));
-  }
-  if (!downloadMapLoaded && !downloadMapBusy) {
-    requests.push(loadDownloadMap({ quiet: true }));
-  }
-  if (hasBlenderGithubShare() && !blenderGithubShareState && !blenderGithubBusy) {
-    requests.push(loadBlenderGithubShare({ detect: true }));
-  }
-  const results = await Promise.all(requests);
-  return results.every(result => result !== false);
+  const view = activeConsoleView;
+  if (!["common", "collaboration"].includes(view)) return true;
+  if (loadingConsoleWorkspaceViews.has(view)) return loadingConsoleWorkspaceViews.get(view);
+  const request = Promise.resolve().then(async () => {
+    if (!isModuleForeground("workspace") || activeConsoleView !== view) return false;
+    const requests = [];
+    if (view === "common") {
+      cancelWorkspaceDesktopLayoutInitialization();
+      if (els.desktopLayoutPlan && !desktopLayoutState) requests.push(loadDesktopLayout({ quiet: true }));
+      if (els.builtinMediaMusicSync && !builtinMediaState) requests.push(loadBuiltinMedia({ quiet: true }));
+      if (hasMaterialWorkspace && downloadIntakeEnabled) requests.push(loadMaterialCandidates());
+    } else {
+      if (hasWorkspace) requests.push(loadGithubDownloadsInfo());
+      if (!feedbackConfigLoaded && !feedbackConfigBusy) {
+        requests.push(loadFeedbackConfig({ quiet: true }));
+      } else if (feedbackInboxPollingAllowed() && !feedbackInboxBusy) {
+        requests.push(loadFeedbackInbox({ quiet: true }));
+      }
+      if (!downloadMapLoaded && !downloadMapBusy) {
+        requests.push(loadDownloadMap({ quiet: true }));
+      }
+      if (hasBlenderGithubShare() && !blenderGithubShareState && !blenderGithubBusy) {
+        requests.push(loadBlenderGithubShare({ detect: true }));
+      }
+    }
+    const results = await Promise.all(requests);
+    return results.every(result => result !== false);
+  }).finally(() => {
+    if (loadingConsoleWorkspaceViews.get(view) === request) loadingConsoleWorkspaceViews.delete(view);
+  });
+  loadingConsoleWorkspaceViews.set(view, request);
+  return request;
 }
 
 function setConsoleWorkspaceView(value, options = {}) {
@@ -3103,7 +3143,7 @@ function setConsoleWorkspaceView(value, options = {}) {
   }
   syncConsoleTransferActivity();
 
-  if (runtimeActivityReady && isModuleForeground("workspace") && ["collaboration", "document"].includes(activeConsoleView)) {
+  if (runtimeActivityReady && isModuleForeground("workspace") && ["common", "collaboration", "document"].includes(activeConsoleView)) {
     void loadActiveConsoleWorkspaceViewData();
   }
   if (feedbackInboxPollingAllowed()) {
@@ -4308,6 +4348,7 @@ function setBlenderWorkspaceView(value, options = {}) {
   const transitionSequence = ++blenderViewTransitionSequence;
   const previousView = activeBlenderView;
   activeBlenderView = normalizeBlenderWorkspaceView(value);
+  syncRandomRealmLiveSelectionActivity({ immediate: previousView !== activeBlenderView });
   if (options.persist !== false) {
     localStorage.setItem(storageKeys.blenderView, activeBlenderView);
   }
@@ -10205,6 +10246,7 @@ function renderLyricsPanel() {
     else delete els.nowPlayingArt.dataset.lyricsLanguage;
     els.nowPlayingArt.tabIndex = selectedPath ? 0 : -1;
   }
+  els.nowPlayingCard?.classList.toggle("can-show-lyrics", Boolean(selectedPath));
   renderSentenceLyricsControls();
   els.nowPlayingLyricsList.innerHTML = "";
   els.nowPlayingLyricsPanel.classList.toggle("is-synced", musicLyricsSynced || hasSentenceLyricTimeline());
@@ -11081,6 +11123,7 @@ function clearLyricsLineTone(node) {
 function updateLyricsLineTone(time = 0) {
   const list = els.nowPlayingLyricsList;
   if (!list) return;
+  list.dataset.lyricsToneIndex = String(musicLyricsActiveIndex);
   const lines = list.querySelectorAll(".music-lyrics-line");
   if ((!musicLyricsSynced && !hasSentenceLyricTimeline()) || !musicLyricsLines.length) {
     lines.forEach(clearLyricsLineTone);
@@ -13059,7 +13102,9 @@ function updateLyricsProgress(time = 0) {
     }
   }
   if (nextIndex === musicLyricsActiveIndex) {
-    updateLyricsLineTone(time);
+    // Whole-sentence tones are fixed until the active line changes. Avoid
+    // rewriting every line's CSS on each audio animation frame.
+    if (list.dataset.lyricsToneIndex !== String(nextIndex)) updateLyricsLineTone(time);
     return;
   }
   musicLyricsActiveIndex = nextIndex;
@@ -13084,10 +13129,15 @@ function musicLyricsRequestKey(item, kind = "text") {
 function getMusicLyricsCacheEntry(item) {
   const path = musicLyricsCachePath(item);
   if (!path) return null;
-  const entry = musicLyricsCache.get(path);
+  const isTrack = typeof item === "object" && item;
+  const sourceKey = isTrack
+    ? `${musicLyricsRequestKey(item)}:${musicLyricsCacheType(item)}:${normalizeLyricsLanguageCode(item.lyricsLanguage)}`
+    : path;
+  const entry = musicLyricsCache.get(sourceKey) || musicLyricsCache.get(path);
   if (!entry) return null;
-  if (typeof item === "object" && item) {
+  if (isTrack) {
     if (entry.lyricsUrl !== item.lyricsUrl || entry.lyricsType !== musicLyricsCacheType(item)) return null;
+    if (entry.lyricsLanguage && entry.lyricsLanguage !== normalizeLyricsLanguageCode(item.lyricsLanguage)) return null;
   }
   return entry;
 }
@@ -13095,11 +13145,11 @@ function getMusicLyricsCacheEntry(item) {
 function setMusicLyricsCacheEntry(item, patch = {}) {
   const path = musicLyricsCachePath(item);
   if (!path) return null;
-  const current = musicLyricsCache.get(path) || {};
+  const isTrack = typeof item === "object" && item;
+  const current = getMusicLyricsCacheEntry(item) || {};
   const nextLyricsUrl = typeof item === "object" && item ? item.lyricsUrl : current.lyricsUrl;
-  const sourceChanged = Boolean(current.lyricsUrl && nextLyricsUrl && current.lyricsUrl !== nextLyricsUrl);
   const entry = {
-    ...(sourceChanged ? {} : current),
+    ...current,
     path,
     lyricsUrl: nextLyricsUrl,
     lyricsType: typeof item === "object" && item ? musicLyricsCacheType(item) : current.lyricsType,
@@ -13108,12 +13158,20 @@ function setMusicLyricsCacheEntry(item, patch = {}) {
       : current.lyricsLanguage,
     ...patch
   };
+  // Keep languages independently so switching back is a cache hit and a late
+  // request for another language cannot replace the current source's cache.
+  const sourceKey = isTrack
+    ? `${musicLyricsRequestKey(item)}:${musicLyricsCacheType(item)}:${normalizeLyricsLanguageCode(item.lyricsLanguage)}`
+    : `${musicLyricsRequestKey(entry)}:${entry.lyricsType || "lrc"}:${entry.lyricsLanguage || ""}`;
+  musicLyricsCache.set(sourceKey, entry);
+  // The path alias remains available for source-independent mark acknowledgements.
   musicLyricsCache.set(path, entry);
   return entry;
 }
 
 async function fetchParsedLyricsForTrack(item) {
-  item = musicTrackWithPreferredLyrics(item);
+  // The caller already captured the desired language. Keep that source stable
+  // if the user changes preferences while this request is in flight.
   const path = musicLyricsCachePath(item);
   if (!item?.lyricsUrl || !path) return null;
   const cached = getMusicLyricsCacheEntry(item);
@@ -13141,7 +13199,7 @@ async function fetchParsedLyricsForTrack(item) {
 }
 
 async function fetchLyricsAnalysisForTrack(item) {
-  item = musicTrackWithPreferredLyrics(item);
+  // Use the captured source, including after a preceding lyric text await.
   const path = musicLyricsCachePath(item);
   if (!path) return null;
   const cached = getMusicLyricsCacheEntry(item);
@@ -13219,7 +13277,7 @@ async function ensureLyricsAnalysisWarm(item) {
     setMusicLyricsCacheEntry(item, { analysis, analysisLoadedAt: Date.now() });
     applyLyricsAnalysisToActiveTrack(item, analysis);
   }
-  return getMusicLyricsCacheEntry(path);
+  return getMusicLyricsCacheEntry(item);
 }
 
 async function preloadLyricsForTrack(item) {
@@ -13460,6 +13518,8 @@ function toggleNowPlayingLyrics() {
 
 function handleNowPlayingLyricsClick(event) {
   if (event.button !== 0 || event.detail > 1) return;
+  const control = event.target?.closest?.("button, a, input, select, textarea, summary, [role='button'], [contenteditable='true']");
+  if (control && control !== els.nowPlayingArt) return;
   toggleNowPlayingLyrics();
 }
 
@@ -14072,19 +14132,28 @@ function renderGithubDownloads() {
 
 async function loadGithubDownloadsInfo() {
   if (!hasWorkspace || !els.githubDownloadsMeta) return true;
-  els.githubDownloadsMeta.textContent = text("githubDownloadsResolving");
-  let succeeded = true;
-  try {
-    const response = await fetch("/api/workspace/github-downloads", { cache: "no-store" });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    githubDownloadsInfo = payload;
-  } catch (error) {
-    succeeded = false;
-    githubDownloadsInfo = { configured: false, url: "", error: error.message };
-  }
-  renderGithubDownloads();
-  return succeeded;
+  if (githubDownloadsLoaded) return true;
+  if (githubDownloadsLoading) return githubDownloadsLoading;
+  const request = Promise.resolve().then(async () => {
+    els.githubDownloadsMeta.textContent = text("githubDownloadsResolving");
+    try {
+      const response = await fetch("/api/workspace/github-downloads", { cache: "no-store" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      githubDownloadsInfo = payload;
+      githubDownloadsLoaded = true;
+      return true;
+    } catch (error) {
+      githubDownloadsInfo = { configured: false, url: "", error: error.message };
+      return false;
+    } finally {
+      renderGithubDownloads();
+    }
+  }).finally(() => {
+    if (githubDownloadsLoading === request) githubDownloadsLoading = null;
+  });
+  githubDownloadsLoading = request;
+  return request;
 }
 
 async function openGithubDownloads() {
@@ -17032,6 +17101,7 @@ function updateRandomRealmProjectAddress() {
 
 function selectRandomRealmBlenderProject(projectPath, options = {}) {
   const nextProject = String(projectPath || "");
+  stopRandomRealmLiveSelectionPolling();
   clearRandomRealmTextureDragFileCache();
   for (const select of [els.randomRealmBlenderProject, els.referenceViewProject].filter(Boolean)) {
     if (Array.from(select.options).some(option => option.value === nextProject)) {
@@ -17048,6 +17118,7 @@ function selectRandomRealmBlenderProject(projectPath, options = {}) {
   if (options.loadObjects !== false) {
     loadRandomRealmBlenderObjects();
   }
+  syncRandomRealmLiveSelectionActivity({ immediate: true });
 }
 
 function filteredRandomRealmObjects() {
@@ -17101,13 +17172,26 @@ function renderRandomRealmBlenderObjects() {
 }
 
 async function syncRandomRealmLiveSelection(options = {}) {
-  if (!hasRandomRealmArtTools() || !els.randomRealmBlenderProject?.value) return false;
+  if (!hasRandomRealmArtTools() || !randomRealmBuilderIsForeground() || !els.randomRealmBlenderProject?.value) return false;
   if (randomRealmObjectPickerOpen && document.activeElement === els.randomRealmObjectSearch) return false;
   const quiet = options.quiet !== false;
+  const project = els.randomRealmBlenderProject.value;
+  const epoch = randomRealmLiveSelectionEpoch;
+  const isCurrent = () => !request.cancelled && epoch === randomRealmLiveSelectionEpoch && randomRealmBuilderIsForeground()
+    && project === els.randomRealmBlenderProject?.value;
+  let request = randomRealmLiveSelectionRequest;
+  if (!request || request.project !== project || request.epoch !== epoch) {
+    if (request) { request.cancelled = true; request.controller.abort(); }
+    const controller = new AbortController();
+    const url = `/api/randomrealm/blender/live-selection?project=${encodeURIComponent(project)}`;
+    request = { project, epoch, controller, cancelled: false, promise: fetch(url, { cache: "no-store", signal: controller.signal }).then(async response => ({
+      response, payload: await response.json().catch(() => ({}))
+    })) };
+    randomRealmLiveSelectionRequest = request;
+  }
   try {
-    const url = `/api/randomrealm/blender/live-selection?project=${encodeURIComponent(els.randomRealmBlenderProject.value)}`;
-    const response = await fetch(url, { cache: "no-store" });
-    const payload = await response.json().catch(() => ({}));
+    const { response, payload } = await request.promise;
+    if (!isCurrent()) return false;
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
     if (!payload.available || payload.stale) {
       randomRealmLiveSelectedObjects = [];
@@ -17152,12 +17236,20 @@ async function syncRandomRealmLiveSelection(options = {}) {
     if (!quiet) await refreshRandomRealmSelectedObjectTextures();
     return true;
   } catch (error) {
-    if (!quiet) setRandomRealmArtStatus(text("randomRealmBlenderActionFailed", error.message));
+    if (!quiet && isCurrent()) setRandomRealmArtStatus(text("randomRealmBlenderActionFailed", error.message));
     return false;
+  } finally {
+    if (randomRealmLiveSelectionRequest === request) randomRealmLiveSelectionRequest = null;
   }
 }
 
 function stopRandomRealmLiveSelectionPolling(options = {}) {
+  randomRealmLiveSelectionEpoch += 1;
+  if (randomRealmLiveSelectionRequest) {
+    randomRealmLiveSelectionRequest.cancelled = true;
+    randomRealmLiveSelectionRequest.controller.abort();
+  }
+  randomRealmLiveSelectionRequest = null;
   if (randomRealmLiveSelectionTimer) {
     window.clearTimeout(randomRealmLiveSelectionTimer);
   }
@@ -17179,8 +17271,18 @@ function randomRealmLiveSelectionPollDelay(succeeded) {
   return delay;
 }
 
+function randomRealmBuilderIsForeground() {
+  return isModuleForeground("blender") && activeBlenderView === "builder";
+}
+
+function syncRandomRealmLiveSelectionActivity(options = {}) {
+  if (!runtimeActivityReady) return;
+  if (randomRealmBuilderIsForeground()) startRandomRealmLiveSelectionPolling(options);
+  else stopRandomRealmLiveSelectionPolling();
+}
+
 function startRandomRealmLiveSelectionPolling(options = {}) {
-  if (!hasRandomRealmArtTools() || !isModuleForeground("blender")) {
+  if (!hasRandomRealmArtTools() || !randomRealmBuilderIsForeground()) {
     stopRandomRealmLiveSelectionPolling();
     return;
   }
@@ -17188,13 +17290,16 @@ function startRandomRealmLiveSelectionPolling(options = {}) {
     stopRandomRealmLiveSelectionPolling();
   }
   if (randomRealmLiveSelectionTimer) return;
-  randomRealmLiveSelectionTimer = window.setTimeout(async () => {
+  const epoch = randomRealmLiveSelectionEpoch;
+  const timer = window.setTimeout(async () => {
+    if (randomRealmLiveSelectionTimer !== timer) return;
     randomRealmLiveSelectionTimer = null;
-    if (!isModuleForeground("blender")) return;
+    if (!randomRealmBuilderIsForeground() || epoch !== randomRealmLiveSelectionEpoch) return;
     const succeeded = await syncRandomRealmLiveSelection({ quiet: true });
-    if (!isModuleForeground("blender")) return;
+    if (!randomRealmBuilderIsForeground() || epoch !== randomRealmLiveSelectionEpoch) return;
     startRandomRealmLiveSelectionPolling({ delay: randomRealmLiveSelectionPollDelay(succeeded) });
   }, options.immediate ? 0 : Number(options.delay ?? randomRealmLiveSelectionSuccessDelayMs));
+  randomRealmLiveSelectionTimer = timer;
 }
 
 function isRandomRealmPreviewableTexture(path) {
@@ -21588,9 +21693,7 @@ bindSteamworkDropzone("publishTool", els.steamworkPublishToolDropzone, els.steam
 if (hasMusic) els.musicDock.addEventListener("dragover", handleLocalMusicDragOver);
 if (hasMusic) els.musicDock.addEventListener("dragleave", handleLocalMusicDragLeave);
 if (hasMusic) els.musicDock.addEventListener("drop", handleLocalMusicDrop);
-if (hasMusic && els.nowPlayingArt) {
-  els.nowPlayingArt.addEventListener("click", handleNowPlayingLyricsClick);
-}
+if (hasMusic) (els.nowPlayingCard || els.nowPlayingArt)?.addEventListener("click", handleNowPlayingLyricsClick);
 if (hasMusic) (els.nowPlayingCard || els.nowPlayingArt)?.addEventListener("contextmenu", handleNowPlayingLyricsContextMenu);
 if (hasMusic && els.nowPlayingLyricsPanel) {
   els.nowPlayingLyricsPanel.addEventListener("pointerdown", beginLyricsPanelResize);

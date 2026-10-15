@@ -6140,6 +6140,10 @@ body.wallpaper-dragging * {
   padding: 10px 12px;
 }
 
+.music-now.can-show-lyrics {
+  cursor: pointer;
+}
+
 .track-art {
   width: 46px;
   height: 46px;

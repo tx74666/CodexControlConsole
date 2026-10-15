@@ -52,6 +52,7 @@ function harness() {
     blenderViewTransitionSequence: 0, blenderViewTransitionTimer: 0, blenderViewTransitionFrame: 0, blenderViewTransitionAnimations: [],
     localStorage: { setItem(key, value) { stored.set(key, value); } }, storageKeys: { blenderView: "view" }, els: {},
     referenceViewProjectPath: () => "", hasRandomRealmArtTools: () => false, referenceViewLoadedProject: "",
+    syncRandomRealmLiveSelectionActivity() {},
     async documentRequest(endpoint, payload) {
       assert.equal(payload, undefined, "reference discovery must be read-only"); calls.push(endpoint);
       if (endpoint === "state") return { ...state };

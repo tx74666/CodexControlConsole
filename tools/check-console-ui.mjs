@@ -923,9 +923,11 @@ async function checkBlenderPerformancePolicies(client) {
     const originalSync = syncRandomRealmLiveSelection;
     const originalSetTimeout = window.setTimeout;
     const originalClearTimeout = window.clearTimeout;
+    const originalView = activeBlenderView;
     const scheduled = [];
     let nextId = 100;
     try {
+      activeBlenderView = "builder";
       stopRandomRealmLiveSelectionPolling();
       const outcomes = [false, false, false, false, true];
       syncRandomRealmLiveSelection = async () => outcomes.shift();
@@ -958,7 +960,8 @@ async function checkBlenderPerformancePolicies(client) {
       syncRandomRealmLiveSelection = originalSync;
       window.setTimeout = originalSetTimeout;
       window.clearTimeout = originalClearTimeout;
-      startRandomRealmLiveSelectionPolling({ immediate: true });
+      activeBlenderView = originalView;
+      syncRandomRealmLiveSelectionActivity({ immediate: true });
     }
   })()`, true);
   assert(

@@ -119,6 +119,7 @@ const actualNames = [...new Set([...sentenceNames, "lyricsLineText", "lyricsAnal
   "mergePendingMusicLyricMarksIntoAnalysis", "stagePendingMusicLyricMark", "sessionLyricMarksForLine",
   "flushPendingMusicLyricMarks", "musicLyricsCachePath", "musicLyricsRequestKey", "audioIsTrack",
   "musicLyricsCacheType", "getMusicLyricsCacheEntry", "setMusicLyricsCacheEntry", "fetchParsedLyricsForTrack",
+  "musicLyricsLanguageOptions", "preferredMusicLyricsLanguage", "musicTrackWithPreferredLyrics", "parseLyricsTimestamp", "parseLyricsText",
   "fetchLyricsAnalysisForTrack", "ensureLyricsAnalysisWarm", "loadLyricsAnalysisForTrack",
   "formatLyricsEditorTime", "parseLyricsEditorTime", "lyricsTrustedAlignment", "lyricsLineDisplayStartTime",
   "activeLyricsIndexAt", "lyricsLineEndTime", "applyAudioCurrentTime", "seekToLyricsLine", "lyricsAnimationShouldRun",
@@ -148,6 +149,7 @@ function harness({ lines = fixtureLines(), marks = [], synced = true, language =
         wordTimes: [0, .2], wordSpans: [{ word: line.text, start: 0, end: .2 }] })), manualMarks: copy(marks) },
     sessionMusicLyricMarks: new Map(), pendingMusicLyricMarks: new Map(), musicLyricMarksFlushPromise: null,
     musicLyricsCache: new Map(), musicLyricsTextPromises: new Map(), musicLyricsAnalysisPromises: new Map(),
+    lyricsLanguageCycleOrder: ["fr", "en", "zh"], musicLyricsLanguagePreferences: {},
     sentenceLyricsCalibration: null, sentenceLyricsOperation: null, sentenceLyricsBusy: false, sentenceLyricsSaveError: "",
     sentenceLyricsMarksLoadedToken: -1, sentenceLyricsMarksLoadedSource: "",
     smoothValueAnimations: new Map(), pendingSeekRatio: null, userSeeking: false, musicLyricsAnimationFrame: 0,
@@ -610,6 +612,47 @@ await check("cheap marks placeholder cannot suppress a later actual acoustic ana
   h.reads[0].resolve({ ok: true, json: async () => copy(acoustic) }); await loading;
   assert.equal(h.runtime.musicLyricsCache.get(h.selected.path).analysis.method, "synthetic-acoustic");
   assert.equal(h.runtime.musicLyricsCache.get(h.selected.path).analysis.sentenceMarksOnly, undefined);
+});
+await check("language caches survive returning to an earlier language and late analysis cannot evict the newer language", async () => {
+  const h = harness(), en = { ...h.selected }, zh = { ...h.selected, lyricsLanguage: "zh", lyricsUrl: "/fixture.zh.lrc" };
+  h.api.setMusicLyricsCacheEntry(en, { lines: fixtureLines(), synced: true });
+  h.api.setMusicLyricsCacheEntry(zh, { lines: [{ time: 1, text: "中文原文" }], synced: true });
+  assert.equal(h.api.getMusicLyricsCacheEntry(en).lines[0].text, fixtureLines()[0].text);
+  assert.equal(h.api.getMusicLyricsCacheEntry(zh).lines[0].text, "中文原文");
+  const english = h.api.fetchLyricsAnalysisForTrack(en), chinese = h.api.fetchLyricsAnalysisForTrack(zh);
+  const duplicateChinese = h.api.fetchLyricsAnalysisForTrack(zh);
+  assert.equal(h.reads.length, 2, "one in-flight request per language");
+  const analysis = (language, method) => ({ ok: true, path: en.path, lyricsLanguage: language, method, lines: [], manualMarks: [] });
+  h.reads[1].resolve({ ok: true, json: async () => analysis("zh", "newer-chinese") });
+  await chinese; await duplicateChinese;
+  h.reads[0].resolve({ ok: true, json: async () => analysis("en", "late-english") }); await english;
+  assert.equal(h.api.getMusicLyricsCacheEntry(zh).analysis.method, "newer-chinese");
+  assert.equal(h.api.getMusicLyricsCacheEntry(en).analysis.method, "late-english");
+  await h.api.fetchLyricsAnalysisForTrack(en); await h.api.fetchLyricsAnalysisForTrack(zh);
+  assert.equal(h.reads.length, 2, "returning to either language reuses its analysis");
+  const changed = { ...en, lyricsUrl: "/fixture.updated.en.lrc" };
+  assert.equal(h.api.getMusicLyricsCacheEntry(changed), null, "changed source cannot reuse old lines");
+  assert.equal(h.api.getMusicLyricsCacheEntry({ ...en, lyricsType: "txt" }), null, "changed parser cannot reuse LRC lines");
+});
+await check("a real preference switch during lyric preload keeps the captured language through the analysis await", async () => {
+  const h = harness();
+  h.selected.lyricsLanguages = [{ code: "en", lyricsUrl: "/fixture.en.lrc" }, { code: "zh", lyricsUrl: "/fixture.zh.lrc" }];
+  const en = h.api.musicTrackWithPreferredLyrics(h.selected);
+  const loading = h.api.ensureLyricsAnalysisWarm(en);
+  assert.equal(h.reads[0].url, en.lyricsUrl);
+  h.runtime.musicLyricsLanguagePreferences[h.selected.path] = "zh";
+  assert.equal(h.api.musicTrackWithPreferredLyrics(h.selected).lyricsLanguage, "zh");
+  h.reads[0].resolve({ ok: true, text: async () => "[00:01.000]English captured line" });
+  await tick();
+  assert.equal(h.reads.length, 2);
+  assert.equal(new URL(h.reads[1].url, "http://fixture/").searchParams.get("language"), "en",
+    "analysis must use the language captured before the text await");
+  h.reads[1].resolve({ ok: true, json: async () => ({ ok: true, path: en.path, lyricsLanguage: "en",
+    method: "captured-english", lines: [], manualMarks: [] }) });
+  const cached = await loading;
+  assert.equal(cached.lyricsLanguage, "en"); assert.equal(cached.analysis.lyricsLanguage, "en");
+  assert.equal(h.api.getMusicLyricsCacheEntry(h.api.musicTrackWithPreferredLyrics(h.selected)), null,
+    "English response must not populate the active Chinese source");
 });
 await check("cheap marks overlay preserves already available acoustic timing and word detail", async () => {
   const h = harness(), before = copy(h.runtime.musicLyricsAnalysis.lines);

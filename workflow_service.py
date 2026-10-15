@@ -111,6 +111,74 @@ class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, G
                 self._revision(db, True)
             db.commit()
 
+    def _ensure_schema(self, db, path):
+        # Validate the database identity and schema generation without running DDL
+        # on every read. A replacement database or external schema edit is checked
+        # again; a failed initialization is never recorded as ready.
+        identity = path.stat()
+        key = (identity.st_dev, identity.st_ino, db.execute("PRAGMA schema_version").fetchone()[0])
+        if key == getattr(self, "_schema_key", None):
+            return
+        db.executescript("""
+            CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            INSERT OR IGNORE INTO settings VALUES ('revision','0');
+            CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY,title TEXT NOT NULL,project_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,updated_at TEXT NOT NULL,primary_attachment_id TEXT,context TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY,record_id TEXT NOT NULL,role TEXT NOT NULL,
+                text TEXT NOT NULL,created_at TEXT NOT NULL,attachment_ids TEXT NOT NULL,options TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY,record_id TEXT NOT NULL,name TEXT NOT NULL,
+                filename TEXT NOT NULL,mime_type TEXT NOT NULL,size INTEGER NOT NULL,preview INTEGER NOT NULL,duration REAL);
+            CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY,record_id TEXT NOT NULL,kind TEXT NOT NULL,
+                request_id TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,attempt INTEGER NOT NULL,
+                parent_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,error TEXT NOT NULL,log TEXT NOT NULL,result TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY,kind TEXT NOT NULL,fingerprint TEXT NOT NULL,response TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS mobile_message_sources (message_id TEXT PRIMARY KEY,client_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,record_id TEXT NOT NULL,request_id TEXT NOT NULL UNIQUE,job_id TEXT NOT NULL UNIQUE,
+                text_sha256 TEXT NOT NULL,attachment_ids TEXT NOT NULL,created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS guide_sources (id INTEGER PRIMARY KEY CHECK(id=1),chat_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS guide_replies (request_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,
+                client_id TEXT NOT NULL,session_id TEXT NOT NULL,record_id TEXT NOT NULL,source_user_message_id TEXT NOT NULL,
+                source_guide_chat_id TEXT NOT NULL,text_sha256 TEXT NOT NULL,created_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS guide_reply_scope ON guide_replies(client_id,session_id,record_id);
+            CREATE INDEX IF NOT EXISTS guide_reply_record ON guide_replies(record_id);
+            CREATE TABLE IF NOT EXISTS guide_inputs (seq INTEGER PRIMARY KEY AUTOINCREMENT,request_id TEXT NOT NULL UNIQUE,
+                message_id TEXT NOT NULL UNIQUE,client_id TEXT NOT NULL,session_id TEXT NOT NULL,record_id TEXT NOT NULL,
+                source_guide_chat_id TEXT NOT NULL,expected_revision INTEGER NOT NULL,text_sha256 TEXT NOT NULL,
+                attachment_ids TEXT NOT NULL,attachment_proofs TEXT NOT NULL,source_snapshot TEXT NOT NULL,
+                request_body TEXT NOT NULL,created_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS guide_input_scope ON guide_inputs(client_id,session_id,record_id,seq);
+            CREATE INDEX IF NOT EXISTS guide_input_inbox ON guide_inputs(source_guide_chat_id,client_id,seq);
+            CREATE TABLE IF NOT EXISTS ideas (id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,
+                stage TEXT NOT NULL,priority TEXT NOT NULL,parent_id TEXT,target_kind TEXT NOT NULL,
+                target_thread_id TEXT NOT NULL,target_name TEXT NOT NULL,revision INTEGER NOT NULL,
+                created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS message_records ON messages(record_id);
+            CREATE INDEX IF NOT EXISTS job_status ON jobs(status);
+            CREATE INDEX IF NOT EXISTS idea_parents ON ideas(parent_id);
+            CREATE TABLE IF NOT EXISTS idea_dispatches (id TEXT PRIMARY KEY,idea_id TEXT NOT NULL,
+                request_id TEXT NOT NULL UNIQUE,snapshot TEXT NOT NULL,prompt TEXT NOT NULL,
+                target_kind TEXT NOT NULL,target_mode TEXT NOT NULL,target_thread_id TEXT,target_name TEXT NOT NULL,
+                priority TEXT NOT NULL,status TEXT NOT NULL,result TEXT NOT NULL,error TEXT NOT NULL,
+                claim_token TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,user_confirmed_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS idea_dispatch_status ON idea_dispatches(status,priority,created_at);
+            CREATE TABLE IF NOT EXISTS idea_refinements (id TEXT PRIMARY KEY,idea_id TEXT NOT NULL,
+                state TEXT NOT NULL,round INTEGER NOT NULL,round_limit INTEGER NOT NULL,
+                target_kind TEXT NOT NULL,target_thread_id TEXT,target_name TEXT NOT NULL,
+                user_confirmed_at TEXT NOT NULL,error TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS conversation_threads (id TEXT PRIMARY KEY,generation INTEGER NOT NULL,
+                cached_generation INTEGER NOT NULL,fetched_at TEXT,payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS conversation_pages (thread_id TEXT NOT NULL,generation INTEGER NOT NULL,
+                cursor TEXT NOT NULL,fetched_at TEXT NOT NULL,payload TEXT NOT NULL,
+                PRIMARY KEY(thread_id,generation,cursor));
+            CREATE TABLE IF NOT EXISTS conversation_requests (id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,
+                mode TEXT NOT NULL,generation INTEGER NOT NULL,cursor TEXT NOT NULL,status TEXT NOT NULL,
+                error TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS conversation_request_status ON conversation_requests(status,created_at);
+        """)
+        identity = path.stat()
+        self._schema_key = (identity.st_dev, identity.st_ino, db.execute("PRAGMA schema_version").fetchone()[0])
+
     @contextmanager
     def _db(self):
         with self._lock:
@@ -118,79 +186,26 @@ class WorkflowService(CodexWorkMixin, MobileHandoffMixin, MobileDialogueMixin, G
             db = sqlite3.connect(path, timeout=15)
             db.row_factory = sqlite3.Row
             try:
-                db.executescript("""
-                    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
-                    INSERT OR IGNORE INTO settings VALUES ('revision','0');
-                    CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY,title TEXT NOT NULL,project_id TEXT NOT NULL,
-                        created_at TEXT NOT NULL,updated_at TEXT NOT NULL,primary_attachment_id TEXT,context TEXT NOT NULL);
-                    CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY,record_id TEXT NOT NULL,role TEXT NOT NULL,
-                        text TEXT NOT NULL,created_at TEXT NOT NULL,attachment_ids TEXT NOT NULL,options TEXT NOT NULL);
-                    CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY,record_id TEXT NOT NULL,name TEXT NOT NULL,
-                        filename TEXT NOT NULL,mime_type TEXT NOT NULL,size INTEGER NOT NULL,preview INTEGER NOT NULL,duration REAL);
-                    CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY,record_id TEXT NOT NULL,kind TEXT NOT NULL,
-                        request_id TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,attempt INTEGER NOT NULL,
-                        parent_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,error TEXT NOT NULL,log TEXT NOT NULL,result TEXT NOT NULL);
-                    CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY,kind TEXT NOT NULL,fingerprint TEXT NOT NULL,response TEXT NOT NULL);
-                    CREATE TABLE IF NOT EXISTS mobile_message_sources (message_id TEXT PRIMARY KEY,client_id TEXT NOT NULL,
-                        session_id TEXT NOT NULL,record_id TEXT NOT NULL,request_id TEXT NOT NULL UNIQUE,job_id TEXT NOT NULL UNIQUE,
-                        text_sha256 TEXT NOT NULL,attachment_ids TEXT NOT NULL,created_at TEXT NOT NULL);
-                    CREATE TABLE IF NOT EXISTS guide_sources (id INTEGER PRIMARY KEY CHECK(id=1),chat_id TEXT NOT NULL,
-                        request_id TEXT NOT NULL,created_at TEXT NOT NULL);
-                    CREATE TABLE IF NOT EXISTS guide_replies (request_id TEXT PRIMARY KEY,message_id TEXT NOT NULL UNIQUE,
-                        client_id TEXT NOT NULL,session_id TEXT NOT NULL,record_id TEXT NOT NULL,source_user_message_id TEXT NOT NULL,
-                        source_guide_chat_id TEXT NOT NULL,text_sha256 TEXT NOT NULL,created_at TEXT NOT NULL);
-                    CREATE INDEX IF NOT EXISTS guide_reply_scope ON guide_replies(client_id,session_id,record_id);
-                    CREATE INDEX IF NOT EXISTS guide_reply_record ON guide_replies(record_id);
-                    CREATE TABLE IF NOT EXISTS guide_inputs (seq INTEGER PRIMARY KEY AUTOINCREMENT,request_id TEXT NOT NULL UNIQUE,
-                        message_id TEXT NOT NULL UNIQUE,client_id TEXT NOT NULL,session_id TEXT NOT NULL,record_id TEXT NOT NULL,
-                        source_guide_chat_id TEXT NOT NULL,expected_revision INTEGER NOT NULL,text_sha256 TEXT NOT NULL,
-                        attachment_ids TEXT NOT NULL,attachment_proofs TEXT NOT NULL,source_snapshot TEXT NOT NULL,
-                        request_body TEXT NOT NULL,created_at TEXT NOT NULL);
-                    CREATE INDEX IF NOT EXISTS guide_input_scope ON guide_inputs(client_id,session_id,record_id,seq);
-                    CREATE INDEX IF NOT EXISTS guide_input_inbox ON guide_inputs(source_guide_chat_id,client_id,seq);
-                    CREATE TABLE IF NOT EXISTS ideas (id TEXT PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,
-                        stage TEXT NOT NULL,priority TEXT NOT NULL,parent_id TEXT,target_kind TEXT NOT NULL,
-                        target_thread_id TEXT NOT NULL,target_name TEXT NOT NULL,revision INTEGER NOT NULL,
-                        created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
-                    CREATE INDEX IF NOT EXISTS message_records ON messages(record_id);
-                    CREATE INDEX IF NOT EXISTS job_status ON jobs(status);
-                    CREATE INDEX IF NOT EXISTS idea_parents ON ideas(parent_id);
-                    CREATE TABLE IF NOT EXISTS idea_dispatches (id TEXT PRIMARY KEY,idea_id TEXT NOT NULL,
-                        request_id TEXT NOT NULL UNIQUE,snapshot TEXT NOT NULL,prompt TEXT NOT NULL,
-                        target_kind TEXT NOT NULL,target_mode TEXT NOT NULL,target_thread_id TEXT,target_name TEXT NOT NULL,
-                        priority TEXT NOT NULL,status TEXT NOT NULL,result TEXT NOT NULL,error TEXT NOT NULL,
-                        claim_token TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,user_confirmed_at TEXT NOT NULL);
-                    CREATE INDEX IF NOT EXISTS idea_dispatch_status ON idea_dispatches(status,priority,created_at);
-                    CREATE TABLE IF NOT EXISTS idea_refinements (id TEXT PRIMARY KEY,idea_id TEXT NOT NULL,
-                        state TEXT NOT NULL,round INTEGER NOT NULL,round_limit INTEGER NOT NULL,
-                        target_kind TEXT NOT NULL,target_thread_id TEXT,target_name TEXT NOT NULL,
-                        user_confirmed_at TEXT NOT NULL,error TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
-                    CREATE TABLE IF NOT EXISTS conversation_threads (id TEXT PRIMARY KEY,generation INTEGER NOT NULL,
-                        cached_generation INTEGER NOT NULL,fetched_at TEXT,payload TEXT NOT NULL);
-                    CREATE TABLE IF NOT EXISTS conversation_pages (thread_id TEXT NOT NULL,generation INTEGER NOT NULL,
-                        cursor TEXT NOT NULL,fetched_at TEXT NOT NULL,payload TEXT NOT NULL,
-                        PRIMARY KEY(thread_id,generation,cursor));
-                    CREATE TABLE IF NOT EXISTS conversation_requests (id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,
-                        mode TEXT NOT NULL,generation INTEGER NOT NULL,cursor TEXT NOT NULL,status TEXT NOT NULL,
-                        error TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
-                    CREATE INDEX IF NOT EXISTS conversation_request_status ON conversation_requests(status,created_at);
-                """)
+                self._ensure_schema(db, path)
                 notifier = self._dispatch_commit_notifier
                 before_dispatch_rowid = db.execute("SELECT COALESCE(MAX(rowid),0) FROM idea_dispatches").fetchone()[0] if notifier else None
                 before_dispatch_open = {row[0] for row in db.execute("SELECT id FROM idea_dispatches WHERE status IN ('claimed','waiting','needs_review')")} if notifier else set()
                 before_mobile_results = self._mobile_events_snapshot(db)
+                changes_before = db.total_changes
                 yield db
+                changed = db.total_changes != changes_before
                 committed_dispatches = [row[0] for row in db.execute(
-                    "SELECT id FROM idea_dispatches WHERE rowid>? AND status='pending' AND user_confirmed_at<>''", (before_dispatch_rowid,))] if notifier else []
+                    "SELECT id FROM idea_dispatches WHERE rowid>? AND status='pending' AND user_confirmed_at<>''", (before_dispatch_rowid,))] if notifier and changed else []
                 released_dispatches = [row[0] for row in db.execute(
                     "SELECT id FROM idea_dispatches WHERE id IN (" + ",".join("?" for _ in before_dispatch_open) + ") AND status IN ('completed','failed')",
-                    tuple(before_dispatch_open))] if notifier and before_dispatch_open else []
-                after_mobile_results = self._mobile_events_snapshot(db)
+                    tuple(before_dispatch_open))] if notifier and changed and before_dispatch_open else []
+                after_mobile_results = self._mobile_events_snapshot(db) if changed else before_mobile_results
                 db.commit()
                 # Subscribers wake only for an actual committed scoped change.
                 # A notification failure cannot turn an accepted write into retry.
                 try:
-                    self._mobile_events_committed(before_mobile_results, after_mobile_results)
+                    if changed:
+                        self._mobile_events_committed(before_mobile_results, after_mobile_results)
                 except Exception:
                     pass
                 if notifier and committed_dispatches:
