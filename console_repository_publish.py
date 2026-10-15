@@ -39,7 +39,8 @@ _PRIVATE_PARTS = {".git", ".venv", "venv", "node_modules", "__pycache__", "cache
 _PRIVATE_NAMES = {".env", ".npmrc", ".pypirc", "credentials.json", "secrets.json",
                   "installation.json", "local-store-identity.json", "publisher-state.json"}
 _DEFAULT_NAMING = {"preset": "version", "fallbackTitle": "更新进度 {datetime}",
-                   "subtitle": "", "notes": "", "includeSummary": True, "autoBump": True}
+                   "subtitle": "", "notes": "", "includeSummary": True, "autoBump": True,
+                   "allowActiveWork": True}
 _LIVE = {}
 
 
@@ -80,6 +81,10 @@ _DIAGNOSTICS = {
     "git_timeout": ("network", "warning", "确认网络及原 Git 操作状态；重试先核对远端是否收到原提交。", None),
     "git_missing": ("repository", "error", "确认本机 Git 可用，再重新核对。", None),
     "git_unavailable": ("repository", "warning", "确认本机 Git 能正常运行，再重新核对。", None),
+    "git_failed": ("repository", "warning", "查看本次 Git 步骤和退出码；原文件、暂存选择及已有提交保留。", None),
+    "git_remote_failed": ("remote", "warning", "远端检查未完成；查看 Git 步骤和退出码后重试，继续保留原提交。", None),
+    "git_network": ("network", "warning", "核对网络连接后重试；先核验远端，不会重复提交。", None),
+    "git_unsupported": ("repository", "warning", "本机 Git 拒绝此命令选项；核对实际 Git 版本与本次步骤。", None),
     "remote_changed": ("remote", "warning", "重新核对远端和本地历史；需要整合时自行处理后重试原提交。", None),
     "remote_ahead": ("remote", "warning", "在仓库中核对并自行整合远端领先或分叉的历史，再重试原提交。", None),
     "manual_check": ("unknown", "warning", "先核对原安全提示、仓库与保留记录；确认相关工作完成后重新核对。", None),
@@ -87,7 +92,43 @@ _DIAGNOSTICS = {
 _GIT_DIAGNOSTIC_CODES = {"authentication": "git_authentication", "permissions": "git_permissions",
                          "rules": "git_rules", "lfs": "git_lfs", "timeout": "git_timeout",
                          "missing_git": "git_missing", "git_unavailable": "git_unavailable",
-                         "remote_changed": "remote_changed", "remote_config": "remote_config"}
+                         "remote_changed": "remote_changed", "remote_config": "remote_config",
+                         "git_failed": "git_failed", "network": "git_network", "unsupported": "git_unsupported"}
+
+_GIT_OPERATIONS = {"ls-remote", "fetch", "push", "commit", "status", "config", "rev-parse", "symbolic-ref",
+                   "add", "read-tree", "update-index", "write-tree", "diff", "diff-tree", "diff-index",
+                   "merge-base", "rev-list", "log", "ls-files", "ls-tree", "cat-file", "show", "show-ref", "update-ref",
+                   "check-ref-format", "stripspace"}
+
+
+def _git_operation(arguments):
+    # Recognize only the fixed global flags our caller uses; never persist an
+    # unknown argument, pathspec, configuration value or message as a command.
+    offset = 0
+    while offset < len(arguments) and arguments[offset] in {"--literal-pathspecs", "--no-optional-locks", "--no-pager", "--no-replace-objects"}:
+        offset += 1
+    return arguments[offset] if offset < len(arguments) and arguments[offset] in _GIT_OPERATIONS else None
+
+
+_NETWORK_ERRORS = (
+    ("resolve_host", r"^fatal:\s*unable to access ['\"][^'\"\r\n]+['\"]:\s*could not resolve (?:host|proxy):"),
+    ("connect_failed", r"^fatal:\s*unable to access ['\"][^'\"\r\n]+['\"]:\s*(?:failed to connect|couldn't connect|could not connect)\b"),
+    ("connection_reset", r"^(?:fatal:\s*unable to access ['\"][^'\"\r\n]+['\"]:\s*|error:\s*rpc failed;\s*curl\s+\d+\s+)(?:recv failure:|send failure:|connection (?:was )?reset|failure when receiving data from the peer)"),
+    ("tls_failed", r"^fatal:\s*unable to access ['\"][^'\"\r\n]+['\"]:\s*(?:ssl certificate problem:|server certificate verification failed|openssl ssl_connect:|gnutls_handshake\(\) failed|schannel:)"),
+    ("server_unavailable", r"^fatal:\s*unable to access ['\"][^'\"\r\n]+['\"]:\s*the requested url returned error:\s*5\d\d\s*$"),
+    ("transport_failed", r"^error:\s*rpc failed;\s*curl\s+(?:16|18|28|35|52|55|56|92)\s+"),
+)
+
+
+def _git_error_kind(stderr):
+    # Only fixed error types survive. URLs, filenames, hook output and tokens do
+    # not enter a receipt; an unknown line remains unknown.
+    for kind, pattern in _NETWORK_ERRORS:
+        if re.search(pattern, stderr, re.MULTILINE | re.IGNORECASE):
+            return kind
+    if re.search(r"^error:\s*(?:unknown|unrecognized) (?:option|switch)\b", stderr, re.MULTILINE | re.IGNORECASE):
+        return "unsupported_option"
+    return "unknown"
 
 
 def _make_diagnostic(code, summary, *, source_id=None):
@@ -135,9 +176,11 @@ class RepositoryPublishError(ValueError):
 
 
 class _GitFailure(Exception):
-    def __init__(self, code, detail="", returncode=None):
+    def __init__(self, code, detail="", returncode=None, *, operation=None, error_kind="unknown"):
         super().__init__(code)
         self.code, self.detail, self.returncode = code, detail, returncode
+        self.operation = operation if operation in _GIT_OPERATIONS else None
+        self.error_kind = error_kind if error_kind in {"unknown", "unsupported_option", "timeout", *(k for k, _ in _NETWORK_ERRORS)} else "unknown"
 
 
 def _git_error_category(stderr):
@@ -168,7 +211,8 @@ def _git_error_category(stderr):
     for category, receipts in patterns:
         if any(re.search(pattern, stderr, re.MULTILINE | re.IGNORECASE) for pattern in receipts):
             return category
-    return "git_failed"
+    kind = _git_error_kind(stderr)
+    return "unsupported" if kind == "unsupported_option" else "network" if kind != "unknown" else "git_failed"
 
 
 def _parse_transfer_progress(record, *, lfs_file=False):
@@ -515,12 +559,13 @@ class RepositoryPublishService:
                 _atomic(self._settings_path, settings)
 
     def _git(self, root, *arguments, data=None, index=None, timeout=35, config=None, progress=None):
+        operation = _git_operation(arguments)
         remaining = self._catalog_remaining()
         if remaining is not None:
             timeout = min(timeout, remaining)
         executable = shutil.which("git")
         if not executable:
-            raise _GitFailure("missing_git")
+            raise _GitFailure("missing_git", operation=operation)
         env = os.environ.copy()
         # Remove environment-based repository redirects, not credentials, SSH,
         # config, hooks, or clean/LFS filters belonging to the user.
@@ -546,13 +591,13 @@ class RepositoryPublishService:
                        subprocess.run(command, input=data, capture_output=True, env=env, timeout=timeout,
                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
         except subprocess.TimeoutExpired as exc:
-            raise _GitFailure("timeout") from exc
+            raise _GitFailure("timeout", operation=operation, error_kind="timeout") from exc
         except OSError as exc:
-            raise _GitFailure("git_unavailable") from exc
+            raise _GitFailure("git_unavailable", operation=operation) from exc
         if process.returncode:
             text = process.stderr.decode("utf-8", "replace").replace("\r", "\n").lower()
             category = _git_error_category(text)
-            raise _GitFailure(category, returncode=process.returncode)
+            raise _GitFailure(category, returncode=process.returncode, operation=operation, error_kind=_git_error_kind(text))
         return process.stdout
 
     def _catalog_remaining(self):
@@ -807,6 +852,8 @@ class RepositoryPublishService:
         naming["includeSummary"] = bool(naming["includeSummary"])
         if not isinstance(naming["autoBump"], bool):
             raise RepositoryPublishError("自动升版设置必须为开关。")
+        if not isinstance(naming["allowActiveWork"], bool):
+            raise RepositoryPublishError("工作中上传设置必须为开关。")
         return {"repositories": repositories, "naming": naming}
 
     def _settings(self):
@@ -1191,6 +1238,10 @@ class RepositoryPublishService:
         if not self.allowed:
             raise RepositoryPublishError("当前入口不允许读取版本配置。")
         settings = self._settings()
+        with self._activity_policy(settings["naming"]):
+            return self._version_catalog_frozen(repo_id, settings)
+
+    def _version_catalog_frozen(self, repo_id, settings):
         rows = settings["repositories"]
         if repo_id is not None and (not isinstance(repo_id, str) or repo_id not in {row["id"] for row in rows}):
             raise RepositoryPublishError("仓库编号不存在。")
@@ -1206,6 +1257,7 @@ class RepositoryPublishService:
                     "hasChanges": None, "changeState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
                     "diagnostic": None, "planState": "none", "versionChanged": None, "versionState": "unknown",
                     "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
+            item["activityPolicy"] = "allow_saved_snapshot" if self._lease.allow_active_work else "strict"
             try:
                 self._catalog_remaining()
                 context = self._repo(repo)
@@ -1861,29 +1913,77 @@ class RepositoryPublishService:
             raise RepositoryPublishError("此仓库配置已改变，请重新读取列表。", code="destination_changed")
         root = _safe_path(repo["path"])
         diagnostic = None
+        notice = None
+        policy = "allow_saved_snapshot" if settings["naming"].get("allowActiveWork", True) is True else "strict"
         try:
             if not root.is_dir():
                 raise RepositoryPublishError("本地仓库目录不存在，请核对路径。", code="repo_missing")
-            self._busy_reason(root)
+            error = self._activity_error(root)
+            if error:
+                diagnostic = error.diagnostic
+                if diagnostic.get("kind") == "codex_activity":
+                    notice = dict(diagnostic)
         except RepositoryPublishError as error:
             diagnostic = error.diagnostic
+        clear = diagnostic is None
+        permitted = clear or policy == "allow_saved_snapshot" and notice is not None
         return {"repoId": repo_id, "sourceIdentity": catalog_source_identity(repo, settings["naming"]),
-                "activityClear": diagnostic is None, "diagnostic": diagnostic, "checkedAt": _now()}
+                "activityClear": clear, "publicationAllowed": permitted, "activityPolicy": policy,
+                "activityNotice": notice, "diagnostic": None if permitted else diagnostic, "checkedAt": _now()}
 
-    def _busy_reason(self, root):
+    def _activity_error(self, root):
+        """Separate trusted Codex notices from Git/shared-operation blockers."""
         reason = self._busy_check(root) if self._busy_check else None
         if reason:
             if isinstance(reason, dict):
                 code = reason.get("code")
-                code = code if code in {"activity_active", "activity_scope_unknown", "activity_unconfirmed"} else "activity_unconfirmed"
+                code = code if code in {"activity_active", "activity_scope_unknown", "activity_unconfirmed", "git_lock"} else "activity_unconfirmed"
                 summary = reason.get("summary")
                 summary = summary[:1000] if isinstance(summary, str) and summary else "无法确认本仓库的编辑活动，请查看具体原因后重试。"
                 error = RepositoryPublishError(summary, code=code)
+                if reason.get("kind") == "codex_activity" and reason.get("code") in {"activity_active", "activity_scope_unknown", "activity_unconfirmed"}:
+                    error.diagnostic["kind"] = "codex_activity"
+                elif reason.get("kind") == "git_operation" or code == "git_lock":
+                    error.diagnostic["kind"] = "git_operation"
                 blockers = _activity_blockers(reason.get("blockers"))
                 if blockers:
                     error.diagnostic["blockers"] = blockers
-                raise error
-            raise RepositoryPublishError(str(reason), code="activity_unconfirmed")
+                return error
+            return RepositoryPublishError(str(reason)[:1000], code="activity_unconfirmed")
+        return None
+
+    @contextmanager
+    def _activity_policy(self, naming, item=None):
+        """Freeze this invocation's policy and release its thread lease on all exits."""
+        if not hasattr(self, "_lease"):
+            self._lease = threading.local()
+        missing = object()
+        previous = {key: getattr(self._lease, key, missing) for key in ("allow_active_work", "activity_item")}
+        self._lease.allow_active_work = naming.get("allowActiveWork", True) is True
+        self._lease.activity_item = item
+        if item is not None:
+            item.update(activityPolicy="allow_saved_snapshot" if self._lease.allow_active_work else "strict", activityNotice=None)
+        try:
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is missing:
+                    delattr(self._lease, key)
+                else:
+                    setattr(self._lease, key, value)
+
+    def _busy_reason(self, root):
+        error = self._activity_error(root)
+        if error is None:
+            return None
+        lease = getattr(self, "_lease", None)
+        if error.diagnostic.get("kind") == "codex_activity":
+            item = getattr(lease, "activity_item", None)
+            if item is not None:
+                item["activityNotice"] = dict(error.diagnostic)
+            if getattr(lease, "allow_active_work", False) is True:
+                return dict(error.diagnostic)
+        raise error
 
     def _sync_contract(self, repo):
         if repo.get("syncError"):
@@ -2115,6 +2215,10 @@ class RepositoryPublishService:
 
     def preview(self, repo_id=None):
         settings = self._settings()
+        with self._activity_policy(settings["naming"]):
+            return self._preview(repo_id, settings)
+
+    def _preview(self, repo_id, settings):
         selected = [r for r in settings["repositories"] if repo_id is None or r["id"] == repo_id]
         if repo_id is not None and not selected:
             raise RepositoryPublishError("仓库编号不存在。")
@@ -2126,6 +2230,8 @@ class RepositoryPublishService:
                     "components": [], "versionTransitions": [], "hasChanges": None, "changeState": "unknown", "planWillApply": None, "action": "unknown",
                     "diagnostic": None, "versionState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
                     "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
+            self._lease.activity_item = item
+            item.update(activityPolicy="allow_saved_snapshot" if self._lease.allow_active_work else "strict", activityNotice=None)
             try:
                 self._sync_contract(repo)
                 context = self._repo(repo)
@@ -2198,6 +2304,8 @@ class RepositoryPublishService:
                                          "message": "等待处理", "commitSha": "", "title": "", "body": "", "logs": [],
                                          "uploadSummary": self._upload_summary(r)} for r in selected]}
             for item in receipt["repositories"]:
+                item.update(activityPolicy="allow_saved_snapshot" if settings["naming"].get("allowActiveWork", True) is True else "strict",
+                            activityNotice=None)
                 item["progress"] = self._item_progress(item)
             self._starting = True
             _LIVE[self._owner] = weakref.ref(self)
@@ -2332,18 +2440,42 @@ class RepositoryPublishService:
         if isinstance(exc, RepositoryPublishError):
             return dict(exc.diagnostic)
         code = _GIT_DIAGNOSTIC_CODES.get(exc.code, "manual_check") if isinstance(exc, _GitFailure) else "manual_check"
-        return _make_diagnostic(code, RepositoryPublishService._error(exc))
+        if isinstance(exc, _GitFailure) and exc.code == "git_failed":
+            code = "git_remote_failed" if exc.operation in {"ls-remote", "fetch"} else "manual_check"
+        result = _make_diagnostic(code, RepositoryPublishService._error(exc))
+        if isinstance(exc, _GitFailure):
+            if exc.operation:
+                result["operationKind"] = exc.operation
+            if isinstance(exc.returncode, int) and not isinstance(exc.returncode, bool):
+                result["exitCode"] = exc.returncode
+            result["errorKind"] = exc.error_kind
+        return result
 
     @staticmethod
     def _error(exc):
         if isinstance(exc, RepositoryPublishError):
             return str(exc)
         if isinstance(exc, _GitFailure):
-            return {"authentication": "认证失败，请检查已配置的 Git 凭证后重试原提交。", "permissions": "没有推送权限，请检查仓库权限。",
+            message = {"authentication": "认证失败，请检查已配置的 Git 凭证后重试原提交。", "permissions": "没有推送权限，请检查仓库权限。",
                     "rules": "远端规则或 Git hook 拒绝操作，请处理规则后重试。", "lfs": "Git LFS 处理失败，请检查 LFS 安装、对象或认证。",
                     "remote_config": "配置的远端名称不存在，请核对该仓库的远端名称后重新核对。",
                     "remote_changed": "远端发生变化，请自行整合；不会强制推送。", "timeout": "Git 操作超时，保留原提交核对状态。",
-                    "missing_git": "未找到 Git。"}.get(exc.code, "Git 操作失败，请检查仓库或 Git hook；已保留文件和原提交。")
+                    "missing_git": "未找到 Git。", "git_unavailable": "Git 进程无法启动，请核对本机 Git。",
+                    "unsupported": "Git 拒绝了本次命令选项，请核对实际 Git 版本。",
+                    "network": {"resolve_host": "Git 无法解析远端或代理域名。", "connect_failed": "Git 无法连接远端或代理。",
+                                "connection_reset": "Git 连接在传输期间被重置。", "tls_failed": "Git 的 TLS 或证书核验失败。",
+                                "server_unavailable": "Git 远端服务返回服务器错误。"}.get(exc.error_kind, "Git 网络传输失败。")}.get(exc.code)
+            if message is None:
+                message = ({"ls-remote": "读取 Git 远端分支失败。", "fetch": "获取 Git 远端历史失败。",
+                            "push": "Git 推送失败，保留原提交以核验或重试。", "commit": "Git 本地提交失败。"}
+                           .get(exc.operation, "Git 操作失败。"))
+                message += "文件、暂存选择和已有提交保留。"
+            metadata = []
+            if exc.operation:
+                metadata.append("git " + exc.operation)
+            if isinstance(exc.returncode, int) and not isinstance(exc.returncode, bool):
+                metadata.append("退出码 " + str(exc.returncode))
+            return message + ("（" + " · ".join(metadata) + "）" if metadata else "")
         return "文件或发布记录不可用，请保存完成后重试。"
 
     def _sync(self, repo, context):
@@ -2522,6 +2654,10 @@ class RepositoryPublishService:
         self._push(repo, context, pending, pending_path, receipt, item)
 
     def _run_repo(self, repo, naming, receipt, item):
+        with self._activity_policy(naming, item):
+            return self._run_repo_frozen(repo, naming, receipt, item)
+
+    def _run_repo_frozen(self, repo, naming, receipt, item):
         self._phase(receipt, item, "check", "核对仓库、分支和活动任务。")
         self._sync_contract(repo)
         context = self._repo(repo)

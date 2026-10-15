@@ -26,6 +26,7 @@
 .repository-publish-compact-status:disabled { cursor: default; text-decoration: none; }
 .repository-publish-compact-status[data-status="success"], .repository-publish-compact-status[data-status="pushed"] { color: var(--repository-publish-change, #69dfa7); }
 .repository-publish-compact-status[data-status="deferred"], .repository-publish-compact-status[data-status="push_failed"], .repository-publish-compact-status[data-status="commit_failed"], .repository-publish-compact-status[data-status="conflict"], .repository-publish-compact-status[data-status="failed"], .repository-publish-compact-status[data-status="verification_required"], .repository-publish-compact-status[data-status="unknown"] { color: var(--status-warning, #d9a170); }
+.repository-publish-compact-status[data-status="snapshot_available"] { color: var(--text, #edf2fa); }
 .repository-publish-version-cell { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .repository-publish-version-cell > .repository-publish-version-picker { flex: 1; }
 .repository-publish-refresh-indicator { flex: 0 0 9px; width: 9px; height: 9px; border: 1.5px solid var(--line, #3b4a5b); border-top-color: var(--muted, #92a2b5); border-radius: 50%; animation: repository-publish-spin 1s linear infinite; }
@@ -75,6 +76,14 @@
 .repository-publish-current-activity { padding: 0 0 9px; margin-bottom: 9px; border-bottom: 1px solid var(--line, #3b4a5b); }
 .repository-publish-current-activity[hidden] { display: none; }
 .repository-publish-current-activity-summary { color: var(--text, #edf2fa); }
+.repository-publish-current-activity[data-state="allowed"] { border-left: 2px solid var(--green, #59d4bb); padding-left: 10px; }
+.repository-publish-last-attempt { border-top: 1px solid var(--line, #3b4a5b); padding-top: 10px; margin-top: 12px; }
+.repository-publish-last-attempt[hidden], .repository-publish-diagnosis-current[hidden] { display: none; }
+.repository-publish-git-metadata[hidden] { display: none; }
+.repository-publish-git-metadata { color: var(--muted, #92a2b5); font-size: 11px; }
+.repository-publish-last-attempt > summary { cursor: pointer; color: var(--muted, #92a2b5); font-size: 12px; }
+.repository-publish-last-attempt[open] > summary { margin-bottom: 9px; }
+.repository-publish-policy-hint { grid-column: 1 / -1; margin: 0 0 4px; }
 .repository-publish-diagnosis-work-heading { display: block; margin: 8px 0 5px; }
 .repository-publish-diagnosis-work { padding: 7px 0 7px 10px; border-left: 2px solid var(--line, #3b4a5b); }
 .repository-publish-diagnosis-work + .repository-publish-diagnosis-work { margin-top: 5px; }

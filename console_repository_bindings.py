@@ -525,12 +525,24 @@ class RepositoryBindingDiscovery:
         return diagnostic["summary"] if diagnostic else None
 
     def busy_diagnostic(self, root, *, developer_operation=None, owned_developer_lock=False):
-        """Exact current-turn scopes can narrow activity; uncertainty still blocks."""
+        """Typed Codex activity is advisory; actual shared Git ownership is not."""
         root = _path(root)
         def issue(summary, blockers=(), code="activity_unconfirmed"):
-            return {"code": code, "category": "activity", "severity": "warning", "summary": summary,
-                    "blockers": list(blockers), "target": {"kind": "activity", "repositoryPath": str(root)},
-                    "nextStep": "完成或协调下面列出的仓库编辑；重新核对后可重试。"}
+            locked = code == "git_lock"
+            return {"code": code, "kind": "git_operation" if locked else "codex_activity",
+                    "category": "repository" if locked else "activity", "severity": "warning", "summary": summary,
+                    "blockers": list(blockers), "target": {"kind": "repository" if locked else "activity", "repositoryPath": str(root)},
+                    "nextStep": "等待原 Git 操作完成后重新核对；不会移除其他操作的锁。" if locked else "可上传已保存且核对稳定的内容；严格模式需先完成或协调相关编辑。"}
+        # A known chat must never mask a shared Git writer. This probe therefore
+        # precedes advisory Work/Desktop inspection, including unknown scopes.
+        try:
+            common = Path(self.git(root, "rev-parse", "--git-common-dir"))
+            common = common if common.is_absolute() else root / common
+            state = "owned" if owned_developer_lock is True else self.lock_probe(common / "console-developer-update.lock")
+            if state not in {"absent", "free", "owned"}:
+                return issue("The shared Git developer-update lock is held or could not be verified.", code="git_lock")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return issue("Shared Git operation state could not be verified.", code="git_lock")
         try:
             snapshot = self._get(self.workflow_snapshot, {})  # exactly one callback read
             ownership = self._get(self.edit_ownership, [])
@@ -570,16 +582,6 @@ class RepositoryBindingDiscovery:
                                "reason": "active_work_or_edit_ownership"}], "activity_active")
             if status not in _TERMINAL and item.get("active") is not False:
                 return issue("Work/edit operation state is unverified; publication deferred.")
-        try:
-            common = Path(self.git(root, "rev-parse", "--git-common-dir"))
-            common = common if common.is_absolute() else root / common
-            # Trusted server-only thread lease; callers must prove they retain
-            # this exact lock. Other Work/Desktop ownership checks still run.
-            state = "owned" if owned_developer_lock is True else self.lock_probe(common / "console-developer-update.lock")
-            if state in {"held", "unknown"}:
-                return issue("The shared Git developer-update lock is held or could not be verified.")
-        except (OSError, ValueError, subprocess.SubprocessError):
-            return issue("Shared Git operation state could not be verified.")
         try:
             native = self.desktop_activity(root) if callable(self.desktop_activity) else self.desktop_activity
             if native is None:
