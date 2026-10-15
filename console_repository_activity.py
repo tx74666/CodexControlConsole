@@ -18,6 +18,8 @@ import tempfile
 import uuid
 
 MAX_SCAN_BYTES = 4 * 1024 * 1024
+MAX_APPEND_BYTES = 16 * 1024 * 1024
+MAX_METADATA_LINE_BYTES = 8 * 1024 * 1024
 MAX_CLAIM_BYTES = 64 * 1024
 SCHEMA = 1
 
@@ -62,6 +64,83 @@ def _stamp(s):
     return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns)
 
 
+def _opened_stamp(stream):
+    return _stamp(os.fstat(stream.fileno()))
+
+
+def _typed_event(event):
+    """Typed lifecycle metadata only; tool text and rendered items are irrelevant."""
+    if (not isinstance(event, dict) or not isinstance(event.get("type"), str)
+            or not isinstance(event.get("payload"), dict)):
+        raise ScopeError("malformed_typed_metadata")
+    typ, payload = event.get("type"), event["payload"]
+    _token(typ)
+    kind = payload.get("type")
+    if typ in {"response_item", "event_msg"}:
+        _token(kind)
+    if typ == "session_meta":
+        _token(payload.get("id"))
+        return "session", payload.get("id")
+    if typ == "turn_context":
+        _token(payload.get("turn_id"))
+        return "context", payload.get("turn_id")
+    if typ == "event_msg":
+        if kind == "user_message":
+            return "user", None
+        if kind in {"task_started", "turn_started"}:
+            return "start", payload.get("turn_id")
+        if kind in {"task_complete", "turn_complete", "turn_aborted", "turn_finished"}:
+            return "terminal", None
+        if kind == "agent_message" and payload.get("phase") in {"final", "final_answer"}:
+            return "terminal", None
+    if typ == "response_item" and kind == "message":
+        if payload.get("role") not in {"user", "assistant", "developer", "system", "tool"}:
+            raise ScopeError("malformed_message_role")
+        if payload.get("role") == "user":
+            return "user", None
+        if payload.get("role") == "assistant" and payload.get("phase") in {"final", "final_answer"}:
+            return "terminal", None
+    return None, None
+
+
+def _stream_range(stream, start, end, consume=None, *, skip_first_line=False):
+    """Read a fixed range in 64KiB chunks, with a separate bounded JSON line cap."""
+    stream.seek(start)
+    remaining, digest, line, skipping = end - start, hashlib.sha256(), bytearray(), skip_first_line
+    last_byte = None
+    while remaining:
+        chunk = stream.read(min(65536, remaining))
+        if not chunk:
+            raise ScopeError("metadata_range_truncated")
+        remaining -= len(chunk)
+        digest.update(chunk)
+        last_byte = chunk[-1]
+        if consume is None:
+            continue
+        offset = 0
+        while offset < len(chunk):
+            stop = chunk.find(b"\n", offset)
+            part = chunk[offset:] if stop < 0 else chunk[offset:stop]
+            if not skipping:
+                line.extend(part)
+                if len(line) > MAX_METADATA_LINE_BYTES:
+                    raise ScopeError("metadata_line_too_large")
+            if stop < 0:
+                break
+            if skipping:
+                skipping = False
+            else:
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    raise ScopeError("metadata_line_not_object")
+                consume(event)
+                line.clear()
+            offset = stop + 1
+    if consume is not None and (line or skipping or (end > start and last_byte != 10)):
+        raise ScopeError("metadata_range_partial_tail")
+    return digest.hexdigest()
+
+
 def scan_rollout(path, max_bytes=MAX_SCAN_BYTES):
     """Bounded metadata scan. No message text or command arguments leave this API."""
     try:
@@ -73,10 +152,13 @@ def scan_rollout(path, max_bytes=MAX_SCAN_BYTES):
         while True:
             offset = max(0, first.st_size - budget)
             with p.open("rb") as stream:
+                if _opened_stamp(stream) != _stamp(first):
+                    return {"state": "unknown", "reason": "rollout_changed_during_read"}
                 stream.seek(offset)
                 window = stream.read(budget)
                 stream.seek(0)
                 head = stream.read(min(65536, first.st_size))
+                opened_after = _opened_stamp(stream)
             raw, line_offset = window, offset
             if offset:
                 prefix, separator, raw = window.partition(b"\n")
@@ -90,7 +172,10 @@ def scan_rollout(path, max_bytes=MAX_SCAN_BYTES):
                 except (ValueError, UnicodeError):
                     malformed = True
                     continue
-                if not isinstance(event, dict) or not isinstance(event.get("payload"), dict):
+                try:
+                    _typed_event(event)
+                except (ValueError, TypeError):
+                    malformed = True
                     continue
                 typ, payload = event.get("type"), event["payload"]
                 kind = payload.get("type")
@@ -105,6 +190,9 @@ def scan_rollout(path, max_bytes=MAX_SCAN_BYTES):
                     state = "idle"
                 elif typ == "event_msg" and kind == "agent_message" and payload.get("phase") in {"final", "final_answer"}:
                     state = "idle"
+                elif typ == "event_msg" and kind == "user_message":
+                    state = "active"
+                    starts.append({"offset": at, "turnId": turn_id})
                 elif typ == "response_item" and kind == "message":
                     if payload.get("role") == "user":
                         # Desktop emits the initial user after task_started /
@@ -115,7 +203,7 @@ def scan_rollout(path, max_bytes=MAX_SCAN_BYTES):
                     elif payload.get("role") == "assistant" and payload.get("phase") in {"final", "final_answer"}:
                         state = "idle"
             last = p.stat()
-            if _stamp(first) != _stamp(last):
+            if _stamp(first) != _stamp(last) or opened_after != _stamp(first):
                 return {"state": "unknown", "reason": "rollout_changed_during_read"}
             fingerprint = {**_identity(p, first), "size": first.st_size, "mtimeNs": first.st_mtime_ns,
                            "headSha256": hashlib.sha256(head).hexdigest(), "tailOffset": offset,
@@ -148,8 +236,16 @@ def scan_rollout(path, max_bytes=MAX_SCAN_BYTES):
 
 def _read_json(path, limit=MAX_CLAIM_BYTES):
     p = safe_path(path)
+    first = p.stat()
     with p.open("rb") as stream:
+        if _opened_stamp(stream) != _stamp(first):
+            raise ScopeError("metadata_changed_during_read")
         raw = stream.read(limit + 1)
+        if _opened_stamp(stream) != _stamp(first):
+            raise ScopeError("metadata_changed_during_read")
+    if _stamp(p.stat()) != _stamp(first):
+        raise ScopeError("metadata_changed_during_read")
+    safe_path(p)
     if len(raw) > limit:
         raise ScopeError("metadata_too_large")
     value = json.loads(raw.decode("utf-8"))
@@ -265,16 +361,28 @@ class ScopeStore:
             raise ScopeError("invalid_scope_mode_or_roots")
         record = self.thread_record(thread_id)
         scan = scan_rollout(record["rolloutPath"])
+        recovered = None
         if (scan.get("state") != "active" or not scan.get("currentTurnId") or not scan.get("identity", {}).get("inode")
                 or scan.get("ownerThreadId") != record["threadId"]):
-            raise ScopeError("current_active_turn_unverified")
-        turn_id = _token(scan["currentTurnId"])
+            try:
+                prior, _ = _read_json(self._file(thread_id))
+                recovered = self._recover_claim(prior, scan, record)
+            except (OSError, ValueError, TypeError):
+                recovered = None
+            if recovered is None:
+                raise ScopeError("current_active_turn_unverified")
+        turn_id = _token(prior["turnId"] if recovered is not None else scan["currentTurnId"])
+        anchor = prior["anchor"] if recovered is not None else scan["fingerprint"]
         edit_roots = sorted(set(self.git_root_reader(root) for root in roots))
         value = {"schemaVersion": SCHEMA, "kind": "scope", "threadId": record["threadId"], "turnId": turn_id,
-                 "mode": mode, "editRoots": edit_roots, "cwd": record["cwd"], "anchor": scan["fingerprint"],
+                 "mode": mode, "editRoots": edit_roots, "cwd": record["cwd"], "anchor": anchor,
                  "declaredAt": datetime.now(timezone.utc).isoformat()}
+        if recovered is not None:
+            value["continuation"] = recovered  # Display evidence only; never an authorization seed.
         # Validation before atomic publication catches a new turn during Git root reads.
-        if self.thread_record(thread_id) != record or not self._scope_matches(value, scan_rollout(record["rolloutPath"])):
+        final_scan = scan_rollout(record["rolloutPath"])
+        proven = self._scope_matches(value, final_scan) or self._recover_claim(value, final_scan, record) is not None
+        if self.thread_record(thread_id) != record or not proven:
             raise ScopeError("owner_turn_changed_during_declaration")
         _atomic_json(self._file(thread_id), value)
         self._snapshot_names = None
@@ -294,6 +402,8 @@ class ScopeStore:
             p = safe_path(fp["path"])
             first = p.stat()
             with p.open("rb") as stream:
+                if _opened_stamp(stream) != _stamp(first):
+                    return False
                 stream.seek(anchor["tailOffset"])
                 raw = stream.read(length)
                 stream.seek(0)
@@ -309,8 +419,114 @@ class ScopeStore:
     def _scope_matches(cls, value, scan):
         return (scan.get("state") == "active" and value.get("turnId") == scan.get("currentTurnId")
                 and value.get("threadId") == scan.get("ownerThreadId")
-                and cls._anchor_matches(value.get("anchor"), scan)
-                and not any(s["offset"] >= value["anchor"]["size"] for s in scan.get("starts", [])))
+                and cls._scope_proof(value, scan, allow_same_turn_context=True) is not None)
+
+    @staticmethod
+    def _valid_scope(value):
+        try:
+            mode, roots = value.get("mode"), value.get("editRoots")
+            return (type(value.get("schemaVersion")) is int and value["schemaVersion"] == SCHEMA
+                    and value.get("kind") == "scope" and mode in {"read_only", "edit"}
+                    and isinstance(roots, list) and (not roots if mode == "read_only" else bool(roots))
+                    and isinstance(value.get("turnId"), str) and bool(value["turnId"])
+                    and isinstance(value.get("cwd"), str)
+                    and all(isinstance(r, str) and Path(r).is_absolute() and str(safe_path(r)) == r for r in roots))
+        except (OSError, ValueError, TypeError, AttributeError):
+            return False
+
+    @staticmethod
+    def _scope_proof(value, scan, *, allow_same_turn_context):
+        """Independently replay the typed anchor and every appended byte.
+
+        This does not trust a continuation marker, latest-tail absence, time,
+        command contents, or a remembered snapshot. The original anchor remains
+        bounded by4MiB; append inspection is streamed with a hard16MiB total cap.
+        """
+        try:
+            anchor, fp = value["anchor"], scan["fingerprint"]
+            if (not isinstance(anchor, dict) or any(type(anchor.get(k)) is not int for k in
+                    ("device", "inode", "size", "mtimeNs", "tailOffset"))
+                    or any(type(fp.get(k)) is not int for k in ("device", "inode", "size", "mtimeNs", "tailOffset"))
+                    or not anchor["inode"] or any(anchor.get(k) != fp.get(k) for k in ("path", "device", "inode"))
+                    or not 0 <= anchor["tailOffset"] <= anchor["size"] <= fp["size"]
+                    or not 0 <= fp["tailOffset"] <= fp["size"] or fp["size"] - fp["tailOffset"] > MAX_SCAN_BYTES
+                    or anchor["size"] - anchor["tailOffset"] > MAX_SCAN_BYTES
+                    or fp["size"] - anchor["size"] > MAX_APPEND_BYTES
+                    or scan.get("ownerThreadId") != value.get("threadId")):
+                return None
+            p = safe_path(fp["path"])
+            first = p.stat()
+            if (_identity(p, first) != scan.get("identity") or first.st_size != fp["size"]
+                    or first.st_mtime_ns != fp["mtimeNs"]):
+                return None
+            active = {"state": None, "turnId": None, "events": 0}
+            def consume_anchor(event):
+                kind, ident = _typed_event(event)
+                if kind == "session" and not (anchor["tailOffset"] == 0 and active["events"] == 0 and ident == value["threadId"]):
+                    raise ScopeError("session_boundary_in_anchor")
+                active["events"] += 1
+                if kind in {"start", "context"}:
+                    active.update(state="active", turnId=ident)
+                elif kind == "user":
+                    active["state"] = "active"
+                elif kind == "terminal":
+                    active["state"] = "idle"
+            def consume_append(event):
+                kind, ident = _typed_event(event)
+                if kind is None:
+                    return
+                if allow_same_turn_context and kind == "context" and ident == value["turnId"]:
+                    return
+                raise ScopeError("scope_boundary_after_anchor")
+            with p.open("rb") as stream:
+                if _opened_stamp(stream) != _stamp(first):
+                    return None
+                head = stream.read(min(65536, fp["size"]))
+                if hashlib.sha256(head).hexdigest() != fp.get("headSha256"):
+                    return None
+                anchor_head = head[:min(65536, anchor["size"])]
+                if hashlib.sha256(anchor_head).hexdigest() != anchor.get("headSha256"):
+                    return None
+                first_line, separator, _ = anchor_head.partition(b"\n")
+                owner = json.loads(first_line) if separator else {}
+                if (owner.get("type") != "session_meta" or not isinstance(owner.get("payload"), dict)
+                        or owner["payload"].get("id") != value["threadId"]):
+                    return None
+                # Match the current scan's actual bytes as well as its file stamp.
+                if (_stream_range(stream, fp["tailOffset"], fp["size"]) != fp.get("tailSha256")):
+                    return None
+                original_hash = _stream_range(stream, anchor["tailOffset"], anchor["size"], consume_anchor,
+                                              skip_first_line=anchor["tailOffset"] > 0)
+                if (original_hash != anchor.get("tailSha256") or active["state"] != "active"
+                        or active["turnId"] != value["turnId"]):
+                    return None
+                append_hash = _stream_range(stream, anchor["size"], fp["size"], consume_append)
+                if _opened_stamp(stream) != _stamp(first):
+                    return None
+            if _stamp(first) != _stamp(p.stat()):
+                return None
+            return {"state": "active", "turnId": value["turnId"], "source": "verified_anchor_continuation",
+                    "anchorSize": anchor["size"], "verifiedSize": fp["size"],
+                    "appendBytes": fp["size"] - anchor["size"], "appendSha256": append_hash}
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError):
+            return None
+
+    def _record_for_scope(self, value, scan):
+        try:
+            record = self.thread_record(value["threadId"])
+            if (record["cwd"] == value.get("cwd") and record["rolloutPath"] == scan.get("fingerprint", {}).get("path")):
+                return record
+        except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+            pass
+        return None
+
+    def _recover_claim(self, value, scan, record):
+        if (scan.get("state") != "unknown" or scan.get("reason") != "no_boundary_in_bounded_tail"
+                or not self._valid_scope(value) or record is None or value.get("threadId") != record["threadId"]
+                or value.get("cwd") != record["cwd"] or not isinstance(value.get("anchor"), dict)
+                or value["anchor"].get("path") != record["rolloutPath"]):
+            return None
+        return self._scope_proof(value, scan, allow_same_turn_context=False)
 
     def resolve(self, thread_id, rollout_path, *, scan=None):
         """Invalid/absent claims never turn active or unknown records into idle."""
@@ -318,12 +534,17 @@ class ScopeStore:
             ident = _thread_id(thread_id)
             if self._known_absent(ident):
                 return {"status": "undeclared", "reason": "edit_scope_undeclared"}
-            value, _ = _read_json(self._file(ident))
+            value, claim_digest = _read_json(self._file(ident))
         except FileNotFoundError:
             return {"status": "undeclared", "reason": "edit_scope_undeclared"}
         except (OSError, ValueError, TypeError):
             return {"status": "unverified", "reason": "edit_scope_unreadable"}
         scan = scan if scan is not None else scan_rollout(rollout_path)
+        def same_claim():
+            try:
+                return _read_json(self._file(ident))[1] == claim_digest
+            except (OSError, ValueError, TypeError):
+                return False
         if value.get("schemaVersion") != SCHEMA or value.get("threadId") != ident:
             return {"status": "unverified", "reason": "edit_scope_invalid"}
         if value.get("kind") == "terminal":
@@ -339,24 +560,23 @@ class ScopeStore:
             if (value.get("verifiedStatus") in {"interrupted", "completed"} and value.get("turnId") == scan.get("currentTurnId")
                     and scan.get("ownerThreadId") == ident
                     and value.get("fingerprint") == scan.get("fingerprint") and scan.get("reason") == "typed_rollout_boundary"
-                    and evidence_valid):
+                    and evidence_valid and same_claim()):
                 return {"status": "terminal", "reason": "native_terminal_attestation", "turnId": value["turnId"],
                         "verifiedStatus": value["verifiedStatus"]}
             return {"status": "unverified", "reason": "terminal_attestation_stale"}
         mode, roots = value.get("mode"), value.get("editRoots")
-        if (value.get("kind") != "scope" or mode not in {"read_only", "edit"} or not isinstance(roots, list)
-                or (mode == "read_only" and roots) or (mode == "edit" and not roots)
-                or any(not isinstance(r, str) or not Path(r).is_absolute() for r in roots)):
+        if not self._valid_scope(value):
             return {"status": "unverified", "reason": "edit_scope_invalid"}
-        try:
-            if any(str(safe_path(r)) != r for r in roots) or not isinstance(value.get("turnId"), str):
-                return {"status": "unverified", "reason": "edit_scope_invalid"}
-        except (OSError, ValueError, TypeError):
-            return {"status": "unverified", "reason": "edit_scope_invalid"}
-        if not self._scope_matches(value, scan):
+        record = self._record_for_scope(value, scan)
+        matched = record is not None and self._scope_matches(value, scan)
+        recovered = self._recover_claim(value, scan, record) if not matched else None
+        if ((not matched and recovered is None) or self._record_for_scope(value, scan) != record or not same_claim()):
             return {"status": "unverified", "reason": "edit_scope_stale_or_turn_unverified", "editRoots": roots}
-        return {"status": "verified", "mode": mode, "editRoots": roots, "turnId": value["turnId"],
-                "reason": "current_turn_scope_declaration"}
+        result = {"status": "verified", "mode": mode, "editRoots": roots, "turnId": value["turnId"],
+                  "reason": "current_turn_scope_declaration"}
+        if recovered is not None:
+            result.update(reason="current_turn_anchored_continuation", lifecycleProof=recovered)
+        return result
 
     def candidate_roots(self, thread_id):
         """Only expand candidates. A stale declaration must never grant exemption."""

@@ -253,6 +253,13 @@ def desktop_codex_activity(root, state_paths=None, *, trusted_boot_epoch=_BOOT_U
                     if activity.get("ownerThreadId") and activity["ownerThreadId"] != ident:
                         activity.update(state="unknown", reason="rollout_owner_mismatch")
                     scope = scopes.resolve(ident, rollout, scan=activity)
+                    lifecycle = scope.get("lifecycleProof") if isinstance(scope, dict) else None
+                    if (activity.get("state") == "unknown" and activity.get("reason") == "no_boundary_in_bounded_tail"
+                            and scope.get("status") == "verified" and isinstance(lifecycle, dict)
+                            and lifecycle.get("source") == "verified_anchor_continuation" and lifecycle.get("state") == "active"
+                            and lifecycle.get("turnId") == scope.get("turnId")):
+                        activity.update(rawState="unknown", rawReason=activity["reason"], state="active",
+                                        reason="verified_anchor_continuation", currentTurnId=lifecycle["turnId"])
                     record = {"threadId": ident, "title": display_name or title or agent_path or str(ident),
                               "agentPath": agent_path, "cwd": str(cwd_paths[str(cwd)]), "scope": scope,
                               "declaredRoots": declared_roots,

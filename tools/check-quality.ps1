@@ -149,6 +149,7 @@ $PythonChecks = @(
   "tools/check-console-repository-publish.py",
   "tools/check-console-repository-bindings.py",
   "tools/check-console-repository-activity.py",
+  "tools/check-console-repository-activity-continuation.py",
   "tools/check-console-repository-activity-diagnostics.py",
   "tools/check-console-repository-publish-http.py",
   "tools/check-console-repository-progress.py",
