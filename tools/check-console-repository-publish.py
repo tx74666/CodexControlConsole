@@ -172,6 +172,42 @@ def test_sync_missing_and_preview_no_sync():
         require(child(result)["diagnostic"]["code"] == "sync_missing", result)
 
 
+def test_long_push_deadline_preserves_short_metadata_bounds():
+    class SlowTransfer(Service):
+        def _git(self, root, *arguments, **kwargs):
+            operation = module._git_operation(arguments)
+            self.observed.append((operation, kwargs.get("timeout", 35)))
+            return super()._git(root, *arguments, **kwargs)
+
+        def _stream_git(self, command, env, data, timeout, progress):
+            if command[3] == "push":
+                # Model an ordinary/LFS transfer taking longer than the old
+                # 100-second cap, without sleeping or transferring large files.
+                if timeout < 125:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                require(callable(progress), "Long push must retain measured Git/LFS progress")
+                require("--progress" in command and "--no-follow-tags" in command)
+                require(not any(flag.startswith("--force") or flag == "--no-verify" for flag in command),
+                        "A longer deadline must not bypass hooks or remote history")
+            return super()._stream_git(command, env, data, timeout, progress)
+
+    with Fixture() as f:
+        root, remote, _ = f.repo()
+        (root / "tracked.txt").write_text("saved long-transfer fixture\n")
+        service = f.service(SlowTransfer)
+        service.observed = []
+        result = f.run(service)
+        require(child(result)["status"] == "success", result)
+        require(f.git(remote, "rev-parse", "main") == child(result)["commitSha"], result)
+        pushes = [timeout for operation, timeout in service.observed if operation == "push"]
+        require(pushes == [1800], service.observed)
+        for operation, expected in (("ls-remote", 35), ("fetch", 65), ("add", 90), ("commit", 90)):
+            actual = [timeout for name, timeout in service.observed if name == operation]
+            require(actual and all(timeout == expected for timeout in actual), (operation, actual))
+        require(all(0 < timeout <= 90 for operation, timeout in service.observed if operation != "push"),
+                "Metadata and preparation deadlines must remain bounded")
+
+
 def test_duplicate_and_restart_failed_push():
     class FailPush(Service):
         def _git(self, root, *arguments, **kwargs):

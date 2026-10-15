@@ -2987,7 +2987,7 @@ class RepositoryPublishService:
         try:
             alias, config = self._transport(repo, root)
             self._git(root, "push", "--progress", "--no-follow-tags", alias, sha + ":refs/heads/" + repo["branch"],
-                      timeout=100, config=config, progress=self._transfer_progress(receipt, item))
+                      timeout=1800, config=config, progress=self._transfer_progress(receipt, item))
             self._transport_identity(repo, root)
         except _GitFailure as exc:
             error = exc
