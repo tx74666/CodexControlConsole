@@ -2898,7 +2898,8 @@ class RepositoryPublishService:
             self._recognize_commit(root, pending, head)
             pending.update(commitSha=head, state="committed")
             _atomic(pending_path, pending)
-            self._reconcile(context, pending, pending_path)
+            if not pending.get("indexReconciled"):
+                self._reconcile(context, pending, pending_path)
             self._verify_sync(repo, context, pending.get("syncProofs", []))
             self._verify_version_evidence(root, pending)
             after = self._snapshot(repo, context)

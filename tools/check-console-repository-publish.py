@@ -1087,6 +1087,80 @@ def test_legacy_verify_then_explicit_current_submission_bumps_once():
         require(child(replay)["commitSha"] == new_sha and f.git(root, "rev-list", "--count", "HEAD") == count)
 
 
+def test_commit_timeout_after_success_reconciles_once_preserves_later_work():
+    class LostCommitExit(Service):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.commit_calls = self.reconcile_calls = self.push_calls = 0
+            self.actual_commit = ""
+            self.push_targets = []
+
+        def _git(self, root, *arguments, **kwargs):
+            result = super()._git(root, *arguments, **kwargs)
+            if arguments and arguments[0] == "commit":
+                self.commit_calls += 1
+                self.actual_commit = self._text(root, "rev-parse", "HEAD")
+                # The commit really exists before its caller loses confirmation.
+                raise module._GitFailure("timeout", operation="commit", error_kind="timeout")
+            if arguments and arguments[0] == "push":
+                self.push_calls += 1
+            return result
+
+        def _reconcile(self, *args, **kwargs):
+            self.reconcile_calls += 1
+            return super()._reconcile(*args, **kwargs)
+
+        def _push(self, repo, context, pending, *args):
+            self.push_targets.append(pending["commitSha"])
+            # Work saved after the frozen commit must remain outside that push.
+            (context[0] / "later-saved.txt").write_text("later saved work\n")
+            return super()._push(repo, context, pending, *args)
+
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        f.git(root, "commit", "--allow-empty", "-m", "1.6.44 → 1.6.45")
+        f.git(root, "push", "origin", "main")
+        repo["versionSources"] = [{"path": "HEAD", "kind": "git_commit", "key": "subject", "name": "App", "scope": "**"}]
+        before_count = int(f.git(root, "rev-list", "--count", "HEAD"))
+        (root / "tracked.txt").write_text("original saved work\n")
+        service = f.service(LostCommitExit)
+        identifier = "request_commit_timeout_0001"
+        result = f.run(service, identifier, intent="commit_and_push")
+        item = child(result)
+        require(item["status"] == "success", result)
+        sha = item["commitSha"]
+        require(sha == service.actual_commit and service.commit_calls == service.reconcile_calls == service.push_calls == 1)
+        require(service.push_targets == [sha] and item["verifiedRemote"] == sha)
+        require(item["title"] == "1.6.45 → 1.6.46" and f.git(root, "show", "-s", "--format=%s", sha) == item["title"])
+        require(f.git(root, "rev-parse", "HEAD") == f.git(remote, "rev-parse", "main") == sha)
+        require(int(f.git(root, "rev-list", "--count", "HEAD")) == before_count + 1)
+        require(f.git(remote, "show", "main:tracked.txt") == "original saved work")
+        require(f.git(remote, "ls-tree", "--name-only", "main", "--", "later-saved.txt") == "")
+        require((root / "later-saved.txt").read_text() == "later saved work\n")
+        pending = module._read(service._pending_path(repo["id"]))
+        require(pending["state"] == "delivered" and pending["commitError"] == "timeout" and pending["indexReconciled"] is True)
+        require(pending["versionUpdates"] == [] and not Path(pending["temporaryIndex"]).exists())
+        index = (root / ".git/index").read_bytes()
+        require(module._sha(index) == pending["reconciledIndexSha"] and not (root / ".git/index.lock").exists())
+        replay = f.run(service, identifier, intent="commit_and_push")
+        require(child(replay)["commitSha"] == sha and service.commit_calls == service.reconcile_calls == service.push_calls == 1)
+        require(int(f.git(root, "rev-list", "--count", "HEAD")) == before_count + 1 and (root / ".git/index").read_bytes() == index)
+        require((root / "later-saved.txt").read_text() == "later saved work\n")
+
+    # An unreconciled journal still needs its actual original temporary index.
+    with Fixture() as f:
+        repo, pending = retained_delivery(f)
+        service = f.service()
+        identity = pending["identity"]
+        context = tuple(Path(identity[key]) for key in ("root", "gitdir", "common")) + (identity,)
+        pending.update(indexReconciled=False, temporaryIndex=str(service.state_dir / "missing-index"))
+        try:
+            service._reconcile(context, pending, service._pending_path(repo["id"]))
+            raise AssertionError("A genuinely missing recovery index must still refuse")
+        except Error as exc:
+            require(exc.code == "receipt_unverified" and pending["indexReconciled"] is False)
+
+
 def test_missing_operation_replay_never_consumes_fresh_work_without_git():
     from contextlib import nullcontext
     for replay_id_kind in ("original", "recovery"):
