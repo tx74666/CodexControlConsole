@@ -63,7 +63,7 @@ _DIAGNOSTICS = {
     "activity_active": ("activity", "warning", "等待列出的聊天完成或交还本仓库的编辑范围，再重新核对并重试。", None),
     "activity_scope_unknown": ("activity", "warning", "列出的聊天尚未声明本轮编辑范围；由该聊天登记实际仓库或完成本轮工作后重新核对。", None),
     "git_history_operation": ("repository", "warning", "在该仓库完成或按原意取消现有 Git 历史操作，再重新核对。", None),
-    "git_lock": ("repository", "warning", "确认原 Git 操作已完成后重新核对；保留原锁和工作。", None),
+    "git_lock": ("repository", "warning", "核对锁文件归属及相关 Git 操作状态；保留原锁和工作。", None),
     "staged_selection": ("repository", "warning", "先按原意处理已有暂存选择，再重新核对；当前选择会保留。", None),
     "merge_conflict": ("repository", "warning", "在仓库中处理现有冲突并完成相关 Git 操作，再重新核对。", None),
     "worktree_changed": ("repository", "warning", "确认相关工作与保存已完成，重新预览并核对原提交。", None),
@@ -1447,6 +1447,12 @@ class RepositoryPublishService:
                 if item.get("syncState") == "unknown":
                     item["message"] = item["syncReason"]
                 self._catalog_remaining()
+                try:
+                    self._git_file_blockers(*context[:3])
+                except RepositoryPublishError as exc:
+                    # A local read may succeed while an existing lock or history
+                    # operation still blocks publication. Keep the read values.
+                    item["diagnostic"] = self._diagnostic(exc)
             except (RepositoryPublishError, _GitFailure, OSError) as exc:
                 item["readState"] = "error"
                 item["message"] = self._error(exc)
@@ -2199,7 +2205,8 @@ class RepositoryPublishService:
             finally:
                 self._lease.root = None
 
-    def _blockers(self, root, gitdir, common, *, own_index_lock=False):
+    def _git_file_blockers(self, root, gitdir, common, *, own_index_lock=False):
+        """Read native Git markers without activity scans, remote I/O or writes."""
         if (gitdir / "index").exists():
             _safe_path(gitdir / "index")
         for base in {gitdir, common}:
@@ -2209,7 +2216,10 @@ class RepositoryPublishService:
             locks = [base / "HEAD.lock", base / "config.lock", base / "packed-refs.lock"]
             locks.extend((base / "refs").rglob("*.lock") if (base / "refs").exists() else [])
             if any(p.exists() for p in locks) or not own_index_lock and (gitdir / "index.lock").exists():
-                raise RepositoryPublishError("Git 正在使用锁，请等待；不会移除其他操作的锁。", code="git_lock")
+                raise RepositoryPublishError("检测到 Git 锁文件，归属尚未确认；保留以免打断操作。", code="git_lock")
+
+    def _blockers(self, root, gitdir, common, *, own_index_lock=False):
+        self._git_file_blockers(root, gitdir, common, own_index_lock=own_index_lock)
         # Existing Console developer-update uses this same lock file. Merely
         # existing isn't busy; taking its advisory lock detects a live owner.
         self._busy_reason(root)

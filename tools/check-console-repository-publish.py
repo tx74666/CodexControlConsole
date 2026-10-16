@@ -1954,6 +1954,102 @@ def test_diagnostic_activity_is_an_unconfirmed_boundary():
         require(not any(word in value["nextStep"] for word in ("关闭", "强制", "绕过", "移除锁")), value)
 
 
+def test_native_git_file_blockers_cover_shared_directories_without_git():
+    with Fixture() as f:
+        root, gitdir, common = f.base / "root", f.base / "gitdir", f.base / "common"
+        root.mkdir()
+        gitdir.mkdir()
+        common.mkdir()
+        (gitdir / "index").write_bytes(b"unchanged fixture index")
+        service = f.service()
+        def unexpected(*args, **kwargs):
+            raise AssertionError("Pure native marker reads must not invoke Git or activity scans")
+        service._git = service._busy_reason = unexpected
+        context = (root, gitdir, common)
+        service._git_file_blockers(*context)
+        markers = [(gitdir / "index.lock", "git_lock")]
+        for base in (gitdir, common):
+            markers.extend((base / name, "git_lock") for name in
+                           ("HEAD.lock", "config.lock", "packed-refs.lock", "refs/heads/main.lock"))
+            markers.extend((base / name, "git_history_operation") for name in
+                           ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_START"))
+        for marker, code in markers:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_bytes(b"")
+            try:
+                service._git_file_blockers(*context)
+                raise AssertionError("A real native marker must block: " + str(marker))
+            except Error as exc:
+                require(exc.code == code and exc.diagnostic["category"] == "repository", exc.diagnostic)
+                if code == "git_lock":
+                    require("归属尚未确认" in str(exc) and "正在使用" not in str(exc), str(exc))
+            require(marker.exists() and marker.read_bytes() == b"", "Read did not remove or rewrite a marker")
+            marker.unlink()
+        owned = gitdir / "index.lock"
+        owned.write_bytes(b"owned fixture index lock")
+        service._git_file_blockers(*context, own_index_lock=True)
+        other = common / "refs/heads/other.lock"
+        other.write_bytes(b"other operation")
+        try:
+            service._git_file_blockers(*context, own_index_lock=True)
+            raise AssertionError("Owning the index lock must not bypass another native lock")
+        except Error as exc:
+            require(exc.code == "git_lock")
+        require(owned.read_bytes() == b"owned fixture index lock" and other.read_bytes() == b"other operation")
+        require((gitdir / "index").read_bytes() == b"unchanged fixture index")
+
+
+def test_catalog_git_blockers_are_current_without_losing_versions_or_changes():
+    class Observed(Service):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.git_operations, self.activity_checks = [], 0
+        def _git(self, root, *args, **kwargs):
+            operation = module._git_operation(args)
+            require(operation not in {"ls-remote", "fetch", "push", "add", "commit"}, "Catalog/clean skip must remain local read-only")
+            self.git_operations.append(operation)
+            return super()._git(root, *args, **kwargs)
+        def _busy_reason(self, root):
+            self.activity_checks += 1
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        service = f.service(Observed)
+        head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+        baseline = service.version_catalog(repo["id"])["repositories"][0]
+        require(baseline["readState"] == "ready" and baseline["diagnostic"] is None and baseline["hasChanges"] is False, baseline)
+        require(baseline["components"] and service.activity_checks == 0)
+        lock = root / ".git/index.lock"
+        lock.write_bytes(b"")
+        before_lock = module._stable(lock)
+        locked = service.version_catalog(repo["id"])["repositories"][0]
+        require(locked["readState"] == "ready" and locked["components"] == baseline["components"], locked)
+        require(locked["hasChanges"] is False and locked["changeState"] == "unchanged" and locked["diagnostic"]["code"] == "git_lock", locked)
+        require(locked["diagnostic"]["severity"] == "warning" and locked["diagnostic"]["target"] is None)
+        require(service.activity_checks == 0 and module._stable(lock) == before_lock)
+        refused = f.run(service, "request_catalog_lock_0001", intent="commit_and_push")
+        require(child(refused)["status"] == "deferred" and child(refused)["diagnostic"]["code"] == "git_lock", refused)
+        require(child(refused)["commitSha"] == "" and module._stable(lock) == before_lock)
+        require((root / ".git/index").read_bytes() == index and f.git(root, "rev-parse", "HEAD") == head)
+        lock.unlink()  # This fixture created the exact isolated marker above.
+        cleared = service.version_catalog(repo["id"])["repositories"][0]
+        require(cleared["diagnostic"] is None and cleared["components"] == baseline["components"] and cleared["hasChanges"] is False, cleared)
+        resumed = f.run(service, "request_catalog_clear_0002", intent="commit_and_push")
+        require(child(resumed)["status"] == "noop" and child(resumed)["commitSha"] == "", resumed)
+        (root / "tracked.txt").write_text("saved later work\n")
+        before_activity = service.activity_checks
+        merge = root / ".git/MERGE_HEAD"
+        merge.write_text(head + "\n")
+        history = service.version_catalog(repo["id"])["repositories"][0]
+        require(history["readState"] == "ready" and history["diagnostic"]["code"] == "git_history_operation", history)
+        require(history["hasChanges"] is True and history["worktreeChanged"] is True and history["components"], history)
+        require(service.activity_checks == before_activity and merge.read_text() == head + "\n")
+        merge.unlink()
+        current = service.version_catalog(repo["id"])["repositories"][0]
+        require(current["diagnostic"] is None and current["components"] == history["components"] and current["hasChanges"] is True, current)
+        require((root / "tracked.txt").read_text() == "saved later work\n" and (root / ".git/index").read_bytes() == index)
+        require(f.git(root, "rev-parse", "HEAD") == head and f.git(remote, "rev-parse", "main") == head)
+
+
 class DiagnosticReadFixture(Service):
     # Pure read contract fixture: any unexpected Git/write/busy call is a failure.
     def __init__(self, *, error=None, sources=None, components=None, sync_state="changed"):
