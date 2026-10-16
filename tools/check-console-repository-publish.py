@@ -1913,6 +1913,7 @@ def test_diagnostic_git_receipts_ignore_keyword_paths():
     actual_which, actual_run = module.shutil.which, module.subprocess.run
     service = object.__new__(Service)
     service._test_mode = False
+    service._lease = module.threading.local()
     calls = []
     try:
         module.shutil.which = lambda name: "fixture-git"
