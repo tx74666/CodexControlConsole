@@ -153,8 +153,8 @@ await test("configuration POST keeps its twenty-second deadline and clears the t
   pending.resolve(response(configReceipt(h.snapshot.settings))); await settle();
   assert.equal(h.timers.has(timerId), false); assert.equal(h.timers.size, 0); assert.equal(h.posts("/config").length, 1); assert.equal(h.posts("/run").length, 0);
 });
-await test("closed default is three compact controls with no resident form", async () => {
-  const h = harness(); await h.ready(); const bar = h.byClass("repository-publish-bar"); assert.equal(bar.children.filter(item => !item.hidden).length, 3); assert.equal(h.byClass("repository-publish-dialog").open, false); assert.equal(h.fields("path").length, 0); assert.equal(h.byClass("repository-publish-primary").disabled, false); assert.match(css, /\.repository-publish-bar\[hidden\]/);
+await test("closed toolbar keeps Push All and Configure All visible without a resident form", async () => {
+  const h = harness(); await h.ready(); const bar = h.byClass("repository-publish-bar"); assert.equal(bar.children.filter(item => !item.hidden).length, 4); assert.equal(h.byClass("repository-publish-dialog").open, false); assert.equal(h.fields("path").length, 0); assert.equal(h.byClass("repository-publish-primary").disabled, false); assert.match(css, /\.repository-publish-bar\[hidden\]/);
   assert.ok(bar.children.slice(0, 2).every(item => item.getAttribute("data-console-management") === ""));
 });
 await test("initial binding warnings stay collapsed in config with safe supported text and snapshot wording", async () => {
@@ -164,7 +164,7 @@ await test("initial binding warnings stay collapsed in config with safe supporte
     { repositoryUrl: "https://another-secret@example.invalid/private", unsupported: hostile }, null, 17
   ], warningsSource: "initial_discovery" } });
   await h.ready(); const bar = h.byClass("repository-publish-bar"), notes = h.byClass("repository-publish-warnings");
-  assert.equal(bar.children.filter(item => !item.hidden).length, 3); assert.equal(h.byClass("repository-publish-dialog").open, false);
+  assert.equal(bar.children.filter(item => !item.hidden).length, 4); assert.equal(h.byClass("repository-publish-dialog").open, false);
   assert.equal(h.fields("path").length, 0); assert.equal(notes.children[2].children.length, 0); assert.equal(notes.hidden, true);
   await h.open(); assert.equal(notes.open, false); assert.equal(notes.hidden, false); assert.equal(notes.children[0].textContent, "初次绑定提示");
   assert.equal(notes.children[2].children.length, 3); const labels = h.all(notes).map(item => item.textContent).join(" ");
@@ -172,7 +172,7 @@ await test("initial binding warnings stay collapsed in config with safe supporte
   assert.ok(labels.includes(hostile)); assert.match(labels, /初次发现时的快照.*不代表当前仍有异常/);
   assert.doesNotMatch(labels, /secret-token|another-secret|example\.invalid/); assert.equal(h.all(notes).some(item => item.tagName === "IMG" || item.tagName === "A"), false);
   h.locale("en"); assert.equal(notes.children[0].textContent, "Initial binding notes"); assert.match(notes.children[1].textContent, /initial discovery snapshot.*does not describe current issues/);
-  h.button("Close").click(); assert.equal(h.byClass("repository-publish-dialog").open, false); assert.equal(bar.children.filter(item => !item.hidden).length, 3); assert.equal(h.posts().length, 0);
+  h.button("Close").click(); assert.equal(h.byClass("repository-publish-dialog").open, false); assert.equal(bar.children.filter(item => !item.hidden).length, 4); assert.equal(h.posts().length, 0);
 });
 await test("configuration opens on demand and close restores compact state", async () => {
   const h = harness(); await h.ready(); await h.open(); assert.equal(h.fields("path")[0].value, "D:/Projects/Music"); assert.equal(h.fields("branch")[0].value, "feature/music"); h.button("关闭").click(); assert.equal(h.byClass("repository-publish-dialog").open, false); assert.equal(h.byClass("repository-publish-config").getAttribute("aria-expanded"), "false");
@@ -252,7 +252,7 @@ await test("preview renders actual title/body without sync or commit request", a
   const h = harness(); await h.ready(); await h.open(); h.button("预览标题与改动").click(); await settle(); assert.equal(h.posts("/preview").length, 1); assert.equal(h.posts("/run").length, 0); assert.equal(h.posts("/config").length, 0); const text = h.all().map(item => item.textContent).join(" "); assert.match(text, /Music v2.3/); assert.match(text, /2 files/);
 });
 await test("language follows app lang mutation without changing drafts or sending", async () => {
-  const h = harness(); await h.ready(); await h.open(); const before = h.calls.length; h.locale("en"); assert.equal(h.byClass("repository-publish-primary").textContent, "Commit & Push"); assert.equal(h.fields("branch")[0].placeholder, "Current branch (read and save)"); assert.equal(h.fields("branch")[0].value, "feature/music"); assert.equal(h.calls.length, before); assert.ok(h.button("Configure all"));
+  const h = harness(); await h.ready(); await h.open(); const before = h.calls.length; h.locale("en"); assert.equal(h.byClass("repository-publish-primary").textContent, "Push All"); assert.equal(h.fields("branch")[0].placeholder, "Current branch (read and save)"); assert.equal(h.fields("branch")[0].value, "feature/music"); assert.equal(h.calls.length, before); assert.ok(h.button("Configure All"));
 });
 await test("XSS values remain text, request credentials and redirects stay local", async () => {
   const id = randomUUID(), hostile = '<img src=x onerror="fetch(\"evil\")">'; const h = harness({ snapshot: { operation: operation(id, "complete", [{ repoId: "repository-001", name: hostile, status: "success", title: hostile, body: hostile }]) } }); await h.ready(); await h.open(); assert.ok(h.all().some(item => item.textContent.includes(hostile))); assert.equal(h.all().some(item => item.tagName === "IMG"), false); for (const call of h.calls) { assert.equal(call.options.credentials, "same-origin"); assert.equal(call.options.redirect, "error"); assert.equal(call.options.mode, "same-origin"); } assert.doesNotMatch(source, /\b(?:innerHTML|eval|confirm)\s*[=(]/);
@@ -310,17 +310,29 @@ await test("real host precedes Console subnav and remains inside the workspace m
 await test("arrow shows five dynamic GitHub names and current versions without forms or mutations", async () => {
   const names = ["RandomRealm2", "Builder6", "CodexControlConsole", "MyWeb", "MyGitHub"], repos = names.map((name, i) => repository({ id: `repository-${i + 1}`, path: `D:/Unrelated/Folder${i}`, name: `Wrong path title ${i}`, repositoryUrl: i === 4 ? "git@github.com:owner/MyGitHub.git" : `https://github.com/owner/${name}.git`, versionSources: [{ path: "package.json", kind: "json", key: "version" }] }));
   const h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: repos.map((repo, i) => ({ repoId: repo.id, components: [component({ currentVersion: `1.0.${i}`, nextVersion: `1.0.${i + 1}` })] })) } }); await h.ready();
-  assert.equal(h.byClass("repository-publish-primary").textContent, "提交并上传"); assert.equal(h.byClass("repository-publish-expanded").hidden, true); assert.equal(h.calls.length, 1); assert.equal(h.fields("path").length, 0);
+  assert.equal(h.byClass("repository-publish-primary").textContent, "全部上传"); assert.equal(h.byClass("repository-publish-expanded").hidden, true); assert.equal(h.calls.length, 1); assert.equal(h.fields("path").length, 0);
   await h.expand(); const rows = h.byClass("repository-publish-compact-rows").children; assert.equal(rows.length, 5); assert.deepEqual(rows.map(row => h.byClass("repository-publish-compact-name", row).textContent), names); assert.deepEqual(rows.map(row => h.byClass("repository-publish-compact-version", row).textContent), names.map((_, i) => `1.0.${i}`));
   assert.equal(h.byClass("repository-publish-toggle").getAttribute("aria-expanded"), "true"); assert.ok(h.button("配置全部")); assert.equal(h.fields("path").length, 0); assert.equal(h.posts().length, 0); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 1);
-  await h.expand(); assert.equal(h.byClass("repository-publish-expanded").hidden, true); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 1); h.locale("en"); assert.equal(h.byClass("repository-publish-primary").textContent, "Commit & Push"); assert.equal(h.posts().length, 0);
+  await h.expand(); assert.equal(h.byClass("repository-publish-expanded").hidden, true); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 1); h.locale("en"); assert.equal(h.byClass("repository-publish-primary").textContent, "Push All"); assert.equal(h.posts().length, 0);
 });
 await test("single-repository configure hides other repos and keeps paths and rules collapsed", async () => {
-  const repos = [repository(), repository({ id: "repository-002", repositoryUrl: "https://github.com/example/Second.git", path: "D:/Other" })], h = harness({ snapshot: { settings: settings(repos) } }); await h.ready(); await h.expand(); h.byClass("repository-publish-compact-rows").children[1].children[3].click(); await settle();
+  const repos = [repository(), repository({ id: "repository-002", repositoryUrl: "https://github.com/example/Second.git", path: "D:/Other" })], h = harness({ snapshot: { settings: settings(repos) } }); await h.ready(); await h.expand(); const name = h.byClass("repository-publish-compact-name", h.byClass("repository-publish-compact-rows").children[1]);
+  assert.equal(name.tagName, "BUTTON"); assert.equal(name.type, "button"); assert.match(name.getAttribute("aria-label"), /配置.*Second/); assert.equal(name.getAttribute("aria-haspopup"), "dialog");
+  name.focus(); assert.equal(h.document.activeElement, name); name.click(); await settle();
   const cards = h.byClass("repository-publish-repositories").children; assert.equal(cards[0].hidden, true); assert.equal(cards[1].hidden, false); assert.equal(cards[1].open, true); assert.match(h.byClass("repository-publish-header").children[0].textContent, /^Second/);
   assert.equal(h.fields("enabled").filter(h.visible).length, 1); assert.equal(h.fields("path").filter(h.visible).length, 0); assert.equal(h.fields("notes").filter(h.visible).length, 0); assert.equal(h.fields("sync").filter(h.visible).length, 0); assert.equal(h.posts().length, 0);
   h.button("预览标题与改动").click(); await settle(); assert.deepEqual(h.posts("/preview")[0].body, { repoId: "repository-002" }); assert.equal(h.posts("/run").length, 0);
-  h.button("关闭").click(); h.button("配置全部").click(); await settle(); assert.ok(h.byClass("repository-publish-repositories").children.every(card => !card.hidden));
+  h.button("关闭").click(); assert.equal(h.document.activeElement, name); h.button("配置全部").click(); await settle(); assert.ok(h.byClass("repository-publish-repositories").children.every(card => !card.hidden));
+});
+await test("a row Push submits only its repository with one commit-and-push intent and keeps batch guards", async () => {
+  const repos = [repository(), repository({ id: "repository-002", repositoryUrl: "https://github.com/example/Second.git", path: "D:/Other" })];
+  const h = harness({ lang: "en", snapshot: { settings: settings(repos) } }); await h.ready(); await h.expand();
+  const rows = h.byClass("repository-publish-compact-rows").children, push = h.byClass("repository-publish-row-push", rows[1]);
+  assert.equal(push.textContent, "Push"); assert.equal(push.disabled, false); push.click(); push.click(); await settle();
+  const posted = h.posts("/run"); assert.equal(posted.length, 1); assert.deepEqual(posted[0].body.repoIds, [repos[1].id]); assert.equal(posted[0].body.intent, "commit_and_push");
+  assert.deepEqual(JSON.parse(h.storage.get(KEY + ".payload")).repoIds, [repos[1].id]); assert.equal(h.byClass("repository-publish-dialog").open, false);
+  assert.equal(h.byClass("repository-publish-primary").disabled, true); assert.ok(rows.every(row => h.byClass("repository-publish-row-push", row).disabled));
+  h.byClass("repository-publish-row-push", rows[0]).click(); h.byClass("repository-publish-primary").click(); await settle(); assert.equal(h.posts("/run").length, 1); assert.equal(h.posts("/config").length, 0);
 });
 await test("all configuration starts as a compact name list and retains expanded details after autosave", async () => {
   const h = harness({ snapshot: { settings: settings([repository(), repository({ id: "repository-002", path: "D:/Other", repositoryUrl: "https://github.com/example/Second" })]) } }); await h.ready(); await h.open();
@@ -387,9 +399,12 @@ await test("compact version colors follow real worktree or outgoing state, never
   for (const color of colors) { const channels = color.match(/../g).map(value => Number.parseInt(value, 16)); assert.ok(channels[1] > channels[0] && channels[1] > channels[2], "Both actual theme change colors must be green, not the desktop dark blue --green alias"); }
   assert.match(css, /\.repository-publish-compact-version\s*\{[^}]*color:\s*var\(--text,/);
   assert.match(css, /compact-version\[data-change-state="changed"\][^}]*var\(--repository-publish-change,/);
-  assert.match(css, /data-change-state="unknown"[^}]*var\(--status-warning,/);
+  assert.match(css, /\.repository-publish-compact-status\s*\{[^}]*color:\s*var\(--text,/);
+  assert.doesNotMatch(css, /data-change-state="unknown"[^}]*var\(--status-warning,/);
+  assert.match(css, /data-attention="true"[^}]*var\(--status-warning,/);
+  assert.ok(visible.every(row => h.byClass("repository-publish-compact-status", row).dataset.attention === "false"));
 });
-await test("unknown or contradictory change receipts cannot appear as clean white", async () => {
+await test("unknown or contradictory receipts remain unverified without claiming clean or warning", async () => {
   for (const row of [{}, { hasChanges: false, changeState: "changed" }, { hasChanges: true, changeState: "unchanged" }, { hasChanges: null, changeState: "unchanged" }]) {
     const h = harness({ catalog: { repositories: [{ repoId: "repository-001", components: [component()], ...row, hasChanges: row.hasChanges, changeState: row.changeState }] } });
     await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "变化未核对");
@@ -872,7 +887,6 @@ await test("fresh changes remain primary after a successful old upload without i
   assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "changed");
   assert.equal(h.byClass("repository-publish-compact-status").textContent, "Changes to commit");
   assert.equal(h.byClass("repository-publish-row-history").textContent, "Last upload · 100%");
-  assert.equal(h.byClass("repository-publish-row-progress").getAttribute("aria-valuenow"), null);
   assert.equal(h.byClass("repository-publish-row-activity").hidden, true); assert.equal(h.posts().length, 0);
   h.byClass("repository-publish-primary").click(); await settle(); assert.equal(h.posts("/run").length, 1); assert.equal(h.posts("/run")[0].body.intent, "commit_and_push"); h.api.destroy();
 });
@@ -881,11 +895,11 @@ await test("old success cannot hide a pending or failed read and only a fresh ca
   const h = harness({ lang: "en", snapshot: { ...envelope, operation: operation(randomUUID(), "success", [completedUpload(repo)]) }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return pending.promise; } });
   await h.ready(); await h.expand();
   const version = h.byClass("repository-publish-compact-version"), status = h.byClass("repository-publish-compact-status"), history = h.byClass("repository-publish-row-history"), freshness = h.byClass("repository-publish-version-freshness");
-  assert.equal(version.textContent, "1.6.45"); assert.equal(version.dataset.changeState, "unknown"); assert.equal(status.textContent, "Rechecking…"); assert.equal(freshness.textContent, "Last known");
-  assert.equal(history.textContent, "Last upload · 100%"); assert.equal(h.byClass("repository-publish-row-progress").getAttribute("aria-valuenow"), null); assert.equal(h.posts().length, 0);
+  assert.equal(version.textContent, "1.6.45"); assert.equal(version.dataset.changeState, "unknown"); assert.equal(status.textContent, "Rechecking…"); assert.equal(freshness.textContent, "Last known"); assert.equal(status.dataset.attention, "false"); assert.equal(h.byClass("repository-publish-row-activity").hidden, false);
+  assert.equal(history.textContent, "Last upload · 100%"); assert.equal(h.posts().length, 0);
   pending.reject(new Error("fixture version reader unavailable")); await settle();
-  assert.equal(version.textContent, "1.6.45"); assert.equal(status.textContent, "Refresh failed · Last known"); assert.equal(freshness.textContent, "Refresh failed"); assert.equal(history.hidden, false);
-  assert.equal(h.byClass("repository-publish-row-progress").getAttribute("aria-valuenow"), null); assert.equal(h.posts().length, 0);
+  assert.equal(version.textContent, "1.6.45"); assert.equal(status.textContent, "Refresh failed · Last known"); assert.equal(freshness.textContent, "Refresh failed"); assert.equal(history.hidden, false); assert.equal(status.dataset.attention, "true"); assert.equal(h.byClass("repository-publish-row-reason").hidden, false); assert.equal(h.byClass("repository-publish-row-activity").hidden, true);
+  assert.equal(h.posts().length, 0);
   h.hook(call => call.url.includes("/versions?snapshot=1") ? response(cachedEnvelope(repo, { hasChanges: false, changeState: "unchanged", worktreeChanged: false, components: [component({ currentVersion: "1.6.46", nextVersion: "1.6.47", headVersion: "1.6.46" })] }, "ready")) : undefined);
   await h.emitWindow("focus"); assert.equal(version.textContent, "1.6.46"); assert.equal(version.dataset.changeState, "unchanged"); assert.equal(status.textContent, "No changes"); assert.equal(freshness.hidden, true);
   assert.equal(history.textContent, "Last upload · 100%"); assert.equal(h.calls.filter(call => call.url.includes("refresh=1")).length, 2); assert.equal(h.posts().length, 0); h.api.destroy();
@@ -895,8 +909,8 @@ await test("display-only snapshots keep their known number but never a current g
     const repo = repository(), item = automaticComponent(), envelope = cachedEnvelope(repo, { components: [item] }, readState); envelope.versionSnapshots[0].displayOnly = true;
     const h = harness({ lang: "en", snapshot: { ...envelope, operation: operation(randomUUID(), "success", [completedUpload(repo)]) }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return response(envelope); } });
     await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown");
-    assert.equal(h.byClass("repository-publish-compact-status").textContent, "Last known"); assert.equal(h.byClass("repository-publish-row-history").textContent, "Last upload · 100%");
-    assert.equal(h.byClass("repository-publish-row-progress").getAttribute("aria-valuenow"), null); assert.equal(h.byClass("repository-publish-version-freshness").hidden, false); assert.equal(h.posts().length, 0); h.api.destroy();
+    assert.equal(h.byClass("repository-publish-compact-status").textContent, "Last known"); assert.equal(h.byClass("repository-publish-compact-status").dataset.attention, "false"); assert.equal(h.byClass("repository-publish-row-history").textContent, "Last upload · 100%");
+    assert.equal(h.byClass("repository-publish-version-freshness").hidden, false); assert.equal(h.posts().length, 0); h.api.destroy();
   }
 });
 await test("completed uploads retain normal live batch progress until the original batch finishes", async () => {
@@ -905,8 +919,8 @@ await test("completed uploads retain normal live batch progress until the origin
   const h = harness({ lang: "en", snapshot: { ...cachedEnvelope(first, { components: [automaticComponent()] }, "ready"), settings: settings([first, second]), operation: operation(id, "working", [completedUpload(first), { ...progressItem(second, "working", "push"), progress: measured }]) } });
   await h.ready(); await h.expand();
   const one = rowFor(h, first.id), two = rowFor(h, second.id);
-  assert.equal(h.byClass("repository-publish-compact-status", one).textContent, "Uploaded"); assert.equal(h.byClass("repository-publish-row-progress", one).getAttribute("aria-valuenow"), "100"); assert.equal(h.byClass("repository-publish-row-history", one).hidden, true);
-  assert.equal(h.byClass("repository-publish-compact-status", two).textContent, "Uploading"); assert.equal(h.byClass("repository-publish-row-progress", two).getAttribute("aria-valuenow"), "37"); assert.equal(h.posts().length, 0); h.api.destroy();
+  assert.equal(h.byClass("repository-publish-compact-status", one).textContent, "Uploaded"); assert.equal(h.byClass("repository-publish-row-activity", one).hidden, true); assert.equal(h.byClass("repository-publish-row-history", one).hidden, true);
+  assert.equal(h.byClass("repository-publish-compact-status", two).textContent, "Uploading"); assert.equal(h.byClass("repository-publish-row-activity", two).hidden, false); assert.equal(h.posts().length, 0); h.api.destroy();
 });
 await test("an old skipped receipt cannot mask newly saved changes", async () => {
   const repo = repository(), h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "success", [progressItem(repo, "noop", "complete")]) }, catalog: { repositories: [{ repoId: repo.id, hasChanges: true, changeState: "changed", worktreeChanged: true, components: [automaticComponent()] }] } });
@@ -980,7 +994,7 @@ await test("snapshot read failures without a valid diagnosis keep the safe messa
     assert.equal(h.byClass("repository-publish-diagnosis-locate").hidden, true); assert.match(h.byClass("repository-publish-diagnosis-summary").textContent, malformed ? /Unverified target/ : /Local source read could not finish/); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.equal(h.posts().length, 0);
   }
 });
-await test("each repository displays only its own measured transfer percent and queued or checking phases never invent one", async () => {
+await test("active rows use one compact spinner while real measurements remain scoped to operation details", async () => {
   const repos = progressRepos(), measured = { phase: "push", state: "measured", scope: "phase", unit: "objects", current: 37, total: 100, percent: 37, source: "git", step: "writing_objects", elapsedSeconds: 23 }, rows = [
     { ...progressItem(repos[0], "working", "push"), progress: measured },
     { ...progressItem(repos[1], "queued", "queued"), progress: { state: "queued", percent: 90 } },
@@ -988,26 +1002,35 @@ await test("each repository displays only its own measured transfer percent and 
     { ...progressItem(repos[3], "working", "push"), progress: { ...measured, scope: "file", unit: "bytes", current: 75, total: 100, source: "git-lfs", fileIndex: 2, fileTotal: 3, estimatedFileTotal: true } },
     { ...progressItem(repos[4], "success", "complete"), progress: { phase: "complete", state: "complete", scope: "repository", source: "receipt", percent: 100 } }
   ], h = harness({ snapshot: { settings: settings(repos), operation: operation(randomUUID(), "working", rows) } }); await h.ready(); await h.expand();
-  const rail = i => h.byClass("repository-publish-row-progress", rowFor(h, repos[i].id)), metric = i => h.byClass("repository-publish-row-metric", rowFor(h, repos[i].id));
-  assert.equal(rail(0).getAttribute("aria-valuenow"), "37"); assert.match(metric(0).textContent, /37%.*Git.*23s/); assert.equal(rail(0).getAttribute("aria-valuemax"), "100");
-  assert.equal(rail(1).dataset.mode, "queued"); assert.equal(rail(1).getAttribute("aria-valuenow"), null); assert.doesNotMatch(metric(1).textContent, /%/);
-  assert.equal(rail(2).dataset.mode, "indeterminate"); assert.equal(rail(2).getAttribute("aria-valuenow"), null); assert.equal(metric(2).textContent, "4s");
-  assert.match(metric(3).textContent, /75%.*LFS.*2\/\~3/); assert.match(rail(3).getAttribute("aria-valuetext"), /当前传输阶段/);
-  assert.equal(rail(4).getAttribute("aria-valuenow"), "100"); assert.equal(metric(4).textContent, "100%"); assert.equal(h.byClass("repository-publish-progress"), undefined); assert.equal(h.posts().length, 0);
+  for (let i = 0; i < repos.length; i++) {
+    const row = rowFor(h, repos[i].id), status = h.byClass("repository-publish-compact-status", row);
+    assert.equal(h.all(row).filter(item => item.className.split(" ").includes("repository-publish-row-spinner")).length, 1);
+    assert.equal(h.byClass("repository-publish-row-activity", row).hidden, i === 1 || i === 4); assert.equal(status.dataset.attention, "false");
+    assert.equal(h.byClass("repository-publish-row-progress", row), undefined); assert.equal(h.byClass("repository-publish-row-metric", row), undefined);
+    assert.doesNotMatch(h.all(row).map(item => item.textContent).join(" "), /23s|4s|37%|75%/);
+  }
+  const metrics = [];
+  for (const repo of repos) { await h.open(repo.id); metrics.push(h.byClass("repository-publish-operation-metric").textContent); }
+  assert.match(metrics[0], /37%.*Git.*23s.*当前传输阶段/); assert.doesNotMatch(metrics[1], /%/); assert.match(metrics[2], /4s/); assert.doesNotMatch(metrics[2], /%/);
+  assert.match(metrics[3], /75%.*LFS.*2\/\~3/); assert.match(metrics[4], /100%/);
+  assert.equal(h.byClass("repository-publish-progress"), undefined); assert.equal(h.posts().length, 0);
 });
 await test("unknown results, historical receipts and failed transfer never show a fabricated 100 percent", async () => {
   const repo = repository();
   for (const [status, progress] of [["verification_required", { state: "complete", scope: "repository", source: "receipt", percent: 100 }], ["push_failed", { phase: "push", state: "measured", scope: "phase", source: "git", unit: "objects", current: 100, total: 100, percent: 100 }], ["success", { state: "complete", scope: "repository", source: "historical_receipt", percent: null }]]) {
-    const h = harness({ snapshot: { operation: operation(randomUUID(), "attention", [{ ...progressItem(repo, status, "verify"), progress }]) } }); await h.ready(); await h.expand();
-    assert.doesNotMatch(h.byClass("repository-publish-row-metric").textContent, /100%/); assert.equal(h.byClass("repository-publish-row-progress").getAttribute("aria-valuenow"), null); assert.equal(h.posts().length, 0);
+    const h = harness({ snapshot: { operation: operation(randomUUID(), "attention", [{ ...progressItem(repo, status, "verify"), progress }]) } }); await h.ready(); await h.expand(); await h.open(repo.id);
+    assert.doesNotMatch(h.byClass("repository-publish-operation-metric").textContent, /100%/); assert.equal(h.byClass("repository-publish-row-activity").hidden, true);
+    assert.equal(h.byClass("repository-publish-compact-status").dataset.attention, String(status !== "success")); assert.equal(h.posts().length, 0);
   }
 });
-await test("switching an operation removes the old repository measurement and a failed poll stops claiming live transfer", async () => {
+await test("switching an operation removes old detail measurements and a failed poll stops claiming live transfer", async () => {
   const repo = repository(), id = randomUUID(), measured = { phase: "push", state: "measured", scope: "phase", source: "git", unit: "objects", current: 50, total: 100, elapsedSeconds: 9 }, h = harness({ snapshot: { operation: operation(id, "working", [{ ...progressItem(repo, "working", "push"), progress: measured }]) } });
-  await h.ready(); await h.expand(); assert.match(h.byClass("repository-publish-row-metric").textContent, /50%/);
-  h.hook(call => { if (call.url.includes("/operation?")) throw new Error("Fixture disconnected"); }); await h.poll(); assert.doesNotMatch(h.byClass("repository-publish-row-metric").textContent, /50%/); assert.match(h.byClass("repository-publish-row-metric").textContent, /待核对/);
+  await h.ready(); await h.expand(); await h.open(repo.id); assert.match(h.byClass("repository-publish-operation-metric").textContent, /50%/); assert.equal(h.byClass("repository-publish-row-activity").hidden, false);
+  h.hook(call => { if (call.url.includes("/operation?")) throw new Error("Fixture disconnected"); }); await h.poll();
+  assert.doesNotMatch(h.byClass("repository-publish-operation-metric").textContent, /50%/); assert.match(h.byClass("repository-publish-operation-metric").textContent, /待核对/);
+  assert.equal(h.byClass("repository-publish-row-activity").hidden, true); assert.equal(h.byClass("repository-publish-compact-status").dataset.attention, "true");
   h.hook(null); h.snapshot.operation = operation(id, "attention", [progressItem(repo, "push_failed", "push")]); await h.poll();
-  h.byClass("repository-publish-primary").click(); await settle(); assert.equal(h.posts("/run").length, 1); assert.doesNotMatch(h.byClass("repository-publish-row-metric").textContent, /50%/); assert.equal(h.byClass("repository-publish-row-progress").getAttribute("aria-valuenow"), null);
+  h.byClass("repository-publish-primary").click(); await settle(); assert.equal(h.posts("/run").length, 1); assert.doesNotMatch(h.byClass("repository-publish-operation-metric").textContent, /50%/);
 });
 await test("each repository displays the age of its HEAD commit instead of the upload receipt or operation start", async () => {
   const clock = { now: Date.parse("2026-10-15T03:00:00Z") }, repos = progressRepos(), seconds = [30, 12 * 60, 3 * 3600, 2 * 86400, 60], rows = repos.map((repo, i) => ({ repoId: repo.id, components: [component()], lastCommit: { sha: String(i + 1).repeat(40), committedAt: new Date(clock.now - seconds[i] * 1000).toISOString() } }));
@@ -1071,13 +1094,13 @@ await test("scope-unknown and legacy unconfirmed activity have different labels 
 });
 await test("legacy deferred receipts show their actual reason without requiring a click or guessing the blocker", async () => {
   const repo = repository(), h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "attention", [blockedReceipt(repo, null, { message: "Original safety check could not establish the workspace boundary." })]) } }); await h.ready(); await h.expand();
-  assert.equal(h.byClass("repository-publish-compact-status").textContent, "Upload paused · See why"); assert.match(h.byClass("repository-publish-row-reason").textContent, /could not establish the workspace boundary/); h.byClass("repository-publish-compact-status").click(); await settle();
+  assert.equal(h.byClass("repository-publish-compact-status").textContent, "Last upload attempt · Upload paused · See why"); assert.match(h.byClass("repository-publish-row-reason").textContent, /could not establish the workspace boundary/); h.byClass("repository-publish-compact-status").click(); await settle();
   assert.equal(h.byClass("repository-publish-diagnosis-blockers").hidden, true); assert.equal(h.byClass("repository-publish-diagnosis-locate").hidden, true); assert.doesNotMatch(h.all(h.byClass("repository-publish-diagnosis")).map(item => item.textContent).join(" "), /Character|X\.blend/); assert.equal(h.posts().length, 0);
 });
 await test("explicit Git and sync blocker codes provide actionable localized labels with preserved reasons", async () => {
   for (const [code, category, label, zh] of [["staged_selection", "repository", "Review staged changes", "已有暂存选择"], ["git_lock", "repository", "Git is using this repository", "Git 正在占用仓库"], ["remote_ahead", "remote", "Integrate remote changes first", "先整合远端历史"], ["sync_missing", "sync", "Save the work file first", "先保存工作文件"], ["git_lfs", "lfs", "Check the LFS upload", "LFS 上传待处理"]]) {
     const repo = repository(), value = diagnostic({ code, category, summary: "A verified guard stopped this repository; original work is retained.", target: null }), h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "attention", [blockedReceipt(repo, value)]) } }); await h.ready(); await h.expand();
-    assert.equal(h.byClass("repository-publish-compact-status").textContent, label); assert.match(h.byClass("repository-publish-row-reason").textContent, /verified guard/); h.locale("zh-CN"); assert.equal(h.byClass("repository-publish-compact-status").textContent, zh); assert.equal(h.posts().length, 0);
+    assert.equal(h.byClass("repository-publish-compact-status").textContent, "Last upload attempt · " + label); assert.match(h.byClass("repository-publish-row-reason").textContent, /verified guard/); h.locale("zh-CN"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "上次上传尝试 · " + zh); assert.equal(h.posts().length, 0);
   }
 });
 await test("a refreshing or stale catalog cannot hide the actual reason the bound upload stopped", async () => {
@@ -1093,7 +1116,7 @@ await test("hostile or malformed blocker metadata remains inert text and cannot 
 });
 await test("unknown codes remain truthful generic pauses and normal or historical rows have no new blocker note", async () => {
   const repo = repository(), value = activityDiagnostic({ code: "unknown_future_guard" }), h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "attention", [blockedReceipt(repo, value)]) } }); await h.ready(); await h.expand();
-  assert.equal(h.byClass("repository-publish-compact-status").textContent, "Upload paused · See why"); assert.equal(h.byClass("repository-publish-row-reason").textContent, value.summary); h.byClass("repository-publish-compact-status").click(); await settle(); assert.equal(h.byClass("repository-publish-diagnosis-blockers").hidden, true); assert.equal(h.posts().length, 0);
+  assert.equal(h.byClass("repository-publish-compact-status").textContent, "Last upload attempt · Upload paused · See why"); assert.equal(h.byClass("repository-publish-row-reason").textContent, value.summary); h.byClass("repository-publish-compact-status").click(); await settle(); assert.equal(h.byClass("repository-publish-diagnosis-blockers").hidden, true); assert.equal(h.posts().length, 0);
   for (const operationValue of [null, operation(randomUUID(), "complete", [progressItem(repo, "success", "complete")]), operation(randomUUID(), "attention", [blockedReceipt({ ...repo, branch: "feature/old-target" }, activityDiagnostic())])]) {
     const normal = harness({ snapshot: { operation: operationValue }, catalog: { repositories: [{ repoId: repo.id, components: [], hasChanges: false, changeState: "unchanged" }] } }); await normal.ready(); await normal.expand(); assert.equal(normal.byClass("repository-publish-row-reason").hidden, true); assert.equal(normal.byClass("repository-publish-compact-status").getAttribute("aria-describedby"), null); assert.equal(normal.posts().length, 0);
   }
@@ -1115,7 +1138,7 @@ await test("opening a stopped diagnosis reads current actors once without slowin
 await test("a cleared live activity check suggests retrying remaining checks without claiming uploaded or repository ready", async () => {
   const repo = repository(), envelope = activityEnvelope(repo), h = harness({ lang: "en", snapshot: { ...envelope, operation: operation(randomUUID(), "attention", [blockedReceipt(repo, activityDiagnostic())]) }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return response(envelope); if (call.url.startsWith(BASE + "/activity?")) return response(liveActivityReply(repo, null)); } });
   await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "Retry repository checks"); assert.equal(h.byClass("repository-publish-current-activity-summary").textContent, "Chat activity cleared; retry continues repository checks.");
-  assert.doesNotMatch(h.byClass("repository-publish-row-reason").textContent, /Uploaded|Ready/); assert.equal(h.byClass("repository-publish-row-progress").getAttribute("aria-valuenow"), null); assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, "Codex is still editing this repository."); assert.ok(h.button("Continue this repository")); assert.equal(h.posts().length, 0);
+  assert.doesNotMatch(h.byClass("repository-publish-row-reason").textContent, /Uploaded|Ready/); assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, "Codex is still editing this repository."); assert.ok(h.button("Continue this repository")); assert.equal(h.posts().length, 0);
   h.locale("zh-CN"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "重试以继续仓库检查"); assert.equal(h.byClass("repository-publish-current-activity-summary").textContent, "聊天活动已解除；重试后继续核对仓库。"); assert.equal(h.posts().length, 0);
 });
 await test("explicit recheck refreshes only the selected activity with a scoped GET and keeps the original receipt", async () => {
@@ -1127,7 +1150,7 @@ await test("explicit recheck refreshes only the selected activity with a scoped 
 await test("a clear chat check never hides an independently diagnosed staged selection or file-sync blocker", async () => {
   for (const [code, category, label] of [["staged_selection", "repository", "Review staged changes"], ["sync_missing", "sync", "Save the work file first"]]) {
     const repo = repository(), envelope = activityEnvelope(repo), value = diagnostic({ code, category, summary: "This specific non-chat blocker still needs resolving.", target: null }), h = harness({ lang: "en", snapshot: { ...envelope, operation: operation(randomUUID(), "attention", [blockedReceipt(repo, value)]) }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return response(envelope); if (call.url.startsWith(BASE + "/activity?")) return response(liveActivityReply(repo, null)); } });
-    await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle(); assert.equal(h.byClass("repository-publish-compact-status").textContent, label); assert.equal(h.byClass("repository-publish-row-reason").textContent, value.summary); assert.match(h.byClass("repository-publish-current-activity-summary").textContent, /Chat activity cleared/); assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, value.summary); assert.equal(h.posts().length, 0);
+    await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "Last upload attempt · " + label); assert.equal(h.byClass("repository-publish-row-reason").textContent, value.summary); assert.match(h.byClass("repository-publish-current-activity-summary").textContent, /Chat activity cleared/); assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, value.summary); assert.equal(h.posts().length, 0);
   }
 });
 await test("malformed, contradictory or differently bound activity replies preserve the original reason", async () => {
@@ -1188,7 +1211,7 @@ await test("allowed active work stays visibly active and never claims clear, upl
   const repo = repository(), envelope = activityEnvelope(repo), original = activityDiagnostic(), h = harness({ lang: "en", snapshot: { ...envelope, operation: operation(randomUUID(), "attention", [blockedReceipt(repo, original)]) }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return response(envelope); if (call.url.startsWith(BASE + "/activity?")) return response(policyActivityReply(repo)); } });
   await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle();
   assert.equal(h.byClass("repository-publish-current-activity-summary").textContent, "A chat is working; saved work may be uploaded."); assert.equal(h.byClass("repository-publish-current-activity").dataset.state, "allowed");
-  assert.equal(h.byClass("repository-publish-compact-status").textContent, "Continue with saved work"); assert.doesNotMatch(h.byClass("repository-publish-row-reason").textContent, /cleared|Uploaded|Ready/); assert.equal(h.byClass("repository-publish-row-progress").getAttribute("aria-valuenow"), null);
+  assert.equal(h.byClass("repository-publish-compact-status").textContent, "Continue with saved work"); assert.doesNotMatch(h.byClass("repository-publish-row-reason").textContent, /cleared|Uploaded|Ready/);
   const current = h.byClass("repository-publish-current-activity"), content = h.all(current).map(item => item.textContent).join(" "); assert.match(content, /Character.*RandomRealm2/); assert.doesNotMatch(content, /Wait for Character to finish/);
   const history = h.byClass("repository-publish-last-attempt"); assert.equal(history.open, false); assert.equal(h.visible(h.byClass("repository-publish-diagnosis-summary")), false); assert.equal(h.snapshot.operation.repositories[0].diagnostic.summary, original.summary);
   history.children[0].click(); assert.equal(history.open, true); assert.equal(h.visible(h.byClass("repository-publish-diagnosis-summary")), true); h.locale("zh-CN"); assert.equal(history.open, true); assert.equal(h.byClass("repository-publish-current-activity-summary").textContent, "有聊天在工作，允许上传已保存内容。"); assert.match(history.children[1].textContent, /上次操作记录.*不代表当前/); assert.equal(h.posts().length, 0);
@@ -1214,12 +1237,19 @@ await test("current clear policy receipt collapses the old failure without claim
   await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle(); assert.match(h.byClass("repository-publish-current-activity-summary").textContent, /Chat activity cleared/); assert.equal(h.byClass("repository-publish-last-attempt").open, false); assert.equal(h.visible(h.byClass("repository-publish-diagnosis-summary")), false); assert.match(h.all(h.byClass("repository-publish-current-activity")).map(item => item.textContent).join(" "), /Git, files and the remote still need checking/); assert.equal(h.posts().length, 0);
 });
 await test("an active upload can show the actual saved-work notice without replacing its measured phase or result", async () => {
-  const repo = repository(), item = { ...progressItem(repo, "working", "push"), activityPolicy: "allow_saved_snapshot", activityNotice: activityDiagnostic() }, h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "working", [item]) } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "Uploading"); assert.equal(h.byClass("repository-publish-row-reason").textContent, "A chat is working; saved work may be uploaded."); assert.equal(h.byClass("repository-publish-row-progress").getAttribute("aria-valuenow"), null); assert.equal(h.posts().length, 0);
+  const repo = repository(), item = { ...progressItem(repo, "working", "push"), activityPolicy: "allow_saved_snapshot", activityNotice: activityDiagnostic() }, h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "working", [item]) } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "Uploading"); assert.equal(h.byClass("repository-publish-row-reason").textContent, "A chat is working; saved work may be uploaded."); assert.equal(h.posts().length, 0);
 });
 await test("Git failure details show only verified operation, exit code and error-kind metadata on demand", async () => {
   for (const exitCode of [128, -1073741510, 4294967295]) {
-    const repo = repository(), reason = diagnostic({ code: "git_network", category: "network", summary: "Fetching the remote failed because its host could not be resolved.", operationKind: "fetch", exitCode, errorKind: "resolve_host", stderr: "secret-token@host" }), h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "attention", [blockedReceipt(repo, reason, { phase: "remote" })]) } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "Check the network"); h.byClass("repository-publish-compact-status").click(); await settle();
+    const repo = repository(), reason = diagnostic({ code: "git_network", category: "network", summary: "Fetching the remote failed because its host could not be resolved.", operationKind: "fetch", exitCode, errorKind: "resolve_host", stderr: "secret-token@host" }), h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "attention", [blockedReceipt(repo, reason, { phase: "remote" })]) } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "Last upload attempt · Check the network"); h.byClass("repository-publish-compact-status").click(); await settle();
     const details = h.byClass("repository-publish-git-metadata"); assert.equal(h.visible(details), false); h.byClass("repository-publish-last-attempt").children[0].click(); assert.equal(h.visible(details), true); assert.equal(details.textContent, `Git fetch · Exit code ${exitCode} · Error kind · resolve_host`); assert.doesNotMatch(h.all().map(item => item.textContent).join(" "), /secret-token|Git hook/); h.locale("zh-CN"); assert.match(details.textContent, /Git fetch.*退出码/); assert.equal(h.posts().length, 0);
+  }
+  for (const lang of ["en", "zh-CN"]) {
+    const repo = repository(), reason = diagnostic({ code: "git_network", category: "network", summary: "TLS verification failed while checking the remote.", operationKind: "ls-remote", exitCode: 128, errorKind: "tls_failed", stderr: "secret-token@host" });
+    const h = harness({ lang, snapshot: { operation: operation(randomUUID(), "attention", [blockedReceipt(repo, reason, { phase: "version" })]) } }); await h.ready(); await h.expand();
+    const status = h.byClass("repository-publish-compact-status"); assert.match(status.textContent, lang === "en" ? /Last upload attempt.*TLS connection failed.*Checking remote/ : /上次上传尝试.*TLS连接失败.*核对远端/);
+    assert.equal(status.dataset.attention, "true"); assert.equal(h.byClass("repository-publish-row-reason").hidden, false); assert.match(h.byClass("repository-publish-row-reason").textContent, /TLS verification failed/);
+    assert.equal(h.byClass("repository-publish-row-activity").hidden, true); assert.doesNotMatch(h.all().map(item => item.textContent).join(" "), /secret-token/); assert.equal(h.posts().length, 0);
   }
 });
 await test("unknown, hostile or ill-typed Git metadata is omitted without fabricating a hook diagnosis", async () => {
@@ -1229,7 +1259,7 @@ await test("unknown, hostile or ill-typed Git metadata is omitted without fabric
 });
 await test("a permissive chat check cannot erase a legacy Git failure with an unknown diagnostic category", async () => {
   const repo = repository(), envelope = activityEnvelope(repo), reason = diagnostic({ code: "legacy_git_error", category: "unknown", summary: "The original Git operation failed before uploading.", target: null }), h = harness({ lang: "en", snapshot: { ...envelope, operation: operation(randomUUID(), "attention", [blockedReceipt(repo, reason)]) }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return response(envelope); if (call.url.startsWith(BASE + "/activity?")) return response(policyActivityReply(repo)); } });
-  await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "Upload paused · See why"); assert.equal(h.byClass("repository-publish-row-reason").textContent, reason.summary); assert.equal(h.byClass("repository-publish-current-activity-summary").textContent, "A chat is working; saved work may be uploaded."); assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, reason.summary); assert.equal(h.posts().length, 0);
+  await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "Last upload attempt · Upload paused · See why"); assert.equal(h.byClass("repository-publish-row-reason").textContent, reason.summary); assert.equal(h.byClass("repository-publish-current-activity-summary").textContent, "A chat is working; saved work may be uploaded."); assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, reason.summary); assert.equal(h.posts().length, 0);
 });
 const freshCleanCatalog = (repo, extra = {}) => ({ repoId: repo.id, components: [component()], repositoryVersion: { state: "current", currentVersion: "2.3.4", transition: null },
   hasChanges: false, changeState: "unchanged", worktreeChanged: false, outgoingCommits: 0, headSha: "c".repeat(40), outgoingBaselineSha: "c".repeat(40), syncChanged: false, syncState: "none", pendingRecovery: false, readState: "ready", ...extra });
@@ -1250,7 +1280,8 @@ await test("all freshly clean repositories perform no POST or identity allocatio
   await h.ready(); await h.expand(); const before = structuredClone(h.snapshot.settings); h.byClass("repository-publish-primary").click(); await settle();
   assert.equal(h.posts().length, 0); assert.equal(h.storage.has(KEY), false); assert.equal(h.storage.has(KEY + ".payload"), false);
   assert.match(progressText(h), /均无改动.*无需提交或推送/); assert.deepEqual(h.snapshot.settings, before);
-  for (const repo of repos) { const row = rowFor(h, repo.id); assert.equal(h.byClass("repository-publish-compact-version", row).dataset.changeState, "unchanged"); assert.equal(h.byClass("repository-publish-row-activity", row).hidden, true); }
+  for (const repo of repos) { const row = rowFor(h, repo.id); assert.equal(h.byClass("repository-publish-compact-version", row).dataset.changeState, "unchanged"); assert.equal(h.byClass("repository-publish-row-activity", row).hidden, true); h.byClass("repository-publish-row-push", row).click(); }
+  await settle(); assert.equal(h.posts("/run").length, 0); assert.equal(h.storage.has(KEY), false);
 });
 await test("unknown recovery, outgoing state, sync comparison, or stale display never narrows a new request", async () => {
   for (const extra of [{ pendingRecovery: null }, { pendingRecovery: undefined }, { pendingRecovery: true }, { worktreeChanged: null }, { outgoingCommits: null }, { outgoingCommits: 1 },
@@ -1293,8 +1324,8 @@ await test("an old pending request retains its exact original clean-inclusive sc
 await test("server-confirmed noops have no phase or progress track during another repository upload", async () => {
   const repos = [repository(), repository({ id: "uploading-repo", path: "D:/Uploading" })], rows = [progressItem(repos[0], "noop", "complete"), progressItem(repos[1], "working", "push")];
   const h = harness({ snapshot: { settings: settings(repos), operation: operation(randomUUID(), "working", rows) }, catalog: { repositories: [freshCleanCatalog(repos[0]), freshCleanCatalog(repos[1], { hasChanges: true, changeState: "changed", worktreeChanged: true })] } });
-  await h.ready(); await h.expand(); const skipped = rowFor(h, repos[0].id); assert.equal(h.byClass("repository-publish-row-activity", skipped).hidden, true); assert.equal(h.byClass("repository-publish-row-progress", skipped).hidden, true);
-  assert.equal(h.byClass("repository-publish-row-progress", rowFor(h, repos[1].id)).hidden, false); assertProgress(h, 1, 2);
+  await h.ready(); await h.expand(); const skipped = rowFor(h, repos[0].id); assert.equal(h.byClass("repository-publish-row-activity", skipped).hidden, true); assert.equal(h.byClass("repository-publish-row-spinner", skipped).hidden, true);
+  assert.equal(h.byClass("repository-publish-row-activity", rowFor(h, repos[1].id)).hidden, false); assertProgress(h, 1, 2);
   h.snapshot.operation = operation(h.snapshot.operation.requestId, "success", [rows[0], progressItem(repos[1], "success", "complete")]); await h.poll(); assert.match(assertProgress(h, 2, 2), /成功\s*1.*跳过\s*1/);
 });
 await test("repository semantic authority replaces every upload count while keeping plugin versions independent", async () => {
@@ -1328,8 +1359,14 @@ await test("a failed refresh cannot omit a repository that was previously confir
   h.hook(call => { if (call.url.endsWith("/versions")) throw new Error("isolated refresh failed"); }); await h.emitWindow("focus");
   assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); h.byClass("repository-publish-primary").click(); await settle(); assert.deepEqual(h.posts("/run")[0].body.repoIds, [repo.id]);
 });
-await test("the only primary action explicitly commits and pushes in both languages", async () => {
-  const h = harness(); await h.ready(); assert.equal(h.byClass("repository-publish-primary").textContent, "提交并上传"); h.locale("en"); assert.equal(h.byClass("repository-publish-primary").textContent, "Commit & Push");
+await test("Push All and each row Push explicitly retain commit-and-push semantics in both languages", async () => {
+  const h = harness(); await h.ready(); assert.equal(h.byClass("repository-publish-primary").textContent, "全部上传"); h.locale("en"); assert.equal(h.byClass("repository-publish-primary").textContent, "Push All");
+  assert.match(h.byClass("repository-publish-primary").getAttribute("aria-label"), /Push All.*Commit and push saved changes/); assert.equal(h.byClass("repository-publish-config").textContent, "Configure All");
+  await h.expand(); const one = h.byClass("repository-publish-row-push"); assert.equal(one.textContent, "Push"); assert.match(one.getAttribute("aria-label"), /Push.*Music.*Commit and push/);
+  h.locale("zh-CN"); assert.equal(one.textContent, "上传"); assert.match(one.title, /提交并上传/);
+  assert.match(css, /compact-name:focus-visible/);
+  assert.match(css, /@media \(max-width: 620px\)[^\n]*\.repository-publish-row-push \{[^}]*grid-column: 2;[^}]*grid-row: 1;[^}]*justify-self: end/);
+  assert.doesNotMatch(css, /\.repository-publish-row-config\b/);
   assert.equal(h.button("Push only"), undefined); assert.equal(h.button("仅推送"), undefined); assert.equal(h.posts().length, 0);
 });
 await test("legacy missing snapshots never paint a fallback title or an invented repository version before fresh reads", async () => {
