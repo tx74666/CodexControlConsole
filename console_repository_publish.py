@@ -25,9 +25,10 @@ import time
 import uuid
 import weakref
 import xml.etree.ElementTree as ET
+from console_git_environment import environment_for_remote
 from console_repository_versions import (VersionPlanError, catalog as version_catalog_items,
                                         prepare_updates as prepare_version_updates, source_id as version_source_id,
-                                        read_current_version, parse_commit_history,
+                                        read_current_version, parse_commit_history, next_patch,
                                         MAX_BYTES as VERSION_MAX_BYTES)
 
 
@@ -572,6 +573,14 @@ class RepositoryPublishService:
         for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX"):
             env.pop(key, None)
         env.update(GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="Never", GIT_OPTIONAL_LOCKS="0", GIT_NO_LAZY_FETCH="1")
+        if not self._test_mode:
+            identity = (getattr(self._lease, "transport", None) or {}).get("identity", {})
+            remote_url = identity.get("pushUrl" if operation == "push" else "fetchUrl", "")
+            field = ".pushurl" if operation == "push" else ".url"
+            remote_url = next((value for key, value in config or [] if key.startswith("remote.") and key.endswith(field)), remote_url)
+            if operation == "push" and not remote_url:
+                remote_url = next((value for key, value in config or [] if key.startswith("remote.") and key.endswith(".url")), "")
+            env = environment_for_remote(env, remote_url)
         if index is not None:
             env["GIT_INDEX_FILE"] = str(index)
         if config:
@@ -914,12 +923,28 @@ class RepositoryPublishService:
         return self.status()
 
     def _version_sources(self, repo, root):
-        sources = repo["versionSources"]
+        sources = [dict(source) for source in repo["versionSources"]]
         if not sources:
             path = next((name for name in ("app-manifest.json", "package.json") if (root / name).is_file()), None)
-            return [{"path": path, "kind": "json", "key": "version", "name": root.name, "scope": ""}] if path else []
+            sources = [{"path": path, "kind": "json", "key": "version", "name": root.name, "scope": ""}] if path else []
         # The application manifest supersedes package.json, as in commit naming.
-        return [source for source in sources if source["path"] != "package.json"] if any(source["path"] == "app-manifest.json" for source in sources) else sources
+        if any(source["path"] == "app-manifest.json" for source in sources):
+            sources = [source for source in sources if source["path"] != "package.json"]
+        primary = next((source for source in sources if source["path"] in {"app-manifest.json", "package.json"}), None)
+        if primary is None:
+            primary = next((source for source in sources if source["path"] == "repository-version.json"), None)
+            if primary is None and (root / "repository-version.json").is_file():
+                primary = {"path":"repository-version.json", "kind":"json", "key":"version", "name":root.name, "scope":"**"}
+                sources.append(primary)
+        if primary is None:
+            primary = next((source for source in sources if source["kind"] == "git_commit" and source["path"] == "HEAD"), None)
+        if primary is None and len(sources) == 1:
+            primary = sources[0]
+        if primary is None:
+            primary = {"path":"HEAD", "kind":"git_commit", "key":"subject", "name":root.name, "scope":"**", "allowInitial":True}
+            sources.append(primary)
+        primary.update(repositoryVersion=True, minimumVersion="1.0.0")
+        return sources
 
     def _version_reader(self, root):
         def read(relative):
@@ -940,7 +965,7 @@ class RepositoryPublishService:
                 raise VersionPlanError("提交版本仅允许固定 HEAD / subject 来源。")
             head = self._text(root, "rev-parse", "HEAD")
             raw = self._git(root, "log", "--first-parent", "--max-count=64", "--format=%H%x00%s", "HEAD")
-            result = parse_commit_history(head, raw)
+            result = parse_commit_history(head, raw, allow_initial=source.get("allowInitial") is True)
             if self._text(root, "rev-parse", "HEAD") != head:
                 raise VersionPlanError("读取提交版本时 HEAD 已变化，请重新读取。")
             return result
@@ -1054,6 +1079,7 @@ class RepositoryPublishService:
         """Display-only Git state; no fetch, synchronization, staging or locks."""
         root = context[0]
         result = {"hasChanges": None, "changeState": "unknown", "worktreeChanged": None,
+                  "pendingRecovery": None,
                   "outgoingCommits": None, "remoteReference": "", "changesReason": "", "changedFiles": [], "headSha": "",
                   "outgoingBaselineSha": "", "outgoingBaselineSource": "", "deliveryVerifiedAt": "", "lastCommit": None,
                   "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
@@ -1082,6 +1108,7 @@ class RepositoryPublishService:
             # delivery journal can establish a newer local acknowledgement,
             # without writing those refs or pretending to query today's remote.
             pending = _read(self._pending_path(repo["id"]))
+            result["pendingRecovery"] = not self._settled_submission(repo, context, pending)
             if (pending and pending.get("state") == "delivered" and pending.get("identity") == context[3]
                     and pending.get("repositorySettingsSha") == _repo_settings_sha(repo)
                     and pending.get("transportOptionsSha") == _json_sha(self._remote_options(repo, root))
@@ -1104,8 +1131,10 @@ class RepositoryPublishService:
             result["lastCommit"] = last_commit
             if result["worktreeChanged"] or result["syncChanged"] is True or result["outgoingCommits"] is not None and result["outgoingCommits"] > 0:
                 result.update(hasChanges=True, changeState="changed")
-            elif result["outgoingCommits"] == 0 and result["syncChanged"] is False:
+            elif result["outgoingCommits"] == 0 and result["syncChanged"] is False and baseline == head:
                 result.update(hasChanges=False, changeState="unchanged")
+            elif result["outgoingCommits"] == 0 and baseline != head:
+                result["changesReason"] = "本地远端引用与 HEAD 不同，可能领先；保留未知状态，执行时再核对实际远端。"
             if not result["changesReason"]:
                 result["changesReason"] = "待推数量依据已保存的本地远端引用；执行时会重新核验实际远端。"
             if result["syncState"] in {"changed", "unknown"}:
@@ -1113,6 +1142,108 @@ class RepositoryPublishService:
         except (RepositoryPublishError, _GitFailure, OSError) as exc:
             result.update(hasChanges=None, changeState="unknown", worktreeChanged=None, changedFiles=[], changesReason=self._error(exc), diagnostic=self._diagnostic(exc))
         return result
+
+    def _submission_probe(self, repo, context):
+        """Fresh local routing evidence, without sync, versioning or remote I/O.
+
+        A tracking/delivery reference is a local baseline, never a claim about
+        today's remote. Unknown or behind histories must take the normal path.
+        """
+        root, gitdir, _, identity = context
+        head = self._text(root, "rev-parse", "HEAD")
+        index_path = gitdir / "index"
+        index_sha = _sha(index_path.read_bytes()) if index_path.exists() else None
+        config_sha = _sha(self._git(root, "config", "--null", "--list"))
+        status = self._git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames")
+        changed = False
+        for record in status.split(b"\0"):
+            if not record:
+                continue
+            if len(record) < 4 or record[2:3] != b" ":
+                raise RepositoryPublishError("工作树状态回执不完整。", code="worktree_changed")
+            xy = record[:2].decode("ascii", "replace")
+            if xy != "??" and xy[0] != " ":
+                raise RepositoryPublishError("保留已有暂存选择，请先提交或取消该选择。", code="merge_conflict" if xy in {"DD", "AU", "UD", "UA", "DU", "AA", "UU"} else "staged_selection")
+            changed = changed or not _excluded(record[3:].decode("utf-8", "surrogateescape"), repo["exclude"])
+        if changed:
+            return {"state": "actionable", "reason": "saved_changes"}
+        sync = self._saved_sync_changes(repo, root)
+        if sync["syncChanged"] is True:
+            return {"state": "actionable", "reason": "saved_sync_changes"}
+        if sync["syncChanged"] is not False:
+            return {"state": "unknown", "reason": "sync_unknown"}
+        for source in self._version_sources(repo, root):
+            if source.get("repositoryVersion") and source["kind"] != "git_commit":
+                try:
+                    current = read_current_version(self._version_reader(root)(source["path"]), source)
+                    floor = next_patch(current, source.get("minimumVersion")) == "1.0.0"
+                except (VersionPlanError, RepositoryPublishError, OSError, ValueError, UnicodeError, SyntaxError, KeyError, TypeError, ET.ParseError):
+                    return {"state": "unknown", "reason": "repository_version_unknown"}
+                if floor:
+                    return {"state": "actionable", "reason": "repository_version_floor"}
+        baseline = ""
+        try:
+            baseline = self._text(root, "show-ref", "--verify", "--hash", "refs/remotes/" + repo["remote"] + "/" + repo["branch"])
+        except _GitFailure:
+            pass  # An unreadable local reference is unknown, never clean.
+        pending = _read(self._pending_path(repo["id"]))
+        if (pending and pending.get("state") == "delivered" and pending.get("identity") == identity
+                and pending.get("repositorySettingsSha") == _repo_settings_sha(repo)
+                and pending.get("transportOptionsSha") == _json_sha(self._remote_options(repo, root))
+                and self._delivery_evidence(pending, self._upload_destination(repo)) and pending.get("commitSha") == head):
+            baseline = head
+        if not _SHA.fullmatch(baseline):
+            return {"state": "unknown", "reason": "local_baseline_unknown"}
+        if baseline != head:
+            count = self._text(root, "rev-list", "--count", baseline + ".." + head)
+            if not re.fullmatch(r"\d+", count):
+                raise RepositoryPublishError("待推提交数量无法确认。", code="receipt_unverified")
+            return {"state": "actionable" if int(count) else "unknown", "reason": "outgoing_history" if int(count) else "local_baseline_ahead"}
+        if (self._text(root, "rev-parse", "HEAD") != head
+                or (_sha(index_path.read_bytes()) if index_path.exists() else None) != index_sha
+                or _sha(self._git(root, "config", "--null", "--list")) != config_sha
+                or self._git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames") != status
+                or self._repo(repo)[3] != identity):
+            raise RepositoryPublishError("仓库在检查期间发生变化，请稍后重试。", code="worktree_changed")
+        return {"state": "clean", "headSha": head, "baselineSha": baseline, "remoteChecked": False}
+
+    def _settled_submission(self, repo, context, pending):
+        """Only fully persisted old delivery may be bypassed by a clean skip."""
+        if not pending:
+            return True
+        if pending.get("state") == "cancelled_before_commit":
+            return not (pending.get("commitSha") or pending.get("versionUpdates") or pending.get("versionPlans"))
+        if (pending.get("state") != "delivered" or pending.get("indexReconciled") is not True
+                or pending.get("identity") != context[3]
+                or pending.get("repositorySettingsSha") != _repo_settings_sha(repo)
+                or pending.get("transportOptionsSha") != _json_sha(self._remote_options(repo, context[0]))
+                or pending.get("uploadCounterPending") is not False
+                or pending.get("uploadSummary", {}).get("state") != "recorded"
+                or not self._delivery_evidence(pending, self._upload_destination(repo))
+                or not self._delivery_acknowledged(pending)):
+            return False
+        destination = self._upload_destination(repo)
+        _, ledger = self._upload_ledger(destination)
+        if ledger is None:
+            return False
+        floor, _required = self._upload_floor(pending, destination)
+        self._upload_check_anchors(pending, destination, ledger)
+        return (len(ledger["events"]) >= floor and any(all(event.get(key) == pending.get(key) for key in
+                ("commitSha", "verifiedRemote", "verifiedAt", "requestId")) for event in ledger["events"]))
+
+    def _skip_clean_submission(self, repo, context, receipt, item, *, request_already_used=None):
+        pending = _read(self._pending_path(repo["id"]))
+        if request_already_used is None:
+            request_already_used = bool(pending and receipt["requestId"] in
+                                        {pending.get("requestId"), pending.get("deliveryRecoveryRequestId")})
+        if request_already_used or not self._settled_submission(repo, context, pending):
+            return None
+        self._blockers(*context[:3])
+        probe = self._submission_probe(repo, context)
+        if probe["state"] == "clean":
+            item.update(status="noop", phase="complete", commitSha="", title="", body="", diagnostic=None,
+                        message="本地没有需要提交或推送的变化；已跳过，未连接远端。", preflight=probe)
+        return probe
 
     def _version_details(self, repo, context):
         root = context[0]
@@ -1204,6 +1335,33 @@ class RepositoryPublishService:
         return components
 
     @staticmethod
+    def _file_version_floor(component):
+        return (component.get("repositoryVersion") is True and component.get("kind") != "git_commit"
+                and component.get("requiresVersionFloor") is True and component.get("canBump") is True)
+
+    @staticmethod
+    def _repository_version(components):
+        def canonical(value):
+            match = re.fullmatch(r"[vV]?(\d+)\.(\d+)\.(\d+)", str(value))
+            return ".".join(str(int(part)) for part in match.groups()) if match else ""
+        main = [component for component in components if component.get("repositoryVersion") is True]
+        if len(main) != 1 or not canonical(main[0].get("currentVersion")):
+            return {"state":"unknown", "currentVersion":"", "transition":None}
+        main = main[0]
+        initial = main.get("initialVersion") is True or main.get("requiresVersionFloor") is True
+        if initial:
+            source = "" if main.get("initialVersion") else canonical(main["currentVersion"])
+            target = canonical(main.get("nextVersion")) or "1.0.0"
+            return {"state":"initial", "currentVersion":target, "sourceVersion":source, "nextVersion":target,
+                    "transition":{"kind":"initial", "fromVersion":source, "toVersion":target} if source else None}
+        transition = main.get("transition")
+        if transition:
+            previous, following = canonical(transition.get("fromVersion")), canonical(transition.get("toVersion"))
+            transition = {"kind":transition["kind"], "fromVersion":previous, "toVersion":following} if previous and following else None
+        return {"state":"current", "currentVersion":canonical(main["currentVersion"]),
+                "nextVersion":canonical(main.get("nextVersion")), "transition":transition}
+
+    @staticmethod
     def _catalog_diagnostic(item):
         if (item.get("diagnostic") or {}).get("severity") not in {None, "info"}:
             return
@@ -1255,6 +1413,8 @@ class RepositoryPublishService:
                     "lastCommit": None,
                     "uploadSummary": self._upload_summary(repo),
                     "hasChanges": None, "changeState": "unknown", "worktreeChanged": None, "outgoingCommits": None,
+                    "pendingRecovery": None,
+                    "repositoryVersion": {"state":"unknown", "currentVersion":"", "transition":None},
                     "diagnostic": None, "planState": "none", "versionChanged": None, "versionState": "unknown",
                     "syncChanged": None, "syncState": "unknown", "syncReason": "", "syncDifferences": []}
             item["activityPolicy"] = "allow_saved_snapshot" if self._lease.allow_active_work else "strict"
@@ -1269,6 +1429,9 @@ class RepositoryPublishService:
                     raise RepositoryPublishError("读取仓库差异和版本期间 HEAD 已变化，请重新读取。", code="worktree_changed")
                 self._planned_versions(repo, context, item["components"], item["changedFiles"], settings["naming"],
                                        sync_pending=bool(repo["syncFiles"]), changes_known=item["worktreeChanged"] is not None)
+                item["repositoryVersion"] = self._repository_version(item["components"])
+                if any(self._file_version_floor(component) for component in item["components"]):
+                    item.update(hasChanges=True, changeState="changed")
                 states = {component["planState"] for component in item["components"]}
                 if any(plan["sourceId"] not in {component["sourceId"] for component in item["components"]} for plan in repo.get("versionPlans", [])):
                     states.add("stale")
@@ -1365,12 +1528,15 @@ class RepositoryPublishService:
                 return max((len(re.split(r"[*?\[]", value)[0].strip("/")) for value in scopes if _matches(file["path"], value)), default=0)
             best = max((specificity(source) for source in matching), default=-1)
             selected.update(version_source_id(source) for source in matching if specificity(source) == best)
+        if files:
+            selected.update(version_source_id(source) for source in sources if source.get("repositoryVersion") is True)
         return selected
 
     def _planned_versions(self, repo, context, components, files, naming, *, sync_pending=False, changes_known=True, strict=False):
         """Read-only candidates. Only the locked, synchronized worker freezes them."""
         sources = self._version_sources(repo, context[0])
         affected = self._affected_sources(sources, files)
+        affected.update(component["sourceId"] for component in components if self._file_version_floor(component))
         shared_paths = {source["path"] for source in sources if sum(other["path"] == source["path"] for other in sources) > 1}
         by_id = {version_source_id(source): source for source in sources}
         explicit = {plan["sourceId"]: plan for plan in repo.get("versionPlans", [])}
@@ -1400,7 +1566,8 @@ class RepositoryPublishService:
                 elif files:
                     blocked.append("一次性版本计划已过期，请重新配置。" + component.get("reason", ""))
                 reason = "已配置的一次性计划优先。"
-            elif not naming.get("autoBump", True):
+            elif not naming.get("autoBump", True) and not (component.get("repositoryVersion") and
+                    (component.get("requiresVersionFloor") or component.get("initialVersion"))):
                 reason = "自动升版已关闭。"
             elif sync_pending:
                 state, reason = "sync_pending", "先同步已保存工作文件，再核对改动组件和版本。"
@@ -1410,15 +1577,15 @@ class RepositoryPublishService:
                 state, reason = "unknown", "真实工作树变化尚未确认。"
             elif ident not in affected:
                 reason = "此组件没有待提交文件变化；已有提交保留原版本。"
-            elif component["versionChanged"] is True:
+            elif component["versionChanged"] is True and not self._file_version_floor(component):
                 state, reason = "manual_version", "版本已手动改变，保留当前版本，不再次递增。"
             elif component["path"] in shared_paths and not any(file["path"] != component["path"] and
                                                                _matches(file["path"], by_id[ident]["scope"]) for file in files):
                 reason = "共享版本文件的载体变化不代表此组件有改动；版本未变的字段保留。"
                 component["worktreeChanged"] = False if component["versionChanged"] is False else None
-            elif component.get("headSourceMissing") is True and component.get("currentVersion"):
+            elif component.get("headSourceMissing") is True and component.get("currentVersion") and not self._file_version_floor(component):
                 state, reason = "initial_version", "新版本来源保留声明的初始版本。"
-            elif component["versionChanged"] is None:
+            elif component["versionChanged"] is None and not self._file_version_floor(component):
                 state, reason = "blocked", "无法确认 HEAD 权威版本，不自动猜测下一版。"
             elif not component.get("canBump") or not component.get("currentVersion"):
                 state, reason = "blocked", component.get("reason") or "权威版本无法安全准备。"
@@ -1428,7 +1595,7 @@ class RepositoryPublishService:
                 candidate["targetVersion"] = target
                 effective.append(candidate)
                 automatic.append(ident)
-                component["transition"] = {"kind": "auto", "fromVersion": component["currentVersion"], "toVersion": target}
+                component["transition"] = {"kind": "auto", "fromVersion": "" if component.get("initialVersion") else component["currentVersion"], "toVersion": target}
                 reason = "根据当前已保存变化预览；同步和提交前会重新核对。"
             if state == "blocked":
                 component["diagnostic"] = _make_diagnostic("version_plan_blocked", reason, source_id=ident)
@@ -2091,6 +2258,8 @@ class RepositoryPublishService:
         for source in sources:
             item = {"sourceId": version_source_id(source), "name": source["name"] or Path(source["path"]).stem,
                     "path": source["path"], "version": "", "scope": source["scope"], "kind": source["kind"]}
+            if source.get("repositoryVersion"):
+                item["repositoryVersion"] = True
             try:
                 if source["kind"] == "git_commit":
                     item.update(self._git_version_reader(root)(source))
@@ -2153,10 +2322,7 @@ class RepositoryPublishService:
 
     def _message(self, repo, snapshot, naming, *, version_plans=None, automatic_source_ids=()):
         root = Path(snapshot["identity"]["root"])
-        sources = repo["versionSources"]
-        if not sources:
-            first = next((p for p in ("app-manifest.json", "package.json") if (root / p).is_file()), None)
-            sources = [{"path": first, "kind": "json", "key": "version", "name": root.name, "scope": ""}] if first else []
+        sources = self._version_sources(repo, root)
         if version_plans is None:
             version_plans = []
             if repo.get("versionPlans"):
@@ -2181,11 +2347,11 @@ class RepositoryPublishService:
             plan = planned.get(item["sourceId"])
             if plan:
                 item["transition"] = {"kind": "auto" if item["sourceId"] in automatic_source_ids else "planned",
-                                      "fromVersion": plan["currentVersion"], "toVersion": plan["targetVersion"]}
+                                      "fromVersion": "" if item.get("initialVersion") else plan["currentVersion"], "toVersion": plan["targetVersion"]}
                 item["plannedVersion"] = plan["targetVersion"]
         def label(item, include_name=False):
             transition = item.get("transition")
-            value = transition["fromVersion"] + " → " + transition["toVersion"] if transition else item["version"]
+            value = ((transition["fromVersion"] + " → " if transition["fromVersion"] else "") + transition["toVersion"]) if transition else item["version"]
             return (item["name"] + " " if include_name else "") + value
         title = naming["fallbackTitle"].replace("{datetime}", datetime.now().strftime("%Y-%m-%d %H:%M"))
         if naming["preset"] == "version" and len(versions) == 1 and len(valid) == 1:
@@ -2196,6 +2362,9 @@ class RepositoryPublishService:
             # A Git-only authority must produce the same strict subject shape
             # it can subsequently read, irrespective of a global module preset.
             title = label(valid[0])
+        main_versions = [item for item in valid if item.get("repositoryVersion")]
+        if len(main_versions) == 1:
+            title = label(main_versions[0])
         title = " ".join(title.replace("\0", "").splitlines()).strip()[:240] or "更新进度"
         paragraphs = [naming[k].strip() for k in ("subtitle", "notes") if naming[k].strip()]
         if versions:
@@ -2263,8 +2432,14 @@ class RepositoryPublishService:
                     raise RepositoryPublishError("预览期间 HEAD 已变化，请重新读取。", code="worktree_changed")
                 effective, automatic, blocked = self._planned_versions(repo, context, components, snapshot["files"], settings["naming"],
                                                                       sync_pending=bool(repo["syncFiles"]))
-                item["planWillApply"] = bool(effective) and bool(snapshot["files"])
+                item["repositoryVersion"] = self._repository_version(components)
+                floor = any(self._file_version_floor(component) for component in components)
+                item["planWillApply"] = bool(effective) and (bool(snapshot["files"]) or floor)
+                if floor:
+                    item.update(hasChanges=True, changeState="changed")
                 item["action"] = "sync_pending" if repo["syncFiles"] else "commit" if snapshot["files"] else "push_only" if item["outgoingCommits"] else "noop" if item["outgoingCommits"] == 0 else "unknown"
+                if floor:
+                    item["action"] = "commit"
                 if item["action"] == "sync_pending":
                     item["planWillApply"] = None
                 if blocked:
@@ -2415,7 +2590,7 @@ class RepositoryPublishService:
                 with _file_lock(self.state_dir / "worker.lock"):
                     receipt.update(status="working", phase="repositories")
                     self._save(receipt)
-                    duplicates, contexts = set(), {}
+                    duplicates, contexts, repo_contexts = set(), {}, {}
                     for repo in selected:
                         try:
                             context = self._repo(repo)
@@ -2423,9 +2598,30 @@ class RepositoryPublishService:
                             if key in contexts:
                                 duplicates.update({repo["id"], contexts[key]})
                             contexts[key] = repo["id"]
+                            repo_contexts[repo["id"]] = context
                         except (RepositoryPublishError, _GitFailure, OSError):
                             pass
-                    for repo, item in zip(selected, receipt["repositories"]):
+                    ranked = []
+                    for position, (repo, item) in enumerate(zip(selected, receipt["repositories"])):
+                        rank = 1  # Unknown rows remain eligible for normal checks.
+                        if repo["enabled"] and repo["id"] not in duplicates and repo["id"] in repo_contexts:
+                            try:
+                                with self._activity_policy(settings["naming"], item), self._repo_locks(repo_contexts[repo["id"]]):
+                                    probe = self._skip_clean_submission(repo, repo_contexts[repo["id"]], receipt, item)
+                                if probe is not None:
+                                    rank = {"actionable": 0, "unknown": 1, "clean": 2}[probe["state"]]
+                                if item["status"] == "noop":
+                                    item["logs"].append({"at": _now(), "phase": "complete", "message": item["message"]})
+                                    self._save(receipt)
+                            except Exception:
+                                pass  # Sorting is a hint; the normal path retains its guards.
+                        ranked.append((rank, position, repo, item))
+                    ranked.sort(key=lambda entry: entry[:2])
+                    receipt["executionOrder"] = [repo["id"] for _, _, repo, item in ranked if item["status"] != "noop"]
+                    self._save(receipt)
+                    for _rank, _position, repo, item in ranked:
+                        if item["status"] == "noop":
+                            continue
                         try:
                             if not repo["enabled"]:
                                 raise RepositoryPublishError("该仓库未启用，请先启用再重试。")
@@ -2780,7 +2976,9 @@ class RepositoryPublishService:
                             message="原请求已使用，保留原记录；不会复用原请求提交后续修改。",
                             diagnostic=_make_diagnostic("receipt_unverified", "原请求已使用，保留原记录；不会复用原请求提交后续修改。"))
                 return
-            self._blockers(root, gitdir, common)
+            probe = self._skip_clean_submission(repo, context, receipt, item, request_already_used=False)
+            if probe is not None and probe["state"] == "clean":
+                return
             # Staged work is checked before any explicit source synchronization.
             self._snapshot(repo, context)
             self._phase(receipt, item, "sync", "核对并同步明确指定的已保存文件。")
@@ -2791,7 +2989,7 @@ class RepositoryPublishService:
             if any(component["repositoryHeadSha"] != snapshot["head"] for component in components):
                 raise RepositoryPublishError("同步后读取版本期间 HEAD 已变化，请重新核对。", code="worktree_changed")
             effective, automatic, _ = self._planned_versions(repo, context, components, snapshot["files"], naming, strict=True)
-            apply_plans = bool(effective) and bool(snapshot["files"])
+            apply_plans = bool(effective) and (bool(snapshot["files"]) or any(self._file_version_floor(component) for component in components))
             title, body, versions = self._message(repo, snapshot, naming, version_plans=effective if apply_plans else [],
                                                   automatic_source_ids=automatic)
             item.update(title=title, body=body, versions=versions)

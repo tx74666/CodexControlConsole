@@ -450,18 +450,19 @@ def test_versions_scopes_and_nonimport():
             {"path": "app.csproj", "kind": "xml", "name": "CSharp", "key": "", "scope": "app.csproj"}]
         service = f.service()
         preview = service.preview()["previews"][0]
-        require([v["version"] for v in preview["versions"]] == ["2.4.1", "7.2.0", "1.8.0", "3.2.1"], preview)
-        require(preview["title"].startswith("更新进度"))
+        require([v["version"] for v in preview["versions"] if not v.get("repositoryVersion")] == ["2.4.1", "7.2.0", "1.8.0", "3.2.1"], preview)
+        require(preview["title"] == "1.0.0" and preview["repositoryVersion"]["state"] == "initial", preview)
         settings = service.status()["settings"]
         settings["naming"]["preset"] = "module_version"
         settings["naming"]["autoBump"] = False  # This fixture isolates naming/scope behavior.
         service.configure(settings)
-        require("Alpha 2.4.1" in service.preview()["previews"][0]["title"])
+        require(service.preview()["previews"][0]["title"] == "1.0.0")
         result = f.run(service)
         require(child(result)["status"] == "success", result)
         (root / "a" / "module.py").write_text("one\n")
         preview = service.preview()["previews"][0]
-        require(len(preview["versions"]) == 1 and preview["title"] == "Alpha 2.4.1", preview)
+        require(len(preview["versions"]) == 2 and preview["title"] == "1.0.0", preview)
+        require(any(item["name"] == "Alpha" and item["version"] == "2.4.1" for item in preview["versions"]), preview)
 
 
 def test_branch_locks_and_no_global_config():
@@ -1219,6 +1220,318 @@ def test_unknown_old_delivery_never_enters_fresh_work_without_git():
         require(item["status"] == "verification_required" and not fresh_reads and not launches)
 
 
+def test_submission_probe_local_clean_outgoing_sync_and_staging_without_git():
+    with Fixture() as f:
+        root, gitdir = f.base / "repo", f.base / "repo" / ".git"
+        gitdir.mkdir(parents=True)
+        (gitdir / "index").write_bytes(b"original index")
+        repo = {"id":"probe", "path":str(root), "repositoryUrl":str(f.base / "remote.git"),
+                "remote":"origin", "branch":"main", "exclude":[], "syncFiles":[], "versionSources":[]}
+        context = (root, gitdir, gitdir, {})
+        service = f.service()
+        service._repo = lambda _repo: context
+        head, other = "a" * 40, "b" * 40
+        observed = []
+        status, baseline, outgoing, sync = b"", head, "0", False
+        def git(_root, *args, **kwargs):
+            observed.append(args[0])
+            require(args[0] in {"config", "status"}, "Local probe must not fetch, filter, sync or push")
+            return b"fixed config" if args[0] == "config" else status
+        def text(_root, *args):
+            observed.append(args[0])
+            if args[0] == "show-ref":
+                if baseline is None:
+                    raise module._GitFailure("git_failed", returncode=1)
+                return baseline
+            return outgoing if args[0] == "rev-list" else head
+        service._git, service._text = git, text
+        service._saved_sync_changes = lambda *args: {"syncChanged":sync}
+        require(service._submission_probe(repo, context)["state"] == "clean")
+        status = b"?? .env\0"
+        require(service._submission_probe(repo, context)["state"] == "clean", "Private work remains excluded")
+        status = b" M tracked.txt\0"
+        require(service._submission_probe(repo, context)["state"] == "actionable")
+        for staged in (b"M  .env\0", b"UU conflict.txt\0"):
+            status = staged
+            try:
+                service._submission_probe(repo, context)
+                raise AssertionError("Existing staging/conflicts must not become clean")
+            except Error as exc:
+                require(exc.code in {"staged_selection", "merge_conflict"})
+        status = b""
+        sync = True
+        require(service._submission_probe(repo, context)["state"] == "actionable")
+        sync = None
+        require(service._submission_probe(repo, context)["state"] == "unknown")
+        sync = False
+        baseline = None
+        require(service._submission_probe(repo, context)["state"] == "unknown")
+        baseline = other
+        require(service._submission_probe(repo, context)["state"] == "unknown", "Behind is not confirmed clean")
+        service._head_commit = lambda *args: None
+        catalog = service._local_changes(repo, context)
+        require(catalog["outgoingCommits"] == 0 and catalog["headSha"] != catalog["outgoingBaselineSha"]
+                and catalog["hasChanges"] is None and catalog["changeState"] == "unknown", catalog)
+        outgoing = "1"
+        require(service._submission_probe(repo, context)["state"] == "actionable")
+        service._version_sources = lambda *args: [{"path":"version.json", "kind":"json", "key":"version", "repositoryVersion":True, "minimumVersion":"1.0.0"}]
+        service._version_reader = lambda *args: lambda path: b'{"version":"unknown"}'
+        require(service._submission_probe(repo, context)["state"] == "unknown", "Invalid authority cannot escape the batch preflight")
+        require(not any(name in observed for name in ("fetch", "push", "add", "commit", "ls-remote")))
+
+
+def test_clean_submission_returns_before_sync_version_remote_without_git():
+    from contextlib import nullcontext
+    with Fixture() as f:
+        service = f.service()
+        root = f.base / "repo"
+        repo = {"id":"clean", "path":str(root), "repositoryUrl":str(f.base / "remote.git"), "remote":"origin", "branch":"main", "syncFiles":[], "exclude":[]}
+        context = (root, root / ".git", root / ".git", {})
+        history = {"binding":dict(repoId="clean", path=str(root)), "count":7, "state":"recorded"}
+        item = {"repoId":"clean", "status":"queued", "phase":"queued", "commitSha":"", "title":"", "body":"", "logs":[], "uploadSummary":history}
+        receipt = {"requestId":"request_clean_now_0001", "status":"working", "repositories":[item]}
+        saved = []
+        service._save = lambda current: saved.append(json.loads(json.dumps(current)))
+        service._repo = lambda *args: context
+        service._repo_locks = lambda *args: nullcontext()
+        service._transport_identity = lambda *args: {"optionsSha":module._json_sha([])}
+        service._busy_reason = service._blockers = lambda *args: None
+        service._submission_probe = lambda *args: {"state":"clean", "headSha":"a" * 40, "baselineSha":"a" * 40, "remoteChecked":False}
+        def forbidden(*args, **kwargs):
+            raise AssertionError("Clean submission must finish before snapshot/sync/version/remote phases")
+        for name in ("_git", "_snapshot", "_sync", "_version_details", "_remote", "_fetch", "_push"):
+            setattr(service, name, forbidden)
+        service._run_repo_frozen(repo, {}, receipt, item)
+        require(item["status"] == "noop" and item["phase"] == "complete" and item["commitSha"] == "")
+        require(item["uploadSummary"] is history and history["count"] == 7 and item["preflight"]["remoteChecked"] is False)
+        require(all(row["repositories"][0]["phase"] not in {"sync", "version", "remote"} for row in saved))
+
+
+def test_batch_skips_clean_before_green_work_preserving_display_order_without_git():
+    from contextlib import nullcontext
+    with Fixture() as f:
+        service = f.service()
+        states = [("white-one", "clean"), ("unknown", "unknown"), ("green-one", "actionable"), ("green-two", "actionable"), ("white-two", "clean")]
+        repos = [{"id":name, "path":str(f.base / name), "enabled":True} for name, _ in states]
+        items = [{"repoId":repo["id"], "status":"queued", "phase":"queued", "message":"", "logs":[], "commitSha":"", "title":"", "body":"", "uploadSummary":{"count":3}} for repo in repos]
+        receipt = {"requestId":"request_sorted_batch_0001", "status":"queued", "repositories":items}
+        service._repo = lambda repo: (f.base / repo["id"], f.base / repo["id"] / ".git", f.base / repo["id"] / ".git", {})
+        service._repo_locks = lambda *args: nullcontext()
+        by_state, persisted, actual = dict(states), [], []
+        def probe(repo, context, current, item):
+            state = by_state[repo["id"]]
+            if state == "unknown":
+                raise ValueError("Classification is unknown; normal row handling still follows")
+            if state == "clean":
+                item.update(status="noop", phase="complete", message="clean")
+            return {"state":state}
+        service._skip_clean_submission = probe
+        service._save = lambda current: persisted.append(json.loads(json.dumps(current)))
+        def work(repo, naming, current, item):
+            require(all(row["status"] == "noop" for row in items if by_state[row["repoId"]] == "clean"), "Clean rows must not wait behind a long green push")
+            require(any(all(row["status"] == "noop" for row in snapshot["repositories"] if by_state[row["repoId"]] == "clean") for snapshot in persisted))
+            actual.append(repo["id"])
+            item.update(status="success", phase="complete")
+        service._run_repo = work
+        service._queue.append((receipt, repos, {"naming":dict(module._DEFAULT_NAMING)}))
+        service._drain_batches()
+        require(actual == ["green-one", "green-two", "unknown"] == receipt["executionOrder"])
+        require([row["repoId"] for row in receipt["repositories"]] == [name for name, _ in states])
+        require(all(row["uploadSummary"]["count"] == 3 for row in items))
+
+
+def test_clean_skip_preserves_unsettled_delivery_and_used_requests_without_git():
+    with Fixture() as f:
+        service, repo, context, pending, path, receipt, item, launches = synthetic_delivery_service(f)
+        service._push(repo, context, pending, path, receipt, item)
+        service._save(receipt)
+        pending = module._read(path)
+        pending.update(indexReconciled=True, transportOptionsSha=module._json_sha([]))
+        service._remote_options = lambda *args: []
+        module._atomic(path, pending)
+        require(service._settled_submission(repo, context, pending))
+        for key, value in (("state", "verification_required"), ("uploadCounterPending", True), ("indexReconciled", False)):
+            require(not service._settled_submission(repo, context, dict(pending, **{key:value})))
+        ledger_path, ledger = service._upload_ledger(service._upload_destination(repo))
+        ledger_path.unlink()
+        require(not service._settled_submission(repo, context, pending), "A missing ledger still needs recovery")
+        module._atomic(ledger_path, ledger)
+        def forbidden(*args):
+            raise AssertionError("A previously used request must retain original recovery scope")
+        service._submission_probe = forbidden
+        for request_id in (pending["requestId"], pending["deliveryRecoveryRequestId"]):
+            receipt["requestId"] = request_id
+            require(service._skip_clean_submission(repo, context, receipt, item) is None)
+        require(not launches)
+
+
+def test_clean_bare_submission_skips_sync_and_remote_but_keeps_changed_sources_and_staging():
+    class Observed(Service):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.git_operations, self.phases, self.sync_calls = [], [], 0
+        def _git(self, root, *args, **kwargs):
+            self.git_operations.append(module._git_operation(args))
+            require(module._git_operation(args) not in {"ls-remote", "fetch", "push", "add", "commit"}, "Confirmed clean must use only local Git reads")
+            return super()._git(root, *args, **kwargs)
+        def _phase(self, receipt, item, phase, message):
+            self.phases.append(phase)
+            return super()._phase(receipt, item, phase, message)
+        def _sync(self, *args):
+            self.sync_calls += 1
+            raise Error("Changed saved source reached its normal sync boundary", code="worktree_changed")
+        def _version_details(self, *args):
+            raise AssertionError("A clean row must not enter version planning")
+    with Fixture() as f:
+        root, _remote, repo = f.repo()
+        source = f.base / "saved.txt"
+        source.write_bytes((root / "tracked.txt").read_bytes())
+        repo["syncFiles"] = [{"source":str(source), "target":"tracked.txt"}]
+        (root / ".env").write_text("private work remains private\n")
+        head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+        service = f.service(Observed)
+        result = f.run(service, "request_clean_bare_0001", intent="commit_and_push")
+        item = child(result)
+        require(item["status"] == "noop" and item["phase"] == "complete" and item["commitSha"] == "", result)
+        require(item["preflight"]["remoteChecked"] is False and item["uploadSummary"]["count"] == 0)
+        require(service.sync_calls == 0 and not any(phase in service.phases for phase in ("sync", "version", "remote")))
+        require(not service._pending_path(repo["id"]).exists() and (root / ".git/index").read_bytes() == index)
+        count = len(service.git_operations)
+        replay = f.run(service, "request_clean_bare_0001", intent="commit_and_push")
+        require(child(replay)["status"] == "noop" and len(service.git_operations) == count)
+        source.write_text("new saved external source\n")
+        result = f.run(service, "request_changed_source_0002", intent="commit_and_push")
+        require(child(result)["status"] == "deferred" and service.sync_calls == 1, result)
+        require((root / "tracked.txt").read_text() == "base\n", "Probe did not copy an external file")
+        f.git(root, "add", ".env")
+        staged = (root / ".git/index").read_bytes()
+        result = f.run(service, "request_staged_private_0003", intent="commit_and_push")
+        require(child(result)["diagnostic"]["code"] == "staged_selection" and service.sync_calls == 1, result)
+        require((root / ".git/index").read_bytes() == staged and f.git(root, "rev-parse", "HEAD") == head)
+        require((root / ".env").read_text() == "private work remains private\n")
+
+
+def test_repository_main_authority_and_initial_public_contract_without_git():
+    with Fixture() as f:
+        root = f.base / "project"
+        service = f.service()
+        plugins = [{"path":"one/__init__.py", "kind":"python_ast", "key":"bl_info.version", "name":"One", "scope":"one/**"},
+                   {"path":"two/__init__.py", "kind":"python_ast", "key":"bl_info.version", "name":"Two", "scope":"two/**"}]
+        repo = {"versionSources":plugins}
+        sources = service._version_sources(repo, root)
+        require(sources[:2] == plugins and not any("minimumVersion" in item for item in plugins))
+        main = sources[-1]
+        require(main["repositoryVersion"] and main["allowInitial"] and main["path"] == "HEAD" and main["minimumVersion"] == "1.0.0")
+        affected = service._affected_sources(sources, [{"path":"one/module.py"}])
+        require(module.version_source_id(main) in affected and module.version_source_id(plugins[0]) in affected)
+        file_main = {"repositoryVersion":True, "kind":"json", "currentVersion":"0.4.0", "nextVersion":"1.0.0", "requiresVersionFloor":True}
+        public = service._repository_version([file_main])
+        require(public == {"state":"initial", "currentVersion":"1.0.0", "sourceVersion":"0.4.0", "nextVersion":"1.0.0",
+                           "transition":{"kind":"initial", "fromVersion":"0.4.0", "toVersion":"1.0.0"}})
+        initial = service._repository_version([{**file_main, "kind":"git_commit", "currentVersion":"1.0.0", "initialVersion":True}])
+        require(initial["sourceVersion"] == "" and initial["transition"] is None)
+        known = service._repository_version([{**file_main, "requiresVersionFloor":False, "currentVersion":"1.6.47", "nextVersion":"1.6.48"}])
+        require(known["state"] == "current" and known["currentVersion"] == "1.6.47")
+        raw = {**file_main, "requiresVersionFloor":False, "currentVersion":"v1.02.003", "nextVersion":"v1.02.004",
+               "transition":{"kind":"working", "fromVersion":"V1.02.002", "toVersion":"v1.02.003"}}
+        public = service._repository_version([raw])
+        require(public["currentVersion"] == "1.2.3" and public["nextVersion"] == "1.2.4"
+                and public["transition"] == {"kind":"working", "fromVersion":"1.2.2", "toVersion":"1.2.3"})
+        require(raw["currentVersion"] == "v1.02.003", "Public formatting must not rewrite the real authority")
+
+
+def test_root_repository_version_discovery_keeps_independent_plugin_versions_without_git():
+    with Fixture() as f:
+        root = f.base / "plugins"
+        root.mkdir()
+        (root / "repository-version.json").write_text('{"version":"1.0.0"}\n')
+        plugins = [{"path":"one/__init__.py", "kind":"python_ast", "key":"bl_info.version", "name":"One", "scope":"one/**"},
+                   {"path":"two/__init__.py", "kind":"python_ast", "key":"bl_info.version", "name":"Two", "scope":"two/**"}]
+        service = f.service()
+        sources = service._version_sources({"versionSources":plugins}, root)
+        require(sources[:2] == plugins and len(sources) == 3)
+        require(sources[-1]["path"] == "repository-version.json" and sources[-1]["repositoryVersion"] is True)
+        require(not any(source["kind"] == "git_commit" for source in sources))
+        require(not any("minimumVersion" in source for source in plugins))
+
+
+def test_main_initialization_ignores_old_auto_optout_but_never_creates_empty_git_plan_without_git():
+    with Fixture() as f:
+        root = f.base / "project"
+        service = f.service()
+        repo = {"versionSources":[], "versionPlans":[]}
+        source = service._version_sources(repo, root)[0]
+        component = {"sourceId":module.version_source_id(source), "path":"HEAD", "kind":"git_commit", "name":"Main", "repositoryVersion":True,
+                     "initialVersion":True, "currentVersion":"1.0.0", "nextVersion":"1.0.0", "versionChanged":False,
+                     "canBump":True, "planState":"none", "expectedSha256":"a" * 64, "expectedBytes":1, "planProof":"b" * 64}
+        context = (root, root / ".git", root / ".git", {})
+        effective, _automatic, _blocked = service._planned_versions(repo, context, [dict(component)], [{"path":"saved.txt"}], {"autoBump":False})
+        require(len(effective) == 1 and effective[0]["targetVersion"] == "1.0.0")
+        require(not service._planned_versions(repo, context, [dict(component)], [], {"autoBump":False})[0])
+        known = dict(component, initialVersion=False, currentVersion="1.6.47", nextVersion="1.6.48")
+        require(not service._planned_versions(repo, context, [known], [{"path":"saved.txt"}], {"autoBump":False})[0])
+        root.mkdir()
+        (root / "repository-version.json").write_text('{"version":"0.4.0"}\n')
+        source = service._version_sources(repo, root)[0]
+        floor = dict(component, sourceId=module.version_source_id(source), path=source["path"], kind="json",
+                     initialVersion=False, requiresVersionFloor=True, currentVersion="0.4.0")
+        require(len(service._planned_versions(repo, context, [floor], [], {"autoBump":False})[0]) == 1)
+
+
+def test_git_environment_uses_actual_transport_and_skips_test_mode_without_git():
+    with Fixture() as f:
+        service = f.service()
+        original_environment, original_run = module.environment_for_remote, module.subprocess.run
+        seen, environments = [], []
+        def proxy(environment, url):
+            seen.append(url)
+            return dict(environment, FIXTURE_PROXY_ONLY="1")
+        def run(command, **kwargs):
+            environments.append(kwargs["env"])
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        module.environment_for_remote, module.subprocess.run = proxy, run
+        try:
+            service._test_mode = False
+            service._lease.transport = {"identity":{"fetchUrl":"https://example.invalid/read", "pushUrl":"https://example.invalid/write"}}
+            service._git(f.base, "ls-remote", "origin")
+            service._git(f.base, "push", "origin", config=[("remote.fixed.url", "https://example.invalid/pinned-read"), ("remote.fixed.pushurl", "https://example.invalid/pinned-write")])
+            require(seen == ["https://example.invalid/read", "https://example.invalid/pinned-write"])
+            service._test_mode = True
+            service._git(f.base, "ls-remote", "origin")
+            require(len(seen) == 2 and "FIXTURE_PROXY_ONLY" not in environments[-1])
+        finally:
+            module.environment_for_remote, module.subprocess.run = original_environment, original_run
+
+
+def test_missing_repository_version_initializes_once_and_recovery_keeps_new_work():
+    class FailFirstPush(Service):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.pushes = 0
+        def _git(self, root, *args, **kwargs):
+            if args and args[0] == "push":
+                self.pushes += 1
+                if self.pushes == 1:
+                    raise module._GitFailure("timeout", operation="push", error_kind="timeout")
+            return super()._git(root, *args, **kwargs)
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        service = f.service(FailFirstPush)
+        clean = f.run(service, "request_missing_clean_0001", intent="commit_and_push")
+        require(child(clean)["status"] == "noop" and f.git(root, "rev-list", "--count", "HEAD") == "1")
+        (root / "tracked.txt").write_text("first saved batch\n")
+        first = f.run(service, "request_initial_version_0002", intent="commit_and_push")
+        sha = child(first)["commitSha"]
+        require(child(first)["status"] == "verification_required" and child(first)["title"] == "1.0.0", first)
+        require(f.git(root, "show", "-s", "--format=%s", sha) == "1.0.0")
+        (root / "later.txt").write_text("new work remains outside the original scope\n")
+        require(f.run(service, "request_initial_version_0002", intent="commit_and_push") == first)
+        recovered = f.run(service, "request_verify_initial_0003")
+        require(child(recovered)["status"] == "success" and child(recovered)["commitSha"] == sha and service.pushes == 2, recovered)
+        require(f.git(root, "rev-list", "--count", "HEAD") == "2" and f.git(remote, "rev-parse", "main") == sha)
+        require(f.git(remote, "ls-tree", "--name-only", "main", "--", "later.txt") == "" and (root / "later.txt").exists())
+
+
 def test_used_cancelled_request_has_terminal_receipt_without_git():
     from contextlib import nullcontext
     for intent in (None, "commit_and_push"):
@@ -1719,12 +2032,15 @@ TESTS = [v for k, v in tuple(globals().items()) if k.startswith("test_") and cal
 if __name__ == "__main__":
     source_sha = module._sha(SOURCE.read_bytes())
     test_sha = module._sha(Path(__file__).read_bytes())
+    environment_sha = module._sha(SOURCE.with_name("console_git_environment.py").read_bytes())
     print("Source SHA256 " + source_sha + "; test SHA256 " + test_sha)
+    print("Git environment SHA256 " + environment_sha)
     selected = [test for test in TESTS if not sys.argv[1:] or test.__name__ in sys.argv[1:]]
     require(len(selected) == len(sys.argv[1:]) if sys.argv[1:] else True, "Unknown test name")
     for test in selected:
         test()
         print("PASS " + test.__name__)
-    require(module._sha(SOURCE.read_bytes()) == source_sha and module._sha(Path(__file__).read_bytes()) == test_sha,
+    require(module._sha(SOURCE.read_bytes()) == source_sha and module._sha(Path(__file__).read_bytes()) == test_sha
+            and module._sha(SOURCE.with_name("console_git_environment.py").read_bytes()) == environment_sha,
             "Source or tests changed during this run; results do not certify the final files")
     print(f"{len(selected)} isolated serial Git checks PASS; real repositories untouched")

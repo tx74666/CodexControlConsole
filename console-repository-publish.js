@@ -33,8 +33,8 @@
   copy.zh.bindingHintSnapshot = "此清单是初次发现时的快照，不代表当前仍有异常。"; copy.en.bindingHintSnapshot = "This is the initial discovery snapshot; it does not describe current issues.";
   copy.zh.omittedLink = "链接已省略"; copy.en.omittedLink = "Link omitted";
   copy.zh.scope = "适用范围（每行一项）"; copy.en.scope = "Scope (one pattern per line)";
-  Object.assign(copy.zh, { displayVersion: "查看插件版本", changedPlugins: "本次有改动", otherPlugins: "其他插件", uploadNumber: "上传 #{n}", uploadUnknown: "上传 #?", uploadHint: "Console 已确认的上传序号；插件版本在下方单独列出。", uploadPending: "上传计数待核对", pluginDetails: "插件版本", processed: "已处理 {n}/{total}", succeeded: "成功 {n}", skipped: "跳过 {n}", attention: "需处理 {n}", review: "待核对 {n}", progressWaiting: "等待进度回执…", progressLabel: "仓库处理进度", phaseQueued: "等待处理", phaseCheck: "检查仓库", phaseSync: "同步工作文件", phaseRemote: "核对远端", phaseVersion: "准备版本", phaseCommit: "提交改动", phasePush: "上传", phaseVerify: "核验上传结果", phaseOther: "正在处理", uploaded: "已上传", deferred: "已暂缓", failed: "失败", verifyRequired: "待核对", detailsAction: "查看此仓库的处理详情" });
-  Object.assign(copy.en, { displayVersion: "View plugin versions", changedPlugins: "Changed plugins", otherPlugins: "Other plugins", uploadNumber: "Push #{n}", uploadUnknown: "Push #?", uploadHint: "Uploads confirmed by Console; independent plugin versions are listed below.", uploadPending: "Upload count needs verification", pluginDetails: "Plugin versions", processed: "Processed {n}/{total}", succeeded: "Succeeded {n}", skipped: "Skipped {n}", attention: "Needs attention {n}", review: "Unconfirmed {n}", progressWaiting: "Waiting for a progress receipt…", progressLabel: "Repository progress", phaseQueued: "Queued", phaseCheck: "Checking repository", phaseSync: "Syncing work files", phaseRemote: "Checking remote", phaseVersion: "Preparing versions", phaseCommit: "Committing", phasePush: "Uploading", phaseVerify: "Verifying upload", phaseOther: "Processing", uploaded: "Uploaded", deferred: "Deferred", failed: "Failed", verifyRequired: "Unconfirmed", detailsAction: "View this repository's operation details" });
+  Object.assign(copy.zh, { displayVersion: "查看插件版本", changedPlugins: "本次有改动", otherPlugins: "其他插件", uploadHint: "仓库主版本；各插件版本在下方单独列出。", uploadPending: "上传记录待核对", initialRepositoryVersion: "首次提交时初始化此主版本；尚未保存。", nothingToUpload: "已核对的仓库均无改动，无需提交或推送。", pluginDetails: "插件版本", processed: "已处理 {n}/{total}", succeeded: "成功 {n}", skipped: "跳过 {n}", attention: "需处理 {n}", review: "待核对 {n}", progressWaiting: "等待进度回执…", progressLabel: "仓库处理进度", phaseQueued: "等待处理", phaseCheck: "检查仓库", phaseSync: "同步工作文件", phaseRemote: "核对远端", phaseVersion: "准备版本", phaseCommit: "提交改动", phasePush: "上传", phaseVerify: "核验上传结果", phaseOther: "正在处理", uploaded: "已上传", deferred: "已暂缓", failed: "失败", verifyRequired: "待核对", detailsAction: "查看此仓库的处理详情" });
+  Object.assign(copy.en, { displayVersion: "View plugin versions", changedPlugins: "Changed plugins", otherPlugins: "Other plugins", uploadHint: "Repository version; independent plugin versions are listed below.", uploadPending: "Upload record needs verification", initialRepositoryVersion: "This repository version will be initialized on its first commit; it has not been saved.", nothingToUpload: "All checked repositories have no changes; no commit or push is needed.", pluginDetails: "Plugin versions", processed: "Processed {n}/{total}", succeeded: "Succeeded {n}", skipped: "Skipped {n}", attention: "Needs attention {n}", review: "Unconfirmed {n}", progressWaiting: "Waiting for a progress receipt…", progressLabel: "Repository progress", phaseQueued: "Queued", phaseCheck: "Checking repository", phaseSync: "Syncing work files", phaseRemote: "Checking remote", phaseVersion: "Preparing versions", phaseCommit: "Committing", phasePush: "Uploading", phaseVerify: "Verifying upload", phaseOther: "Processing", uploaded: "Uploaded", deferred: "Deferred", failed: "Failed", verifyRequired: "Unconfirmed", detailsAction: "View this repository's operation details" });
   Object.assign(copy.zh, { historicalReceipt: "历史回执", historicalHint: "此回执未匹配当前仓库目标，保留原结果；不会按新配置重试。", originalTarget: "原上传目标" });
   Object.assign(copy.en, { historicalReceipt: "Historical receipt", historicalHint: "This receipt does not match the current repository target. Its original result is kept; retrying against the new configuration is unavailable.", originalTarget: "Original upload target" });
   Object.assign(copy.zh, { diagnosis: "原因与下一步", diagnosisRead: "当前读取", diagnosisOperation: "本次执行", diagnosisHistory: "历史执行", diagnosisNext: "下一步", locateSetting: "查看对应设置", recheckRepository: "重新核对此仓库", readingLocal: "读取版本与本地差异…", readingHint: "正在读取本机状态，最多等待 60 秒；不会同步、提交或推送。", updatingLocal: "更新核对中…", readTimeout: "读取已超时", readInvalid: "仓库状态回执不完整", readConnection: "暂时无法读取仓库状态", readNext: "稍后重新核对。原工作、配置与操作回执已保留。", notRead: "此仓库状态尚未核对", notReadNext: "点击重新核对，只读取本机仓库状态。", publishingRead: "上传处理中，结束后可重新核对版本。", waitOperation: "等待原操作完成；不要重复提交。", knownBefore: "显示上次读取结果，当前尚未重新核对。", checkedAt: "上次核对", inspectOriginal: "查看下方原回执。只在确认原目标后继续原请求。", configDraftRead: "配置草稿尚未保存；保留草稿，保存后再核对。" });
@@ -190,6 +190,7 @@
       if (inputPending.size) return text(state.invalid.size ? "invalidConfig" : "editing");
       if (state.saveBusy || state.dirty) return text(state.invalid.size ? "invalidConfig" : "saving");
       if (state.pendingId && !activeStatuses.has(state.operation?.status)) return text("unknown");
+      if (state.notice === "nothingToUpload") return text("nothingToUpload");
       const info = operationProgress(); if (info) return operationText(info) + (state.notice === "pendingUnavailable" ? " · " + text("pendingUnavailable") : "");
       if (blocked()) return text("progressWaiting");
       if (state.notice) return text(state.notice);
@@ -226,7 +227,7 @@
     function catalogFor(repo) { const catalog = state.catalog.get(repo.id); return catalog?.sourceIdentity === sourceIdentity(repo) ? catalog : null; }
     function displayCatalogFor(repo) {
       const catalog = catalogFor(repo), reading = readFor(repo);
-      return catalog && (reading?.busy || reading?.error) ? { ...catalog, displayOnly: true } : catalog;
+      return catalog && !currentCatalog(catalog, reading) ? { ...catalog, displayOnly: true } : catalog;
     }
     function acceptVersionSnapshots(value, sources = sourceIdentities(state.settings), initial = false) {
       if (!plain(value) || !/^[a-f0-9]{64}$/.test(value.cacheIdentity || "") || !Array.isArray(value.versionSources) || !Array.isArray(value.versionSnapshots) || !plain(value.versionReadStates)) return false;
@@ -455,7 +456,23 @@
     function repoChangeState(catalog) {
       if (!catalog || typeof catalog.hasChanges !== "boolean") return "unknown";
       const expected = catalog.hasChanges ? "changed" : "unchanged";
+      if (expected === "unchanged" && (catalog.pendingRecovery !== false || catalog.worktreeChanged !== false
+        || catalog.outgoingCommits !== 0 || catalog.syncChanged !== false || catalog.syncState === "unknown"
+        || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(catalog.headSha || "") || catalog.headSha !== catalog.outgoingBaselineSha)) return "unknown";
       return catalog.changeState === expected ? expected : "unknown";
+    }
+    function currentCatalog(catalog, reading) {
+      const checked = Date.parse(reading?.checkedAt || catalog?.checkedAt || "");
+      return Boolean(catalog && reading && !reading.busy && !reading.error && catalog.readState !== "error"
+        && catalog.displayOnly !== true && catalog.cached !== true && catalog.stale !== true
+        && Number.isFinite(checked) && Date.now() >= checked && Date.now() - checked <= 60000);
+    }
+    function confirmedClean(repo) {
+      const catalog = catalogFor(repo);
+      return currentCatalog(catalog, readFor(repo)) && repoChangeState(catalog) === "unchanged"
+        && catalog.worktreeChanged === false && catalog.outgoingCommits === 0 && catalog.syncChanged === false
+        && (!repo.syncFiles.length || catalog.syncState === "unchanged")
+        && !["warning", "error"].includes(catalog.diagnostic?.severity);
     }
     function changeHint(catalog) {
       const status = repoChangeState(catalog);
@@ -500,10 +517,29 @@
       for (const value of [result?.uploadSummary, state.uploadSummaries.get(repo.id), catalog?.uploadSummary]) if (uploadBindingMatches(value, repo)) return value;
       return null;
     }
-    function uploadNumber(summary) {
-      return summary?.state === "recorded" && Number.isSafeInteger(summary.count) && summary.count >= 0
-        && (summary.count === 0 || /^[0-9a-f]{40,64}$/.test(summary.commitSha || "") && typeof summary.verifiedAt === "string" && Number.isFinite(Date.parse(summary.verifiedAt)))
-        ? text("uploadNumber").replace("{n}", String(summary.count)) : text("uploadUnknown");
+    function repositorySemver(value, historical = false) {
+      const match = typeof value === "string" && value.length <= 100 && value.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+      return Boolean(match && !match[4]?.split(".").some(part => /^\d+$/.test(part) && part.length > 1 && part[0] === "0")
+        && (historical || match[1] !== "0" && !(match[1] === "1" && match[2] === "0" && match[3] === "0" && match[4])));
+    }
+    function repositoryVersionText(catalog) {
+      const version = catalog?.repositoryVersion;
+      if (!plain(version)) return null;
+      if (!["current", "initial"].includes(version.state) || !repositorySemver(version.currentVersion)) return text("versionFailed");
+      const transition = version.transition;
+      if (version.state === "initial" && catalog.displayOnly !== true && catalog.cached !== true && plain(transition)
+        && transition.kind === "initial" && repositorySemver(transition.fromVersion, true)
+        && transition.toVersion === version.currentVersion && transition.fromVersion !== transition.toVersion) {
+        return transition.fromVersion + " → " + version.currentVersion;
+      }
+      if (version.state === "current" && catalog.displayOnly !== true && catalog.cached !== true && plain(transition)
+        && ["working", "planned", "auto"].includes(transition.kind)
+        && repositorySemver(transition.fromVersion) && repositorySemver(transition.toVersion)
+        && transition.fromVersion !== transition.toVersion
+        && (transition.kind === "working" ? transition.toVersion === version.currentVersion : transition.fromVersion === version.currentVersion)) {
+        return transition.fromVersion + " → " + transition.toVersion;
+      }
+      return version.currentVersion;
     }
     function hasMultipleVersions(repo, catalog) { return (catalog?.components || []).length > 1 || (repo.versionSources || []).length > 1 || state.multiBindings.has(displayIdentity(repo)); }
     function componentChangeState(component, catalog) {
@@ -512,13 +548,12 @@
     }
     function versionSummary(repo) {
       const catalog = displayCatalogFor(repo), components = catalog?.components || [];
-      if (hasMultipleVersions(repo, catalog)) return uploadNumber(uploadSummary(repo, catalog));
-      if (!components.length && catalog?.versionState === "missing") return text("authorityMissing");
-      if (!components.length) {
-        if (state.snapshotMode && repo.versionSources.length && !state.versionFailed) return repo.versionSources.length === 1 ? clean(repo.versionSources[0].name, 80) || text("versions") : uploadNumber(uploadSummary(repo, catalog));
-        return text(state.versionBusy ? "loading" : state.versionFailed || catalog?.message ? "versionFailed" : catalog ? "noVersion" : "versionPending");
-      }
-      return componentVersionText(components[0], components.length, catalog);
+      const repositoryVersion = repositoryVersionText(catalog);
+      if (repositoryVersion !== null) return repositoryVersion;
+      const unread = readFor(repo)?.error || catalog?.readState === "error" || catalog?.versionState === "unknown"
+        || catalog?.message && catalog.versionState !== "missing" || state.versionFailed && !catalog;
+      if (hasMultipleVersions(repo, catalog) || !components.length) return text(unread ? "versionFailed" : "versionPending");
+      return repositorySemver(components[0].currentVersion) ? componentVersionText(components[0], components.length, catalog) : text(unread ? "versionFailed" : "versionPending");
     }
     function renderVersionPicker(refs, repo, catalog) {
       const components = catalog?.components || [], multiple = hasMultipleVersions(repo, catalog);
@@ -584,7 +619,7 @@
     function currentRepositoryStatus(catalog, reading, diagnostic) {
       if (reading?.busy) return text(catalog ? "updatingLocal" : "readingLocal");
       if (reading?.error) return text("refreshFailed") + (catalog ? " · " + text("lastKnown") : "");
-      if (catalog?.displayOnly === true || catalog?.cached === true) return text("lastKnown");
+      if (catalog && !currentCatalog(catalog, reading)) return text("lastKnown");
       if (diagnostic && diagnostic.severity !== "info") return diagnosticStatus(diagnostic, "repoAttention");
       return catalog ? changeHint(catalog) : text(blocked() ? "publishingRead" : "notRead");
     }
@@ -601,8 +636,9 @@
       const refreshing = !result && reading?.busy;
       refs.refresh.hidden = !(reading?.busy && !active && !queued); refs.refresh.title = text("refreshing");
       refs.refresh.setAttribute("aria-label", text("refreshing")); refs.cell.dataset.freshness = reading?.busy || reading?.error || catalog?.cached === true ? "last-known" : "current";
-      refs.activity.hidden = !(result || refreshing);
-      refs.track.hidden = !(result || refreshing);
+      const skipped = skippedRepoStatuses.has(result?.status);
+      refs.activity.hidden = skipped || !(result || refreshing);
+      refs.track.hidden = skipped || !(result || refreshing);
       refs.track.dataset.mode = awaitingReceipt ? "unconfirmed" : measured ? "measured" : completed ? "complete" : queued ? "queued" : active || refreshing ? "indeterminate" : "blocked";
       const percent = awaitingReceipt ? null : measured ? Math.floor(100 * current / total) : completed ? 100 : null;
       refs.fill.style.width = percent === null ? "" : String(percent) + "%";
@@ -642,11 +678,11 @@
         const catalog = catalogFor(repo), reading = readFor(repo), changeState = repoChangeState(catalog), diagnostic = normalizedDiagnostic(catalog?.diagnostic);
         const lastCompletion = result && !activeStatuses.has(state.operation?.status) && !state.pendingId && !state.postBusy
           && (successfulRepoStatuses.has(result.status) || skippedRepoStatuses.has(result.status));
-        const lastKnown = Boolean(catalog && (catalog.displayOnly === true || catalog.cached === true || reading?.busy || reading?.error));
-        const displayChangeState = lastKnown ? "unknown" : changeState;
+        const lastKnown = Boolean(catalog && !currentCatalog(catalog, reading));
+        const displayChangeState = lastKnown || changeState === "unchanged" && !confirmedClean(repo) ? "unknown" : changeState;
         refs.name.textContent = repoName(repo); refs.version.textContent = versionSummary(repo); refs.version.dataset.changeState = displayChangeState;
         refs.freshness.hidden = !lastKnown; refs.freshness.textContent = lastKnown ? text(reading?.error ? "refreshFailed" : "lastKnown") : "";
-        refs.version.title = [refs.version.textContent, catalog?.displayOnly === true || reading?.busy || reading?.error ? text("knownBefore") : "", hasMultipleVersions(repo, catalog) ? text("uploadHint") : changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
+        refs.version.title = [refs.version.textContent, lastKnown ? text("knownBefore") : "", catalog?.repositoryVersion?.state === "initial" ? text("initialRepositoryVersion") : "", hasMultipleVersions(repo, catalog) ? text("uploadHint") : changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
         renderVersionPicker(refs, repo, displayCatalogFor(repo));
         refs.status.textContent = repo.enabled !== true ? text("disabledRepo") : originalResult && !result ? text("historicalReceipt") : result && activeStatuses.has(result.status) ? phaseText(result.phase)
           : lastCompletion ? currentRepositoryStatus(catalog, reading, diagnostic)
@@ -898,7 +934,16 @@
     }
     async function run(repoIds) {
       if (!state.allowed || !state.settings || blocked() || state.readBusy || state.saveBusy || state.dirty || state.invalid.size || !enabled().length) return;
-      const requestId = uniqueId(), original = { requestId, repoIds: repoIds || enabled().map(repo => repo.id), createdAt: Date.now(), intent: "commit_and_push" };
+      const selected = (repoIds || enabled().map(repo => repo.id)).filter(id => {
+        const repo = state.settings.repositories.find(item => item.id === id); return !repo || !confirmedClean(repo);
+      });
+      const rank = id => {
+        const repo = state.settings.repositories.find(item => item.id === id), catalog = repo && catalogFor(repo);
+        return repo && currentCatalog(catalog, readFor(repo)) && repoChangeState(catalog) === "changed" ? 0 : 1;
+      };
+      selected.sort((left, right) => rank(left) - rank(right));
+      if (!selected.length) { state.error = ""; state.notice = "nothingToUpload"; render(); return; }
+      const requestId = uniqueId(), original = { requestId, repoIds: selected, createdAt: Date.now(), intent: "commit_and_push" };
       if (!requestId || !persistRequest(original)) { state.error = "noIdentity"; render(); return; }
       state.pendingRequest = original; await sendOriginal(original);
     }

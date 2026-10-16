@@ -67,11 +67,11 @@ function harness(options = {}) {
   const stored = options.storageUnavailable ? { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); }, removeItem() { throw new Error("blocked"); } } : { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   const snapshot = { allowed: true, busy: false, settings: settings(), operation: null, ...(options.snapshot || {}) };
   if (!("settingsSha" in snapshot)) snapshot.settingsSha = settingsSha(snapshot.settings);
-  const catalog = options.catalog || { repositories: snapshot.settings.repositories.map(repo => ({ repoId: repo.id, name: "Music", components: [] })) };
+  const catalog = options.catalog || { repositories: snapshot.settings.repositories.map(repo => ({ repoId: repo.id, name: "Music", components: [], hasChanges: null, changeState: "unknown", pendingRecovery: null })) };
   function versionReply() {
     return { repositories: catalog.repositories.map(item => {
       const repo = snapshot.settings.repositories.find(value => value.id === item.repoId);
-      return { hasChanges: false, changeState: "unchanged", worktreeChanged: false, outgoingCommits: 0, ...structuredClone(item),
+      return { hasChanges: false, changeState: "unchanged", worktreeChanged: false, outgoingCommits: 0, headSha: "c".repeat(40), outgoingBaselineSha: "c".repeat(40), syncChanged: false, syncState: "none", pendingRecovery: false, readState: "ready", ...structuredClone(item),
         components: (item.components || []).map(original => {
           const current = structuredClone(original), plan = repo?.versionPlans?.find(value => value.sourceId === current.sourceId);
           if (!plan || current.planState === "stale") return current;
@@ -98,7 +98,7 @@ function harness(options = {}) {
     throw new Error("Unexpected fixture request: " + url);
   } };
   class MutationObserver { constructor(callback) { this.callback = callback; observers.push(this); } observe(target) { this.target = target; } disconnect() { this.disconnected = true; } }
-  const FixtureDate = options.clock ? class extends Date { static now() { return options.clock.now; } } : Date;
+  const FixtureDate = options.clock ? class extends Date { constructor(...args) { super(...(args.length ? args : [options.clock.now])); } static now() { return options.clock.now; } } : Date;
   runInNewContext(source, { window, document, MutationObserver, WeakMap, Map, Set, Uint8Array, AbortController, Date: FixtureDate, console });
   const byClass = (name, parent = root) => all(parent).find(item => item.className.split(" ").includes(name));
   const fields = name => all().filter(item => item.dataset.field === name);
@@ -333,7 +333,7 @@ await test("patch plans preserve each component format and proof and only save c
   const h = harness({ catalog: { repositories: [{ repoId: "repository-001", components }] } }); await h.ready(); await h.open("repository-001"); let actions = h.all().filter(item => item.className.split(" ").includes("repository-publish-plan-action")); assert.equal(actions.length, 3); assert.equal(actions[2].disabled, true); assert.ok(h.all().some(item => item.textContent === "Custom format is read-only"));
   actions[0].click(); await settle(); actions = h.all().filter(item => item.className.split(" ").includes("repository-publish-plan-action")); actions[1].click(); await settle();
   const plans = h.posts("/config").at(-1).body.settings.repositories[0].versionPlans; assert.deepEqual(plans, components.slice(0, 2).map(item => ({ sourceId: item.sourceId, currentVersion: item.currentVersion, targetVersion: item.nextVersion, expectedSha256: item.expectedSha256, expectedBytes: item.expectedBytes, planProof: item.planProof }))); assert.equal(h.posts("/run").length, 0);
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #?");
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本待读取");
   assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.dataset.sourceId).map(item => item.textContent), ["Unity 0.1 → 0.1.1", "Blender (1, 2, 3) → (1, 2, 4)", "Other 2.3.4"]);
   h.button("取消计划").click(); await settle(); assert.equal(h.posts("/config").at(-1).body.settings.repositories[0].versionPlans.length, 1); assert.equal(h.posts("/run").length, 0);
 });
@@ -352,19 +352,19 @@ await test("completed operation refreshes cleared one-time plans without polling
   h.snapshot.settings.repositories[0].versionPlans = []; h.snapshot.operation = operation(id, "success", [{ repoId: "repository-001", status: "success" }]); await h.poll(); assert.equal(h.posts("/run").length, 1); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 0); await h.open(); assert.equal(h.posts().filter(call => call.url.endsWith("/config")).length, 0); assert.equal(h.all().some(item => item.textContent === "取消计划"), false);
 });
 await test("visible planned operation reads the actual completed version once and does not infer its target", async () => {
-  const comp = component(), plan = { sourceId: comp.sourceId, currentVersion: comp.currentVersion, targetVersion: comp.nextVersion, expectedSha256: comp.expectedSha256, expectedBytes: comp.expectedBytes, planProof: comp.planProof }, h = harness({ snapshot: { settings: settings([repository({ versionPlans: [plan] })]) }, catalog: { repositories: [{ repoId: "repository-001", components: [comp] }] } }); await h.ready(); await h.expand(); assert.match(h.byClass("repository-publish-compact-version").textContent, /2.3.4 → 2.3.5/);
+  const comp = component(), plan = { sourceId: comp.sourceId, currentVersion: comp.currentVersion, targetVersion: comp.nextVersion, expectedSha256: comp.expectedSha256, expectedBytes: comp.expectedBytes, planProof: comp.planProof }, h = harness({ snapshot: { settings: settings([repository({ versionPlans: [plan] })]) }, catalog: { repositories: [{ repoId: "repository-001", components: [comp], hasChanges: true, changeState: "changed", worktreeChanged: true }] } }); await h.ready(); await h.expand(); assert.match(h.byClass("repository-publish-compact-version").textContent, /2.3.4 → 2.3.5/);
   h.byClass("repository-publish-primary").click(); await settle(); const id = h.posts("/run")[0].body.requestId; h.snapshot.settings.repositories[0].versionPlans = []; h.snapshot.operation = operation(id, "success", [{ repoId: "repository-001", status: "success" }]); h.catalog.repositories[0].components[0].currentVersion = "2.3.5"; await h.poll();
   assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.5"); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 2); assert.equal(h.posts("/run").length, 1); assert.equal(h.posts("/config").length, 0);
-  const failed = harness({ snapshot: { settings: settings([repository({ versionPlans: [plan] })]) }, catalog: { repositories: [{ repoId: "repository-001", components: [component()] }] } }); await failed.ready(); await failed.expand(); failed.byClass("repository-publish-primary").click(); await settle(); const failedId = failed.posts("/run")[0].body.requestId; failed.snapshot.settings.repositories[0].versionPlans = []; failed.snapshot.operation = operation(failedId, "attention", [{ repoId: "repository-001", status: "commit_failed" }]); await failed.poll(); assert.equal(failed.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.equal(failed.posts("/run").length, 1);
+  const failed = harness({ snapshot: { settings: settings([repository({ versionPlans: [plan] })]) }, catalog: { repositories: [{ repoId: "repository-001", components: [component()], hasChanges: true, changeState: "changed", worktreeChanged: true }] } }); await failed.ready(); await failed.expand(); failed.byClass("repository-publish-primary").click(); await settle(); const failedId = failed.posts("/run")[0].body.requestId; failed.snapshot.settings.repositories[0].versionPlans = []; failed.snapshot.operation = operation(failedId, "attention", [{ repoId: "repository-001", status: "commit_failed" }]); await failed.poll(); assert.equal(failed.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.equal(failed.posts("/run").length, 1);
 });
 await test("saved source changes invalidate old catalog and a late lookup cannot expose the old component", async () => {
   const delayed = deferred(), old = { repositories: [{ repoId: "repository-001", components: [component()] }] }, fresh = { repositories: [{ repoId: "repository-001", components: [component({ sourceId: "new-source", path: "new-package.json", currentVersion: "4.0.0", nextVersion: "4.0.1" })] }] }; let reads = 0;
   const h = harness({ snapshot: { settings: settings([repository({ versionSources: [{ path: "package.json", kind: "json", key: "version", name: "Module", scope: "" }] })]) }, hook(call) { if (call.url === BASE + "/versions") return ++reads === 1 ? response(old) : reads === 2 ? delayed.promise : response(fresh); } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4"); h.api.open("repository-001"); await settle(); await h.change("versionPath", "new-package.json");
-  assert.equal(h.byClass("repository-publish-plan-action"), undefined); assert.equal(h.byClass("repository-publish-compact-version").textContent, "正在读取…"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 2);
+  assert.equal(h.byClass("repository-publish-plan-action"), undefined); assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本待读取"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 2);
   delayed.resolve(response(old)); await settle(); assert.equal(h.calls.filter(call => call.url.endsWith("/versions")).length, 3); assert.equal(h.byClass("repository-publish-compact-version").textContent, "4.0.0"); h.byClass("repository-publish-plan-action").click(); await settle(); assert.equal(h.posts("/config").at(-1).body.settings.repositories[0].versionPlans[0].sourceId, "new-source"); assert.equal(h.posts("/run").length, 0);
 });
 await test("backend noop is no changes and solid dialog and theme-aware primary colors remain explicit", async () => {
-  const h = harness({ snapshot: { operation: operation(randomUUID(), "success", [{ repoId: "repository-001", status: "noop", uploadSummary: uploadSummary() }]) } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "无改动"); h.locale("en"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "No changes");
+  const h = harness({ snapshot: { operation: operation(randomUUID(), "success", [{ repoId: "repository-001", status: "noop", uploadSummary: uploadSummary() }]) }, catalog: { repositories: [{ repoId: "repository-001", components: [], hasChanges: false, changeState: "unchanged" }] } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "无改动"); h.locale("en"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "No changes");
   assert.match(css, /\.repository-publish-dialog\s*\{[^}]*background:\s*var\(--solid-popover-bg,/); assert.match(css, /\.repository-publish-bar \.repository-publish-primary\s*\{[^}]*color:\s*var\(--bg,[^}]*background:\s*var\(--status-success,/); assert.equal(h.posts().length, 0);
 });
 await test("compact version colors follow real worktree or outgoing state, never a version plan", async () => {
@@ -415,8 +415,8 @@ await test("missing or stale actual version reads never reuse the plan's old cur
 await test("99 rollover and independent module formats are displayed only from backend targets", async () => {
   const components = [component({ currentVersion: "1.6.99", nextVersion: "1.7.0", name: "Console" }),
     component({ sourceId: "second-source", currentVersion: "(1, 99, 99)", nextVersion: "(2, 0, 0)", name: "Plugin" })];
-  const h = harness({ snapshot: { settings: settings([repository({ versionPlans: components.map(planFor) })]) }, catalog: { repositories: [{ repoId: "repository-001", components }] } });
-  await h.ready(); await h.open(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #?");
+  const h = harness({ snapshot: { settings: settings([repository({ versionPlans: components.map(planFor) })]) }, catalog: { repositories: [{ repoId: "repository-001", components, hasChanges: true, changeState: "changed", worktreeChanged: true }] } });
+  await h.ready(); await h.open(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本待读取");
   assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.dataset.sourceId).map(item => item.textContent), ["Console 1.6.99 → 1.7.0", "Plugin (1, 99, 99) → (2, 0, 0)"]);
   assert.equal(h.posts().length, 0); h.byClass("repository-publish-primary").click(); await settle(); assert.equal(h.posts("/run").length, 1);
   assert.deepEqual(Object.keys(h.posts("/run")[0].body).sort(), ["intent", "repoIds", "requestId"]); assert.equal(h.posts("/run")[0].body.intent, "commit_and_push"); assert.equal(h.posts("/config").length, 0);
@@ -466,7 +466,7 @@ await test("branch and exclusion changes reject a late dirty-state catalog", asy
   for (const [field, value] of [["branch", "feature/new"], ["excludes", "private/**"], ["autoBump", false]]) {
     const delayed = deferred(); let reads = 0;
     const old = { repositories: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", components: [component({ currentVersion: "1.0.5", nextVersion: "1.0.6" })] }] };
-    const fresh = { repositories: [{ repoId: "repository-001", hasChanges: false, changeState: "unchanged", components: [component({ currentVersion: "2.0.7", nextVersion: "2.0.8" })] }] };
+    const fresh = { repositories: [{ repoId: "repository-001", hasChanges: false, changeState: "unchanged", worktreeChanged: false, outgoingCommits: 0, headSha: "c".repeat(40), outgoingBaselineSha: "c".repeat(40), syncChanged: false, syncState: "none", pendingRecovery: false, components: [component({ currentVersion: "2.0.7", nextVersion: "2.0.8" })] }] };
     const h = harness({ hook(call) { if (call.url === BASE + "/versions") return ++reads === 1 ? response(old) : reads === 2 ? delayed.promise : response(fresh); } });
     await h.ready(); await h.expand(); await h.open(); await h.change(field, value);
     assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown");
@@ -525,13 +525,13 @@ await test("saved work sync differences stay green without claiming an applied v
   await h.ready(); await h.open(); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "changed"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "有工作文件待同步"); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4");
   h.button("预览标题与改动").click(); await settle(); assert.equal(h.byClass("repository-publish-preview-version").textContent, "2.3.4"); assert.equal(h.posts("/config").length, 0); assert.equal(h.posts("/run").length, 0);
 });
-await test("confirmed missing authority shows fallback naming while failed authority remains an error", async () => {
-  for (const [versionState, expected] of [["missing", "无版本 · 备用标题"], ["unknown", "版本读取失败"]]) {
+await test("missing authority keeps the main version unread while failed authority remains an error", async () => {
+  for (const [versionState, expected] of [["missing", "版本待读取"], ["unknown", "版本读取失败"]]) {
     const h = harness({ catalog: { repositories: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", versionState, message: "No readable authoritative version", components: [] }] }, hook(call) {
       if (call.url === BASE + "/preview") return response({ previews: [{ repoId: "repository-001", versionState, title: "更新进度 2026-10-12 23:00", body: "Modified Build.blend", components: [] }] });
     } });
     await h.ready(); await h.open(); assert.equal(h.byClass("repository-publish-compact-version").textContent, expected); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "changed");
-    h.button("预览标题与改动").click(); await settle(); if (versionState === "missing") assert.equal(h.byClass("repository-publish-preview-version").textContent, expected);
+    h.button("预览标题与改动").click(); await settle(); if (versionState === "missing") assert.equal(h.byClass("repository-publish-preview-version").textContent, "无版本 · 备用标题");
     assert.equal(h.posts("/config").length, 0); assert.equal(h.posts("/run").length, 0);
   }
 });
@@ -588,13 +588,13 @@ await test("a late return catalog cannot repaint a hidden Console or supersede i
 const menuComponents = () => [component({ sourceId: "idle-plugin", name: "Node library", currentVersion: "0.3.1", nextVersion: "0.3.2" }),
   automaticComponent({ sourceId: "changed-plugin", name: "Character Designer", currentVersion: "0.77.25", nextVersion: "0.77.38" }),
   component({ sourceId: "other-plugin", name: "RR Helper", currentVersion: "0.2.60", nextVersion: "0.2.61" })];
-const menuCatalog = (repo = repository(), components = menuComponents(), summary = uploadSummary(repo)) => ({ repoId: repo.id, hasChanges: true, changeState: "changed", worktreeChanged: true, outgoingCommits: 0, components, uploadSummary: summary });
+const menuCatalog = (repo = repository(), components = menuComponents(), summary = uploadSummary(repo), currentVersion = "1.2.3") => ({ repoId: repo.id, hasChanges: true, changeState: "changed", worktreeChanged: true, outgoingCommits: 0, components, uploadSummary: summary, repositoryVersion: { state: "current", currentVersion, transition: null } });
 const rowFor = (h, id = "repository-001") => h.byClass("repository-publish-compact-rows").children.find(row => row.dataset.repoId === id);
 const menuOptions = (h, row = rowFor(h)) => h.all(h.byClass("repository-publish-version-menu", row)).filter(item => item.dataset.sourceId);
-await test("multi-plugin rows show one stable verified upload counter and fact-based plugin details on demand", async () => {
+await test("multi-plugin rows show one repository semantic version and fact-based plugin details on demand", async () => {
   const h = harness({ catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand();
   const picker = h.byClass("repository-publish-version-picker"), trigger = h.byClass("repository-publish-version-trigger");
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #3"); assert.equal(picker.open, false);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.equal(picker.open, false);
   assert.equal(h.visible(menuOptions(h)[0]), false);
   trigger.click(); assert.equal(picker.open, true); assert.equal(h.visible(menuOptions(h)[0]), true);
   const menu = h.byClass("repository-publish-version-menu"), groups = h.all(menu).filter(item => item.tagName === "H4").map(item => item.textContent);
@@ -602,57 +602,58 @@ await test("multi-plugin rows show one stable verified upload counter and fact-b
   assert.deepEqual(menuOptions(h).map(item => [item.dataset.sourceId, item.dataset.changeState, item.textContent]), [["changed-plugin", "changed", "Character Designer 0.77.25 → 0.77.38"], ["idle-plugin", "unchanged", "Node library 0.3.1"], ["other-plugin", "unchanged", "RR Helper 0.2.60"]]);
   assert.equal(h.fields("path").length, 0); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
 });
-await test("plugin details are read-only and old display preferences never turn the upload counter into a chosen plugin", async () => {
+await test("plugin details are read-only and old display preferences never replace the repository version with a chosen plugin", async () => {
   const repo = repository(), legacy = JSON.stringify({ [JSON.stringify([repo.id, repo.path, repo.repositoryUrl, repo.remote, repo.branch])]: "idle-plugin" }), storage = new Map([[DISPLAY_KEY, legacy]]);
   const h = harness({ storage, catalog: { repositories: [menuCatalog(repo)] } }); await h.ready(); await h.expand();
   const reads = h.calls.length, settingsBefore = structuredClone(h.snapshot.settings); h.byClass("repository-publish-version-trigger").click();
   for (const item of menuOptions(h)) { assert.notEqual(item.tagName, "BUTTON"); item.click(); }
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #3"); assert.equal(h.storage.get(DISPLAY_KEY), legacy);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.equal(h.storage.get(DISPLAY_KEY), legacy);
   assert.equal(h.calls.length, reads); assert.equal(h.posts().length, 0); assert.deepEqual(h.snapshot.settings, settingsBefore); assert.equal(h.api.hasDraft(), false); assert.equal(h.api.canReload(), true);
   assert.equal(h.byClass("repository-publish-primary").disabled, false); assert.equal(h.button("自动显示有改动的插件"), undefined);
 });
-await test("reload and plan consumption read the real current upload counter instead of inferring from plugin versions", async () => {
+await test("reload and plan consumption preserve the repository version independently of plugin versions and upload counts", async () => {
   const storage = new Map(), first = harness({ storage, catalog: { repositories: [menuCatalog()] } }); await first.ready(); await first.expand(); first.api.destroy();
   const repo = repository(), components = menuComponents(); components[0] = component({ ...components[0], currentVersion: "8.5.17", nextVersion: "8.5.18", worktreeChanged: true });
   const summary = uploadSummary(repo, { count: 4, commitSha: "b".repeat(40), verifiedAt: "2026-10-14T01:00:00Z" });
   const h = harness({ storage, snapshot: { settings: settings([{ ...repo, versionPlans: [planFor(components[1])] }]) }, catalog: { repositories: [menuCatalog(repo, components, summary)] } });
-  await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #4");
+  await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3");
   h.snapshot.settings.repositories[0].versionPlans = []; h.snapshot.settingsSha = settingsSha(h.snapshot.settings); await h.emitWindow("focus");
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #4"); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
   assert.ok(menuOptions(h).some(item => item.textContent === "Node library 8.5.17"));
 });
-await test("upload counters remain isolated by repository and reject a previous branch destination", async () => {
+await test("repository versions remain isolated by repository and reject a previous branch destination", async () => {
   const repos = [repository(), repository({ id: "repository-002", path: "D:/Other", repositoryUrl: "https://github.com/example/Other", branch: "feature/other" })];
-  const h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: repos.map((repo, i) => menuCatalog(repo, menuComponents(), uploadSummary(repo, { count: i + 3 }))) } }); await h.ready(); await h.expand();
-  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "上传 #3"); assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).textContent, "上传 #4");
+  const h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: repos.map((repo, i) => menuCatalog(repo, menuComponents(), uploadSummary(repo, { count: i + 3 }), i ? "1.5.0" : "1.2.3")) } }); await h.ready(); await h.expand();
+  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "1.2.3"); assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).textContent, "1.5.0");
+  h.catalog.repositories[0].repositoryVersion.currentVersion = "1.8.0";
   await h.open(repos[0].id); await h.change("branch", "feature/new-bound-branch");
-  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "上传 #?"); assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).textContent, "上传 #4");
+  assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "1.8.0"); assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).textContent, "1.5.0");
   assert.equal(h.posts("/config").length, 1); assert.equal(h.posts("/run").length, 0);
 });
-await test("removed plugin sources refresh the details without changing the independent upload counter", async () => {
+await test("removed plugin sources refresh the details without changing the independent repository version", async () => {
   const h = harness({ catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand();
   h.catalog.repositories[0].components = menuComponents().filter(item => item.sourceId !== "idle-plugin"); await h.emitWindow("focus");
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #3"); assert.equal(menuOptions(h).length, 2); assert.equal(menuOptions(h).some(item => item.dataset.sourceId === "idle-plugin"), false);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.equal(menuOptions(h).length, 2); assert.equal(menuOptions(h).some(item => item.dataset.sourceId === "idle-plugin"), false);
   h.catalog.repositories[0].components = menuComponents(); await h.emitWindow("focus");
   assert.equal(h.all().filter(item => item.className.split(" ").includes("repository-publish-compact-version")).length, 1); assert.equal(h.posts().length, 0);
 });
-await test("unavailable browser storage never blocks read-only counter and plugin detail rendering", async () => {
+await test("unavailable browser storage never blocks repository-version and plugin detail rendering", async () => {
   const h = harness({ storageUnavailable: true, catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand();
   const reads = h.calls.length; h.byClass("repository-publish-version-trigger").click(); for (const item of menuOptions(h)) item.click();
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #3"); assert.equal(h.byClass("repository-publish-primary").disabled, false);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.equal(h.byClass("repository-publish-primary").disabled, false);
   assert.equal(h.api.hasDraft(), false); assert.equal(h.api.canReload(), true); assert.equal(h.calls.length, reads); assert.equal(h.posts().length, 0);
 });
-await test("locale changes translate the upload counter and detail labels without changing any versions or plans", async () => {
+await test("locale changes preserve the repository semantic version and translate detail labels without changing plans", async () => {
   const h = harness({ catalog: { repositories: [menuCatalog()] } }); await h.ready(); await h.expand();
   const settingsBefore = structuredClone(h.snapshot.settings), reads = h.calls.length; h.byClass("repository-publish-version-trigger").click(); h.locale("en");
   assert.equal(h.byClass("repository-publish-version-picker").open, false);
   assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.tagName === "H4").map(item => item.textContent), ["Plugin versions", "Changed plugins", "Other plugins"]);
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "Push #3"); assert.deepEqual(h.snapshot.settings, settingsBefore); assert.equal(h.calls.length, reads); assert.equal(h.posts().length, 0);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.deepEqual(h.snapshot.settings, settingsBefore); assert.equal(h.calls.length, reads); assert.equal(h.posts().length, 0);
 });
-await test("unknown plugin changes and unknown upload receipts are not presented as unchanged or a fabricated count", async () => {
+await test("unknown plugin changes and missing repository authority are not presented as unchanged or a fabricated version", async () => {
   const unknown = component({ sourceId: "unknown-plugin", name: "Unknown", worktreeChanged: null, versionChanged: null }), other = component({ sourceId: "known-plugin", name: "Other", worktreeChanged: null, versionChanged: null });
   const h = harness({ catalog: { repositories: [{ repoId: "repository-001", hasChanges: null, changeState: "unknown", worktreeChanged: null, components: [unknown, other], uploadSummary: uploadSummary(repository(), { state: "unknown", count: null, reason: "Historical uploads cannot be verified" }) }] } }); await h.ready(); await h.expand();
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #?"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "变化未核对");
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本待读取"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "变化未核对");
   assert.deepEqual(menuOptions(h).map(item => item.dataset.changeState), ["unknown", "unknown"]); const labels = h.all(h.byClass("repository-publish-version-menu")).map(item => item.textContent).join(" "); assert.doesNotMatch(labels, /无改动|无变化|本次有改动/); assert.equal(h.posts().length, 0);
 });
 await test("read-only upload detail menus close on Escape and outside click and opening another closes the first", async () => {
@@ -666,18 +667,18 @@ await test("read-only upload detail menus close on Escape and outside click and 
 await test("refresh and hiding or collapsing Console close old details without showing a long plugin label", async () => {
   const repo = repository({ versionSources: [{ path: "plugins/Designer/__init__.py", kind: "bl_info", key: "version", name: "Designer" }, { path: "plugins/Nodes/__init__.py", kind: "bl_info", key: "version", name: "Nodes" }] }), summary = uploadSummary(repo), h = harness({ snapshot: { settings: settings([repo]), uploadSummaries: [{ repoId: repo.id, ...summary }] }, catalog: { repositories: [menuCatalog(repo)] } }); await h.ready(); await h.expand();
   const picker = h.byClass("repository-publish-version-picker"), trigger = h.byClass("repository-publish-version-trigger"), pending = deferred(); trigger.click();
-  h.hook(call => call.url === BASE + "/versions" ? pending.promise : undefined); await h.emitWindow("focus"); assert.equal(picker.open, false); assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #3");
+  h.hook(call => call.url === BASE + "/versions" ? pending.promise : undefined); await h.emitWindow("focus"); assert.equal(picker.open, false); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3");
   pending.resolve(response({ repositories: [menuCatalog(repo)] })); await settle(); h.hook(null); trigger.click(); await h.setPanelHidden(true); assert.equal(picker.open, false); await h.setPanelHidden(false);
   trigger.click(); await h.expand(); assert.equal(picker.open, false); await h.expand(); assert.equal(picker.open, false);
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #3"); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
 });
-await test("missing legacy or malformed upload summaries degrade to unknown instead of guessing from Git or version numbers", async () => {
+await test("missing or malformed upload summaries never replace an authoritative repository semantic version", async () => {
   const repo = repository();
   for (const summary of [undefined, null, {}, uploadSummary(repo, { count: -1 }), uploadSummary(repo, { count: 1.5 }), uploadSummary(repo, { count: "7" }), uploadSummary(repo, { state: "success" }), uploadSummary(repo, { source: "git_history" }), uploadSummary(repo, { state: "pending", count: null }), uploadSummary(repo, { binding: null }), uploadSummary(repo, { commitSha: "invalid" }), uploadSummary(repo, { verifiedAt: "not a date" }), uploadSummary(repo, { binding: { ...uploadSummary(repo).binding, remote: "different-origin" } })]) {
     const h = harness({ catalog: { repositories: [menuCatalog(repo, menuComponents(), summary)] } }); if (summary === undefined) delete h.catalog.repositories[0].uploadSummary; await h.ready(); await h.expand();
-    assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #?"); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
+    assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
   }
-  const zero = harness({ catalog: { repositories: [menuCatalog(repo, menuComponents(), uploadSummary(repo, { count: 0, commitSha: "", verifiedAt: "", startedAt: "" }))] } }); await zero.ready(); await zero.expand(); assert.equal(zero.byClass("repository-publish-compact-version").textContent, "上传 #0");
+  const zero = harness({ catalog: { repositories: [menuCatalog(repo, menuComponents(), uploadSummary(repo, { count: 0, commitSha: "", verifiedAt: "", startedAt: "" }))] } }); await zero.ready(); await zero.expand(); assert.equal(zero.byClass("repository-publish-compact-version").textContent, "1.2.3");
 });
 const progressText = h => h.byClass("repository-publish-status").textContent;
 const assertProgress = (h, finished, total) => { const text = progressText(h); assert.match(text, new RegExp(`\\b${finished}\\s*[/／]\\s*${total}\\b`)); assert.doesNotMatch(text, /\d+(?:\.\d+)?\s*%/); assert.equal(h.byClass("repository-publish-progress"), undefined, "there must be no aggregate progress bar in the toolbar"); return text; };
@@ -702,7 +703,7 @@ await test("completed mixed batch distinguishes successful uploads, skips, failu
 });
 await test("all-noop completion never reports successful uploads or advances any upload counter", async () => {
   const repos = progressRepos(), id = randomUUID(), h = harness({ snapshot: { settings: settings(repos), operation: operation(id, "success", repos.map(repo => progressItem(repo, "noop", "complete"))) }, catalog: { repositories: [menuCatalog(repos[0])] } }); await h.ready(); await h.expand();
-  const text = assertProgress(h, 5, 5); assert.match(text, /跳过\s*5/); assert.doesNotMatch(text, /成功\s*[1-9]|已上传\s*[1-9]|已推送\s*[1-9]/); assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "上传 #3"); assert.equal(h.posts().length, 0);
+  const text = assertProgress(h, 5, 5); assert.match(text, /跳过\s*5/); assert.doesNotMatch(text, /成功\s*[1-9]|已上传\s*[1-9]|已推送\s*[1-9]/); assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "1.2.3"); assert.equal(h.posts().length, 0);
 });
 await test("poll disconnection retains the pending operation and last known progress without resending", async () => {
   const repos = progressRepos(), id = randomUUID(), original = operation(id, "working", [progressItem(repos[0], "success", "complete"), progressItem(repos[1], "working", "push"), ...repos.slice(2).map(repo => progressItem(repo))]);
@@ -710,19 +711,19 @@ await test("poll disconnection retains the pending operation and last known prog
   const text = assertProgress(h, 1, 5); assert.match(text, /核对|确认|读取|连接|追踪/); assert.equal(h.storage.get(KEY), id); assert.equal(h.byClass("repository-publish-primary").disabled, true); assert.equal(h.posts().length, 0);
   h.hook(null); h.snapshot.operation = operation(id, "attention", repos.map((repo, i) => progressItem(repo, i < 2 ? "success" : "deferred", "complete"))); await h.poll(); assertProgress(h, 5, 5); assert.equal(h.storage.has(KEY), false); assert.equal(h.posts().length, 0);
 });
-await test("working multi-plugin rows keep their upload counter and show real phase without reverting to plugin text", async () => {
+await test("working multi-plugin rows keep their repository version and show real phase without reverting to plugin text", async () => {
   const repo = repository(), summary = uploadSummary(repo), h = harness({ snapshot: { uploadSummaries: [{ repoId: repo.id, ...summary }] }, catalog: { repositories: [menuCatalog(repo)] } }); await h.ready(); await h.expand();
   h.byClass("repository-publish-primary").click(); await settle(); const id = h.posts("/run")[0].body.requestId;
   h.snapshot.operation = operation(id, "working", [progressItem(repo, "working", "push")]); await h.poll();
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #3"); assert.doesNotMatch(h.byClass("repository-publish-compact-version").textContent, /Node library|Character|RR Helper/); assert.match(h.byClass("repository-publish-compact-status").textContent, /推送|上传/); assertProgress(h, 0, 1); assert.equal(h.posts("/run").length, 1);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.doesNotMatch(h.byClass("repository-publish-compact-version").textContent, /Node library|Character|RR Helper/); assert.match(h.byClass("repository-publish-compact-status").textContent, /推送|上传/); assertProgress(h, 0, 1); assert.equal(h.posts("/run").length, 1);
   const completed = uploadSummary(repo, { count: 4, commitSha: "b".repeat(40), verifiedAt: "2026-10-14T01:00:00Z" }); h.snapshot.uploadSummaries = [{ repoId: repo.id, ...completed }]; h.catalog.repositories[0].uploadSummary = completed;
   h.snapshot.operation = operation(id, "success", [{ ...progressItem(repo, "success", "complete"), uploadSummary: completed }]); await h.poll();
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #4"); assertProgress(h, 1, 1); assert.equal(h.posts("/run").length, 1); assert.equal(h.posts("/config").length, 0);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assertProgress(h, 1, 1); assert.equal(h.posts("/run").length, 1); assert.equal(h.posts("/config").length, 0);
 });
-await test("a stale operation binding cannot contribute an upload counter to a newly configured destination", async () => {
+await test("a stale operation binding cannot replace the newly configured repository version", async () => {
   const repo = repository(), current = { ...repo, branch: "feature/rebound" }, id = randomUUID(), stale = uploadSummary(repo, { count: 91 });
   const h = harness({ snapshot: { settings: settings([current]), operation: operation(id, "attention", [{ ...progressItem(repo, "push_failed", "push"), uploadSummary: stale }]), uploadSummaries: [{ repoId: repo.id, ...stale }] }, catalog: { repositories: [menuCatalog(current, menuComponents(), { ...stale })] } }); await h.ready(); await h.expand();
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #?"); assert.equal(h.posts().length, 0);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3"); assert.equal(h.posts().length, 0);
 });
 await test("a terminal batch with an unrecognized row status never pretends all repositories finished", async () => {
   const repos = progressRepos(), id = randomUUID(), statuses = ["success", "noop", "deferred", "verification_required", "unrecognized_old_status"];
@@ -739,9 +740,9 @@ await test("a confirmed upload with pending counter persistence remains successf
   const repo = repository({ versionSources: [{ path: "plugins/Designer/__init__.py", kind: "bl_info", key: "version" }, { path: "plugins/Nodes/__init__.py", kind: "bl_info", key: "version" }] }), id = randomUUID();
   const pending = uploadSummary(repo, { state: "pending", count: null, reason: "Upload confirmed; counter persistence needs recovery" });
   const h = harness({ snapshot: { settings: settings([repo]), uploadSummaries: [{ repoId: repo.id, ...pending }], operation: operation(id, "success", [{ ...progressItem(repo, "success", "complete"), uploadSummary: pending }]) }, catalog: { repositories: [menuCatalog(repo, menuComponents(), pending)] } }); await h.ready(); await h.expand();
-  const text = assertProgress(h, 1, 1); assert.match(text, /成功\s*1/); assert.match(text, /上传计数待核对\s*1/); assert.doesNotMatch(text, /需处理|失败|(?<!计数)待核对\s*1/);
-  assert.equal(h.byClass("repository-publish-progress"), undefined); assert.equal(h.byClass("repository-publish-compact-version").textContent, "上传 #?");
-  const status = h.byClass("repository-publish-compact-status"); assert.equal(status.textContent, "有待提交改动"); assert.match(h.byClass("repository-publish-row-history").textContent, /上次上传.*计数待核对/); assert.doesNotMatch(status.textContent, /失败/); assert.equal(h.posts().length, 0);
+  const text = assertProgress(h, 1, 1); assert.match(text, /成功\s*1/); assert.match(text, /上传记录待核对\s*1/); assert.doesNotMatch(text, /需处理|失败|(?<!记录)待核对\s*1/);
+  assert.equal(h.byClass("repository-publish-progress"), undefined); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.2.3");
+  const status = h.byClass("repository-publish-compact-status"); assert.equal(status.textContent, "有待提交改动"); assert.match(h.byClass("repository-publish-row-history").textContent, /上次上传.*记录待核对/); assert.doesNotMatch(status.textContent, /失败/); assert.equal(h.posts().length, 0);
   status.click(); await settle(); const retry = h.button("继续此仓库"); assert.ok(retry); assert.equal(retry.disabled, false); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
   retry.click(); retry.click(); await settle(); assert.equal(h.posts("/run").length, 1); assert.deepEqual(h.posts("/run")[0].body.repoIds, [repo.id]); assert.notEqual(h.posts("/run")[0].body.requestId, id); assert.equal(h.posts("/config").length, 0);
 });
@@ -753,7 +754,7 @@ await test("an explicit status refresh disconnection keeps known repository prog
 });
 await test("changing branch or path never labels the new target Uploaded from a previous successful receipt", async () => {
   for (const [field, target] of [["branch", "feature/new-target"], ["path", "D:/New/Checkout"]]) {
-    const repo = repository(), id = randomUUID(), h = harness({ snapshot: { settings: settings([repo]), operation: operation(id, "success", [progressItem(repo, "success", "complete")]) } }); await h.ready(); await h.expand();
+    const repo = repository(), id = randomUUID(), h = harness({ snapshot: { settings: settings([repo]), operation: operation(id, "success", [progressItem(repo, "success", "complete")]) }, catalog: { repositories: [{ repoId: repo.id, components: [], hasChanges: false, changeState: "unchanged" }] } }); await h.ready(); await h.expand();
     assert.equal(h.byClass("repository-publish-compact-status").textContent, "无改动"); assert.equal(h.byClass("repository-publish-row-history").textContent, "上次上传"); await h.open(repo.id); await h.change(field, target); h.button("关闭").click();
     const status = h.byClass("repository-publish-compact-status"); assert.match(status.textContent, /历史回执/); assert.doesNotMatch(status.textContent, /已上传/); status.click(); await settle();
     assert.equal(h.byClass("repository-publish-dialog").open, true); const detailText = h.all(h.byClass("repository-publish-results")).map(item => item.textContent).join(" "); assert.match(detailText, /历史回执|历史目标|原.*目标/); assert.ok(detailText.includes(repo.path)); assert.ok(detailText.includes(repo.branch));
@@ -857,9 +858,10 @@ await test("an asynchronous recheck updates the reason without stealing focus, s
 });
 const cachedEnvelope = (repo, item, readState = "reading", extra = {}) => {
   const sourceIdentity = "fixture-saved-source-" + settingsSha(repo);
+  const checkedAt = readState === "ready" ? new Date().toISOString() : "2026-10-14T01:00:00Z";
   return { cacheIdentity: "c".repeat(64), versionSources: [{ repoId: repo.id, sourceIdentity }],
-    versionSnapshots: item ? [{ repoId: repo.id, hasChanges: true, changeState: "changed", worktreeChanged: true, components: [component()], ...item, sourceIdentity, checkedAt: "2026-10-14T01:00:00Z", displayOnly: readState !== "ready" }] : [],
-    versionReadStates: { [repo.id]: { sourceIdentity, state: readState, startedAt: "2026-10-14T01:01:00Z", checkedAt: "2026-10-14T01:00:00Z", message: readState === "error" ? "Local reader unavailable" : "" } }, complete: ["ready", "error", "idle"].includes(readState), refreshingIds: ["queued", "reading"].includes(readState) ? [repo.id] : [], repositories: [], ...extra };
+    versionSnapshots: item ? [{ repoId: repo.id, hasChanges: true, changeState: "changed", worktreeChanged: true, outgoingCommits: 0, headSha: "c".repeat(40), outgoingBaselineSha: "c".repeat(40), syncChanged: false, syncState: "none", pendingRecovery: false, components: [component()], ...item, sourceIdentity, checkedAt, displayOnly: readState !== "ready" }] : [],
+    versionReadStates: { [repo.id]: { sourceIdentity, state: readState, startedAt: "2026-10-14T01:01:00Z", checkedAt, message: readState === "error" ? "Local reader unavailable" : "" } }, complete: ["ready", "error", "idle"].includes(readState), refreshingIds: ["queued", "reading"].includes(readState) ? [repo.id] : [], repositories: [], ...extra };
 };
 const completedUpload = repo => ({ ...progressItem(repo, "success", "complete"), progress: { phase: "complete", state: "complete", scope: "repository", source: "receipt", percent: 100 } });
 await test("fresh changes remain primary after a successful old upload without inventing an applied version", async () => {
@@ -921,9 +923,9 @@ await test("a fast initial snapshot paints known versions and changes before the
   pending.resolve(response(cachedEnvelope(repo, { components: [component({ currentVersion: "2.3.5" })] }, "ready"))); await settle();
   assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.5"); assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, true); assert.equal(h.timers.size, 0);
 });
-await test("first use shows configured component identity instead of an empty Pending value", async () => {
+await test("first use shows an explicit unread version instead of a component name or fabricated repository version", async () => {
   const repo = repository({ versionSources: [{ path: "package.json", kind: "json", key: "version", name: "Music component" }] }), envelope = cachedEnvelope(repo, null), h = harness({ snapshot: { settings: settings([repo]), ...envelope }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return new Promise(() => {}); } });
-  await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "Music component"); assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, false); assert.equal(h.posts().length, 0); h.api.destroy();
+  await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本待读取"); assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, false); assert.equal(h.posts().length, 0); h.api.destroy();
 });
 await test("a failed snapshot refresh preserves the last-known values, disables stale version writes and stops polling", async () => {
   const repo = repository(), cached = cachedEnvelope(repo, {}, "idle"), h = harness({ snapshot: cached, hook(call) { if (call.url.includes("/versions?snapshot=1")) return { ok: false, status: 503, json: async () => ({ error: "Current local read unavailable" }) }; } });
@@ -1228,5 +1230,124 @@ await test("unknown, hostile or ill-typed Git metadata is omitted without fabric
 await test("a permissive chat check cannot erase a legacy Git failure with an unknown diagnostic category", async () => {
   const repo = repository(), envelope = activityEnvelope(repo), reason = diagnostic({ code: "legacy_git_error", category: "unknown", summary: "The original Git operation failed before uploading.", target: null }), h = harness({ lang: "en", snapshot: { ...envelope, operation: operation(randomUUID(), "attention", [blockedReceipt(repo, reason)]) }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return response(envelope); if (call.url.startsWith(BASE + "/activity?")) return response(policyActivityReply(repo)); } });
   await h.ready(); await h.expand(); h.byClass("repository-publish-compact-status").click(); await settle(); assert.equal(h.byClass("repository-publish-compact-status").textContent, "Upload paused · See why"); assert.equal(h.byClass("repository-publish-row-reason").textContent, reason.summary); assert.equal(h.byClass("repository-publish-current-activity-summary").textContent, "A chat is working; saved work may be uploaded."); assert.equal(h.byClass("repository-publish-diagnosis-summary").textContent, reason.summary); assert.equal(h.posts().length, 0);
+});
+const freshCleanCatalog = (repo, extra = {}) => ({ repoId: repo.id, components: [component()], repositoryVersion: { state: "current", currentVersion: "2.3.4", transition: null },
+  hasChanges: false, changeState: "unchanged", worktreeChanged: false, outgoingCommits: 0, headSha: "c".repeat(40), outgoingBaselineSha: "c".repeat(40), syncChanged: false, syncState: "none", pendingRecovery: false, readState: "ready", ...extra });
+await test("a new batch omits freshly confirmed clean rows and preserves stable green-before-unknown order", async () => {
+  const repos = [repository(), repository({ id: "unknown-repo", path: "D:/Unknown" }), repository({ id: "green-second", path: "D:/Green2" }), repository({ id: "green-first", path: "D:/Green1" })];
+  const catalogs = [freshCleanCatalog(repos[0]), freshCleanCatalog(repos[1], { hasChanges: null, changeState: "unknown", worktreeChanged: null, pendingRecovery: null }),
+    ...repos.slice(2).map(repo => freshCleanCatalog(repo, { hasChanges: true, changeState: "changed", worktreeChanged: true }))];
+  const h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: catalogs }, hook(call) {
+    if (call.url === BASE + "/run") return response(operation(call.body.requestId, "queued", call.body.repoIds.map(id => progressItem(repos.find(repo => repo.id === id)))));
+  } });
+  await h.ready(); await h.expand(); h.byClass("repository-publish-primary").click(); await settle();
+  const posted = h.posts("/run"); assert.equal(posted.length, 1); assert.deepEqual(posted[0].body.repoIds, ["green-second", "green-first", "unknown-repo"]);
+  assert.deepEqual(JSON.parse(h.storage.get(KEY + ".payload")).repoIds, posted[0].body.repoIds); assert.equal(posted[0].body.intent, "commit_and_push");
+  assert.equal(h.byClass("repository-publish-row-activity", rowFor(h, repos[0].id)).hidden, true); assertProgress(h, 0, 3);
+});
+await test("all freshly clean repositories perform no POST or identity allocation and preserve their existing rows", async () => {
+  const repos = [repository(), repository({ id: "second-clean", path: "D:/Second" })], h = harness({ snapshot: { settings: settings(repos), operation: operation(randomUUID(), "success", repos.map(repo => progressItem(repo, "noop", "complete"))) }, catalog: { repositories: repos.map(repo => freshCleanCatalog(repo)) } });
+  await h.ready(); await h.expand(); const before = structuredClone(h.snapshot.settings); h.byClass("repository-publish-primary").click(); await settle();
+  assert.equal(h.posts().length, 0); assert.equal(h.storage.has(KEY), false); assert.equal(h.storage.has(KEY + ".payload"), false);
+  assert.match(progressText(h), /均无改动.*无需提交或推送/); assert.deepEqual(h.snapshot.settings, before);
+  for (const repo of repos) { const row = rowFor(h, repo.id); assert.equal(h.byClass("repository-publish-compact-version", row).dataset.changeState, "unchanged"); assert.equal(h.byClass("repository-publish-row-activity", row).hidden, true); }
+});
+await test("unknown recovery, outgoing state, sync comparison, or stale display never narrows a new request", async () => {
+  for (const extra of [{ pendingRecovery: null }, { pendingRecovery: undefined }, { pendingRecovery: true }, { worktreeChanged: null }, { outgoingCommits: null }, { outgoingCommits: 1 },
+    { syncChanged: null }, { syncState: "unknown" }, { displayOnly: true }, { cached: true }, { stale: true }, { readState: "error" }]) {
+    const repo = repository(), h = harness({ catalog: { repositories: [freshCleanCatalog(repo, extra)] } }); await h.ready(); await h.expand();
+    assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown", JSON.stringify(extra));
+    h.byClass("repository-publish-primary").click(); await settle(); assert.deepEqual(h.posts("/run")[0].body.repoIds, [repo.id]);
+  }
+});
+await test("sync-file repositories are omitted only after a current successful external comparison", async () => {
+  const repo = repository({ syncFiles: [{ source: "D:/Saved/work.txt", target: "work.txt" }] });
+  for (const syncState of ["none", "unknown", undefined]) {
+    const h = harness({ snapshot: { settings: settings([repo]) }, catalog: { repositories: [freshCleanCatalog(repo, { syncState })] } }); await h.ready(); await h.expand();
+    assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); h.byClass("repository-publish-primary").click(); await settle(); assert.equal(h.posts("/run").length, 1);
+  }
+  const clean = harness({ snapshot: { settings: settings([repo]) }, catalog: { repositories: [freshCleanCatalog(repo, { syncState: "unchanged" })] } }); await clean.ready(); await clean.expand();
+  clean.byClass("repository-publish-primary").click(); await settle(); assert.equal(clean.posts().length, 0);
+});
+await test("a formerly clean catalog past the freshness bound is visibly unknown and remains selected", async () => {
+  const clock = { now: Date.parse("2026-10-16T02:30:00Z") }, repo = repository(), h = harness({ clock, catalog: { repositories: [freshCleanCatalog(repo)] } });
+  await h.ready(); await h.expand(); clock.now += 60001; h.locale("en");
+  assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.match(h.byClass("repository-publish-version-freshness").textContent, /Last known/i);
+  h.byClass("repository-publish-primary").click(); await settle(); assert.equal(h.posts("/run").length, 1);
+});
+await test("a behind or unverifiable local baseline cannot become a white row or disappear from a new request", async () => {
+  for (const extra of [{ outgoingBaselineSha: "d".repeat(40) }, { outgoingBaselineSha: "" }, { outgoingBaselineSha: null }, { headSha: "invalid", outgoingBaselineSha: "invalid" }, { headSha: null, outgoingBaselineSha: null }]) {
+    const repo = repository(), h = harness({ catalog: { repositories: [freshCleanCatalog(repo, extra)] } }); await h.ready(); await h.expand();
+    assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.byClass("repository-publish-compact-status").textContent, "变化未核对");
+    h.byClass("repository-publish-primary").click(); await settle(); assert.deepEqual(h.posts("/run")[0].body.repoIds, [repo.id]);
+  }
+});
+await test("an old pending request retains its exact original clean-inclusive scope and order", async () => {
+  const repos = [repository(), repository({ id: "green-repo", path: "D:/Green" })], id = randomUUID(), original = { requestId: id, repoIds: repos.map(repo => repo.id), createdAt: Date.now(), intent: "commit_and_push" };
+  const storage = new Map([[KEY, id], [KEY + ".payload", JSON.stringify(original)]]), h = harness({ storage, snapshot: { settings: settings(repos) }, catalog: { repositories: [freshCleanCatalog(repos[0]), freshCleanCatalog(repos[1], { hasChanges: true, changeState: "changed", worktreeChanged: true })] }, hook(call) {
+    if (call.url.startsWith(BASE + "/operation?")) return response(null);
+  } });
+  await h.ready(); await h.poll(); await h.open(); const resume = h.button("继续原请求"); assert.ok(resume); assert.equal(resume.hidden, false); resume.click(); await settle();
+  assert.deepEqual(h.posts("/run")[0].body, { requestId: id, repoIds: original.repoIds, intent: "commit_and_push" });
+});
+await test("server-confirmed noops have no phase or progress track during another repository upload", async () => {
+  const repos = [repository(), repository({ id: "uploading-repo", path: "D:/Uploading" })], rows = [progressItem(repos[0], "noop", "complete"), progressItem(repos[1], "working", "push")];
+  const h = harness({ snapshot: { settings: settings(repos), operation: operation(randomUUID(), "working", rows) }, catalog: { repositories: [freshCleanCatalog(repos[0]), freshCleanCatalog(repos[1], { hasChanges: true, changeState: "changed", worktreeChanged: true })] } });
+  await h.ready(); await h.expand(); const skipped = rowFor(h, repos[0].id); assert.equal(h.byClass("repository-publish-row-activity", skipped).hidden, true); assert.equal(h.byClass("repository-publish-row-progress", skipped).hidden, true);
+  assert.equal(h.byClass("repository-publish-row-progress", rowFor(h, repos[1].id)).hidden, false); assertProgress(h, 1, 2);
+  h.snapshot.operation = operation(h.snapshot.operation.requestId, "success", [rows[0], progressItem(repos[1], "success", "complete")]); await h.poll(); assert.match(assertProgress(h, 2, 2), /成功\s*1.*跳过\s*1/);
+});
+await test("repository semantic authority replaces every upload count while keeping plugin versions independent", async () => {
+  for (const count of [0, 5, null]) {
+    const repo = repository(), item = menuCatalog(repo, menuComponents(), uploadSummary(repo, { count }), "1.0.0"), h = harness({ catalog: { repositories: [item] } });
+    await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.0.0"); h.locale("en"); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.0.0");
+    assert.ok(menuOptions(h).some(option => option.textContent.includes("0.77.25"))); assert.doesNotMatch(h.all().map(node => node.textContent).join(" "), /Push\s*#|上传\s*#/); assert.equal(h.posts().length, 0);
+  }
+});
+await test("an initial repository floor is visibly an unsaved preview and never rewrites independent plugins", async () => {
+  const item = menuCatalog(); item.repositoryVersion = { state: "initial", currentVersion: "1.0.0", transition: null };
+  const h = harness({ catalog: { repositories: [item] } }); await h.ready(); await h.expand(); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.0.0"); assert.match(h.byClass("repository-publish-compact-version").title, /首次提交.*尚未保存/);
+  assert.deepEqual(menuOptions(h).map(option => option.textContent), ["Character Designer 0.77.25 → 0.77.38", "Node library 0.3.1", "RR Helper 0.2.60"]); assert.equal(h.posts().length, 0);
+});
+await test("invalid repository authority never falls back to a plugin or upload sequence", async () => {
+  for (const repositoryVersion of [{ state: "unknown", currentVersion: "1.2.3" }, { state: "current", currentVersion: "0.4.0" }, { state: "current", currentVersion: "5" }, { state: "current", currentVersion: "01.2.3" }, { state: "current", currentVersion: "1.0.0-alpha" }, { state: "current", currentVersion: "1.2.3-01" }]) {
+    const item = menuCatalog(); item.repositoryVersion = repositoryVersion; const h = harness({ catalog: { repositories: [item] } }); await h.ready(); await h.expand();
+    assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本读取失败"); assert.equal(h.posts().length, 0);
+  }
+});
+await test("a real below-floor source shows an unsaved green initialization transition without claiming the file changed", async () => {
+  const repo = repository(), item = freshCleanCatalog(repo, { hasChanges: true, changeState: "changed", components: [component({ currentVersion: "0.4.0", headVersion: "0.4.0", worktreeChanged: false, versionChanged: false })],
+    repositoryVersion: { state: "initial", currentVersion: "1.0.0", nextVersion: "1.0.0", transition: { kind: "initial", fromVersion: "0.4.0", toVersion: "1.0.0" } } });
+  const h = harness({ catalog: { repositories: [item] } }); await h.ready(); await h.expand();
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "0.4.0 → 1.0.0"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "changed");
+  assert.match(h.byClass("repository-publish-compact-version").title, /尚未保存/); assert.equal(h.catalog.repositories[0].components[0].currentVersion, "0.4.0"); assert.equal(h.posts().length, 0);
+  h.catalog.repositories[0].displayOnly = true; await h.emitWindow("focus"); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.0.0"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.posts().length, 0);
+});
+await test("a failed refresh cannot omit a repository that was previously confirmed clean", async () => {
+  const repo = repository(), h = harness({ catalog: { repositories: [freshCleanCatalog(repo)] } }); await h.ready(); await h.expand();
+  h.hook(call => { if (call.url.endsWith("/versions")) throw new Error("isolated refresh failed"); }); await h.emitWindow("focus");
+  assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); h.byClass("repository-publish-primary").click(); await settle(); assert.deepEqual(h.posts("/run")[0].body.repoIds, [repo.id]);
+});
+await test("the only primary action explicitly commits and pushes in both languages", async () => {
+  const h = harness(); await h.ready(); assert.equal(h.byClass("repository-publish-primary").textContent, "提交并上传"); h.locale("en"); assert.equal(h.byClass("repository-publish-primary").textContent, "Commit & Push");
+  assert.equal(h.button("Push only"), undefined); assert.equal(h.button("仅推送"), undefined); assert.equal(h.posts().length, 0);
+});
+await test("legacy missing snapshots never paint a fallback title or an invented repository version before fresh reads", async () => {
+  for (const components of [[], [component({ currentVersion: "not-a-version" })]]) {
+    const repo = repository(), envelope = cachedEnvelope(repo, { components, versionState: "missing", repositoryVersion: undefined, message: "Legacy fallback title retained only as historical information" }, "idle");
+    const h = harness({ snapshot: { settings: settings([repo]), ...envelope }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return new Promise(() => {}); } });
+    await h.ready(); await h.expand(); const version = h.byClass("repository-publish-compact-version");
+    assert.equal(version.textContent, "版本待读取"); assert.equal(version.dataset.changeState, "unknown"); assert.doesNotMatch(version.textContent, /备用标题|无版本|1\.0\.0|Push\s*#|上传\s*#/);
+    assert.equal(h.posts().length, 0); h.api.destroy();
+  }
+});
+await test("an empty or invalid legacy version becomes a read failure after a failed snapshot refresh", async () => {
+  for (const components of [[], [component({ currentVersion: "0.4.0" })]]) {
+    const repo = repository(), old = cachedEnvelope(repo, { components, versionState: "missing", repositoryVersion: undefined }, "idle"), failed = cachedEnvelope(repo, { components, versionState: "missing", repositoryVersion: undefined }, "error");
+    const h = harness({ snapshot: { settings: settings([repo]), ...old }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return response(failed); } });
+    await h.ready(); await h.expand(); const version = h.byClass("repository-publish-compact-version");
+    assert.equal(version.textContent, "版本读取失败"); assert.equal(version.dataset.changeState, "unknown"); assert.match(h.byClass("repository-publish-version-freshness").textContent, /核对失败/);
+    assert.equal(h.posts().length, 0); h.api.destroy();
+  }
 });
 console.log(`PASS ${count} isolated repository-publish UI fixtures`);

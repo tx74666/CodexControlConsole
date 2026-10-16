@@ -34,11 +34,16 @@ def source_id(source):
     return "version-" + _proof({key: source.get(key, "") for key in ("path", "kind", "key")})[:24]
 
 
-def next_patch(value):
+def next_patch(value, minimum=None):
     match = re.fullmatch(r"([vV]?)(\d+)\.(\d+)\.(\d+)", value)
     if not match:
         raise VersionPlanError("此版本不是明确的三段数字版本，请手动准备版本。")
     prefix, major, minor, patch = match.groups()
+    if minimum is not None:
+        if minimum != "1.0.0":
+            raise VersionPlanError("项目最低版本策略不受支持。")
+        if (int(major), int(minor), int(patch)) < (1, 0, 0):
+            return "1.0.0"
     original = (major, minor, patch)
     following = [int(major), int(minor), int(patch) + 1]
     for index in (2, 1):
@@ -50,7 +55,7 @@ def next_patch(value):
     return prefix + ".".join(parts)
 
 
-def parse_commit_history(head, raw):
+def parse_commit_history(head, raw, *, allow_initial=False):
     """Parse fixed first-parent `%H%x00%s` lines, never run Git or project code."""
     if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(head)):
         raise VersionPlanError("提交版本的 HEAD 身份无法确认。")
@@ -81,6 +86,10 @@ def parse_commit_history(head, raw):
             return {"sourceHeadSha": head, "versionCommitSha": commit, "versionSubject": subject,
                     "version": version, "currentVersion": version, "historyDepth": depth,
                     "versionOrigin": "git_commit_first_parent"}
+    if allow_initial is True:
+        return {"sourceHeadSha": head, "versionCommitSha": "", "versionSubject": "",
+                "version": "1.0.0", "currentVersion": "1.0.0", "historyDepth": len(rows),
+                "versionOrigin": "git_commit_initial", "initialVersion": True}
     raise VersionPlanError("最近 64 条 first-parent 提交中没有明确版本；不会使用其他版本来源代替。")
 
 
@@ -91,7 +100,7 @@ def _decode(raw):
     return bom, raw[len(bom):].decode("utf-8")
 
 
-def _json_span(text, key):
+def _json_span(text, key, minimum=None):
     # Validate before the span walker so truncated/empty JSON fails per source.
     json.loads(text)
     decoder = json.JSONDecoder()
@@ -132,7 +141,7 @@ def _json_span(text, key):
         raise VersionPlanError("版本字段不是唯一字符串，请手动准备版本。")
     start, end, current = matches[0]
     # Replace a JSON string token; indentation, other fields, BOM and EOL remain.
-    return current, (start, end, json.dumps(next_patch(current), ensure_ascii=False))
+    return current, (start, end, json.dumps(next_patch(current, minimum), ensure_ascii=False))
 
 
 def _ast_offsets(text, node):
@@ -143,7 +152,7 @@ def _ast_offsets(text, node):
     return len(raw[:start].decode("utf-8")), len(raw[:end].decode("utf-8"))
 
 
-def _python_span(text, key):
+def _python_span(text, key, minimum=None):
     parts = (key or "bl_info.version").split(".")
     if parts == ["bl_info"]:
         parts.append("version")  # Preserve the existing legacy bl_info source alias.
@@ -167,7 +176,7 @@ def _python_span(text, key):
     literal = ast.literal_eval(node)
     if isinstance(literal, (list, tuple)) and len(literal) == 3 and all(type(item) is int and item >= 0 for item in literal):
         current = ".".join(map(str, literal))
-        following = tuple(map(int, next_patch(current).split(".")))
+        following = tuple(map(int, next_patch(current, minimum).split(".")))
         spans = [(*_ast_offsets(text, element), str(value))
                  for element, previous, value in zip(node.elts, literal, following) if previous != value]
         return current, spans
@@ -175,11 +184,11 @@ def _python_span(text, key):
         start, end = _ast_offsets(text, node)
         token = text[start:end]
         if len(token) >= 2 and token[0] in "\"'" and token[-1] == token[0] and token[1:-1] == literal:
-            return literal, (start + 1, end - 1, next_patch(literal))
+            return literal, (start + 1, end - 1, next_patch(literal, minimum))
     raise VersionPlanError("Python 版本格式需要人工协调，请手动准备版本。")
 
 
-def _simple_span(text, kind, key):
+def _simple_span(text, kind, key, minimum=None):
     key = key or ("bundleVersion" if kind in {"unity", "unity_yaml"} else "Version" if kind in {"xml", "csproj"} else "version")
     if kind in {"xml", "csproj"}:
         if "<!DOCTYPE" in text.upper():
@@ -194,7 +203,7 @@ def _simple_span(text, kind, key):
         if current != (nodes[0].text or "").strip():
             raise VersionPlanError("XML 版本包含转义，请手动准备版本。")
         start = match.start("value") + len(value) - len(value.lstrip())
-        return current, (start, start + len(current), next_patch(current))
+        return current, (start, start + len(current), next_patch(current, minimum))
     pattern = r"(?m)^\s*" + re.escape(key) + r"\s*[:=]\s*([\"']?)(?P<value>[vV]?\d+\.\d+\.\d+)\1\s*(?:#.*)?$"
     matches = list(re.finditer(pattern, text))
     if len(matches) != 1:
@@ -212,18 +221,18 @@ def _simple_span(text, kind, key):
         except tomllib.TOMLDecodeError:
             pass  # Plain version.txt/Unity-like scalar remains supported.
     current = match["value"]
-    return current, (match.start("value"), match.end("value"), next_patch(current))
+    return current, (match.start("value"), match.end("value"), next_patch(current, minimum))
 
 
 def _one(raw, source):
     bom, text = _decode(raw)
     kind, key = source.get("kind", "json"), source.get("key", "")
     if kind in {"json", "app-manifest", "package"}:
-        current, edit = _json_span(text, key or "version")
+        current, edit = _json_span(text, key or "version", source.get("minimumVersion"))
     elif kind in {"python_ast", "bl_info"}:
-        current, edit = _python_span(text, key or "bl_info.version")
+        current, edit = _python_span(text, key or "bl_info.version", source.get("minimumVersion"))
     elif kind in {"unity", "unity_yaml", "text", "yaml", "xml", "csproj"}:
-        current, edit = _simple_span(text, kind, key)
+        current, edit = _simple_span(text, kind, key, source.get("minimumVersion"))
     else:
         raise VersionPlanError("此版本来源格式不支持自动升版，请手动准备版本。")
     return current, (bom, text, edit)
@@ -231,6 +240,7 @@ def _one(raw, source):
 
 def _console_files(root, source, reader, current, console_reader=None):
     edits = {}
+    minimum = source.get("minimumVersion")
     raw = reader("app-manifest.json")
     _, parsed = _decode(raw)
     if json.loads(parsed).get("repository") != "tx74666/CodexControlConsole":
@@ -264,7 +274,7 @@ def _console_files(root, source, reader, current, console_reader=None):
         bom, text = _decode(raw)
         spans = []
         if name == "phone/version.json":
-            found, edit = _json_span(text, "version")
+            found, edit = _json_span(text, "version", minimum)
             if found != current:
                 raise VersionPlanError("Console 手机与桌面版本不一致，请先按发布流程协调。")
             spans = [edit]
@@ -273,7 +283,7 @@ def _console_files(root, source, reader, current, console_reader=None):
             if len(matches) != 1 or matches[0]["version"] != current:
                 raise VersionPlanError("Console UI 与权威版本不一致，请先按发布流程协调。")
             match = matches[0]
-            spans = [(match.start("version"), match.end("version"), next_patch(current))]
+            spans = [(match.start("version"), match.end("version"), next_patch(current, minimum))]
         else:
             expected = ("styles.css", "app.js")
             for asset in expected:
@@ -285,7 +295,7 @@ def _console_files(root, source, reader, current, console_reader=None):
                 if len(versions) != 1:
                     raise VersionPlanError("Console 缓存版本不一致，请先按发布流程协调。")
                 offset = match.start("url") + versions[0].start()
-                spans.append((offset, offset + len(current), next_patch(current)))
+                spans.append((offset, offset + len(current), next_patch(current, minimum)))
             # Preserve an unchanged independently cached module. A changed
             # resource gets a fresh query only with fixed HEAD byte evidence.
             if name == "index.html":
@@ -295,7 +305,7 @@ def _console_files(root, source, reader, current, console_reader=None):
                         raise VersionPlanError("Console 独立仓库模块缓存引用不唯一，请按发布流程协调。")
                     if asset in changed_resources:
                         match = matches[0]
-                        spans.append((match.start("cache"), match.end("cache"), next_patch(current)))
+                        spans.append((match.start("cache"), match.end("cache"), next_patch(current, minimum)))
         edits[name] = (raw, (bom, text, spans))
     return edits, evidence
 
@@ -326,7 +336,8 @@ def _application_files(source, reader, current, primary_raw, contract):
         _, manifest_text = _decode(primary_raw)
         manifest = json.loads(manifest_text)
         package_raw = reader("package.json")
-        package_current, package_edit = _one(package_raw, {"kind":"json", "key":"version"})
+        policy = {"minimumVersion": source.get("minimumVersion")}
+        package_current, package_edit = _one(package_raw, {"kind":"json", "key":"version", **policy})
         _, package_text = _decode(package_raw)
         package = json.loads(package_text)
         repository = manifest.get("repository", "")
@@ -350,8 +361,8 @@ def _application_files(source, reader, current, primary_raw, contract):
         if package_current != current:
             raise _ApplicationVersionError("同一应用的 manifest 与 package 版本不同，请协调一致；不会分别升版。")
         lock_raw = reader("package-lock.json")
-        lock_current, lock_edit = _one(lock_raw, {"kind":"json", "key":"version"})
-        locked_current, locked_edit = _one(lock_raw, {"kind":"json", "key":"packages..version"})
+        lock_current, lock_edit = _one(lock_raw, {"kind":"json", "key":"version", **policy})
+        locked_current, locked_edit = _one(lock_raw, {"kind":"json", "key":"packages..version", **policy})
         _, lock_text = _decode(lock_raw)
         lock = json.loads(lock_text)
         if (lock.get("lockfileVersion") not in {2, 3} or lock.get("name") != package_name
@@ -410,7 +421,7 @@ def _blender_companion(root, source, reader, current, primary_raw):
         return None
     try:
         raw = reader(companion["path"])
-        previous, edit = _one(raw, companion)
+        previous, edit = _one(raw, {**companion, "minimumVersion": source.get("minimumVersion")})
         if Path(companion["path"]).name == "blender_manifest.toml":
             _strict_blender_manifest(raw, previous)
         if previous != current:
@@ -430,8 +441,14 @@ def _inspect(root, source, reader, git_reader=None, console_reader=None, applica
         current = evidence["version"]
         raw = json.dumps(evidence, ensure_ascii=False, sort_keys=True).encode("utf-8")
         public = {"sourceId": source_id(source), **{key: source.get(key, "") for key in ("path", "kind", "key", "name", "scope")},
-                  "currentVersion": current, "nextVersion": next_patch(current), "canBump": True, "reason": "",
+                  "currentVersion": current,
+                  "nextVersion": current if evidence.get("initialVersion") else next_patch(current, source.get("minimumVersion")),
+                  "canBump": True, "reason": "",
                   "expectedSha256": _hash(raw), "expectedBytes": len(raw), "expectedFiles": [], **evidence}
+        if source.get("repositoryVersion"):
+            public["repositoryVersion"] = True
+        if not evidence.get("initialVersion") and source.get("minimumVersion") and next_patch(current, source["minimumVersion"]) == "1.0.0":
+            public["requiresVersionFloor"] = True
         public["planProof"] = _proof({"sourceId": public["sourceId"], "currentVersion": current,
                                       "targetVersion": public["nextVersion"], "files": [], "gitEvidence": evidence})
         return public, {}
@@ -462,8 +479,12 @@ def _inspect(root, source, reader, git_reader=None, console_reader=None, applica
         edits[companion["path"]] = (companion_raw, companion_edit)
     files = [{"path": name, "expectedSha256": _hash(item[0]), "expectedBytes": len(item[0])} for name, item in sorted(edits.items())]
     public = {"sourceId": source_id(source), **{key: source.get(key, "") for key in ("path", "kind", "key", "name", "scope")},
-              "currentVersion": current, "nextVersion": next_patch(current), "canBump": True, "reason": "",
+              "currentVersion": current, "nextVersion": next_patch(current, source.get("minimumVersion")), "canBump": True, "reason": "",
               "expectedSha256": _hash(raw), "expectedBytes": len(raw), "expectedFiles": files}
+    if source.get("repositoryVersion"):
+        public["repositoryVersion"] = True
+    if source.get("minimumVersion") and next_patch(current, source["minimumVersion"]) == "1.0.0":
+        public["requiresVersionFloor"] = True
     if paired:
         public.update(pairedCompanion=paired[0], companionState="paired")
     if application:
@@ -491,6 +512,8 @@ def catalog(root, sources, reader, git_reader=None, console_reader=None, applica
         except (VersionPlanError, OSError, UnicodeError, ValueError, SyntaxError, KeyError, TypeError, ET.ParseError) as exc:
             item = {"sourceId": ident, **{key: source.get(key, "") for key in ("path", "kind", "key", "name", "scope")},
                     "currentVersion": "", "nextVersion": "", "canBump": False, "reason": str(exc) if isinstance(exc, VersionPlanError) else "版本来源缺失、变化或无法唯一读取，请手动准备版本。"}
+            if source.get("repositoryVersion"):
+                item["repositoryVersion"] = True
             if isinstance(exc, _CompanionVersionError):
                 item["companionState"] = "blocked"
         items.append(item)
