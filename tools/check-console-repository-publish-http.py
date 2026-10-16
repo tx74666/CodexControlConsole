@@ -239,7 +239,7 @@ def main():
                     ("/preview", {"remote": "evil"}), ("/run?edition=developer", {"requestId": "one"})):
                 reject("POST", base + path, value)
             reject("POST", base + "/run", raw="{")
-            reject("POST", base + "/config", raw="x" * (128 * 1024 + 1), code=413)
+            reject("POST", base + "/config", headers={"Content-Length": str(128 * 1024 + 1)}, code=413)
             for edition, mode in (("lite", "desktop"), ("developer", "store")):
                 ns["edition"], ns["APP_INSTALL_MODE"] = edition, mode
                 before = len(service.calls)
