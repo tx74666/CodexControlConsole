@@ -531,15 +531,32 @@ def test_single_authority_external_hardlink_defers_without_writes():
 def test_hardlinked_authorities_are_manual_but_same_file_keys_merge():
     with Fixture() as f:
         root, _, repo = f.repo()
-        seed(f, root, repo)
+        images = seed(f, root, repo)
         os.link(root / "app.json", root / "alias.json")
         f.git(root, "add", "alias.json")
         f.git(root, "commit", "-m", "hardlink authority fixture")
         repo["versionSources"].append(source("alias.json"))
         service = f.service()
+        original_head = f.git(root, "rev-parse", "HEAD")
+        original_index = (root / ".git" / "index").read_bytes()
         components = service.version_catalog()["repositories"][0]["components"]
-        require(len(components) == 2 and all(not item["canBump"] and "重叠" in item["reason"] for item in components), components)
-        require((root / "app.json").read_bytes() == (root / "alias.json").read_bytes())
+        file_authorities = [item for item in components if item["path"] in {"app.json", "alias.json"}]
+        repository_versions = [item for item in components if item.get("repositoryVersion") is True]
+        require(len(components) == 3 and len(file_authorities) == 2 and
+                {item["path"] for item in file_authorities} == {"app.json", "alias.json"}, components)
+        require(all(not item["canBump"] and "重叠" in item["reason"] for item in file_authorities), file_authorities)
+        require(len(repository_versions) == 1, components)
+        main = repository_versions[0]
+        require(main["path"] == "HEAD" and main["kind"] == "git_commit" and main["key"] == "subject" and
+                main["initialVersion"] is True and main["versionOrigin"] == "git_commit_initial" and
+                main["currentVersion"] == main["nextVersion"] == "1.0.0" and main["canBump"] is True and
+                main["versionCommitSha"] == "" and main["versionSubject"] == "" and
+                main["sourceHeadSha"] == original_head and main["autoPlan"]["state"] == "none", main)
+        require((root / "app.json").stat().st_ino == (root / "alias.json").stat().st_ino and
+                (root / "app.json").stat().st_nlink == 2)
+        require((root / "app.json").read_bytes() == (root / "alias.json").read_bytes() == images["app.json"])
+        require(f.git(root, "rev-parse", "HEAD") == original_head and
+                (root / ".git" / "index").read_bytes() == original_index)
 
 
 def test_base100_carry_all_authority_formats_and_tuple_spans():
