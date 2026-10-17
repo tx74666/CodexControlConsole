@@ -2,6 +2,7 @@
 .repository-publish-bar[hidden] { display: none; }
 .repository-publish-bar .ghost-button { min-height: 32px; padding: 5px 11px; font-size: 12px; }
 .repository-publish-bar .repository-publish-primary { min-height: 40px; padding: 8px 16px; color: var(--bg, #092522); background: var(--status-success, var(--green, #59d4bb)); border-color: var(--status-success, var(--green, #59d4bb)); font-size: 14px; font-weight: 700; }
+.repository-publish-bar .repository-publish-check[aria-busy="true"], .repository-publish-bar .repository-publish-primary[aria-busy="true"] { opacity: .4; filter: saturate(.25); }
 .repository-publish-bar .repository-publish-toggle { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; width: 36px; padding: 0; border-color: transparent; background: transparent; color: var(--muted, #92a2b5); outline: none; box-shadow: none; }
 .repository-publish-bar .repository-publish-toggle::before { content: ""; width: 8px; height: 8px; border: solid currentColor; border-width: 0 1.75px 1.75px 0; transform: translateX(-2px) rotate(-45deg); pointer-events: none; }
 .repository-publish-bar .repository-publish-toggle[aria-expanded="true"]::before { transform: translateY(-2px) rotate(45deg); }
