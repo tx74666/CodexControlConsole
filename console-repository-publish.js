@@ -116,7 +116,7 @@
     const state = { settings: null, settingsSha: "", configConflict: false, warnings: [], allowed: false, serverBusy: false, operation: null, pendingId: storedId(), postBusy: false, readBusy: false, saveBusy: false, previewBusy: false, dirty: false, edit: 0, error: "", notice: "loading", pollTimer: 0, pollDelay: 1200, destroyed: false, invalid: new Set(), localized: [], returnFocus: null };
     const text = key => copy[language()][key] || key;
     state.pendingRequest = storedRequest(); state.notFound = false;
-    state.expanded = false; state.configRepoId = null; state.versionBusy = false; state.versionFailed = false; state.versionEpoch = 0; state.catalog = new Map(); state.savedSources = new Map(); state.operatedRepoIds = new Set();
+    state.expanded = false; state.configRepoId = null; state.versionBusy = false; state.versionEpoch = 0; state.catalog = new Map(); state.savedSources = new Map(); state.operatedRepoIds = new Set();
     state.uploadSummaries = new Map(); state.multiBindings = new Set();
     state.versionReads = new Map(); state.statusReadError = null;
     state.cacheIdentity = ""; state.serverVersionSources = new Map(); state.snapshotMode = false; state.versionRefresh = null; state.versionPollTimer = 0;
@@ -127,10 +127,11 @@
     const bar = managed(node("div", "repository-publish-bar"));
     const runButton = managed(node("button", "ghost-button repository-publish-primary")); runButton.type = "button";
     const checkButton = managed(node("button", "ghost-button repository-publish-check")); checkButton.type = "button";
+    const checkRefresh = node("span", "repository-publish-refresh-indicator repository-publish-check-spinner"); checkRefresh.hidden = true; checkRefresh.setAttribute("aria-hidden", "true");
     const toggleButton = managed(node("button", "ghost-button repository-publish-toggle")); toggleButton.type = "button";
     const configButton = managed(node("button", "ghost-button repository-publish-config")); configButton.type = "button";
     const shortStatus = node("span", "repository-publish-status"); shortStatus.setAttribute("role", "status"); shortStatus.setAttribute("aria-live", "polite");
-    bar.append(runButton, checkButton, configButton, toggleButton, shortStatus);
+    bar.append(runButton, checkButton, checkRefresh, configButton, toggleButton, shortStatus);
     const expanded = managed(node("div", "repository-publish-expanded")), compactRows = node("div", "repository-publish-compact-rows");
     expanded.id = "consoleRepositoryPublish-repositories-" + (uniqueId() || "list"); expanded.hidden = true; expanded.append(compactRows);
     const dialog = managed(node("dialog", "repository-publish-dialog")); dialog.id = "consoleRepositoryPublish-" + (uniqueId() || "config");
@@ -227,6 +228,7 @@
         for (const box of planBoxes.values()) for (const button of childrenOf(box)) if (button.tagName === "BUTTON") button.disabled = true;
         diagnosisRecheck.disabled = true;
       }
+      renderCheckActivity();
       renderDiagnosis();
     }
     function repoName(repo) {
@@ -244,12 +246,15 @@
     }
     function acceptVersionSnapshots(value, sources = sourceIdentities(state.settings), initial = false, target = state, passive = false) {
       if (!plain(value) || !/^[a-f0-9]{64}$/.test(value.cacheIdentity || "") || !Array.isArray(value.versionSources) || !Array.isArray(value.versionSnapshots) || !plain(value.versionReadStates)) return false;
+      const receivedSources = value.versionSources.filter(item => plain(item) && typeof item.repoId === "string" && typeof item.sourceIdentity === "string" && item.sourceIdentity.length <= 200).map(item => [item.repoId, item.sourceIdentity]);
       if (initial) {
         if (target.cacheIdentity && target.cacheIdentity !== value.cacheIdentity) { target.catalog.clear(); target.versionReads.clear(); target.multiBindings.clear(); }
         target.cacheIdentity = value.cacheIdentity; target.snapshotMode = true;
-        target.serverVersionSources = new Map(value.versionSources.filter(item => plain(item) && typeof item.repoId === "string" && typeof item.sourceIdentity === "string" && item.sourceIdentity.length <= 200).map(item => [item.repoId, item.sourceIdentity]));
+        target.serverVersionSources = new Map([...(target.ids ? target.serverVersionSources : []), ...receivedSources]);
       } else if (target.cacheIdentity !== value.cacheIdentity) return false;
+      else if (target.ids) for (const [id, identity] of receivedSources) if (target.ids.includes(id) && !target.serverVersionSources.has(id)) target.serverVersionSources.set(id, identity);
       for (const repo of target.settings.repositories) {
+        if (target.ids && !target.ids.includes(repo.id)) continue;
         if (sources.get(repo.id) !== sourceIdentity(repo, target.settings.naming)) continue;
         const expected = target.serverVersionSources.get(repo.id), receivedSource = value.versionSources.find(item => item?.repoId === repo.id);
         if (!expected || receivedSource?.sourceIdentity !== expected) continue;
@@ -574,7 +579,7 @@
       const repositoryVersion = repositoryVersionText(catalog);
       if (repositoryVersion !== null) return repositoryVersion;
       const unread = readFor(repo)?.error || catalog?.readState === "error" || catalog?.versionState === "unknown"
-        || catalog?.message && catalog.versionState !== "missing" || state.versionFailed && !catalog;
+        || catalog?.message && catalog.versionState !== "missing";
       if (hasMultipleVersions(repo, catalog) || !components.length) return text(unread ? "versionFailed" : "versionPending");
       return repositorySemver(components[0].currentVersion) ? componentVersionText(components[0], components.length, catalog) : text(unread ? "versionFailed" : "versionPending");
     }
@@ -582,9 +587,8 @@
       const components = catalog?.components || [], multiple = hasMultipleVersions(repo, catalog);
       if (workspacePanel.hidden || !state.expanded || !state.allowed || readFor(repo)?.busy) refs.picker.open = false;
       refs.picker.hidden = !multiple;
-      if (!multiple) { refs.picker.open = false; if (refs.version.parentElement !== refs.cell) refs.cell.append(refs.version); return; }
-      if (refs.version.parentElement !== refs.summary) refs.summary.append(refs.version, refs.arrow);
-      refs.summary.setAttribute("aria-label", [refs.version.textContent, text("displayVersion")].join(" · "));
+      if (!multiple) { refs.picker.open = false; return; }
+      refs.summary.setAttribute("aria-label", [text("displayVersion"), repoName(repo)].join(" · ")); refs.summary.title = text("displayVersion");
       const uploaded = uploadSummary(repo, catalog);
       const reading = readFor(repo), signature = JSON.stringify([language(), displayIdentity(repo), components, state.settings.naming.autoBump, uploaded, Boolean(reading?.busy), Boolean(reading?.error), Boolean(catalog?.displayOnly), Boolean(catalog?.cached)]);
       if (signature === refs.menuSignature) return;
@@ -680,16 +684,18 @@
       for (const repo of repos) {
         let refs = compactRefs.get(repo.id);
         if (!refs) {
-          const row = node("div", "repository-publish-compact-row"), name = managed(node("button", "repository-publish-compact-name")), nameCell = node("div", "repository-publish-name-cell"), commitAge = node("span", "repository-publish-commit-age"), version = node("span", "repository-publish-compact-version"), status = managed(node("button", "repository-publish-compact-status")), push = managed(node("button", "ghost-button repository-publish-row-push")); name.type = push.type = status.type = "button";
+          const row = node("div", "repository-publish-compact-row"), name = managed(node("button", "repository-publish-compact-name")), nameCell = node("div", "repository-publish-name-cell"), commitAge = node("span", "repository-publish-commit-age"), version = managed(node("button", "repository-publish-compact-version")), status = managed(node("button", "repository-publish-compact-status")), push = managed(node("button", "ghost-button repository-publish-row-push")); name.type = version.type = push.type = status.type = "button";
           const cell = node("div", "repository-publish-version-cell"), picker = managed(node("details", "repository-publish-version-picker")), summary = node("summary", "repository-publish-version-trigger"), arrow = node("span", "repository-publish-version-arrow", "⌄"), menu = node("div", "repository-publish-version-menu"), freshness = node("span", "repository-publish-version-freshness");
           const refresh = node("span", "repository-publish-refresh-indicator repository-publish-row-spinner"), statusCell = node("div", "repository-publish-status-cell"), statusLine = node("div", "repository-publish-status-line"), reason = node("span", "repository-publish-row-reason"), history = node("span", "repository-publish-row-history"), activity = node("span", "repository-publish-row-activity");
-          refresh.hidden = freshness.hidden = history.hidden = true; arrow.setAttribute("aria-hidden", "true"); picker.append(summary, menu); cell.append(version, picker, freshness);
+          const versionRefresh = node("span", "repository-publish-refresh-indicator repository-publish-version-spinner"); versionRefresh.hidden = true; versionRefresh.setAttribute("aria-hidden", "true");
+          refresh.hidden = freshness.hidden = history.hidden = true; arrow.setAttribute("aria-hidden", "true"); summary.append(arrow); picker.append(summary, menu); cell.append(version, versionRefresh, picker, freshness);
           reason.id = "repository-publish-row-reason-" + (uniqueId() || repo.id); reason.hidden = true;
           activity.append(refresh); statusLine.append(status, activity); statusCell.append(statusLine, reason, history);
-          nameCell.append(name, commitAge); row.dataset.repoId = repo.id; row.append(nameCell, cell, statusCell, push); compactRows.append(row); refs = { row, name, commitAge, version, status, reason, history, push, cell, picker, summary, arrow, menu, refresh, freshness, activity, menuSignature: "" }; compactRefs.set(repo.id, refs);
+          nameCell.append(name, commitAge); row.dataset.repoId = repo.id; row.append(nameCell, cell, statusCell, push); compactRows.append(row); refs = { row, name, commitAge, version, versionRefresh, status, reason, history, push, cell, picker, summary, arrow, menu, refresh, freshness, activity, menuSignature: "" }; compactRefs.set(repo.id, refs);
           picker.addEventListener("toggle", () => { if (picker.open) for (const other of compactRefs.values()) if (other !== refs) other.picker.open = false; });
           picker.addEventListener("keydown", event => { if (event.key === "Escape" && picker.open) { event.preventDefault(); picker.open = false; summary.focus(); } });
           name.addEventListener("click", () => open(repo.id));
+          version.addEventListener("click", () => { if (!version.disabled) void readVersions(repo.id); });
           push.addEventListener("click", () => void run([repo.id]));
           status.addEventListener("click", () => { if (!state.destroyed && state.allowed) { open(repo.id, { diagnose: true }); detail.open = false; renderResults(); dialog.scrollTop = 0; } });
         }
@@ -708,7 +714,8 @@
         const displayChangeState = lastKnown || changeState === "unchanged" && !confirmedClean(repo) ? "unknown" : changeState;
         refs.name.textContent = repoName(repo); refs.name.disabled = !state.allowed; refs.name.title = text("config"); refs.name.setAttribute("aria-label", text("config") + " · " + repoName(repo)); refs.name.setAttribute("aria-haspopup", "dialog"); refs.name.setAttribute("aria-controls", dialog.id); refs.name.setAttribute("aria-expanded", String(dialog.open && state.configRepoId === repo.id)); refs.version.textContent = versionSummary(repo); refs.version.dataset.changeState = displayChangeState;
         refs.freshness.hidden = !lastKnown; refs.freshness.textContent = lastKnown ? text(reading?.error ? "refreshFailed" : "lastKnown") : "";
-        refs.version.title = [refs.version.textContent, lastKnown ? text("knownBefore") : "", catalog?.repositoryVersion?.state === "initial" ? text("initialRepositoryVersion") : "", hasMultipleVersions(repo, catalog) ? text("uploadHint") : changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
+        refs.version.setAttribute("aria-label", [text("recheckRepository"), repoName(repo), refs.version.textContent].join(" · "));
+        refs.version.title = [text("recheckRepository"), refs.version.textContent, lastKnown ? text("knownBefore") : "", catalog?.repositoryVersion?.state === "initial" ? text("initialRepositoryVersion") : "", hasMultipleVersions(repo, catalog) ? text("uploadHint") : changeHint(catalog), clean(catalog?.message, 300), clean(catalog?.changesReason, 300), clean(catalog?.remoteReference, 160)].filter(Boolean).join(" · ");
         renderVersionPicker(refs, repo, displayCatalogFor(repo));
         refs.status.textContent = repo.enabled !== true ? text("disabledRepo") : originalResult && !result ? text("historicalReceipt") : result && activeStatuses.has(result.status) ? phaseText(result.phase)
           : lastCompletion ? currentBlocker ? diagnosticStatus(currentBlocker, "repoAttention") : currentRepositoryStatus(catalog, reading, diagnostic)
@@ -751,10 +758,21 @@
       addButton.hidden = Boolean(state.configRepoId); namingDetails.hidden = Boolean(state.configRepoId && !state.diagnosticNaming);
       if (state.configRepoId) warningDetails.hidden = true;
     }
-    async function readVersions() {
+    function renderCheckActivity() {
+      const selected = state.versionRefresh?.repoId;
+      checkRefresh.hidden = !state.versionBusy || Boolean(selected);
+      for (const repo of state.settings?.repositories || []) {
+        const refs = compactRefs.get(repo.id); if (!refs) continue;
+        const busy = state.versionBusy && selected === repo.id;
+        refs.versionRefresh.hidden = !busy; refs.version.setAttribute("aria-busy", String(busy));
+        refs.version.disabled = runButton.disabled || repo.enabled !== true;
+      }
+    }
+    async function readVersions(repoId = "") {
       if (state.destroyed || !state.allowed || !state.settings || state.versionBusy || state.readBusy || workspacePanel.hidden || blocked()
         || state.dirty || state.saveBusy || state.invalid.size || inputPending.size || !enabled().length) return;
-      const refresh = { epoch: state.versionEpoch, settingsSha: state.settingsSha, sources: sourceIdentities(state.settings), ids: enabled().map(repo => repo.id), deadline: Date.now() + 60000,
+      const ids = enabled().filter(repo => !repoId || repo.id === repoId).map(repo => repo.id); if (!ids.length) return;
+      const refresh = { epoch: state.versionEpoch, settingsSha: state.settingsSha, sources: sourceIdentities(state.settings), ids, repoId, deadline: Date.now() + 60000,
         controller: new AbortController(), settings: clone(state.settings), cacheIdentity: state.cacheIdentity, serverVersionSources: new Map(state.serverVersionSources),
         snapshotMode: state.snapshotMode, catalog: new Map(state.catalog), versionReads: new Map(state.versionReads), multiBindings: new Set(state.multiBindings) };
       state.versionRefresh = refresh; state.versionBusy = true; state.needsVersionsRead = false;
@@ -774,7 +792,7 @@
       if (state.versionRefresh !== refresh) return;
       if (!versionRefreshMatches(refresh)) { stopVersionRefresh(); if (!state.destroyed) render(); return; }
       try {
-        const value = await request("/versions?snapshot=1" + (start ? "&refresh=1" : ""), undefined, refresh.controller.signal);
+        const value = await request("/versions?snapshot=1" + (start ? "&refresh=1" : "") + (refresh.repoId ? "&repoId=" + encodeURIComponent(refresh.repoId) : ""), undefined, refresh.controller.signal);
         if (state.versionRefresh !== refresh || state.destroyed) return;
         if (!versionRefreshMatches(refresh)) { stopVersionRefresh(); render(); return; }
         if (!acceptVersionSnapshots(value, refresh.sources, !refresh.cacheIdentity, refresh)) { const error = new Error("invalid_versions_snapshot"); error.kind = "invalid_response"; throw error; }
@@ -789,14 +807,13 @@
           }
           state.cacheIdentity = refresh.cacheIdentity; state.serverVersionSources = refresh.serverVersionSources; state.snapshotMode = true;
           state.catalog = refresh.catalog; state.versionReads = refresh.versionReads; state.multiBindings = refresh.multiBindings;
-          state.versionFailed = refresh.ids.some(id => Boolean(refresh.versionReads.get(id)?.error));
           stopVersionRefresh(); render(); readCompletedSettings(); return;
         }
         if (Date.now() >= refresh.deadline) { const error = new Error("snapshot_deadline"); error.kind = "timeout"; throw error; }
         state.versionPollTimer = window.setTimeout(() => { state.versionPollTimer = 0; void readVersionSnapshotStep(refresh); }, 1200);
       } catch (error) {
         if (state.versionRefresh !== refresh || state.destroyed) return;
-        stopVersionRefresh(); state.versionFailed = true;
+        stopVersionRefresh();
         for (const id of refresh.ids) {
           const repo = state.settings.repositories.find(item => item.id === id);
           if (repo && refresh.sources.get(id) === sourceIdentity(repo)) state.versionReads.set(id, { ...readFor(repo), sourceIdentity: sourceIdentity(repo), busy: false, error, manualError: true });

@@ -869,7 +869,7 @@ await test("diagnosis recheck uses one full Check All transaction with no per-ro
   await h.ready(); await expandAndCheck(h); h.byClass("repository-publish-compact-status").click(); await settle();
   h.hook(call => call.url.startsWith(BASE + "/versions?") ? pending.promise : undefined); const calls = h.calls.length, before = h.byClass("repository-publish-compact-status").textContent; h.byClass("repository-publish-diagnosis-recheck").click(); await settle();
   assert.equal(h.calls.length, calls + 1); assert.equal(h.calls.at(-1).method, "GET"); assert.equal(h.calls.at(-1).url, BASE + "/versions?snapshot=1&refresh=1"); assert.equal([...h.timers.values()].filter(timer => timer.delay === 10000).length, 1);
-  assert.equal(h.byClass("repository-publish-compact-status").textContent, before); assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, true); assert.equal(h.byClass("repository-publish-primary").disabled, true);
+  assert.equal(h.byClass("repository-publish-compact-status").textContent, before); assert.equal(h.byClass("repository-publish-row-spinner").hidden, true); assert.equal(h.byClass("repository-publish-primary").disabled, true);
   pending.resolve(response(h.versionEnvelope({ repositories: [{ repoId: repos[0].id, components: [component({ currentVersion: "2.3.5" })], hasChanges: true, changeState: "changed", worktreeChanged: true }, { repoId: repos[1].id, components: [component()] }] }))); await settle();
   assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).textContent, "2.3.5"); assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).textContent, "2.3.4"); assert.equal(h.posts().length, 0); assert.equal(h.timers.size, 0);
 });
@@ -968,19 +968,19 @@ await test("initial snapshots and an explicitly started slow check keep rows sil
   const repo = repository(), pending = deferred(), cached = cachedEnvelope(repo, {}), h = harness({ snapshot: cached,
     hook(call) { if (call.url.includes("/versions?snapshot=1")) return pending.promise; } });
   await h.ready(); assert.equal(h.calls.length, 1); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4");
-  assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.byClass("repository-publish-version-freshness").textContent, "上次状态"); assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, true);
+  assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.byClass("repository-publish-version-freshness").textContent, "上次状态"); assert.equal(h.byClass("repository-publish-row-spinner").hidden, true);
   await expandAndCheck(h); assert.equal(h.byClass("repository-publish-compact-status").textContent, "有待提交改动"); assert.doesNotMatch(h.byClass("repository-publish-compact-version").textContent, /Pending|Reading|待读取/);
   await h.emitWindow("focus"); assert.equal(h.calls.filter(call => call.url.includes("/versions?snapshot=1")).length, 1); assert.equal(h.posts().length, 0);
   pending.resolve(response(cachedEnvelope(repo, { components: [component({ currentVersion: "2.3.5" })] }, "ready"))); await settle();
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.5"); assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, true); assert.equal(h.timers.size, 0);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.5"); assert.equal(h.byClass("repository-publish-row-spinner").hidden, true); assert.equal(h.timers.size, 0);
 });
 await test("first use shows an explicit unread version instead of a component name or fabricated repository version", async () => {
   const repo = repository({ versionSources: [{ path: "package.json", kind: "json", key: "version", name: "Music component" }] }), envelope = cachedEnvelope(repo, null), h = harness({ snapshot: { settings: settings([repo]), ...envelope }, hook(call) { if (call.url.includes("/versions?snapshot=1")) return new Promise(() => {}); } });
-  await h.ready(); await expandAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本待读取"); assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, true); assert.equal(h.posts().length, 0); h.api.destroy();
+  await h.ready(); await expandAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本待读取"); assert.equal(h.byClass("repository-publish-row-spinner").hidden, true); assert.equal(h.posts().length, 0); h.api.destroy();
 });
 await test("a failed snapshot refresh preserves the last-known values, disables stale version writes and stops polling", async () => {
   const repo = repository(), cached = cachedEnvelope(repo, {}, "idle"), h = harness({ snapshot: cached, hook(call) { if (call.url.includes("/versions?snapshot=1")) return { ok: false, status: 503, json: async () => ({ error: "Current local read unavailable" }) }; } });
-  await h.ready(); await expandAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, true); assert.match(h.byClass("repository-publish-compact-status").textContent, /有待提交改动.*核对失败/);
+  await h.ready(); await expandAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.equal(h.byClass("repository-publish-row-spinner").hidden, true); assert.match(h.byClass("repository-publish-compact-status").textContent, /有待提交改动.*核对失败/);
   await openAndCheck(h, repo.id); assert.equal(h.byClass("repository-publish-plan-action").disabled, true); assert.equal(h.timers.size, 0); assert.equal(h.posts().length, 0);
 });
 await test("snapshot polling has one refresh request, retains rows, and clears its timer after completion or destroy", async () => {
@@ -988,7 +988,7 @@ await test("snapshot polling has one refresh request, retains rows, and clears i
   await h.ready(); await expandAndCheck(h); assert.equal(h.calls.filter(call => call.url.includes("refresh=1")).length, 1); assert.equal(h.timers.size, 1);
   await h.emitWindow("focus"); await h.emitWindow("pageshow"); assert.equal(h.calls.filter(call => call.url.includes("refresh=1")).length, 1); assert.equal(h.timers.size, 1);
   h.hook(call => call.url.includes("/versions?snapshot=1") ? response(cachedEnvelope(repo, {}, "ready")) : undefined); await h.poll(); assert.equal(h.timers.size, 0); assert.equal(h.calls.filter(call => call.url.includes("refresh=1")).length, 1);
-  assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, true); assert.equal(h.posts().length, 0); h.api.destroy(); assert.equal(h.timers.size, 0);
+  assert.equal(h.byClass("repository-publish-row-spinner").hidden, true); assert.equal(h.posts().length, 0); h.api.destroy(); assert.equal(h.timers.size, 0);
 });
 await test("changed destination and installation identity invalidate cached versions and late snapshots cannot restore them", async () => {
   const repo = repository(), pending = deferred(), envelope = cachedEnvelope(repo, {}, "idle"), h = harness({ snapshot: envelope, hook(call) { if (call.url.includes("/versions?snapshot=1")) return pending.promise; } });
@@ -1000,7 +1000,7 @@ await test("changed destination and installation identity invalidate cached vers
 await test("snapshot refresh stops after its overall deadline and hiding Console removes only its read timer", async () => {
   const repo = repository(), cached = cachedEnvelope(repo, {}), clock = { now: Date.now() }, h = harness({ clock, snapshot: cached, hook(call) { if (call.url.includes("/versions?snapshot=1")) return response(cached); } });
   await h.ready(); await expandAndCheck(h); assert.equal(h.timers.size, 1); clock.now += 61000; await h.poll();
-  assert.equal(h.timers.size, 0); assert.equal(h.byClass("repository-publish-refresh-indicator").hidden, true); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.match(h.byClass("repository-publish-compact-status").textContent, /核对失败/);
+  assert.equal(h.timers.size, 0); assert.equal(h.byClass("repository-publish-row-spinner").hidden, true); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.match(h.byClass("repository-publish-compact-status").textContent, /核对失败/);
   await h.emitWindow("focus"); assert.equal(h.timers.size, 0); await checkAll(h); assert.equal(h.timers.size, 1); await h.setPanelHidden(true); assert.equal(h.timers.size, 0); assert.equal(h.posts().length, 0);
 });
 await test("a snapshot from another source identity cannot replace a valid previous catalog", async () => {
@@ -1542,6 +1542,90 @@ await test("an original pending request still polls without Check All and preser
   const repos = [repository(), repository({ id: "repository-002", path: "D:/Other" })], id = randomUUID(), original = { requestId: id, repoIds: [repos[1].id, repos[0].id], createdAt: Date.now(), intent: "commit_and_push" }, storage = new Map([[KEY,id],[KEY+".payload",JSON.stringify(original)]]);
   const h = harness({ storage, snapshot: { settings: settings(repos), operation: operation(id, "working", []) } }); await h.ready(); await h.expand(); await h.emitWindow("pageshow"); await h.poll();
   assert.ok(h.calls.some(call => call.url === BASE + "/operation?requestId=" + id)); assert.equal(versionCalls(h).length, 0); assert.equal(activityCalls(h).length, 0); assert.equal(h.posts().length, 0); assert.deepEqual(JSON.parse(storage.get(KEY + ".payload")), original); h.api.destroy();
+});
+
+const singleEnvelope = (h, id, catalog) => {
+  const envelope = h.versionEnvelope(catalog);
+  return { ...envelope, versionSources: envelope.versionSources.filter(item => item.repoId === id),
+    versionSnapshots: envelope.versionSnapshots.filter(item => item.repoId === id),
+    versionReadStates: { [id]: envelope.versionReadStates[id] },
+    repositories: envelope.repositories.filter(item => item.repoId === id) };
+};
+await test("Check All shows its circle synchronously before a response and clears it on completion", async () => {
+  const pending = deferred(), h = harness({ lang: "en", hook(call) { if (call.url.startsWith(BASE + "/versions?")) return pending.promise; } });
+  await h.ready(); await h.expand(); const check = h.byClass("repository-publish-check"), circle = h.byClass("repository-publish-check-spinner");
+  assert.equal(circle.hidden, true); check.click();
+  assert.equal(circle.hidden, false); assert.equal(check.disabled, true); assert.equal(check.getAttribute("aria-busy"), "true");
+  assert.ok(h.all().filter(item => item.className.split(" ").includes("repository-publish-version-spinner")).every(item => item.hidden));
+  pending.resolve(response(h.versionEnvelope())); await settle();
+  assert.equal(circle.hidden, true); assert.equal(check.disabled, false); assert.equal(check.getAttribute("aria-busy"), "false"); assert.equal(h.posts().length, 0); h.api.destroy();
+});
+await test("version click checks exactly one repository and only its version circle starts immediately", async () => {
+  const repos = [repository(), repository({ id: "repository-002", path: "D:/Other" })], pending = deferred();
+  const h = harness({ lang: "en", snapshot: { settings: settings(repos) }, hook(call) { if (call.url.startsWith(BASE + "/versions?")) return pending.promise; } });
+  await h.ready(); await h.expand(); const row = rowFor(h, repos[1].id), version = h.byClass("repository-publish-compact-version", row);
+  assert.equal(version.tagName, "BUTTON"); assert.match(version.getAttribute("aria-label"), /check/i); version.click();
+  assert.equal(h.byClass("repository-publish-version-spinner", row).hidden, false);
+  assert.equal(h.byClass("repository-publish-version-spinner", rowFor(h, repos[0].id)).hidden, true);
+  assert.equal(h.byClass("repository-publish-check-spinner").hidden, true); assert.equal(version.getAttribute("aria-busy"), "true");
+  await settle(); assert.equal(versionCalls(h).length, 1); assert.equal(versionCalls(h)[0].url, BASE + "/versions?snapshot=1&refresh=1&repoId=" + repos[1].id);
+  pending.resolve(response(singleEnvelope(h, repos[1].id, { repositories: [menuCatalog(repos[1])] }))); await settle();
+  assert.equal(version.textContent, "1.2.3"); assert.equal(version.disabled, false); assert.equal(version.getAttribute("aria-busy"), "false");
+  assert.equal(h.byClass("repository-publish-version-spinner", row).hidden, true); assert.equal(h.posts().length, 0); assert.equal(activityCalls(h).length, 0); h.api.destroy();
+});
+await test("a partial single-repository snapshot polls its original scope without refreshing other rows", async () => {
+  const repos = [repository(), repository({ id: "repository-002", path: "D:/Other" })], h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: repos.map(repo => menuCatalog(repo)) } });
+  await h.ready(); await expandAndCheck(h); const other = h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)), before = other.textContent;
+  const partial = singleEnvelope(h, repos[1].id, { repositories: [menuCatalog(repos[1], [], uploadSummary(repos[1]), "2.0.0")] }); partial.complete = false; partial.refreshingIds = [repos[1].id]; partial.versionReadStates[repos[1].id].state = "reading";
+  const final = deferred(); h.hook(call => call.url.startsWith(BASE + "/versions?") ? call.url.includes("refresh=1") ? response(partial) : final.promise : undefined);
+  h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).click(); await settle(); assert.equal(other.textContent, before); await h.poll();
+  assert.equal(versionCalls(h).at(-1).url, BASE + "/versions?snapshot=1&repoId=" + repos[1].id);
+  final.resolve(response({ ...partial, complete: true, refreshingIds: [], versionReadStates: { [repos[1].id]: { ...partial.versionReadStates[repos[1].id], state: "ready" } } })); await settle();
+  assert.equal(other.textContent, before); assert.equal(other.dataset.changeState, "changed"); assert.equal(h.byClass("repository-publish-compact-version", rowFor(h, repos[1].id)).textContent, "2.0.0"); assert.equal(h.posts().length, 0); h.api.destroy();
+});
+await test("single-repository errors stop its circle and leave other ready repositories and errors untouched", async () => {
+  const repos = [repository(), repository({ id: "repository-002", path: "D:/Other" })], h = harness({ lang: "en", snapshot: { settings: settings(repos) }, catalog: { repositories: repos.map(repo => menuCatalog(repo)) } });
+  await h.ready(); await expandAndCheck(h); const rows = repos.map(repo => rowFor(h, repo.id)), otherStatus = h.byClass("repository-publish-compact-status", rows[0]).textContent;
+  h.hook(call => call.url.startsWith(BASE + "/versions?") ? { ok: false, status: 503, json: async () => ({ error: "Fixture read unavailable" }) } : undefined);
+  h.byClass("repository-publish-compact-version", rows[1]).click(); await settle();
+  assert.equal(h.byClass("repository-publish-version-spinner", rows[1]).hidden, true); assert.equal(h.byClass("repository-publish-compact-version", rows[1]).disabled, false);
+  assert.equal(h.byClass("repository-publish-compact-status", rows[0]).textContent, otherStatus); assert.equal(h.byClass("repository-publish-compact-status", rows[0]).dataset.attention, "false");
+  assert.equal(h.byClass("repository-publish-compact-status", rows[1]).dataset.attention, "true"); const before = versionCalls(h).length;
+  await h.emitWindow("focus"); await h.emitWindow("pageshow"); assert.equal(versionCalls(h).length, before); assert.equal(h.posts().length, 0); h.api.destroy();
+});
+await test("hiding Console aborts a single version check and a late reply cannot repaint it", async () => {
+  const repo = repository(), pending = deferred(), h = harness({ catalog: { repositories: [menuCatalog(repo)] } }); await h.ready(); await expandAndCheck(h);
+  const version = h.byClass("repository-publish-compact-version"), old = version.textContent; h.hook(call => call.url.startsWith(BASE + "/versions?") ? pending.promise : undefined);
+  version.click(); await settle(); const request = versionCalls(h).at(-1); await h.setPanelHidden(true);
+  assert.equal(request.options.signal.aborted, true); assert.equal(h.byClass("repository-publish-version-spinner").hidden, true);
+  pending.resolve(response(singleEnvelope(h, repo.id, { repositories: [menuCatalog(repo, [], uploadSummary(repo), "9.0.0")] }))); await settle(); await h.setPanelHidden(false);
+  assert.equal(version.textContent, old); assert.equal(version.disabled, false); assert.equal(h.byClass("repository-publish-check-spinner").hidden, true); assert.equal(h.posts().length, 0); h.api.destroy();
+});
+await test("plugin disclosure is separate from the version check button and remains read-only", async () => {
+  const repo = repository(), h = harness({ lang: "en", catalog: { repositories: [menuCatalog(repo)] } }); await h.ready(); await expandAndCheck(h);
+  const version = h.byClass("repository-publish-compact-version"), trigger = h.byClass("repository-publish-version-trigger"), picker = h.byClass("repository-publish-version-picker"), before = h.calls.length;
+  assert.equal(trigger.contains(version), false); assert.equal(version.contains(trigger), false); assert.match(trigger.getAttribute("aria-label"), /plugin/i);
+  trigger.click(); assert.equal(picker.open, true); assert.equal(h.calls.length, before); assert.equal(h.posts().length, 0); assert.equal(h.visible(version), true); h.api.destroy();
+});
+await test("failed Check All stops its circle and direct Push still works without another check", async () => {
+  const h = harness({ lang: "en", hook(call) { if (call.url.startsWith(BASE + "/versions?")) throw new Error("Fixture offline"); } }); await h.ready(); await h.expand();
+  const check = h.byClass("repository-publish-check"); check.click(); assert.equal(h.byClass("repository-publish-check-spinner").hidden, false); await settle();
+  assert.equal(h.byClass("repository-publish-check-spinner").hidden, true); assert.equal(check.disabled, false);
+  h.byClass("repository-publish-row-push").click(); await settle(); assert.equal(h.posts("/run").length, 1); assert.deepEqual(h.posts("/run")[0].body.repoIds, [repository().id]); assert.equal(h.posts("/run")[0].body.intent, "commit_and_push"); h.api.destroy();
+});
+await test("a failed first single check cannot label an untouched repository as failed", async () => {
+  const repos = [repository(), repository({ id: "repository-002", path: "D:/Other" })], h = harness({ lang: "en", snapshot: { settings: settings(repos) }, hook(call) { if (call.url.startsWith(BASE + "/versions?")) throw new Error("Fixture offline"); } });
+  await h.ready(); await h.expand(); const untouched = rowFor(h, repos[1].id), version = h.byClass("repository-publish-compact-version", untouched), status = h.byClass("repository-publish-compact-status", untouched), before = [version.textContent, status.textContent, status.dataset.attention];
+  h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).click(); await settle();
+  assert.deepEqual([version.textContent, status.textContent, status.dataset.attention], before); assert.equal(h.byClass("repository-publish-version-spinner", untouched).hidden, true); assert.equal(h.posts().length, 0); h.api.destroy();
+});
+await test("a partial saved source map accepts a later explicit Check All without losing existing bindings", async () => {
+  const repos = [repository(), repository({ id: "repository-002", path: "D:/Other" })], catalog = { repositories: repos.map(repo => menuCatalog(repo)) }, h = harness({ lang: "en", snapshot: { settings: settings(repos) }, catalog });
+  const initial = singleEnvelope(h, repos[0].id, catalog); Object.assign(h.snapshot, initial);
+  await h.ready(); await h.expand(); h.hook(call => call.url.startsWith(BASE + "/versions?") ? response(call.url.includes("repoId=") ? singleEnvelope(h, repos[0].id, catalog) : h.versionEnvelope(catalog)) : undefined);
+  h.byClass("repository-publish-compact-version", rowFor(h, repos[0].id)).click(); await settle(); await checkAll(h);
+  assert.deepEqual(repos.map(repo => h.byClass("repository-publish-compact-version", rowFor(h, repo.id)).textContent), ["1.2.3", "1.2.3"]);
+  assert.ok(repos.every(repo => h.byClass("repository-publish-compact-version", rowFor(h, repo.id)).dataset.changeState === "changed")); assert.equal(h.posts().length, 0); h.api.destroy();
 });
 
 console.log(`PASS ${count} isolated repository-publish UI fixtures`);

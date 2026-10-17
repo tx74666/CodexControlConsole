@@ -22,7 +22,8 @@
 .repository-publish-compact-name:focus-visible { outline: 2px solid var(--green, #59d4bb); outline-offset: 2px; }
 .repository-publish-name-cell { display: grid; gap: 3px; min-width: 0; }
 .repository-publish-commit-age { color: var(--muted, #92a2b5); font-size: 10px; font-variant-numeric: tabular-nums; font-weight: 400; }
-.repository-publish-compact-version { color: var(--text, #edf2fa); }
+.repository-publish-compact-version { min-height: 0; padding: 0; border: 0; border-radius: 2px; background: transparent; box-shadow: none; color: var(--text, #edf2fa); text-align: left; font: inherit; cursor: pointer; }
+.repository-publish-compact-version:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
 .repository-publish-compact-version[data-change-state="changed"] { color: var(--repository-publish-change, #69dfa7); }
 .repository-publish-compact-status { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text, #edf2fa); text-align: left; font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .repository-publish-compact-status:disabled { cursor: default; text-decoration: none; }
@@ -50,7 +51,6 @@
 .repository-publish-version-picker[hidden] { display: none; }
 .repository-publish-version-trigger { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; list-style: none; }
 .repository-publish-version-trigger::-webkit-details-marker { display: none; }
-.repository-publish-version-trigger .repository-publish-compact-version { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: underline; text-underline-offset: 3px; font-weight: 600; }
 .repository-publish-version-arrow { margin-left: auto; color: var(--muted, #92a2b5); }
 .repository-publish-version-menu { position: absolute; z-index: 30; top: calc(100% + 7px); left: 0; box-sizing: border-box; width: max-content; min-width: min(260px, calc(100vw - 60px)); max-width: min(420px, calc(100vw - 60px)); max-height: min(360px, 60dvh); padding: 7px; overflow: auto; border: 1px solid var(--line, #3b4a5b); border-radius: 9px; background: var(--solid-popover-bg, #182434); color: var(--text, #edf2fa); box-shadow: 0 8px 24px rgb(0 0 0 / 24%); }
 .repository-publish-version-option { display: block; box-sizing: border-box; width: 100%; padding: 7px 9px; color: var(--text, #edf2fa); text-align: left; font: inherit; overflow-wrap: anywhere; }
