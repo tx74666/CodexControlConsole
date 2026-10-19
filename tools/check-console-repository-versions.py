@@ -727,6 +727,145 @@ def git_seed(f, root, repo, version="1.6.43"):
     return unity
 
 
+def test_saved_snapshot_git_only_plan_commits_latest_saved_files():
+    class SaveDuringPlan(Service):
+        def _apply_version_intent(self, repo, context, pending, pending_path):
+            require(pending["versionUpdates"] == [], "Git-subject plan must not write a version file")
+            (context[0] / "tracked.txt").write_text("latest saved implementation\n")
+            (context[0] / "new.txt").write_text("saved after the version plan\n")
+            return super()._apply_version_intent(repo, context, pending, pending_path)
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        unity = git_seed(f, root, repo)
+        service = f.service(SaveDuringPlan)
+        configure_plan(service)
+        save_edit(root)
+        result = f.run(service)
+        item = child(result)
+        require(item["status"] == "success" and item["title"] == "1.6.43 → 1.6.44", result)
+        require(f.git(remote, "show", "main:tracked.txt") == "latest saved implementation")
+        require(f.git(remote, "show", "main:new.txt") == "saved after the version plan")
+        require(f.git(remote, "rev-parse", "main") == item["commitSha"])
+        require(f.git(root, "rev-list", "--count", "HEAD") == "3" and unity.read_bytes() == b"bundleVersion: 0.1.0\r\n")
+
+
+def test_saved_snapshot_file_plan_refreshes_work_after_version_write():
+    class SaveDuringPlan(Service):
+        saved_after_version = False
+        def _apply_version_intent(self, repo, context, pending, pending_path):
+            (context[0] / "tracked.txt").write_text("saved while preparing version\n")
+            return super()._apply_version_intent(repo, context, pending, pending_path)
+        def _version_intent_snapshot(self, repo, context, pending):
+            current = super()._version_intent_snapshot(repo, context, pending)
+            if not self.saved_after_version and any(
+                    module._stable(context[0] / update["path"])["sha256"] == update["afterSha256"]
+                    for update in pending["versionUpdates"]):
+                self.saved_after_version = True
+                (context[0] / "tracked.txt").write_text("latest saved after version write\n")
+                (context[0] / "new.txt").write_text("new saved work\n")
+            return current
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        images = seed(f, root, repo)
+        service = f.service(SaveDuringPlan)
+        configure_plan(service)
+        save_edit(root)
+        result = f.run(service)
+        item = child(result)
+        require(item["status"] == "success" and item["title"] == "1.2.3 → 1.2.4", result)
+        require(service.saved_after_version, "Fixture did not save during the real version write")
+        require((root / "app.json").read_bytes() == images["app.json"].replace(b"1.2.3", b"1.2.4"))
+        require(f.git(remote, "show", "main:tracked.txt") == "latest saved after version write")
+        require(f.git(remote, "show", "main:new.txt") == "new saved work")
+        require(f.git(root, "rev-list", "--count", "HEAD") == "3" and f.git(remote, "rev-parse", "main") == item["commitSha"])
+
+
+def test_strict_version_plan_still_holds_changed_other_files():
+    class SaveDuringPlan(Service):
+        def _apply_version_intent(self, repo, context, pending, pending_path):
+            (context[0] / "tracked.txt").write_text("new work outside the strict plan\n")
+            return super()._apply_version_intent(repo, context, pending, pending_path)
+    for git_only in (False, True):
+        with Fixture() as f:
+            root, remote, repo = f.repo()
+            images = None if git_only else seed(f, root, repo)
+            if git_only:
+                git_seed(f, root, repo)
+            service = f.service(SaveDuringPlan)
+            configure_plan(service)
+            settings = service.status()["settings"]
+            settings["naming"]["allowActiveWork"] = False
+            service.configure(settings)
+            save_edit(root)
+            head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+            result = f.run(service)
+            require(child(result)["status"] == "deferred" and "其他工作文件发生变化" in child(result)["message"], result)
+            require(f.git(root, "rev-parse", "HEAD") == f.git(remote, "rev-parse", "main") == head)
+            require((root / ".git/index").read_bytes() == index)
+            require((root / "tracked.txt").read_text() == "new work outside the strict plan\n")
+            if images:
+                require((root / "app.json").read_bytes() == images["app.json"])
+
+
+def test_saved_snapshot_version_path_change_still_preserves_user_bytes():
+    class ConcurrentVersion(Service):
+        def _apply_version_intent(self, repo, context, pending, pending_path):
+            (context[0] / "tracked.txt").write_text("allowed ordinary saved work\n")
+            (context[0] / "app.json").write_bytes(b'{"version":"9.9.9","user":"concurrent"}\n')
+            return super()._apply_version_intent(repo, context, pending, pending_path)
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        seed(f, root, repo)
+        service = f.service(ConcurrentVersion)
+        configure_plan(service)
+        save_edit(root)
+        head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+        result = f.run(service)
+        require(child(result)["status"] == "deferred" and "版本文件出现其他修改" in child(result)["message"], result)
+        require((root / "app.json").read_bytes() == b'{"version":"9.9.9","user":"concurrent"}\n')
+        require((root / ".git/index").read_bytes() == index)
+        require(f.git(root, "rev-parse", "HEAD") == f.git(remote, "rev-parse", "main") == head)
+        resumed = f.run(f.service(), "request_00000002")
+        require(child(resumed)["status"] == "deferred" and (root / "app.json").read_bytes() == b'{"version":"9.9.9","user":"concurrent"}\n', resumed)
+
+
+def test_saved_snapshot_resumed_plan_keeps_one_version_and_request_identity():
+    class InterruptAfterVersion(Service):
+        def _version_intent_snapshot(self, repo, context, pending):
+            current = super()._version_intent_snapshot(repo, context, pending)
+            if any(module._stable(context[0] / update["path"])["sha256"] == update["afterSha256"]
+                   for update in pending["versionUpdates"]):
+                raise Error("fixture interruption after the original version write")
+            return current
+    with Fixture() as f:
+        root, remote, repo = f.repo()
+        images = seed(f, root, repo)
+        service = f.service(InterruptAfterVersion)
+        configure_plan(service)
+        save_edit(root)
+        first = f.run(service)
+        require(child(first)["status"] == "deferred", first)
+        pending_path = service._pending_path(repo["id"])
+        pending = module._read(pending_path)
+        require(pending["state"] == "version_applying" and len(pending["versionPlans"]) == 1, pending)
+        version_bytes = images["app.json"].replace(b"1.2.3", b"1.2.4")
+        require((root / "app.json").read_bytes() == version_bytes)
+        (root / "tracked.txt").write_text("saved after interrupted version preparation\n")
+        (root / "new.txt").write_text("retained later work\n")
+        resumed_service = f.service()
+        resumed = f.run(resumed_service, "request_00000002")
+        item = child(resumed)
+        require(item["status"] == "success" and item["title"] == "1.2.3 → 1.2.4", resumed)
+        require((root / "app.json").read_bytes() == version_bytes and f.git(root, "rev-list", "--count", "HEAD") == "3")
+        require(f.git(remote, "show", "main:tracked.txt") == "saved after interrupted version preparation")
+        require(f.git(remote, "show", "main:new.txt") == "retained later work")
+        require(f.git(remote, "rev-parse", "main") == item["commitSha"])
+        require(resumed_service.run("request_00000001") == first and resumed_service.run("request_00000002") == resumed)
+        require((root / "app.json").read_bytes() == version_bytes and f.git(root, "rev-parse", "HEAD") == item["commitSha"])
+        require(child(f.run(resumed_service, "request_00000003"))["status"] == "noop")
+        require(f.git(root, "rev-list", "--count", "HEAD") == "3" and (root / "app.json").read_bytes() == version_bytes)
+
+
 def test_git_plan_summary_real_commit_and_once_only_retry():
     class Fail(Service):
         def _git(self, root, *arguments, **kwargs):

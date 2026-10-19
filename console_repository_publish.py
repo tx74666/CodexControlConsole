@@ -1638,7 +1638,12 @@ class RepositoryPublishService:
         if any(current[key] != original[key] for key in ("head", "indexSha", "configSha", "identity")):
             raise RepositoryPublishError("版本计划开始后仓库、分支或暂存区变化，保留已保存文件。")
         paths = {update["path"] for update in pending["versionUpdates"]}
-        if [item for item in current["files"] if item["path"] not in paths] != [item for item in original["files"] if item["path"] not in paths]:
+        # A retained version plan owns its version files, not earlier bytes of
+        # unrelated work. Saved-snapshot mode freezes those files again after
+        # applying the same plan; the commit gates still verify that snapshot.
+        if (getattr(self._lease, "allow_active_work", False) is not True
+                and [item for item in current["files"] if item["path"] not in paths]
+                != [item for item in original["files"] if item["path"] not in paths]):
             raise RepositoryPublishError("版本准备期间其他工作文件发生变化，保留一次性计划待核对。")
         for update in pending["versionUpdates"]:
             proof = _stable(context[0] / update["path"])
