@@ -866,6 +866,367 @@ def test_saved_snapshot_resumed_plan_keeps_one_version_and_request_identity():
         require(f.git(root, "rev-list", "--count", "HEAD") == "3" and (root / "app.json").read_bytes() == version_bytes)
 
 
+class PauseBeforeSyncVersion(Service):
+    def _apply_version_intent(self, repo, context, pending, pending_path):
+        raise Error("fixture saved the original sync and version intent before writing a version")
+
+
+def sync_version_fixture(f, count=1):
+    root, remote, repo = f.repo()
+    sources, targets = [], []
+    for number in range(count):
+        external, target = f.base / ("source-" + str(number) + ".bin"), root / ("asset-" + str(number) + ".bin")
+        external.write_bytes(("old saved source " + str(number) + "\n").encode())
+        target.write_bytes(external.read_bytes())
+        sources.append(external)
+        targets.append(target)
+    images = seed(f, root, repo)
+    repo["syncFiles"] = [{"source": str(external), "target": target.name} for external, target in zip(sources, targets)]
+    service = f.service(PauseBeforeSyncVersion)
+    configure_plan(service)
+    save_edit(root)
+    first = f.run(service)
+    require(child(first)["status"] == "deferred", first)
+    path = service._pending_path(repo["id"])
+    pending = module._read(path)
+    require(pending["state"] == "version_prepared" and not pending["commitSha"] and not pending.get("commitAttemptAt"), pending)
+    require((root / "app.json").read_bytes() == images["app.json"])
+    return root, remote, repo, sources, targets, images, first, path
+
+
+def require_sync_not_committed(f, root, remote, images, head, index):
+    require(f.git(root, "rev-parse", "HEAD") == f.git(remote, "rev-parse", "main") == head)
+    require((root / ".git/index").read_bytes() == index and (root / "app.json").read_bytes() == images["app.json"])
+
+
+def test_saved_snapshot_sync_refresh_copies_current_source_once_and_reads_are_quiet():
+    for already_synced in (False, True):
+        with Fixture() as f:
+            root, remote, repo, sources, targets, images, first, path = sync_version_fixture(f)
+            old_pending, old_target = path.read_bytes(), targets[0].read_bytes()
+            sources[0].write_bytes(b"latest saved source\n")
+            if already_synced:
+                targets[0].write_bytes(sources[0].read_bytes())
+                targets[0].chmod(0o444)
+            target_stamp = targets[0].stat().st_mtime_ns
+            service = f.service()
+            head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+            service.version_catalog(repo["id"])
+            service.preview(repo["id"])
+            require(path.read_bytes() == old_pending and not list(service.state_dir.glob("sync-refresh-*.json")))
+            require(targets[0].read_bytes() == (sources[0].read_bytes() if already_synced else old_target))
+            require_sync_not_committed(f, root, remote, images, head, index)
+            result = f.run(service, "request_sync_refresh_0002")
+            item = child(result)
+            require(item["status"] == "success" and item["title"] == "1.2.3 → 1.2.4", result)
+            require(f.git(remote, "show", "main:" + targets[0].name) == "latest saved source")
+            require(f.git(remote, "rev-parse", "main") == item["commitSha"] and f.git(root, "rev-list", "--count", "HEAD") == "3")
+            require((root / "app.json").read_bytes() == images["app.json"].replace(b"1.2.3", b"1.2.4"))
+            pending = module._read(path)
+            journal = module._read(service.state_dir / pending["syncRefresh"]["journal"])
+            require(journal["state"] == "verified" and journal["originalPending"] == json.loads(old_pending), journal)
+            require(pending["syncProofs"][0]["sha256"] == module._stable(sources[0])["sha256"])
+            backups = list(service.state_dir.glob("sync-refresh-*/*.bin"))
+            require(len(backups) == (0 if already_synced else 1), backups)
+            if backups:
+                require(backups[0].read_bytes() == old_target)
+            if already_synced:
+                require(targets[0].stat().st_mtime_ns == target_stamp, "Already-coherent target was rewritten")
+                targets[0].chmod(0o666)
+            require(service.run("request_00000001") == first and service.run("request_sync_refresh_0002") == result)
+            require(f.git(root, "rev-parse", "HEAD") == item["commitSha"])
+
+
+def test_saved_snapshot_sync_refresh_preserves_independent_or_missing_targets():
+    for mode in ("target", "both", "missing", "hardlink"):
+        with Fixture() as f:
+            root, remote, _, sources, targets, images, _, path = sync_version_fixture(f)
+            original_pending, original_target = path.read_bytes(), targets[0].read_bytes()
+            if mode != "target":
+                sources[0].write_bytes(b"new external source\n")
+            if mode in {"target", "both"}:
+                targets[0].write_bytes(b"independent target edit\n")
+            elif mode == "missing":
+                targets[0].unlink()
+            else:
+                os.link(targets[0], f.base / "target-hardlink.bin")
+            target_before = targets[0].read_bytes() if targets[0].exists() else None
+            head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+            service = f.service()
+            result = f.run(service, "request_sync_protect_0002")
+            expected = "sync_missing" if mode == "missing" else "sync_config" if mode == "hardlink" else "sync_changed"
+            require(child(result)["status"] == "deferred" and child(result)["diagnostic"]["code"] == expected, result)
+            require((targets[0].read_bytes() if targets[0].exists() else None) == target_before)
+            require_sync_not_committed(f, root, remote, images, head, index)
+            require(module._read(path)["syncProofs"] == json.loads(original_pending)["syncProofs"])
+            if mode == "hardlink":
+                require((f.base / "target-hardlink.bin").read_bytes() == original_target)
+            else:
+                require(path.read_bytes() == original_pending and not list(service.state_dir.glob("sync-refresh-*.json")))
+
+
+def test_saved_snapshot_sync_refresh_rechecks_target_and_source_after_copy():
+    for mode in ("before_copy", "busy_target", "busy_source"):
+        class Concurrent(Service):
+            refreshing = False
+            injected = False
+            def _sync(self, repo, context, *, target_guards=None):
+                self.refreshing = target_guards is not None
+                if self.refreshing and mode == "before_copy":
+                    (context[0] / "asset-0.bin").write_bytes(b"independent target race\n")
+                    self.injected = True
+                return super()._sync(repo, context, target_guards=target_guards)
+            def _busy_reason(self, root):
+                value = super()._busy_reason(root)
+                if self.refreshing and not self.injected and list(Path(root).glob(".asset-0.bin.console-sync-*")):
+                    self.injected = True
+                    (sources[0] if mode == "busy_source" else targets[0]).write_bytes(b"independent race after copy\n")
+                return value
+        with Fixture() as f:
+            root, remote, _, sources, targets, images, _, path = sync_version_fixture(f)
+            old_target, old_proofs = targets[0].read_bytes(), module._read(path)["syncProofs"]
+            sources[0].write_bytes(b"latest source before the race\n")
+            head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+            service = f.service(Concurrent)
+            result = f.run(service, "request_sync_race_0002")
+            require(service.injected and child(result)["status"] == "deferred" and child(result)["diagnostic"]["code"] == "sync_changed", result)
+            expected = old_target if mode == "busy_source" else b"independent target race\n" if mode == "before_copy" else b"independent race after copy\n"
+            require(targets[0].read_bytes() == expected)
+            require_sync_not_committed(f, root, remote, images, head, index)
+            require(module._read(path)["syncProofs"] == old_proofs)
+
+
+def test_saved_snapshot_sync_refresh_partial_copy_restart_keeps_original_version():
+    class InterruptAfterCopy(Service):
+        stopped = False
+        def _guarded_sync_write(self, target, temporary, proof, guard):
+            super()._guarded_sync_write(target, temporary, proof, guard)
+            if not self.stopped:
+                self.stopped = True
+                raise Error("fixture stopped after the first actual completed copy")
+    with Fixture() as f:
+        root, remote, _, sources, targets, images, first, path = sync_version_fixture(f, count=2)
+        old_targets, old_pending = [target.read_bytes() for target in targets], path.read_bytes()
+        for number, external in enumerate(sources):
+            external.write_bytes(("latest saved source " + str(number) + "\n").encode())
+        interrupted_service = f.service(InterruptAfterCopy)
+        interrupted = f.run(interrupted_service, "request_sync_partial_0002")
+        require(child(interrupted)["status"] == "deferred", interrupted)
+        require(targets[0].read_bytes() == sources[0].read_bytes() and targets[1].read_bytes() == old_targets[1])
+        require((root / "app.json").read_bytes() == images["app.json"] and f.git(root, "rev-list", "--count", "HEAD") == "2")
+        pending = module._read(path)
+        require(pending["state"] == "version_prepared" and pending["syncProofs"] == json.loads(old_pending)["syncProofs"])
+        archive = module._read(interrupted_service.state_dir / pending["syncRefresh"]["journal"])
+        require(archive["state"] == "prepared" and archive["originalPending"] == json.loads(old_pending))
+        require(Path(archive["targetGuards"][targets[0].name]["backup"]).read_bytes() == old_targets[0])
+        service = f.service()
+        resumed = f.run(service, "request_sync_partial_0003")
+        item = child(resumed)
+        require(item["status"] == "success" and item["title"] == "1.2.3 → 1.2.4", resumed)
+        require(f.git(remote, "rev-parse", "main") == item["commitSha"] and f.git(root, "rev-list", "--count", "HEAD") == "3")
+        require(all(target.read_bytes() == external.read_bytes() for external, target in zip(sources, targets)))
+        require((root / "app.json").read_bytes() == images["app.json"].replace(b"1.2.3", b"1.2.4"))
+        require(service.run("request_00000001") == first and service.run("request_sync_partial_0002") == interrupted)
+        require(service.run("request_sync_partial_0003") == resumed and f.git(root, "rev-list", "--count", "HEAD") == "3")
+
+
+def test_saved_snapshot_sync_refresh_preserves_strict_written_and_uncertain_boundaries():
+    for mode in ("strict", "version_written", "commit_uncertain"):
+        with Fixture() as f:
+            root, remote, _, sources, targets, images, _, path = sync_version_fixture(f)
+            source_before, target_before = sources[0].read_bytes(), targets[0].read_bytes()
+            sources[0].write_bytes(b"new source after original plan\n")
+            service = f.service()
+            if mode == "strict":
+                settings = service.status()["settings"]
+                settings["naming"]["allowActiveWork"] = False
+                service.configure(settings)
+            else:
+                pending = module._read(path)
+                pending["state"] = "version_applying"
+                if mode == "version_written":
+                    (root / "app.json").write_bytes(base64.b64decode(pending["versionUpdates"][0]["afterBase64"]))
+                else:
+                    pending["commitAttemptAt"] = "fixture uncertain commit boundary"
+                module._atomic(path, pending)
+            pending_before, version_before = path.read_bytes(), (root / "app.json").read_bytes()
+            head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+            result = f.run(service, "request_sync_boundary_0002")
+            expected = {"strict": "sync_changed", "version_written": "version_plan_blocked", "commit_uncertain": "receipt_unverified"}[mode]
+            require(child(result)["status"] == "deferred" and child(result)["diagnostic"]["code"] == expected, result)
+            require(path.read_bytes() == pending_before and targets[0].read_bytes() == target_before)
+            require((root / "app.json").read_bytes() == version_before and (root / ".git/index").read_bytes() == index)
+            require(f.git(root, "rev-parse", "HEAD") == f.git(remote, "rev-parse", "main") == head)
+            require(not list(service.state_dir.glob("sync-refresh-*.json")) and sources[0].read_bytes() != source_before)
+
+
+def test_saved_snapshot_sync_refresh_preserves_repository_and_plan_boundaries():
+    for mode in ("head", "index", "config", "settings", "plan"):
+        with Fixture() as f:
+            root, remote, _, sources, targets, images, _, path = sync_version_fixture(f)
+            sources[0].write_bytes(b"new source while repository changed\n")
+            service = f.service()
+            if mode == "head":
+                f.git(root, "commit", "--allow-empty", "-m", "concurrent unrelated commit")
+            elif mode == "index":
+                f.git(root, "add", "tracked.txt")
+            elif mode == "config":
+                f.git(root, "config", "user.name", "Concurrent author")
+            else:
+                settings = service.status()["settings"]
+                if mode == "settings":
+                    settings["repositories"][0]["exclude"] = ["unrelated-excluded.txt"]
+                else:
+                    settings["repositories"][0]["versionPlans"] = []
+                service.configure(settings)
+            pending_before, target_before = path.read_bytes(), targets[0].read_bytes()
+            head, index, remote_head = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes(), f.git(remote, "rev-parse", "main")
+            result = f.run(service, "request_sync_repo_boundary_0002")
+            require(child(result)["status"] == "deferred", result)
+            require(path.read_bytes() == pending_before and targets[0].read_bytes() == target_before)
+            require((root / "app.json").read_bytes() == images["app.json"] and (root / ".git/index").read_bytes() == index)
+            require(f.git(root, "rev-parse", "HEAD") == head and f.git(remote, "rev-parse", "main") == remote_head)
+            require(not list(service.state_dir.glob("sync-refresh-*.json")))
+
+
+def test_saved_snapshot_sync_refresh_holds_target_lease_and_retains_partial_backup():
+    for partial in (False, True):
+        class Guarded(Service):
+            writer_refused = False
+            partial_written = False
+            def _sync(self, repo, context, *, target_guards=None):
+                if target_guards is None:
+                    return super()._sync(repo, context)
+                original_lease, original_copy = module._read_lease, module.shutil.copyfileobj
+                @contextmanager
+                def lease(location):
+                    with original_lease(location):
+                        if (not partial and Path(location).name.startswith(".asset-0.bin.console-sync-")
+                                and list(self.state_dir.glob("sync-refresh-*/*.bin"))):
+                            try:
+                                if os.name == "nt":
+                                    with targets[0].open("r+b") as writer:
+                                        writer.write(b"foreign writer")
+                                else:
+                                    import fcntl
+                                    with targets[0].open("r+b") as writer:
+                                        fcntl.flock(writer.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            except (PermissionError, BlockingIOError):
+                                self.writer_refused = True
+                            else:
+                                raise AssertionError("Guarded target did not refuse the concurrent writer")
+                        yield
+                def copy(source_stream, target_stream, length=0):
+                    if partial and str(getattr(source_stream, "name", "")).find(".asset-0.bin.console-sync-") >= 0:
+                        target_stream.write(b"partial owned copy")
+                        target_stream.flush()
+                        os.fsync(target_stream.fileno())
+                        self.partial_written = True
+                        raise OSError("fixture process interruption during target write")
+                    return original_copy(source_stream, target_stream, length)
+                module._read_lease, module.shutil.copyfileobj = lease, copy
+                try:
+                    return super()._sync(repo, context, target_guards=target_guards)
+                finally:
+                    module._read_lease, module.shutil.copyfileobj = original_lease, original_copy
+        with Fixture() as f:
+            root, remote, _, sources, targets, images, _, path = sync_version_fixture(f)
+            old_target = targets[0].read_bytes()
+            sources[0].write_bytes(b"new saved source needing a guarded write\n")
+            head, index = f.git(root, "rev-parse", "HEAD"), (root / ".git/index").read_bytes()
+            service = f.service(Guarded)
+            result = f.run(service, "request_sync_lease_0002")
+            backups = list(service.state_dir.glob("sync-refresh-*/*.bin"))
+            require(len(backups) == 1 and backups[0].read_bytes() == old_target)
+            if partial:
+                require(service.partial_written and child(result)["status"] == "deferred" and child(result)["diagnostic"]["code"] == "sync_changed", result)
+                partial_target = b"partial owned copy" + old_target[len(b"partial owned copy"):]
+                require(targets[0].read_bytes() == partial_target)
+                require_sync_not_committed(f, root, remote, images, head, index)
+                pending_before = path.read_bytes()
+                resumed = f.run(f.service(), "request_sync_lease_0003")
+                require(child(resumed)["status"] == "deferred" and child(resumed)["diagnostic"]["code"] == "sync_changed", resumed)
+                require(path.read_bytes() == pending_before and targets[0].read_bytes() == partial_target)
+                require(backups[0].read_bytes() == old_target)
+            else:
+                require(service.writer_refused and child(result)["status"] == "success", result)
+                require(f.git(remote, "show", "main:" + targets[0].name) == "new saved source needing a guarded write")
+                require(f.git(root, "rev-list", "--count", "HEAD") == "3")
+
+
+def test_saved_snapshot_preparation_reads_only_owned_version_and_repository_state():
+    for mode in ("saved", "strict", "version", "head", "index"):
+        class PreparationReads(Service):
+            preparing = False
+            injected = False
+            def _version_intent_snapshot(self, repo, context, pending):
+                self.preparing = True
+                try:
+                    if not self.injected:
+                        self.injected = True
+                        if mode in {"saved", "strict"}:
+                            (context[0] / "tracked.txt").write_text("latest work saved during preparation\n")
+                        elif mode == "version":
+                            (context[0] / "app.json").write_bytes(b'{"version":"9.9.9","user":"keep"}\n')
+                        elif mode == "head":
+                            f.git(context[0], "commit", "--allow-empty", "-m", "concurrent head movement")
+                        else:
+                            f.git(context[0], "add", "tracked.txt")
+                    return super()._version_intent_snapshot(repo, context, pending)
+                finally:
+                    self.preparing = False
+            def _git(self, root, *arguments, **kwargs):
+                if self.preparing and mode != "strict":
+                    require(module._git_operation(arguments) != "status", "Preparation scanned ordinary worktree status")
+                return super()._git(root, *arguments, **kwargs)
+        with Fixture() as f:
+            root, remote, repo = f.repo()
+            images = seed(f, root, repo)
+            service = f.service(PreparationReads)
+            configure_plan(service)
+            if mode == "strict":
+                settings = service.status()["settings"]
+                settings["naming"]["allowActiveWork"] = False
+                service.configure(settings)
+            save_edit(root)
+            head = f.git(root, "rev-parse", "HEAD")
+            original_stable = module._stable
+            preparation_reads, final_reads = [], []
+            def stable(location, **kwargs):
+                if Path(location) == root / "tracked.txt":
+                    if service.preparing:
+                        preparation_reads.append(str(location))
+                        require(mode == "strict", "Intermediate preparation hashed unrelated saved work")
+                    elif b"1.2.4" in (root / "app.json").read_bytes():
+                        final_reads.append(str(location))
+                return original_stable(location, **kwargs)
+            module._stable = stable
+            try:
+                result = f.run(service)
+            finally:
+                module._stable = original_stable
+            item = child(result)
+            require(service.injected, "Preparation boundary fixture did not execute")
+            if mode == "saved":
+                require(item["status"] == "success" and final_reads and not preparation_reads, result)
+                require(f.git(remote, "show", "main:tracked.txt") == "latest work saved during preparation")
+                require(f.git(remote, "rev-parse", "main") == item["commitSha"] and f.git(root, "rev-list", "--count", "HEAD") == "3")
+            else:
+                require(item["status"] == "deferred" and f.git(remote, "rev-parse", "main") == head, result)
+                if mode == "strict":
+                    require(preparation_reads, "Strict mode lost its original full worktree gate")
+                else:
+                    require(not preparation_reads)
+                if mode == "version":
+                    require((root / "app.json").read_bytes() == b'{"version":"9.9.9","user":"keep"}\n')
+                else:
+                    require((root / "app.json").read_bytes() == images["app.json"])
+                if mode == "head":
+                    require(f.git(root, "rev-parse", "HEAD") != head and f.git(root, "rev-list", "--count", "HEAD") == "3")
+                elif mode == "index":
+                    require(f.git(root, "diff", "--cached", "--name-only") == "tracked.txt" and f.git(root, "rev-parse", "HEAD") == head)
+
+
 def test_git_plan_summary_real_commit_and_once_only_retry():
     class Fail(Service):
         def _git(self, root, *arguments, **kwargs):

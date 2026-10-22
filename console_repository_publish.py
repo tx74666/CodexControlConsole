@@ -1633,7 +1633,23 @@ class RepositoryPublishService:
                     _atomic(self._settings_path, settings)
 
     def _version_intent_snapshot(self, repo, context, pending):
-        current = self._snapshot(repo, context)
+        if getattr(self._lease, "allow_active_work", False) is True:
+            root, gitdir, common, identity = self._repo(repo)
+            self._blockers(root, gitdir, common)
+            index = gitdir / "index"
+            head = self._text(root, "rev-parse", "HEAD")
+            index_sha = _sha(index.read_bytes()) if index.exists() else None
+            current = {"head": head, "indexSha": index_sha, "configSha": _sha(self._git(root, "config", "--null", "--list")),
+                       "identity": identity}
+            if (self._text(root, "rev-parse", "HEAD") != head
+                    or (_sha(index.read_bytes()) if index.exists() else None) != index_sha):
+                raise RepositoryPublishError("版本核对期间 HEAD 或暂存区变化，保留原计划。", code="worktree_changed")
+            current["fingerprint"] = _json_sha(current)
+        else:
+            current = self._snapshot(repo, context)
+        return self._validate_version_intent(repo, context, pending, current)
+
+    def _validate_version_intent(self, repo, context, pending, current):
         original = pending["versionBaseSnapshot"]
         if any(current[key] != original[key] for key in ("head", "indexSha", "configSha", "identity")):
             raise RepositoryPublishError("版本计划开始后仓库、分支或暂存区变化，保留已保存文件。")
@@ -1666,11 +1682,72 @@ class RepositoryPublishService:
             if _stable(root / entry["path"]) != {"sha256":entry["expectedSha256"], "bytes":entry["expectedBytes"]}:
                 raise RepositoryPublishError("Console 资源在版本准备期间变化，保留原计划和文件；不会生成错误缓存版本。")
 
+    def _refresh_version_sync(self, repo, context, pending, pending_path):
+        """A new request may re-sync untouched targets before any version write."""
+        request_id = getattr(self._lease, "request_id", None)
+        if (not isinstance(request_id, str) or not _REQUEST.fullmatch(request_id)
+                or request_id in {pending.get("requestId"), pending.get("syncRefresh", {}).get("requestId")}):
+            raise RepositoryPublishError("同步变化需由新请求核对原计划；不会在原请求内反复同步。", code="sync_changed")
+        if (pending.get("state") not in {"version_prepared", "version_applying"}
+                or pending.get("commitSha") or pending.get("commitAttemptAt")
+                or pending.get("observedHead") or pending.get("commitError")):
+            raise RepositoryPublishError("原计划已有提交尝试或无法确认其边界，保留原同步证明与文件。", code="receipt_unverified")
+        for update in pending["versionUpdates"]:
+            proof = _stable(context[0] / update["path"])
+            if proof != {"bytes": update["beforeBytes"], "sha256": update["beforeSha256"]}:
+                raise RepositoryPublishError("原计划已写入版本，保留该版本和同步证明；不会重做同步。", code="version_plan_blocked")
+        originals = pending.get("syncProofs", [])
+        mappings = {mapping["target"]: mapping for mapping in repo["syncFiles"]}
+        if (not isinstance(originals, list) or len(originals) != len(mappings)
+                or any(not isinstance(record, dict) for record in originals)
+                or {record.get("target") for record in originals} != set(mappings)):
+            raise RepositoryPublishError("原同步证明与固定映射不完整，保留原计划。", code="receipt_unverified")
+        guards = {}
+        for record in originals:
+            mapping = mappings[record["target"]]
+            source, target = _safe_path(mapping["source"]), _safe_path(context[0] / mapping["target"])
+            if (os.path.normcase(str(source)) != os.path.normcase(str(record.get("source", "")))
+                    or type(record.get("bytes")) is not int or record["bytes"] < 0
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", "")))):
+                raise RepositoryPublishError("原同步证明的来源或摘要无法确认，保留原计划。", code="receipt_unverified")
+            original = {"bytes": record["bytes"], "sha256": record["sha256"]}
+            try:
+                source_proof, target_proof = _stable(source), _stable(target)
+            except FileNotFoundError as exc:
+                raise RepositoryPublishError("同步映射 " + mapping["target"] + " 的来源或目标已缺失，保留现有文件与计划。", code="sync_missing") from exc
+            if target_proof not in (original, source_proof):
+                raise RepositoryPublishError("同步目标 " + mapping["target"] + " 有独立修改，保留来源与目标；请先核对两份内容。", code="sync_changed")
+            guards[mapping["target"]] = {"target": mapping["target"], "original": original, "observed": target_proof}
+        # Preserve the old journal and the checked target preconditions before
+        # copying. A later request can recognize completed copies by source=target.
+        journal_name = "sync-refresh-" + uuid.uuid4().hex + ".json"
+        journal_path = self.state_dir / journal_name
+        for name, guard in guards.items():
+            guard["backup"] = str(self.state_dir / journal_path.stem / (_sha(name.encode("utf-8")) + ".bin"))
+        journal = {"schemaVersion": 1, "state": "prepared", "requestId": request_id, "repoId": repo["id"],
+                   "preparedAt": _now(), "originalPending": dict(pending), "targetGuards": guards}
+        _atomic(journal_path, journal)
+        pending["syncRefresh"] = {"requestId": request_id, "journal": journal_name, "state": "prepared"}
+        _atomic(pending_path, pending)
+        records = self._sync(repo, context, target_guards=guards)
+        snapshot = self._version_intent_snapshot(repo, context, pending)
+        self._verify_sync(repo, context, records)
+        journal.update(state="verified", verifiedAt=_now(), syncProofs=records, preparationFingerprint=snapshot["fingerprint"])
+        _atomic(journal_path, journal)
+        pending["syncProofs"] = records
+        pending["syncRefresh"].update(state="verified", verifiedAt=journal["verifiedAt"])
+        _atomic(pending_path, pending)
+
     def _apply_version_intent(self, repo, context, pending, pending_path):
         root = context[0]
         self._busy_reason(root)
         self._version_intent_snapshot(repo, context, pending)
-        self._verify_sync(repo, context, pending.get("syncProofs", []))
+        try:
+            self._verify_sync(repo, context, pending.get("syncProofs", []))
+        except RepositoryPublishError as exc:
+            if exc.code != "sync_changed" or getattr(self._lease, "allow_active_work", False) is not True:
+                raise
+            self._refresh_version_sync(repo, context, pending, pending_path)
         # Recheck remote before any resumed or first version write.
         remote = self._remote(repo, root)
         self._fetch(repo, context, remote)
@@ -1711,7 +1788,8 @@ class RepositoryPublishService:
                 stream.flush()
                 os.fsync(stream.fileno())
             self._version_intent_snapshot(repo, context, pending)
-        snapshot = self._version_intent_snapshot(repo, context, pending)
+        snapshot = self._snapshot(repo, self._repo(repo))
+        self._validate_version_intent(repo, context, pending, snapshot)
         paths = {update["path"] for update in pending["versionUpdates"]}
         if not paths <= {item["path"] for item in snapshot["files"]}:
             raise RepositoryPublishError("版本修改未进入可提交范围，请检查忽略规则并保留计划。")
@@ -2145,14 +2223,15 @@ class RepositoryPublishService:
         return None
 
     @contextmanager
-    def _activity_policy(self, naming, item=None):
+    def _activity_policy(self, naming, item=None, *, request_id=None):
         """Freeze this invocation's policy and release its thread lease on all exits."""
         if not hasattr(self, "_lease"):
             self._lease = threading.local()
         missing = object()
-        previous = {key: getattr(self._lease, key, missing) for key in ("allow_active_work", "activity_item")}
+        previous = {key: getattr(self._lease, key, missing) for key in ("allow_active_work", "activity_item", "request_id")}
         self._lease.allow_active_work = naming.get("allowActiveWork", True) is True
         self._lease.activity_item = item
+        self._lease.request_id = request_id
         if item is not None:
             item.update(activityPolicy="allow_saved_snapshot" if self._lease.allow_active_work else "strict", activityNotice=None)
         try:
@@ -2709,10 +2788,76 @@ class RepositoryPublishService:
             return message + ("（" + " · ".join(metadata) + "）" if metadata else "")
         return "文件或发布记录不可用，请保存完成后重试。"
 
-    def _sync(self, repo, context):
+    def _guarded_sync_write(self, target, temporary, proof, guard):
+        """Hold the actual target through its final check, backup and write."""
+        def held_proof(stream):
+            before = os.fstat(stream.fileno())
+            stream.seek(0)
+            digest = hashlib.sha256()
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+            after = os.fstat(stream.fileno())
+            if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+                raise RepositoryPublishError("同步目标仍在变化，保留原文件与计划。", code="sync_changed")
+            return {"bytes": after.st_size, "sha256": digest.hexdigest()}
+        target = _safe_path(target)
+        label = guard["target"]
+        if not target.exists():
+            raise RepositoryPublishError("同步目标 " + label + " 已被移除，保留删除和原计划。", code="sync_missing")
+        try:
+            if guard["observed"] == proof:
+                with _read_lease(target):
+                    if _stable(target) != proof:
+                        raise RepositoryPublishError("同步目标 " + label + " 在最终核对时变化，保留该修改。", code="sync_changed")
+                return  # Coherent targets need no write permission or replacement.
+            if target.stat().st_nlink != 1:
+                raise RepositoryPublishError("同步目标存在硬链接，保留所有关联文件。", code="sync_config")
+            with _version_write_lease(target) as stream:
+                actual = held_proof(stream)
+                if actual != guard["observed"] or actual not in (guard["original"], proof):
+                    raise RepositoryPublishError("同步目标 " + label + " 有独立修改，保留来源与目标；不会覆盖。", code="sync_changed")
+                if os.fstat(stream.fileno()).st_nlink != 1:
+                    raise RepositoryPublishError("同步目标出现硬链接，保留所有关联文件。", code="sync_config")
+                if actual == proof:
+                    return
+                backup = _safe_path(guard["backup"])
+                if not backup.is_relative_to(self.state_dir):
+                    raise RepositoryPublishError("同步备份不在本次私有记录范围。", code="receipt_unverified")
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                stream.seek(0)
+                with backup.open("xb") as saved:
+                    shutil.copyfileobj(stream, saved, 1024 * 1024)
+                    saved.flush()
+                    os.fsync(saved.fileno())
+                if _stable(backup) != actual:
+                    raise RepositoryPublishError("原同步目标备份无法核验，尚未覆盖目标。", code="receipt_unverified")
+                with _read_lease(temporary), temporary.open("rb") as source:
+                    if _stable(temporary) != proof:
+                        raise RepositoryPublishError("同步副本在写入前变化，保留目标与备份。", code="sync_changed")
+                    if os.fstat(stream.fileno()).st_nlink != 1:
+                        raise RepositoryPublishError("同步目标出现硬链接，保留原目标与备份。", code="sync_config")
+                    stream.seek(0)
+                    shutil.copyfileobj(source, stream, 1024 * 1024)
+                    stream.truncate()
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                if held_proof(stream) != proof:
+                    raise RepositoryPublishError("同步目标写入未核验，保留原计划与备份。", code="sync_changed")
+        except RepositoryPublishError as exc:
+            if exc.code == "manual_check":
+                raise RepositoryPublishError("同步目标仍在使用，保留原计划与备份。", code="sync_writing") from exc
+            raise
+        except (PermissionError, FileNotFoundError) as exc:
+            raise RepositoryPublishError("同步目标仍在使用或已变化，保留原计划与备份。", code="sync_writing") from exc
+        except OSError as exc:
+            raise RepositoryPublishError("同步目标写入未完成，保留原计划与原文件备份。", code="sync_changed") from exc
+
+    def _sync(self, repo, context, *, target_guards=None):
         root = context[0]
         self._sync_contract(repo)
         self._busy_reason(root)
+        if target_guards is not None and set(target_guards) != {mapping["target"] for mapping in repo["syncFiles"]}:
+            raise RepositoryPublishError("同步恢复的目标门槛与固定映射不符。", code="receipt_unverified")
         records = []
         preflight = self._sync_preflight(repo, root)
         for mapping, source, target, proof in preflight:
@@ -2720,6 +2865,10 @@ class RepositoryPublishService:
                 if _stable(source) != proof:
                     raise RepositoryPublishError("同步来源正在写入，请保存后重试。", code="sync_writing")
                 target_before = _stable(target) if target.exists() else None
+                if target_guards is not None:
+                    guard = target_guards[mapping["target"]]
+                    if target_before != guard["observed"] or target_before not in (guard["original"], proof):
+                        raise RepositoryPublishError("同步目标 " + mapping["target"] + " 在恢复核对后变化，保留该修改。", code="sync_changed")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 temporary = target.with_name("." + target.name + ".console-sync-" + uuid.uuid4().hex)
                 try:
@@ -2732,7 +2881,11 @@ class RepositoryPublishService:
                     if (_stable(target) if target.exists() else None) != target_before:
                         raise RepositoryPublishError("同步目标被另一处修改，保留该修改。", code="sync_changed")
                     self._busy_reason(root)
-                    if source != target and target_before != proof:
+                    if target_guards is not None:
+                        if _stable(source) != proof:
+                            raise RepositoryPublishError("同步来源在最终写入前变化，保留目标。", code="sync_changed")
+                        self._guarded_sync_write(target, temporary, proof, guard)
+                    elif source != target and target_before != proof:
                         os.replace(temporary, target)
                     records.append({"source": str(source), "target": mapping["target"], **proof, "changed": target_before != proof})
                 finally:
@@ -2915,7 +3068,7 @@ class RepositoryPublishService:
         return True
 
     def _run_repo(self, repo, naming, receipt, item):
-        with self._activity_policy(naming, item):
+        with self._activity_policy(naming, item, request_id=receipt["requestId"]):
             return self._run_repo_frozen(repo, naming, receipt, item)
 
     def _run_repo_frozen(self, repo, naming, receipt, item):
