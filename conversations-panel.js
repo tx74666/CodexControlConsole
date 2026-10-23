@@ -31,7 +31,11 @@
     const refreshList = button("刷新列表", () => void reload()); header.append(title, refreshList);
     const notice = make("p", "", "conversations-notice"); notice.setAttribute("role", "status"); notice.setAttribute("aria-live", "polite");
     const catalogMeta = make("p", "尚未抓取", "conversations-meta");
-    const main = make("div", "", "conversations-main"), sidebar = make("aside", "", "conversations-sidebar"), list = make("div", "", "conversations-list"); sidebar.append(list);
+    const main = make("div", "", "conversations-main"), sidebar = make("aside", "", "conversations-sidebar"), list = make("div", "", "conversations-list");
+    const search = make("input", "", "conversations-search"); search.type = "search"; search.value = ""; search.placeholder = "搜索会话、项目或目录"; search.setAttribute("aria-label", "搜索会话、项目或目录"); search.autocomplete = "off";
+    const searchCount = make("p", "", "conversations-meta"); searchCount.setAttribute("role", "status"); searchCount.setAttribute("aria-live", "polite"); searchCount.hidden = true;
+    search.addEventListener("input", renderList); sidebar.append(search, searchCount, list);
+    let renderedMessages = [], renderedThread = "", renderedError = "", renderedAvailable = false;
     const detail = make("section", "", "conversations-detail"), back = button("‹ 返回会话列表", () => { state.selectedId = ""; state.snapshot = null; state.detailSequence++; abort("detail"); renderDetail(); renderList(); }), detailTitle = make("h3"), sourceMeta = make("p", "", "conversations-meta"), detailMeta = make("p", "", "conversations-meta"), coverage = make("p", "", "conversations-coverage"), requestState = make("div", "", "conversations-requests");
     const actions = make("div", "", "conversations-actions"), update = button("更新对话", () => void queueRead("refresh")), older = button("更多历史", () => void queueRead("older")), choose = button("使用这个会话", () => { const thread = currentThread(); if (thread && !state.private) options.onTarget?.({ ...thread }); }, "conversations-primary"), original = make("a", "打开原会话", "conversations-button"), unavailableLink = make("span", "目前未提供可打开的原会话入口", "conversations-muted"); original.rel = "noopener noreferrer"; actions.append(update, older, choose, original, unavailableLink);
     const messages = make("div", "", "conversations-messages"); detail.append(back, detailTitle, sourceMeta, detailMeta, coverage, actions, requestState, make("p", "以下为 App Tools 实际可读文字；快取可能不包含完整原会话或工具输出。", "conversations-muted"), messages);
@@ -47,7 +51,7 @@
     }
     function guard(generation) { return generation === state.generation && state.active && !document.hidden && !state.private; }
     function clearPrivate() {
-      state.generation++; state.catalogSequence++; state.detailSequence++; state.private = true; state.active = false; stopTimer(); abort(); state.catalog = null; state.snapshot = null; state.selectedId = ""; state.pending.clear(); state.posts.clear(); state.messagesOpen.clear(); state.autoRequested.clear(); state.expanded.clear(); renderList(); renderDetail(); catalogMeta.textContent = "尚未抓取"; say(phone ? "连接授权已失效，请回到手机入口重新连接电脑。" : "会话访问未获授权，请重新连接。", true);
+      state.generation++; state.catalogSequence++; state.detailSequence++; state.private = true; state.active = false; stopTimer(); abort(); state.catalog = null; state.snapshot = null; state.selectedId = ""; state.pending.clear(); state.posts.clear(); state.messagesOpen.clear(); state.autoRequested.clear(); state.expanded.clear(); search.value = ""; renderList(); renderDetail(); catalogMeta.textContent = "尚未抓取"; say(phone ? "连接授权已失效，请回到手机入口重新连接电脑。" : "会话访问未获授权，请重新连接。", true);
     }
     async function call(path, payload, scope) {
       const controller = new AbortController(), generation = state.generation; let timedOut = false; controllers.set(controller, scope); const deadline = window.setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
@@ -80,12 +84,22 @@
       node.addEventListener("toggle", () => state.expanded.set(key, node.open)); if (info) node.append(make("p", info, "conversations-path")); const children = make("div", "", "conversations-group-threads"); for (const thread of items) children.append(threadButton(thread)); if (!items.length) children.append(make("p", "暂无已抓取会话", "conversations-muted")); node.append(children); return node;
     }
     function renderList() {
-      list.replaceChildren(); const catalog = state.catalog; if (!catalog || state.private) { list.append(make("p", state.private ? "请重新连接电脑" : "等待会话列表", "conversations-muted")); return; }
+      list.replaceChildren(); const catalog = state.catalog; if (!catalog || state.private) { searchCount.hidden = true; searchCount.textContent = ""; list.append(make("p", state.private ? "请重新连接电脑" : "等待会话列表", "conversations-muted")); return; }
       const threads = Array.isArray(catalog.threads) ? catalog.threads : [], projects = Array.isArray(catalog.projects) ? catalog.projects : []; catalogMeta.textContent = `${fetched(catalog.fetchedAt)}${catalog.partial ? " · 列表尚未完整取得" : ""}`; catalogMeta.dataset.stale = String(stamp(catalog.fetchedAt) === null || Date.now() - stamp(catalog.fetchedAt) > 300000);
+      const words = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean), projectById = new Map(projects.map(project => [project.id, project])), grouped = new Map(); let count = 0;
+      for (const thread of threads) {
+        const projectId = assignedProject(thread, projects), project = projectById.get(projectId);
+        const haystack = [thread.title, thread.cwd, thread.kind, project?.label, project?.path].filter(Boolean).join(" ").toLocaleLowerCase();
+        if (!words.every(word => haystack.includes(word))) continue;
+        if (!grouped.has(projectId)) grouped.set(projectId, []); grouped.get(projectId).push(thread); count++;
+      }
+      searchCount.hidden = !words.length; searchCount.textContent = words.length ? `找到 ${count} 个已抓取会话` : "";
+      if (words.length && !count) { list.append(make("p", "没有匹配的会话，可尝试标题、项目名或目录。", "conversations-muted")); return; }
       const projectGroups = make("details", "", "conversations-projects"); projectGroups.open = state.expanded.has("projects") ? state.expanded.get("projects") : true; projectGroups.dataset.group = "projects"; projectGroups.addEventListener("toggle", () => state.expanded.set("projects", projectGroups.open)); projectGroups.append(make("summary", "Projects · 项目"));
-      for (const project of projects) projectGroups.append(group(project.label || "（尚无项目标题）", `project:${project.id}`, threads.filter(thread => assignedProject(thread, projects) === project.id), project.path || "", true));
-      const unassigned = threads.filter(thread => !assignedProject(thread, projects)); if (!projects.length) projectGroups.append(make("p", "暂无项目快照", "conversations-muted"));
-      list.append(projectGroups, group("Recents · 最近", "recents", unassigned, "没有项目归属的会话，保持来源快照的最近顺序。", true));
+      for (const project of projects) { const items = grouped.get(project.id) || []; if (!words.length || items.length) projectGroups.append(group(project.label || "（尚无项目标题）", `project:${project.id}`, items, project.path || "", true)); }
+      const unassigned = grouped.get("") || []; if (!projects.length) projectGroups.append(make("p", "暂无项目快照", "conversations-muted"));
+      if (!words.length || projectGroups.children.length > 1) list.append(projectGroups);
+      if (!words.length || unassigned.length) list.append(group("Recents · 最近", "recents", unassigned, "没有项目归属的会话，保持来源快照的最近顺序。", true));
     }
     function renderRequests() {
       requestState.replaceChildren(); const requests = Array.isArray(state.snapshot?.requests) ? state.snapshot.requests : state.catalog?.requests || [];
@@ -95,11 +109,15 @@
       return pending;
     }
     function renderDetail() {
-      const thread = currentThread(), selected = Boolean(state.selectedId && thread && !state.private); root.dataset.detail = String(selected); detail.hidden = !selected; empty.hidden = selected; if (!selected) { messages.replaceChildren(); detailTitle.textContent = ""; sourceMeta.textContent = ""; detailMeta.textContent = ""; coverage.textContent = ""; requestState.replaceChildren(); original.removeAttribute?.("href"); return; }
+      const thread = currentThread(), selected = Boolean(state.selectedId && thread && !state.private); root.dataset.detail = String(selected); detail.hidden = !selected; empty.hidden = selected; if (!selected) { messages.replaceChildren(); renderedMessages = []; renderedThread = ""; renderedError = ""; renderedAvailable = false; detailTitle.textContent = ""; sourceMeta.textContent = ""; detailMeta.textContent = ""; coverage.textContent = ""; requestState.replaceChildren(); original.removeAttribute?.("href"); return; }
       detailTitle.textContent = thread.title || "（尚无标题）"; const status = observedStatus(thread); sourceMeta.textContent = `${thread.kind === "chatgpt" ? "ChatGPT" : thread.kind === "codex" ? "Codex" : "来源未提供"} · ${status.name}${thread.hostId ? ` · 主机：${thread.hostId}` : ""}${thread.cwd ? ` · 工作目录：${thread.cwd}` : ""}`;
       const snapshot = state.snapshot, values = Array.isArray(snapshot?.messages) ? snapshot.messages : []; detailMeta.textContent = fetched(snapshot?.fetchedAt); const counts = snapshot?.coverage || {}, count = Number.isFinite(counts.messageCount) ? counts.messageCount : values.length, pages = Number.isFinite(counts.pageCount) ? counts.pageCount : 0; coverage.textContent = `已读取 ${count} 条消息 · ${pages} 页${snapshot?.partial ? " · 部分快取，未取得完整对话" : ""}${snapshot?.hasMore ? " · 仍有历史尚未获取" : ""}${counts.description ? ` · ${counts.description}` : ""}`;
       const inFlight = renderRequests(), posting = state.posts.has(state.selectedId); update.disabled = posting || inFlight; older.disabled = posting || inFlight || !snapshot?.hasMore || !snapshot?.olderCursor; choose.disabled = !["codex", "chatgpt"].includes(thread.kind) || !validId(thread.id);
       const href = openLink(thread); original.hidden = !href; unavailableLink.hidden = Boolean(href); if (href) original.href = href; else original.removeAttribute?.("href");
+      // Metadata refreshes must not detach unchanged text or its selection and focus.
+      const fields = ["id", "sourceMessageId", "turnId", "role", "text", "status", "phase", "createdAt", "truncated"];
+      if (renderedThread === state.selectedId && renderedError === state.detailError && renderedAvailable === Boolean(snapshot) && renderedMessages.length === values.length && values.every((message, index) => fields.every(field => message[field] === renderedMessages[index][field]))) return;
+      renderedThread = state.selectedId; renderedError = state.detailError; renderedAvailable = Boolean(snapshot); renderedMessages = values;
       messages.replaceChildren(); if (!snapshot) { messages.append(make("p", state.detailError ? `快取未能读取：${state.detailError}。可点更新对话提出读取请求。` : "正在读取电脑上的对话快取……", "conversations-muted")); return; }
       if (!values.length) messages.append(make("p", "尚无已抓取消息。读取请求只取回对话，不发送聊天消息。", "conversations-muted"));
       values.forEach((message, index) => {

@@ -284,6 +284,7 @@ class TransferStore:
         self.public_root = Path(public_root).resolve() if public_root is not None else None
         self._lock = threading.RLock()
         self._readers = {}
+        self._schema_key = None
 
     def _location(self):
         selected = self.root_getter()
@@ -307,6 +308,44 @@ class TransferStore:
         private.mkdir(exist_ok=True)
         return folder, private, label
 
+    def _ensure_schema(self, connection, database):
+        """Migrate each database identity/schema once, including replaced files."""
+        with self._lock:
+            try:
+                identity = database.stat()
+                key = (str(database), identity.st_dev, identity.st_ino,
+                       connection.execute("PRAGMA schema_version").fetchone()[0])
+                if key == self._schema_key:
+                    return
+                self._schema_key = None
+                connection.executescript("""
+                    CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, request_id TEXT NOT NULL,
+                        sender TEXT NOT NULL, created_at TEXT NOT NULL, text TEXT NOT NULL,
+                        fingerprint TEXT NOT NULL, starred INTEGER NOT NULL DEFAULT 0,
+                        UNIQUE(sender, request_id));
+                    CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, message_id TEXT NOT NULL,
+                        name TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL,
+                        size INTEGER NOT NULL, preview INTEGER NOT NULL);
+                    CREATE INDEX IF NOT EXISTS attachment_messages ON attachments(message_id);
+                    CREATE TABLE IF NOT EXISTS history_state (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL);
+                    INSERT OR IGNORE INTO history_state VALUES (1, 0);
+                    CREATE TABLE IF NOT EXISTS deleted_requests (sender TEXT NOT NULL, request_id TEXT NOT NULL,
+                        PRIMARY KEY(sender, request_id));
+                    CREATE TABLE IF NOT EXISTS attachment_cleanup (id TEXT PRIMARY KEY, filename TEXT NOT NULL,
+                        preview INTEGER NOT NULL);
+                """)
+                # Upgrade existing private histories without rebuilding their records.
+                connection.execute("BEGIN IMMEDIATE")
+                if "starred" not in {row["name"] for row in connection.execute("PRAGMA table_info(messages)")}:
+                    connection.execute("ALTER TABLE messages ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+                connection.commit()
+                identity = database.stat()
+                self._schema_key = (str(database), identity.st_dev, identity.st_ino,
+                                    connection.execute("PRAGMA schema_version").fetchone()[0])
+            except BaseException:
+                self._schema_key = None
+                raise
+
     @contextmanager
     def _database(self, location=None):
         folder, private, label = location if location is not None else self._location()
@@ -317,27 +356,7 @@ class TransferStore:
         connection = sqlite3.connect(database, timeout=15)
         connection.row_factory = sqlite3.Row
         try:
-            connection.executescript("""
-                CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, request_id TEXT NOT NULL,
-                    sender TEXT NOT NULL, created_at TEXT NOT NULL, text TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL, starred INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE(sender, request_id));
-                CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, message_id TEXT NOT NULL,
-                    name TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL,
-                    size INTEGER NOT NULL, preview INTEGER NOT NULL);
-                CREATE INDEX IF NOT EXISTS attachment_messages ON attachments(message_id);
-                CREATE TABLE IF NOT EXISTS history_state (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL);
-                INSERT OR IGNORE INTO history_state VALUES (1, 0);
-                CREATE TABLE IF NOT EXISTS deleted_requests (sender TEXT NOT NULL, request_id TEXT NOT NULL,
-                    PRIMARY KEY(sender, request_id));
-                CREATE TABLE IF NOT EXISTS attachment_cleanup (id TEXT PRIMARY KEY, filename TEXT NOT NULL,
-                    preview INTEGER NOT NULL);
-            """)
-            # Upgrade existing private histories without rebuilding their records.
-            connection.execute("BEGIN IMMEDIATE")
-            if "starred" not in {row["name"] for row in connection.execute("PRAGMA table_info(messages)")}:
-                connection.execute("ALTER TABLE messages ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
-            connection.commit()
+            self._ensure_schema(connection, database)
             self._cleanup_attachments(connection, folder, private)
             yield connection, folder, private, label
         finally:

@@ -75,12 +75,48 @@ context.desktopCodexWorkPanel.canReload = () => false;
 context.refreshForNewConsoleVersion('99.0.0');
 assert.equal(reloads, 0, 'active Work, permission setup, or unsafe Work persistence must block automatic reload');
 context.desktopCodexWorkPanel.canReload = () => true;
+const workingStorage = { ...context.localStorage };
+for (const failure of ['set throws', 'set ignored', 'read throws', 'read mismatch']) {
+  stored.set('draft', 'previous saved draft');
+  context.els.workspaceTodoInput.value = 'new draft';
+  context.localStorage.setItem = (key, value) => {
+    if (failure === 'set throws') throw new Error('Storage unavailable');
+    if (failure !== 'set ignored') workingStorage.setItem(key, value);
+  };
+  context.localStorage.getItem = key => {
+    if (failure === 'read throws') throw new Error('Storage unavailable');
+    return failure === 'read mismatch' ? 'unverified draft' : workingStorage.getItem(key);
+  };
+  assert.equal(context.saveWorkspaceTodoDraft(), false, failure);
+  context.refreshForNewConsoleVersion('99.0.0');
+  assert.equal(reloads, 0, `${failure} must block automatic reload`);
+  assert.equal(context.els.workspaceTodoInput.value, 'new draft', `${failure} must preserve the editor`);
+  Object.assign(context.localStorage, workingStorage);
+}
+for (const failure of ['remove throws', 'remove ignored', 'remove read throws']) {
+  stored.set('draft', 'previous saved draft');
+  context.els.workspaceTodoInput.value = '';
+  context.localStorage.removeItem = key => {
+    if (failure === 'remove throws') throw new Error('Storage unavailable');
+    if (failure !== 'remove ignored') workingStorage.removeItem(key);
+  };
+  context.localStorage.getItem = key => {
+    if (failure === 'remove read throws') throw new Error('Storage unavailable');
+    return workingStorage.getItem(key);
+  };
+  assert.equal(context.saveWorkspaceTodoDraft(), false, failure);
+  context.refreshForNewConsoleVersion('99.0.0');
+  assert.equal(reloads, 0, `${failure} must prevent an old draft being resurrected by reload`);
+  assert.equal(context.els.workspaceTodoInput.value, '', `${failure} must preserve the cleared editor`);
+  Object.assign(context.localStorage, workingStorage);
+}
+context.els.workspaceTodoInput.value = 'new draft';
 context.refreshForNewConsoleVersion('99.0.0');
 context.refreshForNewConsoleVersion('99.0.0');
-assert.equal(reloads, 1, 'an idle reload-safe Work panel permits one newer-server reload');
+assert.equal(reloads, 1, 'a successful save retry permits one newer-server reload after failures');
 assert.equal(JSON.parse(stored.get('draft')).text, 'new draft');
 context.els.workspaceTodoInput.value = '';
-context.saveWorkspaceTodoDraft();
+assert.equal(context.saveWorkspaceTodoDraft(), true);
 assert(!stored.has('draft'), 'submitting/clearing draft must prevent its resurrection');
 stored.set('draft', '{invalid');
 context.restoreWorkspaceTodoDraft();
@@ -93,7 +129,7 @@ for (const [requested, saved, expected] of [
   ['work', 'document', 'work'], ['document', 'transfer', 'document'],
   ['invalid', 'document', 'work'], [null, 'invalid', 'work']
 ]) {
-  const view = runInNewContext(`${extract('normalizeConsoleWorkspaceView')}\n${initialViewExpression}`, {
+  const view = runInNewContext(`${extract('readConsolePreference')}\n${extract('normalizeConsoleWorkspaceView')}\n${initialViewExpression}`, {
     requestedConsoleView: requested,
     storageKeys: { consoleView: 'console-view' },
     localStorage: { getItem(key) { assert.equal(key, 'console-view'); return saved; } }

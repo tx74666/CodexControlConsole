@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.1.28";
+const consoleUiVersion = "1.1.30";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -97,7 +97,7 @@ function refreshForNewConsoleVersion(version) {
       || window.ConsoleRepositoryPublish && !window.ConsoleRepositoryPublish.canReload()
       || window.ConsoleLyricsTimeline?.hasDraft()
       || window.ConsoleLyricsTimeline && !window.ConsoleLyricsTimeline.canReload()) return;
-  saveWorkspaceTodoDraft();
+  if (!saveWorkspaceTodoDraft()) return;
   consoleVersionReloadPending = true;
   window.location.reload();
 }
@@ -2373,12 +2373,12 @@ const els = {
 
 let wallpapers = [];
 let tracks = [];
-let selectedWallpaperPath = localStorage.getItem(storageKeys.selectedWallpaper) || "";
+let selectedWallpaperPath = readConsolePreference(storageKeys.selectedWallpaper) || "";
 let wallpaperOrder = loadWallpaperOrder();
-let selectedTrackPath = localStorage.getItem(storageKeys.selectedTrack) || "";
+let selectedTrackPath = readConsolePreference(storageKeys.selectedTrack) || "";
 if (els.consoleUiVersionBadge) els.consoleUiVersionBadge.textContent = `v${consoleUiVersion}`;
-let language = normalizeUiLanguage(localStorage.getItem(storageKeys.language));
-let theme = normalizeTheme(localStorage.getItem(storageKeys.theme));
+let language = normalizeUiLanguage(readConsolePreference(storageKeys.language));
+let theme = normalizeTheme(readConsolePreference(storageKeys.theme));
 let pendingDeletePath = "";
 let draggedWallpaperPath = "";
 let suppressWallpaperClickUntil = 0;
@@ -2424,7 +2424,7 @@ const musicLyricsCache = new Map();
 const musicLyricsTextPromises = new Map();
 const musicLyricsAnalysisPromises = new Map();
 let musicLyricsAnimationFrame = 0;
-let musicLyricsPanelHeight = Number(localStorage.getItem(storageKeys.lyricsHeight)) || 0;
+let musicLyricsPanelHeight = Number(readConsolePreference(storageKeys.lyricsHeight)) || 0;
 let musicLyricsPanelResizing = false;
 let musicLyricsResizeStartY = 0;
 let musicLyricsResizeStartHeight = 0;
@@ -2469,7 +2469,7 @@ let randomRealmMusicOrderBusy = false;
 let randomRealmMusicOrderStatusInFlight = false;
 let randomRealmMusicOrderGeneration = 0;
 let consoleStatePersistTimer = null;
-let playbackMode = normalizePlaybackMode(localStorage.getItem(storageKeys.playbackMode));
+let playbackMode = normalizePlaybackMode(readConsolePreference(storageKeys.playbackMode));
 let musicPlaybackRequestId = 0;
 let draggedModuleId = "";
 let draggedTrackPath = "";
@@ -2489,11 +2489,11 @@ let materialCandidates = [];
 let selectedMaterialPath = "";
 let materialNotice = "";
 let renderTextureNotice = "";
-let downloadIntakeEnabled = localStorage.getItem(storageKeys.downloadIntake) === "true";
-let tutorialMode = localStorage.getItem(storageKeys.tutorialMode) === "true";
+let downloadIntakeEnabled = readConsolePreference(storageKeys.downloadIntake) === "true";
+let tutorialMode = readConsolePreference(storageKeys.tutorialMode) === "true";
 const requestedConsoleView = new URLSearchParams(window.location.search).get("consoleView");
 const requestedResumeModule = new URLSearchParams(window.location.search).get("resumeModule");
-let activeConsoleView = normalizeConsoleWorkspaceView(requestedConsoleView ?? localStorage.getItem(storageKeys.consoleView));
+let activeConsoleView = normalizeConsoleWorkspaceView(requestedConsoleView ?? readConsolePreference(storageKeys.consoleView));
 let desktopTransferPanel = null;
 let desktopWorkflowPanel = null;
 let desktopCodexWorkPanel = null;
@@ -2511,7 +2511,7 @@ let documentReadingWindow = null;
 let documentOverviewResult = null;
 const documentResources = { view: "guide", guideLoaded: false, guideItems: [], aiLoaded: false, sequence: 0, fileSequence: 0, browseSequence: 0, returnFocus: null };
 const blenderDocuments = { root: "", items: [], loaded: false, busy: false, sequence: 0, error: "", unavailable: "", fallbackUrl: "" };
-let activeBlenderView = normalizeBlenderWorkspaceView(localStorage.getItem(storageKeys.blenderView));
+let activeBlenderView = normalizeBlenderWorkspaceView(readConsolePreference(storageKeys.blenderView));
 let blenderViewTransitionTimer = 0;
 let blenderViewTransitionFrame = 0;
 let blenderViewTransitionAnimations = [];
@@ -2534,7 +2534,7 @@ let downloadMapState = null;
 let downloadMapBusy = false;
 let downloadMapLoaded = false;
 let downloadMapNotice = "";
-let selectedDownloadMapPluginId = localStorage.getItem(storageKeys.downloadMapPlugin) || "character-designer";
+let selectedDownloadMapPluginId = readConsolePreference(storageKeys.downloadMapPlugin) || "character-designer";
 const initialConsoleVersion = String(els.consoleUpdateCurrent?.textContent || "").replace(/^v/i, "").trim();
 let productUpdateStates = {
   console: initialConsoleVersion ? {
@@ -2549,7 +2549,7 @@ let productUpdateBusy = false;
 let productUpdateStatusesLoaded = false;
 let productUpdateIdleCallback = 0;
 let productUpdateScheduleTimer = 0;
-let selectedUpdateProduct = localStorage.getItem(storageKeys.updateProduct) === "world" ? "world" : "console";
+let selectedUpdateProduct = readConsolePreference(storageKeys.updateProduct) === "world" ? "world" : "console";
 let desktopLayoutState = null;
 let desktopLayoutBusy = false;
 let desktopLayoutHistoryRefreshing = false;
@@ -2820,8 +2820,17 @@ function canActivateModuleInPlace(id) {
   return Boolean(document.querySelector(`[data-module-panel="${id}"]`));
 }
 
+function readConsolePreference(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    // Optional preferences can fall back without interrupting page initialization.
+    return null;
+  }
+}
+
 function lastModuleId() {
-  const saved = localStorage.getItem(storageKeys.lastModule) || "";
+  const saved = readConsolePreference(storageKeys.lastModule) || "";
   return isModuleId(saved) ? saved : "";
 }
 
@@ -2844,9 +2853,11 @@ function initialModuleId() {
 
 function rememberActiveModule(id) {
   if (isModuleId(id)) {
-    if (localStorage.getItem(storageKeys.lastModule) !== id) {
-      localStorage.setItem(storageKeys.lastModule, id);
-    }
+    try {
+      if (localStorage.getItem(storageKeys.lastModule) !== id) {
+        localStorage.setItem(storageKeys.lastModule, id);
+      }
+    } catch { /* Navigation remains available when its local preference cannot be saved. */ }
     persistConsoleState(id);
   }
 }
@@ -4591,7 +4602,7 @@ function moduleOrder() {
 
 function ensureEditionModuleLayout() {
   if (consoleEdition !== "public") return;
-  if (localStorage.getItem(storageKeys.publicLayoutInitialized) === "true") return;
+  if (readConsolePreference(storageKeys.publicLayoutInitialized) === "true") return;
 
   const releaseLayout = releaseDefaults.modules && typeof releaseDefaults.modules === "object"
     ? releaseDefaults.modules
@@ -4625,12 +4636,14 @@ function ensureEditionModuleLayout() {
     ? configured.lastModule
     : fallbackLastModule;
 
-  localStorage.setItem(storageKeys.moduleOrder, JSON.stringify(order));
-  localStorage.setItem(storageKeys.moduleArchive, JSON.stringify(archived));
-  localStorage.setItem(storageKeys.moduleDeepArchive, JSON.stringify(deepArchived));
-  localStorage.setItem(storageKeys.moduleDeleted, JSON.stringify(deleted));
-  localStorage.setItem(storageKeys.lastModule, configuredLastModule);
-  localStorage.setItem(storageKeys.publicLayoutInitialized, "true");
+  try {
+    localStorage.setItem(storageKeys.moduleOrder, JSON.stringify(order));
+    localStorage.setItem(storageKeys.moduleArchive, JSON.stringify(archived));
+    localStorage.setItem(storageKeys.moduleDeepArchive, JSON.stringify(deepArchived));
+    localStorage.setItem(storageKeys.moduleDeleted, JSON.stringify(deleted));
+    localStorage.setItem(storageKeys.lastModule, configuredLastModule);
+    localStorage.setItem(storageKeys.publicLayoutInitialized, "true");
+  } catch { /* Use the available layout without claiming its defaults were saved. */ }
 }
 
 function saveModuleOrder(order) {
@@ -5911,7 +5924,7 @@ function recordThemeChange(beforeMode, afterMode) {
 function setTheme(nextMode, options = {}) {
   const before = theme;
   theme = normalizeTheme(nextMode);
-  localStorage.setItem(storageKeys.theme, theme);
+  try { localStorage.setItem(storageKeys.theme, theme); } catch { /* Keep the choice for this window. */ }
   applyTheme();
   if (options.record !== false) {
     recordThemeChange(before, theme);
@@ -7423,7 +7436,7 @@ function persistMusicStateNow() {
   const body = JSON.stringify(musicStatePayload());
   musicStateHasQueuedSave = true;
   // Serialize snapshots so an older request cannot overwrite a later drag.
-  musicStatePersistQueue = musicStatePersistQueue.then(async () => {
+  const queued = musicStatePersistQueue.then(async () => {
     try {
       const response = await fetch("/api/music/state", {
         method: "POST",
@@ -7438,7 +7451,11 @@ function persistMusicStateNow() {
       return false;
     }
   });
-  return musicStatePersistQueue;
+  musicStatePersistQueue = queued;
+  void queued.then(saved => {
+    if (saved && musicStatePersistQueue === queued && !musicStatePersistTimer) musicStateHasQueuedSave = false;
+  });
+  return queued;
 }
 
 function persistMusicStateSoon() {
@@ -7453,7 +7470,7 @@ function persistMusicStateSoon() {
 }
 
 function flushMusicStateBeforeUnload() {
-  if (!hasMusic) return;
+  if (!hasMusic || !musicStatePersistTimer && !musicStateHasQueuedSave) return;
   saveMusicStateLocal();
   const body = JSON.stringify(musicStatePayload());
   if (navigator.sendBeacon) {
@@ -19092,19 +19109,23 @@ function addWorkspaceTodo() {
 }
 
 function saveWorkspaceTodoDraft() {
-  if (!els.workspaceTodoInput || !els.workspaceTodoCategory) return;
+  if (!els.workspaceTodoInput || !els.workspaceTodoCategory) return true;
   try {
     const value = els.workspaceTodoInput.value;
     if (value) {
-      localStorage.setItem(storageKeys.workspaceTodoDraft, JSON.stringify({
+      const raw = JSON.stringify({
         text: value, category: els.workspaceTodoCategory.value,
         planRevision: activeWorkspacePlan?.revision || ""
-      }));
+      });
+      localStorage.setItem(storageKeys.workspaceTodoDraft, raw);
+      return localStorage.getItem(storageKeys.workspaceTodoDraft) === raw;
     } else {
       localStorage.removeItem(storageKeys.workspaceTodoDraft);
+      return localStorage.getItem(storageKeys.workspaceTodoDraft) === null;
     }
   } catch {
-    // Existing to-dos remain independently saved if browser storage is full.
+    // Keep the current editor available and block automatic reload until retry succeeds.
+    return false;
   }
 }
 
@@ -21567,7 +21588,7 @@ function scheduleClockTick() {
 
 if (els.languageToggle) els.languageToggle.addEventListener("click", () => {
   language = language === "zh" ? "en" : "zh";
-  localStorage.setItem(storageKeys.language, language);
+  try { localStorage.setItem(storageKeys.language, language); } catch { /* Keep the choice for this window. */ }
   applyLanguage();
 });
 if (els.themeToggle) els.themeToggle.addEventListener("click", () => {
@@ -22422,7 +22443,8 @@ document.addEventListener("keydown", event => {
   }
 });
 
-const savedVolume = Number(localStorage.getItem(storageKeys.volume));
+const savedVolumePreference = readConsolePreference(storageKeys.volume);
+const savedVolume = savedVolumePreference === null ? NaN : Number(savedVolumePreference);
 const initialVolume = Number.isFinite(savedVolume) ? Math.max(0, Math.min(1, savedVolume)) : (1 / 3);
 if (hasMusic) {
   musicUserVolume = initialVolume;

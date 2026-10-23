@@ -11,6 +11,8 @@
 .conversations-main{display:grid;grid-template-columns:minmax(210px,30%) minmax(0,1fr);gap:14px;align-items:start}
 .conversations-sidebar,.conversations-detail,.conversations-empty{min-width:0;border:1px solid var(--line,#35445b);border-radius:12px;background:var(--panel,#1b283b);padding:12px}
 .conversations-sidebar{max-height:76vh;overflow:auto;overscroll-behavior:contain}
+.conversations-search{box-sizing:border-box;width:100%;min-width:0;min-height:40px;padding:9px 11px;margin-bottom:8px;border:1px solid var(--line,#35445b);border-radius:9px;background:var(--bg,#141f30);color:inherit;font:inherit;font-size:13px}
+.conversations-search:focus-visible{outline:2px solid var(--conversations-accent);outline-offset:2px}
 .conversations-projects>summary,.conversations-group>summary{cursor:pointer;padding:10px 4px;line-height:1.5;overflow-wrap:anywhere}
 .conversations-projects>summary{font-weight:650}
 .conversations-group>summary{display:flex;gap:8px;align-items:start;justify-content:space-between;border-top:1px solid var(--line,#35445b)}

@@ -6,16 +6,18 @@ import { runInNewContext } from "node:vm";
 const source = readFileSync(new URL("../app.js", import.meta.url), "utf8");
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const saveSource = source.slice(source.indexOf("function persistMusicStateNow()"), source.indexOf("function flushMusicStateBeforeUnload()"));
+const flushSource = source.slice(source.indexOf("function flushMusicStateBeforeUnload()"), source.indexOf("function applyMusicState("));
 const syncSource = source.slice(source.indexOf("function stopRandomRealmMusicOrderPoll()"), source.indexOf("function setRandomRealmReleaseStatus("));
 const settle = async () => { for (let n = 0; n < 8; n++) await new Promise(resolve => setImmediate(resolve)); };
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const response = (value, status = 200) => ({ ok: status >= 200 && status < 300, status, async json() { return value; } });
 
 function harness() {
-  const calls = [], timers = new Map();
+  const calls = [], timers = new Map(), beacons = [];
   let timerId = 0, hook = null, current = { order: ["A", "B"] }, foreground = true;
   const runtime = {
     hasMusic: true,
+    Blob, navigator: { sendBeacon(url, body) { beacons.push({ url, body }); return true; } },
     els: { syncRandomRealmMusicOrder: { disabled: false }, randomRealmMusicOrderStatus: { textContent: "" } },
     window: {
       setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, delay }); return id; },
@@ -50,12 +52,13 @@ function harness() {
     let randomRealmMusicOrderStatusInFlight = false;
     let randomRealmMusicOrderGeneration = 0;
     ${saveSource}
+    ${flushSource}
     ${syncSource}
     globalThis.api = { persistMusicStateNow, persistMusicStateSoon, syncRandomRealmMusicOrder,
       loadRandomRealmMusicOrderStatus, scheduleRandomRealmMusicOrderPoll, stopRandomRealmMusicOrderPoll,
-      status: () => randomRealmMusicOrderStatus };
+      status: () => randomRealmMusicOrderStatus, flushMusicStateBeforeUnload, dirty: () => musicStateHasQueuedSave };
   `, runtime);
-  return { ...runtime.api, calls, timers, runtime,
+  return { ...runtime.api, calls, timers, runtime, beacons,
     hook(value) { hook = value; }, state(value) { current = value; }, foreground(value) { foreground = value; },
     syncPosts: () => calls.filter(call => call.method === "POST" && call.url === "/api/randomrealm/music-order-sync") };
 }
@@ -64,6 +67,27 @@ const randomRealmPanel = html.slice(html.indexOf('data-module-panel="randomrealm
 assert.equal([...html.matchAll(/id="syncRandomRealmMusicOrder"/g)].length, 1);
 assert.match(randomRealmPanel, /id="syncRandomRealmMusicOrder" class="ghost-button"/);
 assert.match(randomRealmPanel, /id="randomRealmMusicOrderStatus"[^>]*aria-live="polite"/);
+
+{
+  const h = harness();
+  h.flushMusicStateBeforeUnload();
+  assert.equal(h.beacons.length, 0, "An idle/unloaded page must not flush its empty music snapshot");
+  h.persistMusicStateSoon(); h.flushMusicStateBeforeUnload();
+  assert.equal(h.beacons.length, 1, "A real pending edit remains flushable");
+  await h.persistMusicStateNow(); await settle();
+  assert.equal(h.dirty(), false);
+  h.flushMusicStateBeforeUnload(); assert.equal(h.beacons.length, 1, "An acknowledged save must not flush again on hide");
+}
+{
+  const h = harness(), first = deferred(), second = deferred(); let saves = 0;
+  h.hook(call => call.url === "/api/music/state" ? (++saves === 1 ? first.promise : second.promise) : undefined);
+  const older = h.persistMusicStateNow(); const newer = h.persistMusicStateNow();
+  first.resolve(response({ ok: true })); await older; await settle();
+  assert.equal(h.dirty(), true, "An older acknowledgement cannot clear a newer queued save");
+  second.resolve(response({ ok: false })); await newer; await settle();
+  assert.equal(h.dirty(), true, "Failed saves retain the pending edit");
+  h.flushMusicStateBeforeUnload(); assert.equal(h.beacons.length, 1);
+}
 
 {
   const h = harness(), first = deferred();

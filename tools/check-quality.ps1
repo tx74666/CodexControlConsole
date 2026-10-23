@@ -408,6 +408,8 @@ finally:
   Invoke-QualityStep "UI regression script syntax" { & $Node --check tools/check-console-ui.mjs }
   Invoke-QualityStep "UI static contracts" { & $Node tools/check-console-ui.mjs --static-only }
   Invoke-QualityStep "Relaunch UI state" { & $Node tools/check-console-relaunch-ui.mjs }
+  Invoke-QualityStep "Console preference storage resilience" { & $Node tools/check-console-preferences.mjs }
+  Invoke-QualityStep "Transfer schema cache and wallpaper storage" { & $Python tools/check-backend-storage.py }
   Invoke-QualityStep "Feedback Worker syntax" { & $Node --check services/feedback-relay/src/index.js }
   Invoke-QualityStep "Feedback Worker tests" { & $Node --test services/feedback-relay/test/feedback.test.js }
 } finally {

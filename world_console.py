@@ -3659,7 +3659,7 @@ def write_original_wallpaper_record(path, source="auto"):
         "style": get_windows_wallpaper_style(),
         "savedAt": datetime.now(timezone.utc).isoformat(),
     }
-    ORIGINAL_WALLPAPER_RECORD.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(ORIGINAL_WALLPAPER_RECORD, payload)
     return payload
 
 
@@ -3684,10 +3684,7 @@ def capture_original_wallpaper(force=False):
         if not existing.get("style"):
             record = read_original_wallpaper_record()
             record["style"] = get_windows_wallpaper_style()
-            ORIGINAL_WALLPAPER_RECORD.write_text(
-                json.dumps(record, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            atomic_write_json(ORIGINAL_WALLPAPER_RECORD, record)
             existing = original_wallpaper_state()
         return {"ok": True, "original": existing, "changed": False}
 
@@ -3877,7 +3874,7 @@ def write_wallpaper_order(payload):
             seen.add(item["path"])
 
     WALLPAPER_ORDER_FILE.parent.mkdir(parents=True, exist_ok=True)
-    WALLPAPER_ORDER_FILE.write_text(json.dumps({"order": next_order}, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(WALLPAPER_ORDER_FILE, {"order": next_order})
     wallpapers = list_wallpapers()
     return {"ok": True, "order": [item["path"] for item in wallpapers], "wallpapers": wallpapers}
 
@@ -10538,14 +10535,32 @@ def write_music_state(payload):
             if "promotedLibraryTracks" in payload:
                 current["promotedLibraryTracks"] = sanitize_string_map(payload.get("promotedLibraryTracks"))
             if "selectedTrackPath" in payload:
-                current["selectedTrackPath"] = sanitize_state_path(payload.get("selectedTrackPath"))
+                selected = sanitize_state_path(payload.get("selectedTrackPath"))
+                can_clear = not previous.get("selectedTrackPath")
+                if not selected and not can_clear:
+                    # An unloaded/old page can send an empty snapshot on hide.
+                    # Only a proven missing track permits clearing a saved choice.
+                    try:
+                        old_path = (MUSIC_DIR / previous["selectedTrackPath"]).resolve()
+                        if is_path_inside(old_path, MUSIC_DIR) and old_path.suffix.lower() in MUSIC_EXTENSIONS:
+                            try:
+                                old_path.stat()
+                            except FileNotFoundError:
+                                can_clear = True
+                    except (OSError, ValueError):
+                        pass
+                if selected or can_clear:
+                    current["selectedTrackPath"] = selected
+                else:
+                    stale_client = True
             if "layoutVersion" in payload:
                 current["layoutVersion"] = max(
                     sanitize_layout_version(previous.get("layoutVersion")),
                     sanitize_layout_version(payload.get("layoutVersion")),
                 )
 
-        store_music_state(current, previous=previous)
+        if current != previous:
+            store_music_state(current, previous=previous)
         return {"ok": not stale_client, "staleClient": stale_client, "state": current}
 
 

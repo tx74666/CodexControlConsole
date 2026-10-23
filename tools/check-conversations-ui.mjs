@@ -50,6 +50,31 @@ function harness({ phone = true, list = catalog(), snapshots = new Map([[A, snap
 }
 let passed = 0;
 async function test(name, action) { await action(); passed++; console.log(`PASS ${name}`); }
+await test("local search matches title, project and directory without requests or losing the selection", async () => {
+  const h = harness({ list: catalog({ projects: [{ id: "project", label: "Game Team", path: "D:/Game" }], threads: [thread(A, { title: "Editor notes", projectId: "project" }), thread(B, { title: "Music notes", cwd: "D:/Audio" })] }) }); await h.start(); await h.select();
+  const search = h.all("input")[0], calls = h.calls.length;
+  search.value = "game EDITOR"; search.fire("input");
+  assert.deepEqual(h.all("button").filter(node => node.dataset.threadId).map(node => node.dataset.threadId), [A]);
+  assert.match(h.root.textContent, /找到 1 个已抓取会话/);
+  search.value = "d:/audio"; search.fire("input");
+  assert.deepEqual(h.all("button").filter(node => node.dataset.threadId).map(node => node.dataset.threadId), [B]);
+  assert.equal(h.all("h3")[0].textContent, "Editor notes", "Filtering must not change the selected source");
+  search.value = "absent"; search.fire("input"); assert.match(h.root.textContent, /没有匹配的会话/);
+  search.value = ""; search.fire("input"); assert.equal(h.all("button").filter(node => node.dataset.threadId).length, 2);
+  assert.equal(h.calls.length, calls, "Search must use only the already fetched catalog");
+  search.value = "private query"; h.panel.clear(); assert.equal(search.value, ""); assert.doesNotMatch(h.root.textContent, /Editor notes|用户的真实文字/);
+});
+await test("unchanged conversation polls keep message nodes while changed text and threads update", async () => {
+  const h = harness({ list: catalog({ threads: [thread(A), thread(B)] }), snapshots: new Map([[A, snapshot()], [B, snapshot(B)]]) }); await h.start(); await h.select();
+  const original = h.all("details").filter(node => node.className === "conversations-message");
+  await h.poll(); const unchanged = h.all("details").filter(node => node.className === "conversations-message");
+  assert.equal(unchanged[0], original[0]); assert.equal(unchanged[1], original[1]);
+  h.snapshots.get(A).messages[1].text = "真实更新的文字"; await h.poll();
+  const updated = h.all("details").filter(node => node.className === "conversations-message");
+  assert.notEqual(updated[1], original[1]); assert.match(h.root.textContent, /真实更新的文字/);
+  h.snapshots.get(A).messages[1].phase = "commentary"; await h.poll(); assert.match(h.root.textContent, /进度（phase：commentary）/);
+  await h.select(B); assert.doesNotMatch(h.root.textContent, /真实更新的文字/);
+});
 await test("catalog is read only and Projects / Recents retain source order and exact titles", async () => {
   const h = harness({ list: catalog({ projects: [{ id: "project", label: "项目 原 标题", path: "D:\\Repo" }], threads: [thread(B, { title: "后更新的名字", projectId: "project" }), thread(C), thread(A, { title: "前一个名字", projectId: "project" }), thread(D)] }) }); await h.start();
   assert.equal(h.calls.length, 1); assert.equal(h.calls[0].options.method, "GET"); assert.equal(h.group("project:project").children[0].children[0].textContent, "项目 原 标题"); const recent = h.group("recents"); assert.deepEqual(h.all("button", recent).map(item => item.dataset.threadId), [C, D]); assert.deepEqual(h.all("button", h.group("project:project")).map(item => item.dataset.threadId), [B, A]); assert.equal(h.group("project:project").open, true); assert.equal(h.group("projects").open, true); assert.equal(recent.open, true); assert.doesNotMatch(h.group("projects").textContent, /其他会话/);
