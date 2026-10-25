@@ -162,8 +162,12 @@ class BackendChecks(unittest.TestCase):
 
     def test_unloaded_music_snapshot_cannot_clear_a_valid_saved_selection(self):
         source = ast.parse((REPO / 'world_console.py').read_text(encoding='utf-8-sig'))
-        node = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == 'write_music_state')
-        music = self.root / 'music'
+        names = {'is_path_inside', 'write_music_state'}
+        nodes = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        self.assertEqual({node.name for node in nodes}, names)
+        # CI may spell the root through a short path or link; keep an alias here too.
+        (self.root / 'music-parent').mkdir()
+        music = self.root / 'music-parent' / '..' / 'music'
         music.mkdir()
         track = music / 'kept.mp3'
         track.write_bytes(b'fixture')
@@ -171,9 +175,8 @@ class BackendChecks(unittest.TestCase):
         writes = []
         env = {'MUSIC_DIR': music, 'MUSIC_EXTENSIONS': {'.mp3'}, 'MUSIC_STATE_LOCK': threading.RLock(),
                'read_music_state': lambda: dict(saved), 'sanitize_state_path': lambda value: str(value or ''),
-               'is_path_inside': lambda path, root: path.is_relative_to(root),
                'store_music_state': lambda value, previous: writes.append(value)}
-        exec(compile(ast.Module(body=[node], type_ignores=[]), 'isolated-music-state', 'exec'), env)
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), 'isolated-music-state', 'exec'), env)
         write = env['write_music_state']
         result = write({'selectedTrackPath': ''})
         self.assertTrue(result['staleClient'])

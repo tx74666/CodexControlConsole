@@ -372,7 +372,7 @@ await test("patch plans preserve each component format and proof and only save c
   actions[0].click(); await settle(); await checkAll(h); actions = h.all().filter(item => item.className.split(" ").includes("repository-publish-plan-action")); actions[1].click(); await settle(); await checkAll(h);
   const plans = h.posts("/config").at(-1).body.settings.repositories[0].versionPlans; assert.deepEqual(plans, components.slice(0, 2).map(item => ({ sourceId: item.sourceId, currentVersion: item.currentVersion, targetVersion: item.nextVersion, expectedSha256: item.expectedSha256, expectedBytes: item.expectedBytes, planProof: item.planProof }))); assert.equal(h.posts("/run").length, 0);
   assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本待读取");
-  assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.dataset.sourceId).map(item => item.textContent), ["Unity 0.1 → 0.1.1", "Blender (1, 2, 3) → (1, 2, 4)", "Other 2.3.4"]);
+  assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.dataset.sourceId).map(item => item.textContent), ["Unity 0.1.1", "Blender (1, 2, 4)", "Other 2.3.4"]);
   h.button("取消计划").click(); await settle(); assert.equal(h.posts("/config").at(-1).body.settings.repositories[0].versionPlans.length, 1); assert.equal(h.posts("/run").length, 0);
 });
 await test("version lookup failure or missing proof cannot invent a plan or block unchanged-version push", async () => {
@@ -390,7 +390,7 @@ await test("completed operation refreshes cleared one-time plans without polling
   h.snapshot.settings.repositories[0].versionPlans = []; h.snapshot.operation = operation(id, "success", [{ repoId: "repository-001", status: "success" }]); await h.poll(); assert.equal(h.posts("/run").length, 1); assert.equal(h.calls.filter(call => call.url.startsWith(BASE + "/versions?")).length, 0); await h.open(); assert.equal(h.posts().filter(call => call.url.endsWith("/config")).length, 0); assert.equal(h.all().some(item => item.textContent === "取消计划"), false);
 });
 await test("visible planned operation reads the actual completed version once and does not infer its target", async () => {
-  const comp = component(), plan = { sourceId: comp.sourceId, currentVersion: comp.currentVersion, targetVersion: comp.nextVersion, expectedSha256: comp.expectedSha256, expectedBytes: comp.expectedBytes, planProof: comp.planProof }, h = harness({ snapshot: { settings: settings([repository({ versionPlans: [plan] })]) }, catalog: { repositories: [{ repoId: "repository-001", components: [comp], hasChanges: true, changeState: "changed", worktreeChanged: true }] } }); await h.ready(); await expandAndCheck(h); assert.match(h.byClass("repository-publish-compact-version").textContent, /2.3.4 → 2.3.5/);
+  const comp = component(), plan = { sourceId: comp.sourceId, currentVersion: comp.currentVersion, targetVersion: comp.nextVersion, expectedSha256: comp.expectedSha256, expectedBytes: comp.expectedBytes, planProof: comp.planProof }, h = harness({ snapshot: { settings: settings([repository({ versionPlans: [plan] })]) }, catalog: { repositories: [{ repoId: "repository-001", components: [comp], hasChanges: true, changeState: "changed", worktreeChanged: true }] } }); await h.ready(); await expandAndCheck(h); assert.match(h.byClass("repository-publish-compact-version").textContent, /2.3.5/);
   h.byClass("repository-publish-primary").click(); await settle(); const id = h.posts("/run")[0].body.requestId; h.snapshot.settings.repositories[0].versionPlans = []; h.snapshot.operation = operation(id, "success", [{ repoId: "repository-001", status: "success" }]); h.catalog.repositories[0].components[0].currentVersion = "2.3.5"; await h.poll(); assert.equal(versionCalls(h).length, 1); await checkAll(h);
   assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.5"); assert.equal(h.calls.filter(call => call.url.startsWith(BASE + "/versions?")).length, 2); assert.equal(h.posts("/run").length, 1); assert.equal(h.posts("/config").length, 0);
   const failed = harness({ snapshot: { settings: settings([repository({ versionPlans: [plan] })]) }, catalog: { repositories: [{ repoId: "repository-001", components: [component()], hasChanges: true, changeState: "changed", worktreeChanged: true }] } }); await failed.ready(); await expandAndCheck(failed); failed.byClass("repository-publish-primary").click(); await settle(); const failedId = failed.posts("/run")[0].body.requestId; failed.snapshot.settings.repositories[0].versionPlans = []; failed.snapshot.operation = operation(failedId, "attention", [{ repoId: "repository-001", status: "commit_failed" }]); await failed.poll(); await checkAll(failed); assert.equal(failed.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.equal(failed.posts("/run").length, 1);
@@ -420,7 +420,7 @@ await test("compact version colors follow real worktree or outgoing state, never
   const h = harness({ snapshot: { settings: settings(repos) }, catalog: { repositories: rows } }); await h.ready(); await expandAndCheck(h);
   const visible = h.byClass("repository-publish-compact-rows").children;
   assert.deepEqual(visible.map(row => h.byClass("repository-publish-compact-version", row).dataset.changeState), ["unchanged", "changed", "changed", "unknown"]);
-  assert.match(h.byClass("repository-publish-compact-version", visible[0]).textContent, /2\.3\.4 → 2\.3\.5/);
+  assert.match(h.byClass("repository-publish-compact-version", visible[0]).textContent, /2\.3\.5/);
   assert.equal(h.byClass("repository-publish-compact-version", visible[1]).textContent, "2.3.4"); assert.equal(h.byClass("repository-publish-compact-version", visible[2]).textContent, "2.3.4");
   assert.equal(h.byClass("repository-publish-compact-status", visible[2]).textContent, "有提交待推送"); assert.equal(h.byClass("repository-publish-compact-status", visible[3]).textContent, "变化未核对");
   assert.match(h.byClass("repository-publish-compact-version", visible[3]).title, /No trustworthy tracking ref/); assert.equal(h.posts().length, 0);
@@ -444,8 +444,8 @@ await test("Summary uses real HEAD-to-working changes and keeps unselected next 
   const changed = component({ currentVersion: "1.6.44", headVersion: "1.6.43", nextVersion: "1.6.45", versionChanged: true,
     transition: { kind: "working", fromVersion: "1.6.43", toVersion: "1.6.44" } });
   const h = harness({ catalog: { repositories: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", components: [changed] }] } });
-  await h.ready(); await expandAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.6.43 → 1.6.44"); await openAndCheck(h);
-  assert.equal(h.byClass("repository-publish-plan-row").children[0].textContent, "1.6.43 → 1.6.44"); assert.match(h.byClass("repository-publish-plan-row").children[2].textContent, /已修改版本/); assert.equal(h.posts().length, 0);
+  await h.ready(); await expandAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.6.44"); await openAndCheck(h);
+  assert.equal(h.byClass("repository-publish-plan-row").children[0].textContent, "1.6.44"); assert.match(h.byClass("repository-publish-plan-row").children[2].textContent, /已修改版本/); assert.equal(h.posts().length, 0);
   const unchanged = harness({ catalog: { repositories: [{ repoId: "repository-001", components: [component()] }] } }); await unchanged.ready(); await openAndCheck(unchanged);
   assert.equal(unchanged.byClass("repository-publish-plan-row").children[0].textContent, "2.3.4"); assert.match(unchanged.byClass("repository-publish-plan-row").children[2].textContent, /本次保留当前版本.*可选下一版 2\.3\.5/); assert.equal(unchanged.posts().length, 0);
 });
@@ -462,7 +462,7 @@ await test("99 rollover and independent module formats are displayed only from b
     component({ sourceId: "second-source", currentVersion: "(1, 99, 99)", nextVersion: "(2, 0, 0)", name: "Plugin" })];
   const h = harness({ snapshot: { settings: settings([repository({ versionPlans: components.map(planFor) })]) }, catalog: { repositories: [{ repoId: "repository-001", components, hasChanges: true, changeState: "changed", worktreeChanged: true }] } });
   await h.ready(); await openAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "版本待读取");
-  assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.dataset.sourceId).map(item => item.textContent), ["Console 1.6.99 → 1.7.0", "Plugin (1, 99, 99) → (2, 0, 0)"]);
+  assert.deepEqual(h.all(h.byClass("repository-publish-version-menu")).filter(item => item.dataset.sourceId).map(item => item.textContent), ["Console 1.7.0", "Plugin (2, 0, 0)"]);
   assert.equal(h.posts().length, 0); h.byClass("repository-publish-primary").click(); await settle(); assert.equal(h.posts("/run").length, 1);
   assert.deepEqual(Object.keys(h.posts("/run")[0].body).sort(), ["intent", "repoIds", "requestId"]); assert.equal(h.posts("/run")[0].body.intent, "commit_and_push"); assert.equal(h.posts("/config").length, 0);
 });
@@ -485,12 +485,12 @@ await test("git commit version source exposes fixed HEAD and subject, never an a
 await test("git-only plan Summary uses the authoritative commit version and has no Unity replacement", async () => {
   const committed = component({ path: "HEAD", kind: "git_commit", key: "subject", currentVersion: "1.6.43", nextVersion: "1.6.44", headVersion: "1.6.43", sourceHeadSha: "c".repeat(40), versionCommitSha: "d".repeat(40) });
   const h = harness({ snapshot: { settings: settings([repository({ versionSources: [{ path: "HEAD", kind: "git_commit", key: "subject", name: "Game", scope: "" }], versionPlans: [planFor(committed)] })]) }, catalog: { repositories: [{ repoId: "repository-001", components: [committed] }] } });
-  await h.ready(); await openAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.6.43 → 1.6.44"); assert.match(h.byClass("repository-publish-plan-row").children[2].textContent, /已计划.*不修改版本文件/);
+  await h.ready(); await openAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.6.44"); assert.match(h.byClass("repository-publish-plan-row").children[2].textContent, /已计划.*不修改版本文件/);
   assert.doesNotMatch(h.byClass("repository-publish-plan-row").children[0].textContent, /0\.1\.0/); assert.equal(h.posts().length, 0);
 });
 await test("preview Summary only shows targets actually selected for this commit, retaining push-only plans", async () => {
   const item = component({ path: "HEAD", kind: "git_commit", key: "subject", currentVersion: "1.6.43", nextVersion: "1.6.44", planState: "valid", plannedVersion: "1.6.44", transition: { kind: "planned", fromVersion: "1.6.43", toVersion: "1.6.44" } });
-  for (const [action, planWillApply, expected, hint] of [["commit", true, "1.6.43 → 1.6.44", "已计划"], ["push_only", false, "1.6.43", "计划保留"], ["noop", false, "1.6.43", "计划保留"], ["sync_pending", null, "1.6.43", "同步后再核对"], ["unknown", null, "1.6.43", "执行待核对"]]) {
+  for (const [action, planWillApply, expected, hint] of [["commit", true, "1.6.44", "已计划"], ["push_only", false, "1.6.43", "计划保留"], ["noop", false, "1.6.43", "计划保留"], ["sync_pending", null, "1.6.43", "同步后再核对"], ["unknown", null, "1.6.43", "执行待核对"]]) {
     const h = harness({ snapshot: { settings: settings([repository({ versionPlans: [planFor(item)] })]) }, catalog: { repositories: [{ repoId: "repository-001", components: [item] }] }, hook(call) {
       if (call.url === BASE + "/preview") return response({ previews: [{ repoId: "repository-001", action, planWillApply, title: action === "push_only" ? "Original committed title" : "Prepared commit title", body: "Saved file changes only", components: [item] }] });
     } });
@@ -535,22 +535,38 @@ await test("an authoritative source error does not erase a real pending-change s
 await test("automatic bump defaults on and the saved checkbox can turn it off without running", async () => {
   const initial = settings(); delete initial.naming.autoBump;
   const auto = automaticComponent(), h = harness({ snapshot: { settings: initial }, catalog: { repositories: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: true, outgoingCommits: 0, components: [auto] }] } });
-  await h.ready(); await openAndCheck(h); assert.equal(h.fields("autoBump")[0].checked, true); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4 → 2.3.5");
+  await h.ready(); await openAndCheck(h); assert.equal(h.fields("autoBump")[0].checked, true); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.5");
   await h.change("autoBump", false); await checkAll(h); assert.equal(h.posts("/config").at(-1).body.settings.naming.autoBump, false); assert.equal(h.fields("autoBump")[0].checked, false);
   assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "changed"); assert.equal(h.posts("/run").length, 0);
 });
-await test("actual automatic candidates show a checked current-to-target Summary without creating a client plan", async () => {
+await test("actual automatic candidates show only the checked target version without creating a client plan", async () => {
   const auto = automaticComponent({ currentVersion: "1.6.99", nextVersion: "1.7.0" });
   const h = harness({ catalog: { repositories: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: true, outgoingCommits: 0, components: [auto] }] }, hook(call) {
-    if (call.url === BASE + "/preview") return response({ previews: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: true, action: "commit", planWillApply: true, title: "1.6.99 → 1.7.0", components: [auto] }] });
+    if (call.url === BASE + "/preview") return response({ previews: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: true, action: "commit", planWillApply: true, title: "1.7.0", components: [auto] }] });
   } });
-  await h.ready(); await openAndCheck(h); assert.equal(h.byClass("repository-publish-plan-row").children[0].textContent, "1.6.99 → 1.7.0"); assert.match(h.byClass("repository-publish-plan-row").children[2].textContent, /自动升版，提交时复核/);
-  h.button("预览标题与改动").click(); await settle(); const row = h.byClass("repository-publish-preview-version"); assert.equal(row.textContent, "1.6.99 → 1.7.0"); assert.equal(row.dataset.transition, "auto"); assert.match(row.children[0].textContent, /自动升版/);
+  await h.ready(); await openAndCheck(h); assert.equal(h.byClass("repository-publish-plan-row").children[0].textContent, "1.7.0"); assert.match(h.byClass("repository-publish-plan-row").children[2].textContent, /自动升版，提交时复核/);
+  h.button("预览标题与改动").click(); await settle(); const row = h.byClass("repository-publish-preview-version"); assert.equal(row.textContent, "1.7.0"); assert.equal(row.dataset.transition, "auto"); assert.match(row.children[0].textContent, /自动升版/);
   assert.equal(h.posts("/config").length, 0); assert.equal(h.posts("/run").length, 0); assert.deepEqual(h.snapshot.settings.repositories[0].versionPlans || [], []);
+});
+await test("1.6.50 is the sole displayed new version while 1.6.49 remains the saved source", async () => {
+  const auto = automaticComponent({ currentVersion: "1.6.49", headVersion: "1.6.49", nextVersion: "1.6.50" });
+  const h = harness({ catalog: { repositories: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: true, outgoingCommits: 0, components: [auto],
+    repositoryVersion: { state: "current", currentVersion: "1.6.49", nextVersion: "1.6.50", transition: auto.transition } }] }, hook(call) {
+    if (call.url === BASE + "/preview") return response({ previews: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: true, action: "commit", planWillApply: true, title: "1.6.50", components: [auto] }] });
+  } });
+  await h.ready(); await openAndCheck(h);
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.6.50");
+  assert.equal(h.byClass("repository-publish-plan-row").children[0].textContent, "1.6.50");
+  assert.match(h.byClass("repository-publish-plan-row").children[2].textContent, /提交时复核/);
+  h.button("预览标题与改动").click(); await settle(); assert.equal(h.byClass("repository-publish-preview-version").textContent, "1.6.50");
+  assert.equal(h.catalog.repositories[0].components[0].currentVersion, "1.6.49");
+  assert.equal(h.catalog.repositories[0].repositoryVersion.currentVersion, "1.6.49");
+  assert.equal(h.posts("/run").length, 0); assert.equal(h.posts("/config").length, 0);
+  h.locale("en"); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.6.50");
 });
 await test("manual or initial versions and push-only commits never receive an extra automatic bump", async () => {
   const manual = component({ currentVersion: "2.3.5", nextVersion: "2.3.6", headVersion: "2.3.4", versionChanged: true, worktreeChanged: true, autoPlan: { state: "manual_version", fromVersion: "", targetVersion: "", reason: "Version already changed" }, transition: { kind: "working", fromVersion: "2.3.4", toVersion: "2.3.5" } });
-  for (const [item, worktree, outgoing, expected] of [[manual, true, 0, "2.3.4 → 2.3.5"], [component({ autoPlan: { state: "initial_version", fromVersion: "", targetVersion: "", reason: "First version" } }), true, 0, "2.3.4"], [component({ autoPlan: { state: "none", fromVersion: "", targetVersion: "", reason: "Only existing commits" } }), false, 2, "2.3.4"]]) {
+  for (const [item, worktree, outgoing, expected] of [[manual, true, 0, "2.3.5"], [component({ autoPlan: { state: "initial_version", fromVersion: "", targetVersion: "", reason: "First version" } }), true, 0, "2.3.4"], [component({ autoPlan: { state: "none", fromVersion: "", targetVersion: "", reason: "Only existing commits" } }), false, 2, "2.3.4"]]) {
     const action = worktree ? "commit" : "push_only", h = harness({ catalog: { repositories: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: worktree, outgoingCommits: outgoing, components: [item] }] }, hook(call) {
       if (call.url === BASE + "/preview") return response({ previews: [{ repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: worktree, outgoingCommits: outgoing, action, planWillApply: false, title: "Original progress", components: [item] }] });
     } });
@@ -608,7 +624,7 @@ await test("returning focus or pageshow reads only passive status until the user
   h.catalog.repositories[0] = { repoId: "repository-001", hasChanges: true, changeState: "changed", worktreeChanged: true, outgoingCommits: 0, components: [automaticComponent()] };
   const checks = versionCalls(h).length; await h.emitWindow("focus"); await h.emitWindow("pageshow");
   assert.equal(versionCalls(h).length, checks); assert.equal(activityCalls(h).length, 0); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4");
-  await checkAll(h); assert.equal(versionCalls(h).length, checks + 1); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.4 → 2.3.5"); assert.equal(h.posts().length, 0);
+  await checkAll(h); assert.equal(versionCalls(h).length, checks + 1); assert.equal(h.byClass("repository-publish-compact-version").textContent, "2.3.5"); assert.equal(h.posts().length, 0);
 });
 await test("hidden collapsed and newly visible Console never start local checks and cleanup removes hooks", async () => {
   const h = harness(); await h.ready(); await h.emitWindow("focus"); await h.emitWindow("pageshow"); await h.expand();
@@ -648,7 +664,7 @@ await test("multi-plugin rows show one repository semantic version and fact-base
   trigger.click(); assert.equal(picker.open, true); assert.equal(h.visible(menuOptions(h)[0]), true);
   const menu = h.byClass("repository-publish-version-menu"), groups = h.all(menu).filter(item => item.tagName === "H4").map(item => item.textContent);
   assert.deepEqual(groups, ["插件版本", "本次有改动", "其他插件"]); assert.ok(h.all(menu).filter(item => item.tagName === "HR").length >= 1);
-  assert.deepEqual(menuOptions(h).map(item => [item.dataset.sourceId, item.dataset.changeState, item.textContent]), [["changed-plugin", "changed", "Character Designer 0.77.25 → 0.77.38"], ["idle-plugin", "unchanged", "Node library 0.3.1"], ["other-plugin", "unchanged", "RR Helper 0.2.60"]]);
+  assert.deepEqual(menuOptions(h).map(item => [item.dataset.sourceId, item.dataset.changeState, item.textContent]), [["changed-plugin", "changed", "Character Designer 0.77.38"], ["idle-plugin", "unchanged", "Node library 0.3.1"], ["other-plugin", "unchanged", "RR Helper 0.2.60"]]);
   assert.equal(h.fields("path").length, 0); assert.equal(h.posts().length, 0); assert.equal(h.api.hasDraft(), false);
 });
 await test("plugin details are read-only and old display preferences never replace the repository version with a chosen plugin", async () => {
@@ -920,7 +936,7 @@ await test("fresh changes remain primary after a successful old upload without i
   const repo = repository(), current = automaticComponent({ currentVersion: "1.6.45", nextVersion: "1.6.46", headVersion: "1.6.45" });
   const h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "success", [completedUpload(repo)]) }, catalog: { repositories: [{ repoId: repo.id, hasChanges: true, changeState: "changed", worktreeChanged: true, components: [current] }] } });
   await h.ready(); await expandAndCheck(h);
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.6.45 → 1.6.46");
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.6.46");
   assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "changed");
   assert.equal(h.byClass("repository-publish-compact-status").textContent, "Changes to commit");
   assert.equal(h.byClass("repository-publish-row-history").textContent, "Last upload · 100%");
@@ -1141,7 +1157,7 @@ await test("legacy deferred reasons remain inspectable without claiming a curren
   assert.match(h.byClass("repository-publish-diagnosis-summary").textContent, /could not establish the workspace boundary/); assert.equal(h.byClass("repository-publish-diagnosis-blockers").hidden, true); assert.equal(h.byClass("repository-publish-diagnosis-locate").hidden, true); assert.doesNotMatch(h.all(h.byClass("repository-publish-diagnosis")).map(item => item.textContent).join(" "), /Character|X\.blend/); assert.equal(h.posts().length, 0);
 });
 await test("current Git and sync diagnostics provide actionable localized labels with preserved reasons", async () => {
-  for (const [code, category, label, zh] of [["staged_selection", "repository", "Review staged changes", "已有暂存选择"], ["git_lock", "repository", "Git lock file found", "检测到Git锁文件"], ["remote_ahead", "remote", "Integrate remote changes first", "先整合远端历史"], ["sync_missing", "sync", "Save the work file first", "先保存工作文件"], ["git_lfs", "lfs", "Check the LFS upload", "LFS 上传待处理"]]) {
+  for (const [code, category, label, zh] of [["staged_selection", "repository", "Review staged changes", "已有暂存选择"], ["git_lock", "repository", "Git lock file found", "检测到Git锁文件"], ["remote_ahead", "remote", "Integrate remote changes first", "先整合远端历史"], ["sync_missing", "sync", "Save the work file first", "先保存工作文件"], ["git_lfs", "lfs", "Check the LFS upload", "LFS 上传待处理"], ["git_large_history", "lfs", "Old commits contain large files; convert history to LFS", "旧提交含大文件，需转换历史"]]) {
     const repo = repository(), value = diagnostic({ code, category, summary: "A verified guard stopped this repository; original work is retained.", target: null }), h = harness({ lang: "en", snapshot: { operation: operation(randomUUID(), "attention", [blockedReceipt(repo, value)]) }, catalog: { repositories: [{ repoId: repo.id, components: [], diagnostic: value }] } }); await h.ready(); await expandAndCheck(h);
     assert.equal(h.byClass("repository-publish-compact-status").textContent, label); assert.match(h.byClass("repository-publish-row-reason").textContent, /verified guard/); h.locale("zh-CN"); assert.equal(h.byClass("repository-publish-compact-status").textContent, zh); assert.equal(h.posts().length, 0);
   }
@@ -1386,13 +1402,13 @@ await test("repository semantic authority replaces every upload count while keep
   for (const count of [0, 5, null]) {
     const repo = repository(), item = menuCatalog(repo, menuComponents(), uploadSummary(repo, { count }), "1.0.0"), h = harness({ catalog: { repositories: [item] } });
     await h.ready(); await expandAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.0.0"); h.locale("en"); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.0.0");
-    assert.ok(menuOptions(h).some(option => option.textContent.includes("0.77.25"))); assert.doesNotMatch(h.all().map(node => node.textContent).join(" "), /Push\s*#|上传\s*#/); assert.equal(h.posts().length, 0);
+    assert.ok(menuOptions(h).some(option => option.textContent.includes("0.77.38"))); assert.doesNotMatch(h.all().map(node => node.textContent).join(" "), /Push\s*#|上传\s*#/); assert.equal(h.posts().length, 0);
   }
 });
 await test("an initial repository floor is visibly an unsaved preview and never rewrites independent plugins", async () => {
   const item = menuCatalog(); item.repositoryVersion = { state: "initial", currentVersion: "1.0.0", transition: null };
   const h = harness({ catalog: { repositories: [item] } }); await h.ready(); await expandAndCheck(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.0.0"); assert.match(h.byClass("repository-publish-compact-version").title, /首次提交.*尚未保存/);
-  assert.deepEqual(menuOptions(h).map(option => option.textContent), ["Character Designer 0.77.25 → 0.77.38", "Node library 0.3.1", "RR Helper 0.2.60"]); assert.equal(h.posts().length, 0);
+  assert.deepEqual(menuOptions(h).map(option => option.textContent), ["Character Designer 0.77.38", "Node library 0.3.1", "RR Helper 0.2.60"]); assert.equal(h.posts().length, 0);
 });
 await test("invalid repository authority never falls back to a plugin or upload sequence", async () => {
   for (const repositoryVersion of [{ state: "unknown", currentVersion: "1.2.3" }, { state: "current", currentVersion: "0.4.0" }, { state: "current", currentVersion: "5" }, { state: "current", currentVersion: "01.2.3" }, { state: "current", currentVersion: "1.0.0-alpha" }, { state: "current", currentVersion: "1.2.3-01" }]) {
@@ -1404,7 +1420,7 @@ await test("a real below-floor source shows an unsaved green initialization tran
   const repo = repository(), item = freshCleanCatalog(repo, { hasChanges: true, changeState: "changed", components: [component({ currentVersion: "0.4.0", headVersion: "0.4.0", worktreeChanged: false, versionChanged: false })],
     repositoryVersion: { state: "initial", currentVersion: "1.0.0", nextVersion: "1.0.0", transition: { kind: "initial", fromVersion: "0.4.0", toVersion: "1.0.0" } } });
   const h = harness({ catalog: { repositories: [item] } }); await h.ready(); await expandAndCheck(h);
-  assert.equal(h.byClass("repository-publish-compact-version").textContent, "0.4.0 → 1.0.0"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "changed");
+  assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.0.0"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "changed");
   assert.match(h.byClass("repository-publish-compact-version").title, /尚未保存/); assert.equal(h.catalog.repositories[0].components[0].currentVersion, "0.4.0"); assert.equal(h.posts().length, 0);
   h.catalog.repositories[0].displayOnly = true; await h.emitWindow("focus"); await checkAll(h); assert.equal(h.byClass("repository-publish-compact-version").textContent, "1.0.0"); assert.equal(h.byClass("repository-publish-compact-version").dataset.changeState, "unknown"); assert.equal(h.posts().length, 0);
 });

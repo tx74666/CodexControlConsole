@@ -194,7 +194,7 @@ def test_catalog_and_config_are_readonly_then_once_only_push():
         require(not (root / ".git/FETCH_HEAD").exists())
         save_edit(root)
         result = f.run(service)
-        require(child(result)["status"] == "success" and child(result)["title"] == "1.2.3 → 1.2.4", result)
+        require(child(result)["status"] == "success" and child(result)["title"] == "1.2.4", result)
         require((root / "app.json").read_bytes() == images["app.json"].replace(b"1.2.3", b"1.2.4"))
         require(not service.status()["settings"]["repositories"][0]["versionPlans"])
         sha = f.git(root, "rev-parse", "HEAD")
@@ -251,7 +251,7 @@ def test_hook_rejection_resumes_same_version():
         require(b"1.2.4" in (root / "app.json").read_bytes() and f.git(root, "rev-list", "--count", "HEAD") == "2")
         (root / ".git/hooks/pre-commit").unlink()
         resumed = f.run(f.service(), "request_00000002")
-        require(child(resumed)["status"] == "success" and child(resumed)["title"] == "1.2.3 → 1.2.4", resumed)
+        require(child(resumed)["status"] == "success" and child(resumed)["title"] == "1.2.4", resumed)
         require(f.git(root, "rev-list", "--count", "HEAD") == "3")
 
 
@@ -310,7 +310,7 @@ def test_console_partial_write_restart_continues_frozen_plan():
         changed = [name for name in images if (root / name).read_bytes() != images[name]]
         require(len(changed) == 1, changed)
         result = f.run(f.service(), "request_00000002")
-        require(child(result)["status"] == "success" and child(result)["title"] == "1.0.105 → 1.1.0", result)
+        require(child(result)["status"] == "success" and child(result)["title"] == "1.1.0", result)
         require(f.git(root, "rev-list", "--count", "HEAD") == "3" and f.git(remote, "rev-parse", "main") == child(result)["commitSha"])
         require(all(b"1.1.0" in (root / name).read_bytes() for name in images))
 
@@ -334,7 +334,7 @@ def test_staging_crash_resumes_version_intent():
         failed = f.run(service)
         require(child(failed)["status"] == "deferred" and (root / ".git/index.lock").exists(), failed)
         resumed = f.run(f.service(), "request_00000002")
-        require(child(resumed)["status"] == "success" and child(resumed)["title"] == "1.2.3 → 1.2.4", resumed)
+        require(child(resumed)["status"] == "success" and child(resumed)["title"] == "1.2.4", resumed)
         require(f.git(root, "rev-list", "--count", "HEAD") == "3")
 
 
@@ -644,7 +644,7 @@ def test_console_auto_changed_module_refreshes_only_its_query():
         js.write_bytes(js.read_bytes() + b"// saved real feature\n")
         service = f.service()
         preview = service.preview()["previews"][0]
-        require(preview["title"] == "1.0.105 → 1.1.0" and preview["status"] == "ready", preview)
+        require(preview["title"] == "1.1.0" and preview["status"] == "ready", preview)
         result = f.run(service)
         require(child(result)["status"] == "success" and child(result)["title"] == preview["title"], result)
         index = (root / "index.html").read_bytes()
@@ -689,6 +689,8 @@ def test_git_subject_history_strict_bounded_terminal_version():
     require(evidence["currentVersion"] == "1.6.44" and evidence["historyDepth"] == 2)
     require(evidence["sourceHeadSha"] == head and evidence["versionCommitSha"] == version_commit)
     require(versions.parse_commit_history(head, head + "\0v1.6.99 -> v1.7.0\n")["version"] == "v1.7.0")
+    latest = versions.parse_commit_history(head, head + "\0" + "1.6.50\n" + version_commit + "\0" + "1.6.48 → 1.6.49\n")
+    require(latest["version"] == "1.6.50" and latest["versionSubject"] == "1.6.50" and latest["historyDepth"] == 1, latest)
     for invalid in (head + "\0fix version 1.6.43\n", "b" * 40 + "\0" + "1.6.43\n",
                     head + "\0\0bad\n", "invalid\0" + "1.6.43\n",
                     "\n".join((head if i == 0 else "b" * 40) + "\0no version" for i in range(65))):
@@ -742,7 +744,7 @@ def test_saved_snapshot_git_only_plan_commits_latest_saved_files():
         save_edit(root)
         result = f.run(service)
         item = child(result)
-        require(item["status"] == "success" and item["title"] == "1.6.43 → 1.6.44", result)
+        require(item["status"] == "success" and item["title"] == "1.6.44", result)
         require(f.git(remote, "show", "main:tracked.txt") == "latest saved implementation")
         require(f.git(remote, "show", "main:new.txt") == "saved after the version plan")
         require(f.git(remote, "rev-parse", "main") == item["commitSha"])
@@ -772,7 +774,7 @@ def test_saved_snapshot_file_plan_refreshes_work_after_version_write():
         save_edit(root)
         result = f.run(service)
         item = child(result)
-        require(item["status"] == "success" and item["title"] == "1.2.3 → 1.2.4", result)
+        require(item["status"] == "success" and item["title"] == "1.2.4", result)
         require(service.saved_after_version, "Fixture did not save during the real version write")
         require((root / "app.json").read_bytes() == images["app.json"].replace(b"1.2.3", b"1.2.4"))
         require(f.git(remote, "show", "main:tracked.txt") == "latest saved after version write")
@@ -855,7 +857,7 @@ def test_saved_snapshot_resumed_plan_keeps_one_version_and_request_identity():
         resumed_service = f.service()
         resumed = f.run(resumed_service, "request_00000002")
         item = child(resumed)
-        require(item["status"] == "success" and item["title"] == "1.2.3 → 1.2.4", resumed)
+        require(item["status"] == "success" and item["title"] == "1.2.4", resumed)
         require((root / "app.json").read_bytes() == version_bytes and f.git(root, "rev-list", "--count", "HEAD") == "3")
         require(f.git(remote, "show", "main:tracked.txt") == "saved after interrupted version preparation")
         require(f.git(remote, "show", "main:new.txt") == "retained later work")
@@ -918,7 +920,7 @@ def test_saved_snapshot_sync_refresh_copies_current_source_once_and_reads_are_qu
             require_sync_not_committed(f, root, remote, images, head, index)
             result = f.run(service, "request_sync_refresh_0002")
             item = child(result)
-            require(item["status"] == "success" and item["title"] == "1.2.3 → 1.2.4", result)
+            require(item["status"] == "success" and item["title"] == "1.2.4", result)
             require(f.git(remote, "show", "main:" + targets[0].name) == "latest saved source")
             require(f.git(remote, "rev-parse", "main") == item["commitSha"] and f.git(root, "rev-list", "--count", "HEAD") == "3")
             require((root / "app.json").read_bytes() == images["app.json"].replace(b"1.2.3", b"1.2.4"))
@@ -1022,7 +1024,7 @@ def test_saved_snapshot_sync_refresh_partial_copy_restart_keeps_original_version
         service = f.service()
         resumed = f.run(service, "request_sync_partial_0003")
         item = child(resumed)
-        require(item["status"] == "success" and item["title"] == "1.2.3 → 1.2.4", resumed)
+        require(item["status"] == "success" and item["title"] == "1.2.4", resumed)
         require(f.git(remote, "rev-parse", "main") == item["commitSha"] and f.git(root, "rev-list", "--count", "HEAD") == "3")
         require(all(target.read_bytes() == external.read_bytes() for external, target in zip(sources, targets)))
         require((root / "app.json").read_bytes() == images["app.json"].replace(b"1.2.3", b"1.2.4"))
@@ -1240,11 +1242,11 @@ def test_git_plan_summary_real_commit_and_once_only_retry():
         configure_plan(service)
         (root / "tracked.txt").write_text("saved work\n")
         preview = service.preview()["previews"][0]
-        require(preview["title"] == "1.6.43 → 1.6.44" and preview["planWillApply"] is True, preview)
+        require(preview["title"] == "1.6.44" and preview["planWillApply"] is True, preview)
         failed = f.run(service)
         sha = child(failed)["commitSha"]
         require(child(failed)["status"] == "push_failed" and sha, failed)
-        require(f.git(root, "show", "-s", "--format=%s", "HEAD") == "1.6.43 → 1.6.44")
+        require(f.git(root, "show", "-s", "--format=%s", "HEAD") == "1.6.44")
         require(unity.read_bytes() == b"bundleVersion: 0.1.0\r\n")
         resumed = f.run(f.service(), "request_00000002")
         require(child(resumed)["status"] == "success" and child(resumed)["commitSha"] == sha, resumed)
@@ -1288,7 +1290,8 @@ def test_catalog_real_dirty_ahead_and_version_delta_are_distinct_readonly():
         dirty = service.version_catalog()["repositories"][0]
         require(dirty["hasChanges"] is True and dirty["versionChanged"] is False, dirty)
         preview = service.preview()["previews"][0]
-        require(preview["title"] == "1.2.3" and "版本未变" in preview["body"], preview)
+        require(preview["title"] == "1.2.3" and "版本核对：\n- fixture: 1.2.3" in preview["body"]
+                and "版本未变" not in preview["body"] and "→" not in preview["body"], preview)
         require((root / ".git/index").read_bytes() == index and (root / "app.json").read_bytes() == files)
         (root / "app.json").write_bytes(images["app.json"].replace(b"1.2.3", b"1.2.4"))
         changed = service.version_catalog()["repositories"][0]
@@ -1327,7 +1330,7 @@ def test_default_auto_saved_change_preview_readonly_then_once():
         require(component["autoPlan"]["state"] == "eligible" and component["autoPlan"]["targetVersion"] == "1.2.4", row)
         require(component["transition"] == {"kind":"auto", "fromVersion":"1.2.3", "toVersion":"1.2.4"})
         preview = service.preview()["previews"][0]
-        require(preview["title"] == "1.2.3 → 1.2.4" and preview["planWillApply"] is True, preview)
+        require(preview["title"] == "1.2.4" and preview["planWillApply"] is True, preview)
         require(preview["versionTransitions"][0]["kind"] == "auto" and "有改动自动升版" in preview["body"])
         require((root / "app.json").read_bytes() == images["app.json"] and (root / ".git/index").read_bytes() == index)
         require(f.git(root, "rev-parse", "HEAD") == head and not service.status()["settings"]["repositories"][0]["versionPlans"])
@@ -1355,7 +1358,7 @@ def test_auto_carry_double_rollover_and_manual_version_preserved():
             f.git(root, "push", "origin", "main")
             save_edit(root)
             result = f.run(f.service())
-            require(child(result)["status"] == "success" and child(result)["title"] == current + " → " + target, result)
+            require(child(result)["status"] == "success" and child(result)["title"] == target, result)
             require(json.loads((root / "app.json").read_text())["version"] == target)
     with Fixture() as f:
         root, _, repo = f.repo()
@@ -1367,7 +1370,7 @@ def test_auto_carry_double_rollover_and_manual_version_preserved():
         component = service.version_catalog()["repositories"][0]["components"][0]
         require(component["versionChanged"] is True and component["autoPlan"]["state"] == "manual_version")
         result = f.run(service)
-        require(child(result)["status"] == "success" and child(result)["title"] == "1.2.3 → 1.2.4", result)
+        require(child(result)["status"] == "success" and child(result)["title"] == "1.2.4", result)
         require((root / "app.json").read_bytes() == manually_saved and "已手动改变" in child(result)["body"])
 
 
@@ -1417,7 +1420,7 @@ def test_auto_independent_component_scopes_and_fallback_title():
             (root / "b/module.txt").write_text("saved B\n")
             preview = service.preview()["previews"][0]
             require(preview["title"] == "1.0.0" and preview["repositoryVersion"]["state"] == "initial", preview)
-            require("A 1.6.99 → 1.7.0" in preview["body"] and "B 2.4.8 → 2.4.9" in preview["body"])
+            require("A 1.7.0" in preview["body"] and "B 2.4.9" in preview["body"])
             result = f.run(service)
             require(child(result)["status"] == "success" and child(result)["title"] == preview["title"], result)
             require(json.loads((root / "a/package.json").read_text())["version"] == "1.7.0")
@@ -1443,14 +1446,14 @@ def test_auto_shared_json_carrier_does_not_bump_unchanged_component():
         require(components[0]["autoPlan"]["state"] == "manual_version", components)
         require(components[1]["autoPlan"]["state"] == "none" and components[1]["currentVersion"] == "8.1.0")
         preview = service.preview()["previews"][0]
-        require(preview["title"] == "1.0.0" and "A 1.2.3 → 1.2.4" in preview["body"], preview)
-        require("B 8.1.0 →" not in preview["body"])
+        require(preview["title"] == "1.0.0" and "A 1.2.4" in preview["body"], preview)
+        require("B 8.1.1" not in preview["body"])
         result = f.run(service)
         require(child(result)["status"] == "success", result)
         require((root / "versions.json").read_bytes() == raw.replace(b"1.2.3", b"1.2.4"))
         (root / "b/module.txt").write_text("saved B implementation\n")
         next_preview = service.preview()["previews"][0]
-        require(next_preview["title"] == "1.0.0 → 1.0.1" and "B 8.1.0 → 8.1.1" in next_preview["body"], next_preview)
+        require(next_preview["title"] == "1.0.1" and "B 8.1.1" in next_preview["body"], next_preview)
         following = f.run(service, "request_00000002")
         require(child(following)["status"] == "success" and child(following)["title"] == next_preview["title"], following)
         values = json.loads((root / "versions.json").read_text())
@@ -1465,7 +1468,7 @@ def test_auto_git_subject_and_push_only_file_plan_retained():
         service = f.service()
         require(service.version_catalog()["repositories"][0]["components"][0]["autoPlan"]["targetVersion"] == "1.7.0")
         result = f.run(service)
-        require(child(result)["status"] == "success" and child(result)["title"] == "1.6.99 → 1.7.0", result)
+        require(child(result)["status"] == "success" and child(result)["title"] == "1.7.0", result)
         require(unity.read_bytes() == b"bundleVersion: 0.1.0\r\n")
         require(service.version_catalog()["repositories"][0]["components"][0]["currentVersion"] == "1.7.0")
     with Fixture() as f:
@@ -1510,7 +1513,7 @@ def test_auto_saved_sync_first_and_failure_preserves_authority():
                 require(child(result)["status"] == "deferred" and not (root / "Build.blend").exists(), result)
                 require((root / "app.json").read_bytes() == images["app.json"] and f.git(root, "rev-list", "--count", "HEAD") == "2")
             else:
-                require(child(result)["status"] == "success" and child(result)["title"] == "1.2.3 → 1.2.4", result)
+                require(child(result)["status"] == "success" and child(result)["title"] == "1.2.4", result)
                 require((root / "Build.blend").read_bytes() == outside.read_bytes() and b"1.2.4" in (root / "app.json").read_bytes())
                 unchanged = service.version_catalog()["repositories"][0]
                 require(unchanged["syncChanged"] is False and unchanged["hasChanges"] is False, unchanged)
@@ -1587,7 +1590,7 @@ def test_auto_precommit_resume_partial_staging_merge_and_unknown_head_guard():
         require(child(failed)["status"] == "deferred" and b"1.2.4" in (root / "app.json").read_bytes(), failed)
         (root / ".git/hooks/pre-commit").unlink()
         result = f.run(f.service(), "request_00000002")
-        require(child(result)["status"] == "success" and child(result)["title"] == "1.2.3 → 1.2.4", result)
+        require(child(result)["status"] == "success" and child(result)["title"] == "1.2.4", result)
         require(b"1.2.5" not in (root / "app.json").read_bytes() and f.git(root, "rev-list", "--count", "HEAD") == "3")
     for guard in ("staged", "merge", "unknown_head"):
         with Fixture() as f:
@@ -1719,7 +1722,7 @@ def test_legacy_status_normalized_sha_and_raw_opaque_bytes_preserved():
         require(service._settings_path.read_bytes() == raw and status["casRequired"] is False)
         save_edit(root)
         result = f.run(restarted)
-        require(child(result)["status"] == "success" and child(result)["title"] == "1.2.3 → 1.2.4", result)
+        require(child(result)["status"] == "success" and child(result)["title"] == "1.2.4", result)
         require(service._settings_path.read_bytes() == raw, "Automatic plan normalized away legacy server metadata")
 
 
@@ -1806,7 +1809,7 @@ def test_blender_pair_auto_and_manual_saved_versions_preserved():
             component = service.version_catalog()["repositories"][0]["components"][0]
             require(component["autoPlan"]["state"] == ("manual_version" if manual else "eligible"), component)
             result = f.run(service)
-            require(child(result)["status"] == "success" and child(result)["title"] == "1.0.99 → 1.1.0", result)
+            require(child(result)["status"] == "success" and child(result)["title"] == "1.1.0", result)
             require((root / "plugin/__init__.py").read_bytes() == images["plugin/__init__.py"].replace(b"(1, 0, 99)", b"(1, 1, 0)"))
             require((root / "plugin/blender_manifest.toml").read_bytes() == images["plugin/blender_manifest.toml"].replace(b"1.0.99", b"1.1.0"))
             require(f.git(remote, "rev-parse", "main") == child(result)["commitSha"] and f.git(root, "rev-list", "--count", "HEAD") == "3")
@@ -1864,7 +1867,7 @@ def test_blender_pair_partial_write_restart_and_concurrent_companion_hold():
                 require((root / "plugin/blender_manifest.toml").read_bytes() == b'user concurrent companion bytes\r\n')
                 require((root / "plugin/__init__.py").read_bytes() == images["plugin/__init__.py"])
             else:
-                require(child(resumed)["status"] == "success" and child(resumed)["title"] == "1.0.99 → 1.1.0", resumed)
+                require(child(resumed)["status"] == "success" and child(resumed)["title"] == "1.1.0", resumed)
                 require(f.git(root, "rev-list", "--count", "HEAD") == "3")
 
 
@@ -2212,8 +2215,8 @@ def test_application_auto_dirty_summary_readonly_then_synchronized_commit_once()
         component = application_component(catalog["components"])
         require(component["autoPlan"]["state"] == "eligible" and component["autoPlan"]["targetVersion"] == "1.0.0", component)
         preview = service.preview()["previews"][0]
-        require(preview["title"] == "0.4.0 → 1.0.0" and len(preview["versionTransitions"]) == 1, preview)
-        require(len(preview["components"]) == 1 and "Application 0.4.0 → 1.0.0" in preview["body"], preview)
+        require(preview["title"] == "1.0.0" and len(preview["versionTransitions"]) == 1, preview)
+        require(len(preview["components"]) == 1 and "Application 1.0.0" in preview["body"], preview)
         require_application_images(root, images)
         require(f.git(root, "rev-parse", "HEAD") == head and (root / ".git/index").read_bytes() == index)
         require(not (root / ".git/FETCH_HEAD").exists())
@@ -2245,7 +2248,7 @@ def test_application_manual_matching_declarations_are_not_incremented_again():
         component = application_component(catalog["components"])
         require(component["autoPlan"]["state"] == "manual_version", component)
         preview = service.preview()["previews"][0]
-        require(preview["title"] == "1.4.0 → 1.4.1", preview)
+        require(preview["title"] == "1.4.1", preview)
         result = f.run(service)
         require(child(result)["status"] == "success" and child(result)["title"] == preview["title"], result)
         require_application_images(root, expected)
@@ -2394,7 +2397,7 @@ def test_application_partial_write_restart_continues_original_three_file_intent(
         require(len(written) == 1, "Interruption did not preserve the actual partial application write")
         original_remote = f.git(remote, "rev-parse", "main")
         resumed = f.run(f.service(), "request_00000002")
-        require(child(resumed)["status"] == "success" and child(resumed)["title"] == "0.4.0 → 1.0.0", resumed)
+        require(child(resumed)["status"] == "success" and child(resumed)["title"] == "1.0.0", resumed)
         require_application_images(root, expected)
         require(f.git(root, "rev-list", "--count", "HEAD") == "3" and child(resumed)["commitSha"] != original_remote)
         require(f.git(remote, "rev-parse", "main") == child(resumed)["commitSha"])
@@ -2583,12 +2586,12 @@ def test_clean_application_repository_floor_creates_real_exact_companion_commit_
         require(catalog["repositoryVersion"] == {"state":"initial", "currentVersion":"1.0.0", "sourceVersion":"0.4.0", "nextVersion":"1.0.0",
                                                "transition":{"kind":"initial", "fromVersion":"0.4.0", "toVersion":"1.0.0"}}, catalog)
         preview = service.preview()["previews"][0]
-        require(preview["action"] == "commit" and preview["planWillApply"] is True and preview["title"] == "0.4.0 → 1.0.0", preview)
+        require(preview["action"] == "commit" and preview["planWillApply"] is True and preview["title"] == "1.0.0", preview)
         require_application_images(root, images)
         require(f.git(root, "rev-parse", "HEAD") == head and (root / ".git/index").read_bytes() == index)
         first = f.run(service, "request_clean_floor_0001", intent="commit_and_push")
         item = child(first)
-        require(item["status"] == "success" and item["title"] == "0.4.0 → 1.0.0", first)
+        require(item["status"] == "success" and item["title"] == "1.0.0", first)
         require_application_images(root, application_after(images, "0.4.0", "1.0.0"))
         require(f.git(root, "rev-list", "--count", "HEAD") == "3" and f.git(remote, "rev-parse", "main") == item["commitSha"])
         changed = f.git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines()

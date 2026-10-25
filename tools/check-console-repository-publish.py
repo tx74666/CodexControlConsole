@@ -1132,7 +1132,7 @@ def test_commit_timeout_after_success_reconciles_once_preserves_later_work():
         sha = item["commitSha"]
         require(sha == service.actual_commit and service.commit_calls == service.reconcile_calls == service.push_calls == 1)
         require(service.push_targets == [sha] and item["verifiedRemote"] == sha)
-        require(item["title"] == "1.6.45 → 1.6.46" and f.git(root, "show", "-s", "--format=%s", sha) == item["title"])
+        require(item["title"] == "1.6.46" and f.git(root, "show", "-s", "--format=%s", sha) == item["title"])
         require(f.git(root, "rev-parse", "HEAD") == f.git(remote, "rev-parse", "main") == sha)
         require(int(f.git(root, "rev-list", "--count", "HEAD")) == before_count + 1)
         require(f.git(remote, "show", "main:tracked.txt") == "original saved work")

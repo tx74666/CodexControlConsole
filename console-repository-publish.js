@@ -44,6 +44,7 @@
   Object.assign(copy.en, { refreshing: "Refreshing", lastKnown: "Last known", refreshFailed: "Refresh failed", gitObjects: "Git objects", lfsObjects: "LFS objects", lfsFile: "LFS file {n}/{total}", phasePercent: "Current transfer phase", elapsed: "Elapsed {time}", checkingReceipt: "Receipt needs verification", repoProgress: "{name} · {phase}" });
   copy.zh.lastUpload = "上次上传"; copy.en.lastUpload = "Last upload";
   copy.zh.lastOperation = "上次操作"; copy.en.lastOperation = "Last operation";
+  copy.zh.largeHistory = "旧提交含大文件，需转换历史"; copy.en.largeHistory = "Old commits contain large files; convert history to LFS";
   Object.assign(copy.zh, { uploadPaused: "暂停上传 · 查看原因", waitingCodex: "等待 Codex 完成", activityScope: "聊天范围待核对", activityCheck: "Codex 活动待核对", stagedSelection: "已有暂存选择", historyOperation: "Git 操作未完成", gitLocked: "检测到Git锁文件", mergeConflict: "先处理合并冲突", workChanged: "改动还在变化", folderCheck: "核对仓库目录", branchCheck: "核对目标分支", remoteCheck: "核对远端", syncMissing: "先保存工作文件", syncWriting: "等待文件保存完成", syncCheck: "核对文件同步", versionCheck: "核对版本来源", versionPlanCheck: "核对版本计划", authCheck: "Git 登录待处理", permissionCheck: "仓库权限待处理", rulesCheck: "上传规则未满足", lfsCheck: "LFS 上传待处理", networkCheck: "网络状态待核对", remoteHistory: "先整合远端历史", gitCheck: "Git 运行待核对", whyPaused: "为什么暂停上传", blockingWork: "相关 Codex 工作", notConfigIssue: "这是工作状态检查，无需修改仓库配置。", activityUnknown: "活动信息尚未确认；查看原原因，不会猜测聊天归属。" });
   Object.assign(copy.en, { uploadPaused: "Upload paused · See why", waitingCodex: "Waiting for Codex", activityScope: "Check the chat's scope", activityCheck: "Check Codex activity", stagedSelection: "Review staged changes", historyOperation: "Finish the Git operation", gitLocked: "Git lock file found", mergeConflict: "Resolve merge conflicts", workChanged: "Files are still changing", folderCheck: "Check the repository folder", branchCheck: "Check the target branch", remoteCheck: "Check the remote", syncMissing: "Save the work file first", syncWriting: "Waiting for the file to finish saving", syncCheck: "Check file sync", versionCheck: "Check the version source", versionPlanCheck: "Check the version plan", authCheck: "Git sign-in needs fixing", permissionCheck: "Check repository permissions", rulesCheck: "Upload rules need review", lfsCheck: "Check the LFS upload", networkCheck: "Check the network", remoteHistory: "Integrate remote changes first", gitCheck: "Check Git", whyPaused: "Why the upload is paused", blockingWork: "Related Codex work", notConfigIssue: "This is a work-state check. No repository setting needs changing.", activityUnknown: "Activity is not confirmed. See the original reason; no chat ownership is assumed." });
   Object.assign(copy.zh, { currentActivity: "当前 Codex 活动", checkingActivity: "正在核对当前聊天活动…", lastAttempt: "上次上传尝试", activityCleared: "聊天活动已解除；重试后继续核对仓库。", activityRetry: "重试以继续仓库检查", activityFailed: "当前活动未能核对，上次尝试的原因仍保留。", activityOnly: "本次只核对聊天活动，不代表 Git、文件或远端已就绪。" });
@@ -288,7 +289,7 @@
       ...[["sync_config", "syncCheck"], ["sync_missing", "syncMissing"], ["sync_writing", "syncWriting"], ["sync_changed", "syncCheck"]].map(([code, key]) => [code, ["sync", key]]),
       ...[["git_history_operation", "historyOperation"], ["git_lock", "gitLocked"], ["staged_selection", "stagedSelection"], ["merge_conflict", "mergeConflict"], ["worktree_changed", "workChanged"], ["git_missing", "gitCheck"], ["git_unavailable", "gitCheck"]].map(([code, key]) => [code, ["repository", key]]),
       ["version_authority", ["versions", "versionCheck"]], ["version_plan_stale", ["versions", "versionPlanCheck"]], ["version_plan_blocked", ["versions", "versionPlanCheck"]],
-      ["git_authentication", ["authentication", "authCheck"]], ["git_permissions", ["permissions", "permissionCheck"]], ["git_rules", ["rules", "rulesCheck"]], ["git_lfs", ["lfs", "lfsCheck"]], ["git_timeout", ["network", "networkCheck"]], ["remote_ahead", ["remote", "remoteHistory"]], ["remote_changed", ["remote", "remoteCheck"]],
+      ["git_authentication", ["authentication", "authCheck"]], ["git_permissions", ["permissions", "permissionCheck"]], ["git_rules", ["rules", "rulesCheck"]], ["git_lfs", ["lfs", "lfsCheck"]], ["git_large_history", ["lfs", "largeHistory"]], ["git_timeout", ["network", "networkCheck"]], ["remote_ahead", ["remote", "remoteHistory"]], ["remote_changed", ["remote", "remoteCheck"]],
       ["git_failed", ["repository", "gitCheck"]], ["git_remote_failed", ["remote", "remoteCheck"]], ["git_network", ["network", "networkCheck"]], ["git_unsupported", ["repository", "gitCheck"]],
       ...["destination_changed", "receipt_unverified", "operation_interrupted"].map(code => [code, ["verification", "verifyRequired"]])
     ]);
@@ -530,7 +531,7 @@
     function componentVersionText(component, count, catalog) {
       const transition = componentTransition(component, catalog);
       return componentLabel(component, count) + (transition
-        ? clean(transition.fromVersion, 80) + " → " + clean(transition.toVersion, 80)
+        ? clean(transition.toVersion, 80)
         : clean(component.currentVersion, 80) || text("versionFailed"));
     }
     function displayIdentity(repo) { return JSON.stringify([repo.id, repo.path, repo.repositoryUrl, repo.remote, repo.branch]); }
@@ -558,14 +559,14 @@
       if (version.state === "initial" && catalog.displayOnly !== true && catalog.cached !== true && plain(transition)
         && transition.kind === "initial" && repositorySemver(transition.fromVersion, true)
         && transition.toVersion === version.currentVersion && transition.fromVersion !== transition.toVersion) {
-        return transition.fromVersion + " → " + version.currentVersion;
+        return version.currentVersion;
       }
       if (version.state === "current" && catalog.displayOnly !== true && catalog.cached !== true && plain(transition)
         && ["working", "planned", "auto"].includes(transition.kind)
         && repositorySemver(transition.fromVersion) && repositorySemver(transition.toVersion)
         && transition.fromVersion !== transition.toVersion
         && (transition.kind === "working" ? transition.toVersion === version.currentVersion : transition.fromVersion === version.currentVersion)) {
-        return transition.fromVersion + " → " + transition.toVersion;
+        return transition.toVersion;
       }
       return version.currentVersion;
     }

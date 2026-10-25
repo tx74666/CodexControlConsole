@@ -26,6 +26,7 @@ import uuid
 import weakref
 import xml.etree.ElementTree as ET
 from console_git_environment import environment_for_remote
+import console_repository_lfs as repository_lfs
 from console_repository_versions import (VersionPlanError, catalog as version_catalog_items,
                                         prepare_updates as prepare_version_updates, source_id as version_source_id,
                                         read_current_version, parse_commit_history, next_patch,
@@ -79,6 +80,7 @@ _DIAGNOSTICS = {
     "git_permissions": ("permissions", "error", "核对当前账号的仓库权限，再重试原提交。", None),
     "git_rules": ("rules", "warning", "核对 Git hook 或远端分支规则的拒绝原因，处理后重试原提交。", None),
     "git_lfs": ("lfs", "error", "核对 Git LFS 安装、相关对象及认证，处理后重试原提交。", None),
+    "git_large_history": ("lfs", "warning", "核对尚未发布历史中的大文件并迁移到 LFS；保留原提交与远端历史，不强推。", None),
     "git_timeout": ("network", "warning", "确认网络及原 Git 操作状态；重试先核对远端是否收到原提交。", None),
     "git_missing": ("repository", "error", "确认本机 Git 可用，再重新核对。", None),
     "git_unavailable": ("repository", "warning", "确认本机 Git 能正常运行，再重新核对。", None),
@@ -99,7 +101,7 @@ _GIT_DIAGNOSTIC_CODES = {"authentication": "git_authentication", "permissions": 
 _GIT_OPERATIONS = {"ls-remote", "fetch", "push", "commit", "status", "config", "rev-parse", "symbolic-ref",
                    "add", "read-tree", "update-index", "write-tree", "diff", "diff-tree", "diff-index",
                    "merge-base", "rev-list", "log", "ls-files", "ls-tree", "cat-file", "show", "show-ref", "update-ref",
-                   "check-ref-format", "stripspace"}
+                   "check-ref-format", "stripspace", "check-attr", "lfs"}
 
 
 def _git_operation(arguments):
@@ -575,10 +577,11 @@ class RepositoryPublishService:
         env.update(GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="Never", GIT_OPTIONAL_LOCKS="0", GIT_NO_LAZY_FETCH="1")
         if not self._test_mode:
             identity = (getattr(self._lease, "transport", None) or {}).get("identity", {})
-            remote_url = identity.get("pushUrl" if operation == "push" else "fetchUrl", "")
-            field = ".pushurl" if operation == "push" else ".url"
+            pushing = operation == "push" or operation == "lfs" and len(arguments) > 1 and arguments[1] == "push"
+            remote_url = identity.get("pushUrl" if pushing else "fetchUrl", "")
+            field = ".pushurl" if pushing else ".url"
             remote_url = next((value for key, value in config or [] if key.startswith("remote.") and key.endswith(field)), remote_url)
-            if operation == "push" and not remote_url:
+            if pushing and not remote_url:
                 remote_url = next((value for key, value in config or [] if key.startswith("remote.") and key.endswith(".url")), "")
             env = environment_for_remote(env, remote_url)
         if index is not None:
@@ -2445,7 +2448,7 @@ class RepositoryPublishService:
                 item["plannedVersion"] = plan["targetVersion"]
         def label(item, include_name=False):
             transition = item.get("transition")
-            value = ((transition["fromVersion"] + " → " if transition["fromVersion"] else "") + transition["toVersion"]) if transition else item["version"]
+            value = transition["toVersion"] if transition else item["version"]
             return (item["name"] + " " if include_name else "") + value
         title = naming["fallbackTitle"].replace("{datetime}", datetime.now().strftime("%Y-%m-%d %H:%M"))
         if naming["preset"] == "version" and len(versions) == 1 and len(valid) == 1:
@@ -2475,7 +2478,7 @@ class RepositoryPublishService:
                 try:
                     previous = item["version"] if source["kind"] == "git_commit" else read_current_version(
                         self._git(root, "show", snapshot["head"] + ":" + source["path"]), source)
-                    changes.append("- " + item["name"] + ": " + (previous + " → " + item["version"] if previous != item["version"] else "版本未变 " + item["version"]))
+                    changes.append("- " + item["name"] + ": " + item["version"])
                 except (VersionPlanError, _GitFailure, ValueError, UnicodeError):
                     pass
             if changes:
@@ -3023,6 +3026,98 @@ class RepositoryPublishService:
             paths = self._git(root, "diff-tree", "--root", "-m", "--no-commit-id", "--name-only", "-r", "-z", revision)
             if any(_excluded(p.decode("utf-8", "surrogateescape"), repo["exclude"]) for p in paths.split(b"\0") if p):
                 raise RepositoryPublishError("待推送历史包含私人或排除路径，请先自行核对历史。")
+        try:
+            return repository_lfs.inspect_outgoing(lambda *args, **kwargs: self._git(root, *args, **kwargs), head, remote)
+        except repository_lfs.LargeFileError as exc:
+            raise RepositoryPublishError(str(exc), code=exc.code) from exc
+
+    def _prepare_large_files(self, repo, context, snapshot):
+        """Prepare new saved files before any commit/version recovery journal."""
+        large = repository_lfs.candidates(snapshot["files"])
+        if not large:
+            return snapshot
+        root = context[0]
+        if _excluded(".gitattributes", repo["exclude"]):
+            raise RepositoryPublishError("大文件需要保存 .gitattributes，但该文件被当前上传范围排除。", code="git_lfs")
+        git = lambda *args, **kwargs: self._git(root, *args, **kwargs)
+        try:
+            effective = repository_lfs.filters(git, [item["path"] for item in large])
+            if any(value not in {"unspecified", "lfs"} for value in effective.values()):
+                raise repository_lfs.LargeFileError("大文件已有其他 Git 过滤器，保留原配置；请先核对该文件的 LFS 规则。")
+            path = _safe_path(root / ".gitattributes")
+            if path.exists():
+                with path.open("rb") as stream:
+                    before = stream.read(4 * 1024 * 1024 + 1)
+            else:
+                before = None
+            if before is not None and len(before) > 4 * 1024 * 1024:
+                raise repository_lfs.LargeFileError("Git 属性文件超过安全读取范围，请先核对 LFS 规则。")
+            additions = [repository_lfs.attribute_line(item["path"]) for item in large if effective[item["path"]] != "lfs"]
+            if self._snapshot(repo, context)["fingerprint"] != snapshot["fingerprint"]:
+                raise RepositoryPublishError("文件在准备 LFS 前变化，请保存后重试。", code="worktree_changed")
+            original_config = self._git(root, "config", "--null", "--list")
+            if _sha(original_config) != snapshot["configSha"]:
+                raise RepositoryPublishError("仓库配置在准备 LFS 前变化，保留原配置。", code="worktree_changed")
+            # Never hide a user's inherited custom filter with a local override.
+            standard = {"filter.lfs.clean": {"git-lfs clean -- %f"},
+                        "filter.lfs.smudge": {"git-lfs smudge -- %f", "git-lfs smudge --skip -- %f"},
+                        "filter.lfs.process": {"git-lfs filter-process", "git-lfs filter-process --skip"},
+                        "filter.lfs.required": {"true", "yes", "on", "1"},
+                        "lfs.repositoryformatversion": {"0"}}
+            configured, skip_smudge = [], False
+            for name, allowed in standard.items():
+                try:
+                    values = self._git(root, "config", "--null", "--get-all", name).split(b"\0")
+                    values = [value.decode("utf-8", "surrogateescape").strip() for value in values if value]
+                except _GitFailure as exc:
+                    if exc.returncode != 1:
+                        raise
+                    values = []
+                if any(value not in allowed for value in values):
+                    raise repository_lfs.LargeFileError("Git LFS 已有自定义过滤器或非强制配置，保留原配置；请先核对该设置。")
+                configured.append(bool(values))
+                skip_smudge = skip_smudge or any("--skip" in value for value in values)
+            self._git(root, "lfs", "version")
+            if not all(configured):
+                self._git(root, "lfs", "install", "--local", "--skip-repo", *( ["--skip-smudge"] if skip_smudge else [] ))
+            if additions:
+                original = before or b""
+                after = original + (b"\n" if original and not original.endswith(b"\n") else b"") + "".join(additions).encode("utf-8", "surrogateescape")
+                backup = self.state_dir / ("lfs-attributes-" + uuid.uuid4().hex + ".json")
+                _atomic(backup, {"root": str(root), "beforeBase64": base64.b64encode(original).decode("ascii"),
+                                 "beforeAbsent": before is None, "beforeSha256": _sha(original), "afterSha256": _sha(after)})
+                descriptor, temporary_name = tempfile.mkstemp(prefix=".console-lfs-", suffix=".tmp", dir=root)
+                temporary = Path(temporary_name)
+                try:
+                    with os.fdopen(descriptor, "wb") as stream:
+                        stream.write(after); stream.flush(); os.fsync(stream.fileno())
+                    if before is None:
+                        # Atomic create-if-absent: never replace a file another
+                        # editor created since the snapshot, even on POSIX.
+                        os.link(temporary, path)
+                    else:
+                        with _read_lease(path):
+                            if _stable(path) != {"bytes": len(before), "sha256": _sha(before)}:
+                                raise RepositoryPublishError("Git 属性文件有新修改，保留原修改和 LFS 备份。", code="worktree_changed")
+                        os.replace(temporary, path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            if any(value != "lfs" for value in repository_lfs.filters(git, [item["path"] for item in large]).values()):
+                raise repository_lfs.LargeFileError("嵌套 Git 属性仍覆盖 LFS 规则，原属性保留；尚未创建提交。")
+            result = self._snapshot(repo, context)
+            if additions and ".gitattributes" not in {item["path"] for item in result["files"]}:
+                raise repository_lfs.LargeFileError("新增 LFS 属性不在可提交范围，请核对 Git 忽略规则；尚未创建提交。")
+            mutable_keys = {key.encode("ascii") for key in standard}
+            unchanged_config = lambda raw: [entry for entry in raw.split(b"\0") if entry.split(b"\n", 1)[0] not in mutable_keys]
+            if unchanged_config(self._git(root, "config", "--null", "--list")) != unchanged_config(original_config):
+                raise RepositoryPublishError("LFS 准备期间其他 Git 配置有变化，保留配置并停止提交。", code="worktree_changed")
+            previous = {item["path"]: item for item in snapshot["files"] if item["path"] != ".gitattributes"}
+            current = {item["path"]: item for item in result["files"] if item["path"] != ".gitattributes"}
+            if result["head"] != snapshot["head"] or result["indexSha"] != snapshot["indexSha"] or current != previous:
+                raise RepositoryPublishError("文件或暂存选择在准备 LFS 时变化，已保留工作文件。", code="worktree_changed")
+            return result
+        except repository_lfs.LargeFileError as exc:
+            raise RepositoryPublishError(str(exc), code=exc.code) from exc
 
     def _pending_path(self, repo_id):
         return self._pending_dir / (repo_id + ".json")
@@ -3153,6 +3248,7 @@ class RepositoryPublishService:
             item["syncFiles"] = self._sync(repo, context)
             self._save(receipt)
             snapshot = self._snapshot(repo, context)
+            snapshot = self._prepare_large_files(repo, context, snapshot)
             components = self._version_details(repo, context)
             if any(component["repositoryHeadSha"] != snapshot["head"] for component in components):
                 raise RepositoryPublishError("同步后读取版本期间 HEAD 已变化，请重新核对。", code="worktree_changed")
@@ -3213,6 +3309,13 @@ class RepositoryPublishService:
         self._verify_version_evidence(root, pending)
         if self._repo(repo)[3] != identity or self._snapshot(repo, context)["fingerprint"] != snapshot["fingerprint"]:
             raise RepositoryPublishError("文件或仓库在提交前变化，请重新预览后重试。", code="worktree_changed")
+        large_paths = [item["path"] for item in repository_lfs.candidates(snapshot["files"])]
+        if large_paths:
+            try:
+                if any(value != "lfs" for value in repository_lfs.filters(lambda *args, **kwargs: self._git(root, *args, **kwargs), large_paths).values()):
+                    raise repository_lfs.LargeFileError("原提交计划含尚未准备 LFS 的新大文件，保留原计划与文件；请先核对 LFS 属性。")
+            except repository_lfs.LargeFileError as exc:
+                raise RepositoryPublishError(str(exc), code=exc.code) from exc
         lock_path = gitdir / "index.lock"
         marker = ("console-repository-publish:" + uuid.uuid4().hex).encode()
         descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -3228,6 +3331,10 @@ class RepositoryPublishService:
             self._git(root, "read-tree", snapshot["head"], index=temp_index)
             paths = b"".join(item["path"].encode("utf-8", "surrogateescape") + b"\0" for item in snapshot["files"])
             self._git(root, "--literal-pathspecs", "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul", data=paths, index=temp_index, timeout=90)
+            try:
+                repository_lfs.verify_index(lambda *args, **kwargs: self._git(root, *args, **kwargs), snapshot["files"], temp_index)
+            except repository_lfs.LargeFileError as exc:
+                raise RepositoryPublishError(str(exc), code=exc.code) from exc
             if self._snapshot(repo, context, own_index_lock=True)["fingerprint"] != snapshot["fingerprint"] or self._repo(repo)[3] != identity:
                 raise RepositoryPublishError("文件在暂存期间变化，保留工作文件；本仓库延期。", code="worktree_changed")
             self._busy_reason(root)
@@ -3413,7 +3520,7 @@ class RepositoryPublishService:
             return
         if remote and not self._ancestor(root, remote, sha):
             raise RepositoryPublishError("远端领先或分叉，请自行整合；保留原提交。", code="remote_ahead")
-        self._outgoing_safe(root, remote, sha, repo)
+        has_lfs = self._outgoing_safe(root, remote, sha, repo)
         self._busy_reason(root)
         if self._repo(repo)[3] != identity or self._text(root, "rev-parse", "HEAD") != pending["snapshot"]["head"] and not self._ancestor(root, sha, self._text(root, "rev-parse", "HEAD")):
             raise RepositoryPublishError("仓库历史或目标变化，请先核对原提交。", code="destination_changed")
@@ -3423,6 +3530,10 @@ class RepositoryPublishService:
         error = None
         try:
             alias, config = self._transport(repo, root)
+            if has_lfs:
+                self._git(root, "lfs", "push", alias, sha, timeout=1800, config=config,
+                          progress=self._transfer_progress(receipt, item))
+                self._transport_identity(repo, root)
             self._git(root, "push", "--progress", "--no-follow-tags", alias, sha + ":refs/heads/" + repo["branch"],
                       timeout=1800, config=config, progress=self._transfer_progress(receipt, item))
             self._transport_identity(repo, root)
