@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.1.31";
+const consoleUiVersion = "1.1.32";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -394,6 +394,8 @@ const i18n = {
     documentInboxArchive: "归档",
     documentInboxClearAll: "全部清空",
     documentInboxUndo: "撤销",
+    documentInboxUndoClear: "撤销清空",
+    documentInboxDismissNotice: "关闭提示",
     documentOpenReader: "独立窗口阅读",
     documentLocal: "普通本地文件",
     documentPath: "资料文件夹路径",
@@ -1276,6 +1278,8 @@ const i18n = {
     documentInboxArchive: "Archive",
     documentInboxClearAll: "Clear All",
     documentInboxUndo: "Undo",
+    documentInboxUndoClear: "Undo clear",
+    documentInboxDismissNotice: "Dismiss notification",
     documentOpenReader: "Read in a separate window",
     documentLocal: "Local files",
     documentPath: "Library folder path",
@@ -2505,7 +2509,7 @@ const documentLibrary = {
   entries: [], sample: { status: "idle" }, sampleTimer: 0, sampleErrors: 0,
   samplePollBusy: false, pendingSampleReport: null
 };
-const documentInbox = { entries: [], busy: false, loading: false, root: "", view: "inbox", undo: null, sequence: 0, refreshPending: false };
+const documentInbox = { entries: [], busy: false, loading: false, root: "", view: "inbox", undo: null, undoNoticeTimer: 0, sequence: 0, refreshPending: false };
 let documentInboxChannel = null;
 let documentReadingWindow = null;
 let documentOverviewResult = null;
@@ -3212,6 +3216,7 @@ function updateDocumentControls() {
   for (const control of document.querySelectorAll(".document-guide-card button")) control.disabled = busy || !documentLibrary.exists;
   if (documentNode("InboxClearAll")) documentNode("InboxClearAll").disabled = busy || !documentLibrary.exists || !documentInbox.entries.some(entry => documentInboxEntryStatus(entry) === "archive");
   if (documentNode("InboxUndo")) documentNode("InboxUndo").disabled = busy || !documentLibrary.exists || !documentInbox.undo;
+  if (documentNode("InboxUndoRecent")) documentNode("InboxUndoRecent").disabled = busy || !documentLibrary.exists || !documentInbox.undo;
 }
 
 async function documentRequest(endpoint, payload) {
@@ -3807,6 +3812,38 @@ function captureDocumentInboxFocus() {
   return row && active.dataset.inboxAction ? { id: row.dataset.reportId, action: active.dataset.inboxAction } : null;
 }
 
+function renderDocumentInboxUndoNotice() {
+  const undo = documentInbox.undo;
+  const visible = Boolean(undo && undo.noticeVisible !== false);
+  const bar = documentNode("InboxUndoBar"), recent = documentNode("InboxUndoRecent");
+  const focusedInBar = bar.contains(document.activeElement), focusedRecent = document.activeElement === recent;
+  bar.hidden = !visible;
+  documentNode("InboxUndoMessage").textContent = visible
+    ? documentText(`已清空 ${undo.count} 份归档，原文件保留。`, `Cleared ${undo.count} archived reports. Files are kept.`) : "";
+  recent.hidden = !undo || visible || documentInbox.view !== "archive";
+  if (!undo) window.clearTimeout(documentInbox.undoNoticeTimer);
+  if (focusedInBar && bar.hidden || focusedRecent && recent.hidden) {
+    (!recent.hidden && !recent.disabled ? recent : document.querySelector("#documentInboxTabs [aria-selected='true']"))?.focus({ preventScroll: true });
+  }
+}
+
+function dismissDocumentInboxUndoNotice() {
+  window.clearTimeout(documentInbox.undoNoticeTimer);
+  if (documentInbox.undo) documentInbox.undo.noticeVisible = false;
+  renderDocumentInboxUndoNotice();
+}
+
+function scheduleDocumentInboxUndoNotice(undo) {
+  window.clearTimeout(documentInbox.undoNoticeTimer);
+  documentInbox.undoNoticeTimer = window.setTimeout(() => {
+    if (documentInbox.undo !== undo) return;
+    if (documentInbox.busy || documentNode("InboxUndoBar").matches?.(":hover, :focus-within")) {
+      scheduleDocumentInboxUndoNotice(undo); return;
+    }
+    dismissDocumentInboxUndoNotice();
+  }, 12000);
+}
+
 function renderDocumentInbox(options = {}) {
   if (!documentNode("Inbox")) return;
   const focus = captureDocumentInboxFocus() || (document.activeElement === document.body ? options.restoreFocus : null);
@@ -3828,9 +3865,7 @@ function renderDocumentInbox(options = {}) {
     if (selected) documentNode("InboxEntries").setAttribute("aria-labelledby", tab.id);
   }
   documentNode("InboxClearAll").hidden = documentInbox.view !== "archive";
-  documentNode("InboxUndoBar").hidden = !documentInbox.undo;
-  documentNode("InboxUndoMessage").textContent = documentInbox.undo
-    ? documentText(`已清空 ${documentInbox.undo.count} 份归档，原文件保留。`, `Cleared ${documentInbox.undo.count} archived reports. Files are kept.`) : "";
+  renderDocumentInboxUndoNotice();
   const list = documentNode("InboxEntries"); list.replaceChildren();
   for (const entry of groups[documentInbox.view]) {
     const status = documentInboxEntryStatus(entry);
@@ -3941,7 +3976,8 @@ function clearDocumentInboxArchive() {
   if (documentInbox.view !== "archive" || !documentInbox.entries.some(entry => documentInboxEntryStatus(entry) === "archive")) return Promise.resolve(false);
   return mutateDocumentInbox("inbox/archive/clear", {}, (result, root) => {
     if (result.clearedCount > 0 && typeof result.undoToken === "string" && result.undoToken) {
-      documentInbox.undo = { root, token: result.undoToken, count: result.clearedCount };
+      documentInbox.undo = { root, token: result.undoToken, count: result.clearedCount, noticeVisible: true };
+      scheduleDocumentInboxUndoNotice(documentInbox.undo);
     }
   });
 }
@@ -3965,6 +4001,8 @@ function bindDocumentInbox() {
   }
   documentNode("InboxClearAll")?.addEventListener("click", () => void clearDocumentInboxArchive());
   documentNode("InboxUndo")?.addEventListener("click", () => void restoreDocumentInboxArchive());
+  documentNode("InboxUndoRecent")?.addEventListener("click", () => void restoreDocumentInboxArchive());
+  documentNode("InboxUndoDismiss")?.addEventListener("click", dismissDocumentInboxUndoNotice);
   window.addEventListener("resize", syncDocumentInboxTabPill);
   try {
     if (typeof BroadcastChannel === "function") {

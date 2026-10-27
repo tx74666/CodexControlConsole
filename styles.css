@@ -858,9 +858,13 @@ h2 {
 }
 .document-inbox-clear:hover:not(:disabled) { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
 .document-inbox-clear:disabled { opacity: .45; cursor: default; }
-.document-inbox-clear[hidden], .document-inbox-undo[hidden] { display: none !important; }
+.document-inbox-toolbar .document-inline-link { font-size: 12px; white-space: nowrap; }
+.document-inbox-clear[hidden], .document-inbox-undo[hidden], #documentInboxUndoRecent[hidden] { display: none !important; }
 .document-inbox-undo { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 9px 11px; border-radius: 8px; background: var(--card-bg); font-size: 12px; color: var(--soft); }
-.document-inbox-undo button { margin-left: auto; white-space: nowrap; }
+.document-inbox-undo .document-inline-link { margin-left: auto; white-space: nowrap; }
+.document-inbox-notice-dismiss { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font: inherit; font-size: 21px; cursor: pointer; }
+.document-inbox-notice-dismiss:hover { background: var(--panel); color: var(--text); }
+.document-inbox-notice-dismiss:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 .document-inbox-entries { display: grid; gap: 8px; min-width: 0; }
 .document-inbox-entry {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px;

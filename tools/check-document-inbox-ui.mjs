@@ -52,7 +52,7 @@ function createInbox() {
     },
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   };
-  for (const suffix of ["Inbox", "UnreadBadge", "InboxTabs", "InboxTabPill", "InboxEntries", "InboxClearAll", "InboxUndoBar", "InboxUndoMessage", "InboxUndo", "InboxTabInbox", "InboxTabLater", "InboxTabArchive", "InboxCountInbox", "InboxCountLater", "InboxCountArchive"]) {
+  for (const suffix of ["Inbox", "UnreadBadge", "InboxTabs", "InboxTabPill", "InboxEntries", "InboxClearAll", "InboxUndoBar", "InboxUndoMessage", "InboxUndo", "InboxUndoRecent", "InboxUndoDismiss", "InboxTabInbox", "InboxTabLater", "InboxTabArchive", "InboxCountInbox", "InboxCountLater", "InboxCountArchive"]) {
     const element = new Element(suffix.startsWith("InboxTab") && suffix !== "InboxTabs" && suffix !== "InboxTabPill" ? "button" : "div"); element.id = `document${suffix}`; elements.set(suffix, element); body.appendChild(element);
   }
   for (const [index, name] of ["Inbox", "Later", "Archive"].entries()) {
@@ -75,7 +75,7 @@ function createInbox() {
     flushDocumentResourcesPending() {},
     withDocumentAction: async () => { throw new Error("Reader popup unexpectedly failed"); }, URL, URLSearchParams,
     BroadcastChannel: class { constructor(name) { this.name = name; this.messages = []; channels.push(this); } postMessage(message) { this.messages.push(clone(message)); } receive(message) { this.onmessage?.({ data: message }); } },
-    window: { location: { href: "http://127.0.0.1:55319/workspace.html" }, requestAnimationFrame: action => action(), addEventListener: (event, action) => { windowEvents[event] = action; }, open(url, name) { const reader = { location: { href: url }, closed: false, focus() {} }; opened.push({ url, name }); return reader; } },
+    window: { location: { href: "http://127.0.0.1:55319/workspace.html" }, setTimeout() { return 0; }, clearTimeout() {}, requestAnimationFrame: action => action(), addEventListener: (event, action) => { windowEvents[event] = action; }, open(url, name) { const reader = { location: { href: url }, closed: false, focus() {} }; opened.push({ url, name }); return reader; } },
     async documentRequest(endpoint, payload) {
       calls.push({ endpoint, payload: clone(payload) });
       assert.equal(payload?.expectedRoot || new URLSearchParams(endpoint.split("?")[1]).get("expectedRoot"), library.root, "expectedRoot guard missing");
