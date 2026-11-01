@@ -27,6 +27,8 @@ class Element {
   click() { return this.emit('click'); }
 }
 const flush = async () => { for (let i = 0; i < 7; i++) await new Promise(resolve => setImmediate(resolve)); };
+const arrow = (card, action) => card.querySelectorAll('button').find(button => button.dataset.variantNavigate === action);
+const position = card => card.querySelectorAll('span').find(element => element.className === 'variant-position')?.textContent;
 const originalRoot = 'D:\\Fixture Images';
 const image = { path: 'sample 64x64.png', title: '<img src=x onerror=alert(1)>', width: 64, height: 64, sha256: 'a'.repeat(64), space: 'root' };
 const candidate = { id: 'candidate1', status: 'conflict', incoming: { ...image, path: 'inbox/sample.png' }, existing: { ...image, space: 'device', sha256: 'b'.repeat(64) }, actions: ['replace', 'keep', 'add'] };
@@ -201,19 +203,20 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   let logoGroup = grouped.elements.imageGrid.children.find(element => element.dataset.groupId === 'logo');
   assert.equal(logoGroup.querySelector('h3').textContent, 'Logo');
   assert(logoGroup.querySelectorAll('span').some(element => element.textContent === '2 方案 · 2 尺寸'), 'Only explicit derivative links share a scheme count');
-  assert.equal(logoGroup.querySelectorAll('button').filter(element => element.dataset.variantPath).length, 2, 'Both same-size schemes must be accessible');
-  await logoGroup.querySelectorAll('button').find(element => element.dataset.variantPath === logoB.path).click();
+  assert.equal(logoGroup.querySelectorAll('button').filter(element => element.dataset.variantNavigate).length, 2, 'Both arrows browse the real same-size schemes');
+  assert.equal(position(logoGroup), '1 / 2');
+  await arrow(logoGroup, 'next').click();
   logoGroup = grouped.elements.imageGrid.children.find(element => element.dataset.groupId === 'logo');
   assert.equal(new URL(logoGroup.querySelector('img').src, 'http://fixture').searchParams.get('path'), logoB.path);
   logoGroup.querySelector('select').value = '320 × 180';
   await logoGroup.querySelector('select').emit('change');
   logoGroup = grouped.elements.imageGrid.children.find(element => element.dataset.groupId === 'logo');
   assert(logoGroup.querySelectorAll('span').some(element => element.className === 'derivative-badge'));
-  assert.equal(logoGroup.querySelectorAll('button').filter(element => element.dataset.variantPath).length, 1);
+  assert.equal(logoGroup.querySelectorAll('button').filter(element => element.dataset.variantNavigate).length, 0, 'A single image at this size needs no navigation arrows');
   logoGroup.querySelector('select').value = '1280 × 720';
   await logoGroup.querySelector('select').emit('change');
   logoGroup = grouped.elements.imageGrid.children.find(element => element.dataset.groupId === 'logo');
-  assert(logoGroup.querySelectorAll('button').find(element => element.dataset.variantPath === logoA.path).attributes['aria-pressed'] === 'true', 'Changing size must preserve an explicitly linked scheme where available');
+  assert.equal(logoGroup.dataset.currentPath, logoA.path, 'Changing size must preserve an explicitly linked scheme where available');
   const togoGroup = grouped.elements.imageGrid.children.find(element => element.dataset.groupId === 'transparent-logo');
   assert.equal(togoGroup.querySelector('h3').textContent, '透明Logo');
   assert(togoGroup.querySelectorAll('p').some(element => element.textContent.includes('Togo.png')), 'Display alias must retain original filename');
@@ -257,6 +260,138 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   await pendingSource.elements.metadataForm.emit('submit');
   assert.equal(Object.hasOwn(pendingSource.requests.findLast(request => request.action === 'metadata').body, 'derivedFromId'), false, 'Unchanged pending source must not be silently cleared or guessed');
   assert(pendingSource.elements.candidateList.querySelectorAll('p').some(element => element.textContent.includes('保留来源的方案')));
+  const logoC = { ...logoA, id: 'logo-c', path: 'Logo (3).png', name: 'Logo (3).png', assetId: 'c', sha256: 'c', variantId: 'vc', variantLabel: '方案3' };
+  const playtestLogo = { ...logoA, id: 'playtest-logo', path: 'Playtest Logo.png', assetId: 'pt', sha256: 'pt', groupId: 'playtest-logo', variantId: 'vpt' };
+  const carousel = boot({ ...groupedState, items: [logoA, logoB, logoC, logoSmall, playtestLogo] }); await flush();
+  const mainCard = () => carousel.elements.imageGrid.children.find(card => card.dataset.groupId === 'logo');
+  const nav = card => card.querySelectorAll('*').find(element => element.className === 'variant-navigation');
+  assert.equal(carousel.elements.imageGrid.children.length, 2, 'Existing distinct main/Playtest purpose IDs must not become alternatives of one card');
+  assert.equal(position(mainCard()), '1 / 3', 'Only actual same-size originals appear in the option counter');
+  assert.equal(mainCard().querySelectorAll('img').length, 1, 'Arrow navigation must not repeat the main image in a thumbnail strip');
+  await arrow(mainCard(), 'next').click();
+  assert.equal(mainCard().dataset.currentPath, logoB.path);
+  assert.equal(position(mainCard()), '2 / 3');
+  assert.equal(carousel.doc.activeElement, arrow(mainCard(), 'next'), 'Pointer navigation must restore focus to the same arrow after rendering');
+  await arrow(mainCard(), 'next').click(); assert.equal(mainCard().dataset.currentPath, logoC.path);
+  await arrow(mainCard(), 'next').click(); assert.equal(mainCard().dataset.currentPath, logoA.path, 'Next wraps from the third real option to the first');
+  await arrow(mainCard(), 'previous').click(); assert.equal(mainCard().dataset.currentPath, logoC.path, 'Previous wraps from first to last');
+  await nav(mainCard()).emit('keydown', { key: 'Home', target: arrow(mainCard(), 'previous') });
+  assert.equal(mainCard().dataset.currentPath, logoA.path);
+  await nav(mainCard()).emit('keydown', { key: 'End', target: arrow(mainCard(), 'next') });
+  assert.equal(mainCard().dataset.currentPath, logoC.path);
+  await nav(mainCard()).emit('keydown', { key: 'ArrowRight', target: arrow(mainCard(), 'next') });
+  assert.equal(mainCard().dataset.currentPath, logoA.path);
+  await nav(mainCard()).emit('keydown', { key: 'ArrowLeft', target: arrow(mainCard(), 'previous') });
+  assert.equal(mainCard().dataset.currentPath, logoC.path);
+  await mainCard().querySelectorAll('button').find(button => button.className === 'thumbnail-button').click();
+  assert.match(carousel.elements.previewMeta.textContent, /Logo \(3\)\.png/, 'Preview must follow the selected option');
+  await carousel.elements.closePreview.click();
+  await mainCard().querySelectorAll('button').find(button => button.dataset.metadataPath).click();
+  assert.match(carousel.elements.metadataOriginal.textContent, /Logo \(3\)\.png/, 'Option editor must target the selected original');
+  assert.equal(carousel.elements.metadataVariantLabel.value, '方案3');
+  await carousel.elements.metadataClose.click();
+  await nav(mainCard()).emit('keydown', { key: 'Home', target: arrow(mainCard(), 'previous') });
+  mainCard().querySelector('select').value = '320 × 180'; await mainCard().querySelector('select').emit('change');
+  assert.equal(mainCard().dataset.currentPath, logoSmall.path);
+  assert.equal(position(mainCard()), undefined, 'A derivative size is a size choice rather than another same-size option');
+  assert(!arrow(mainCard(), 'next'));
+  mainCard().querySelector('select').value = '1280 × 720'; await mainCard().querySelector('select').emit('change');
+  assert.equal(mainCard().dataset.currentPath, logoA.path, 'Returning from a derivative preserves its explicitly linked original scheme');
+  assert.equal(position(mainCard()), '1 / 3');
+  assert(!arrow(carousel.elements.imageGrid.children.find(card => card.dataset.groupId === playtestLogo.groupId), 'next'));
+  assert.equal(carousel.requests.filter(request => request.options.method === 'POST').length, 0, 'Browsing, previews, size selection and opening an editor must not write or create assets');
+  const inboxOptions = [logoA, logoB, logoC].map((item, index) => ({ id: `inbox-option-${index + 1}`, status: 'new', incoming: { ...item, path: `inbox/${item.path}` }, existing: null, actions: ['add','keep'] }));
+  const inboxOptionsPlan = { id: 'three-inbox-options', candidates: inboxOptions };
+  const inboxCarousel = boot({ ...groupedState, plan: inboxOptionsPlan, inboxCount: 3 }); await flush();
+  const inboxCard = () => inboxCarousel.elements.candidateList.children[0];
+  const selectedRadio = () => inboxCard().querySelectorAll('input').find(input => input.checked);
+  assert.equal(inboxCarousel.elements.candidateList.children.length, 1, 'Same-purpose, same-size new Inbox originals share one browsing card');
+  assert.equal(inboxCarousel.elements.reviewCount.textContent, '3 项待确认', 'Review count must be original candidates rather than visible cards');
+  assert.match(inboxCarousel.elements.reviewNote.textContent, /每张图片分别选择.*全部候选.*左右切换/);
+  assert.equal(inboxCard().dataset.candidateId, inboxOptions[0].id);
+  assert.equal(selectedRadio().value, 'add', 'The existing new-candidate add default remains unchanged');
+  await inboxCard().querySelectorAll('input').find(input => input.value === 'keep').emit('change');
+  await arrow(inboxCard(), 'next').click();
+  assert.equal(inboxCard().dataset.candidateId, inboxOptions[1].id);
+  assert.equal(selectedRadio().value, 'add', 'Other candidates retain their own default when the first is kept out');
+  await arrow(inboxCard(), 'next').click();
+  assert.equal(inboxCard().dataset.candidateId, inboxOptions[2].id);
+  await inboxCard().querySelectorAll('input').find(input => input.value === 'keep').emit('change');
+  await arrow(inboxCard(), 'next').click();
+  assert.equal(inboxCard().dataset.candidateId, inboxOptions[0].id);
+  assert.equal(selectedRadio().value, 'keep', 'The first candidate decision survives a full cycle');
+  await nav(inboxCard()).emit('keydown', { key: 'End', target: arrow(inboxCard(), 'next') });
+  assert.equal(inboxCard().dataset.candidateId, inboxOptions[2].id);
+  assert.equal(selectedRadio().value, 'keep');
+  await nav(inboxCard()).emit('keydown', { key: 'Home', target: selectedRadio() });
+  assert.equal(inboxCard().dataset.candidateId, inboxOptions[2].id, 'Navigation key handling must not consume radio/form keys');
+  await inboxCard().querySelectorAll('button').find(button => button.dataset.metadataPath).click();
+  assert.match(inboxCarousel.elements.metadataOriginal.textContent, /inbox\/Logo \(3\)\.png/);
+  await inboxCarousel.elements.metadataClose.click();
+  assert.equal(inboxCarousel.requests.filter(request => request.options.method === 'POST').length, 0, 'Inbox browsing and local decision changes are zero-write until explicit confirmation');
+  const inboxReload = boot({ ...groupedState, plan: inboxOptionsPlan, inboxCount: 3 }, inboxCarousel.storage); await flush();
+  const reloadedCard = () => inboxReload.elements.candidateList.children[0];
+  assert.equal(reloadedCard().querySelectorAll('input').find(input => input.value === 'keep').checked, true);
+  await arrow(reloadedCard(), 'next').click();
+  assert.equal(reloadedCard().querySelectorAll('input').find(input => input.value === 'add').checked, true);
+  await arrow(reloadedCard(), 'next').click();
+  assert.equal(reloadedCard().querySelectorAll('input').find(input => input.value === 'keep').checked, true);
+  inboxCarousel.replies.set('apply', { ok: false, status: 409, body: { error: 'plan_stale' } });
+  await inboxCarousel.elements.reviewApply.click(); await flush();
+  assert.deepEqual(inboxCarousel.requests.findLast(request => request.action === 'apply').body.decisions, inboxOptions.map((item, index) => ({ id: item.id, action: index === 1 ? 'add' : 'keep' })), 'Confirmation must submit every original candidate, including currently hidden options');
+  const exceptions = [
+    { ...inboxOptions[0], id: 'other-purpose', incoming: { ...inboxOptions[0].incoming, groupId: playtestLogo.groupId } },
+    { ...inboxOptions[0], id: 'other-size', incoming: { ...inboxOptions[0].incoming, width: 320, height: 180 } },
+    { ...inboxOptions[0], id: 'other-space', incoming: { ...inboxOptions[0].incoming, space: 'device' } },
+    { ...inboxOptions[0], id: 'unknown-size', incoming: { ...inboxOptions[0].incoming, width: null } },
+    { ...inboxOptions[0], id: 'string-size', incoming: { ...inboxOptions[0].incoming, width: '1280' } },
+    { ...inboxOptions[0], id: 'zero-size', incoming: { ...inboxOptions[0].incoming, height: 0 } },
+    { ...inboxOptions[0], id: 'conflict-stays-separate', status: 'conflict', existing: logoB, actions: ['add','keep','replace'] },
+    { ...inboxOptions[0], id: 'duplicate-stays-separate', status: 'duplicate', existing: logoB },
+    { ...inboxOptions[0], id: 'ambiguous-stays-separate', status: 'ambiguous', matches: [logoA,logoB] },
+    { ...inboxOptions[0], id: 'new-match-stays-separate', matches: [logoA] },
+    { ...inboxOptions[0], id: 'new-existing-stays-separate', existing: logoA }
+  ];
+  const isolated = boot({ ...groupedState, plan: { id: 'isolated-new-buckets', candidates: [...inboxOptions, ...exceptions] } }); await flush();
+  assert.equal(isolated.elements.candidateList.children.length, exceptions.length + 1, 'Only new candidates with exact purpose, actual positive integer dimensions and space may share a card');
+  assert.equal(isolated.elements.reviewApply.disabled, true, 'An unresolved conflict outside the displayed option still blocks confirmation');
+  assert(isolated.elements.candidateList.children.filter(card => ['conflict','duplicate','ambiguous'].includes(card.dataset.status)).every(card => !arrow(card, 'next') && card.querySelectorAll('img').length >= 2), 'Conflicts and duplicate/ambiguous comparisons must remain complete individual cards');
+  assert.equal(isolated.requests.filter(request => request.options.method === 'POST').length, 0);
+  const fallbackPurpose = boot({ ...groupedState, plan: { id: 'fallback-purpose', candidates: inboxOptions.map((candidate, index) => ({ ...candidate, incoming: { ...candidate.incoming, groupId: '', groupTitle: ['Icône','ICÔNE','Ico\u0302ne'][index] } })) } }); await flush();
+  assert.equal(fallbackPurpose.elements.candidateList.children.length, 1, 'A missing group ID falls back to the existing normalized purpose/title semantics');
+  assert.equal(position(fallbackPurpose.elements.candidateList.children[0]), '1 / 3');
+  const explicitPurpose = boot({ ...groupedState, items: [logoA,{ ...logoB, path: 'Playtest/Logo.png' }] }); await flush();
+  assert.equal(explicitPurpose.elements.imageGrid.children.length, 1, 'A path name must not override an explicitly shared purpose group');
+  assert.equal(position(explicitPurpose.elements.imageGrid.children[0]), '1 / 2');
+  const sameHashNew = boot({ ...groupedState, plan: { id: 'independent-new-identities', candidates: [inboxOptions[0], { ...inboxOptions[1], incoming: { ...inboxOptions[1].incoming, sha256: inboxOptions[0].incoming.sha256 } }] } }); await flush();
+  assert.equal(position(sameHashNew.elements.candidateList.children[0]), '1 / 2', 'UI grouping does not deduplicate distinct new candidate IDs or alter their defaults');
+  await arrow(sameHashNew.elements.candidateList.children[0], 'next').click();
+  assert.equal(sameHashNew.elements.candidateList.children[0].dataset.candidateId, inboxOptions[1].id);
+  assert.equal(sameHashNew.elements.candidateList.children[0].querySelectorAll('input').find(input => input.value === 'add').checked, true);
+  let releaseScan;
+  const busyBrowse = boot({ ...groupedState, items: [logoA,logoB,logoC], plan: inboxOptionsPlan }); await flush();
+  busyBrowse.replies.set('scan', () => new Promise(resolve => { releaseScan = resolve; }));
+  const runningScan = busyBrowse.elements.scanImages.click(); await flush();
+  const busyGallery = busyBrowse.elements.imageGrid.children[0], busyInbox = busyBrowse.elements.candidateList.children[0];
+  assert.equal(arrow(busyGallery, 'next').disabled, true); assert.equal(arrow(busyInbox, 'next').disabled, true);
+  assert.equal(busyGallery.querySelector('select').disabled, true);
+  await arrow(busyGallery, 'next').click(); await arrow(busyInbox, 'next').click();
+  await nav(busyGallery).emit('keydown', { key: 'End', target: arrow(busyGallery, 'next') });
+  assert.equal(busyBrowse.elements.imageGrid.children[0].dataset.currentPath, logoA.path);
+  assert.equal(busyBrowse.elements.candidateList.children[0].dataset.candidateId, inboxOptions[0].id);
+  releaseScan({ body: { ...inboxOptionsPlan, state: { ...groupedState, items: [logoA,logoB,logoC], plan: inboxOptionsPlan } } });
+  await runningScan;
+  assert.equal(arrow(busyBrowse.elements.imageGrid.children[0], 'next').disabled, false);
+  assert.deepEqual(busyBrowse.requests.filter(request => request.options.method === 'POST').map(request => request.action), ['scan'], 'Busy navigation must not enqueue a write or change the selected original');
+  const pendingBrowse = boot({ ...groupedState, items: [logoA,logoB,logoC], plan: inboxOptionsPlan, notion: { canAttempt: true } }); await flush();
+  pendingBrowse.replies.set('sync', request => ({ body: { operation: { requestId: request.body.requestId, status: 'unknown', message: '原请求待核对' } } }));
+  pendingBrowse.elements.syncSource.value = 'console'; pendingBrowse.elements.syncTarget.value = 'notion';
+  await pendingBrowse.elements.syncImages.click();
+  assert.equal(arrow(pendingBrowse.elements.imageGrid.children[0], 'next').disabled, true);
+  assert.equal(arrow(pendingBrowse.elements.candidateList.children[0], 'next').disabled, true);
+  await arrow(pendingBrowse.elements.imageGrid.children[0], 'next').click();
+  assert.equal(pendingBrowse.elements.imageGrid.children[0].dataset.currentPath, logoA.path);
+  assert.deepEqual(pendingBrowse.requests.filter(request => request.options.method === 'POST').map(request => request.action), ['sync'], 'Uncertain pending operation navigation cannot start another request');
   const pageA = '11111111-1111-1111-1111-111111111111', pageB = '22222222-2222-2222-2222-222222222222';
   const editedLogo = { ...logoA, variantLabel: '保存的新方案名' };
   const metadataState = { ...groupedState, notionPage: `https://www.notion.so/${pageA}`, notion: { canAttempt: true, verified: true, pageId: pageA }, plan: addPlan };
@@ -476,14 +611,14 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   for (const id of ['imageManagerOpen','steamworkAssetList','steamworkAssetRoot','steamworkAssetSummary','steamworkAssetFileInput']) assert(!indexSource.includes(`id="${id}"`), `Removed checklist/extra entry must stay absent: ${id}`);
   assert(!indexSource.includes('href="image-manager.html"'), 'Primary Image experience must not be an extra standalone link');
   assert(html.includes('href="/steamwork.html"'), 'Standalone compatibility page must return to the actual Image host');
-  const eightPlan = { ...addPlan, candidates: Array.from({ length: 8 }, (_, i) => ({ ...addPlan.candidates[0], id: `inbox-${i}`, incoming: { ...image, path: `inbox/new-${i}.png` } })) };
+  const eightPlan = { ...addPlan, candidates: Array.from({ length: 8 }, (_, i) => ({ ...addPlan.candidates[0], id: `inbox-${i}`, incoming: { ...image, groupId: `purpose-${i}`, groupTitle: `用途 ${i + 1}`, path: `inbox/new-${i}.png` } })) };
   const embeddedApp = boot({ ...groupedState, plan: eightPlan, inboxCount: 8 }, makeStorage(), { height: 600 }); await flush();
   assert.equal(embeddedApp.doc.documentElement.dataset.embed, 'steamwork');
   assert.equal(embeddedApp.elements.reviewSection.dataset.expanded, 'false', 'Restored Inbox must not push the primary gallery below eight review cards');
   assert.equal(embeddedApp.elements.candidateList.children.length, 8, 'Collapsing reviews must preserve the real plan');
   assert.equal(embeddedApp.elements.imageGrid.children.length, 2);
-  assert.equal(embeddedApp.elements.imageGrid.children.find(card => card.dataset.groupId === 'transparent-logo').querySelectorAll('button').filter(button => button.dataset.variantPath).length, 0, 'A single option must not repeat the full preview as a thumbnail');
-  assert.equal(embeddedApp.elements.imageGrid.children.find(card => card.dataset.groupId === 'logo').querySelectorAll('button').filter(button => button.dataset.variantPath).length, 2, 'All real alternative options must remain switchable');
+  assert.equal(embeddedApp.elements.imageGrid.children.find(card => card.dataset.groupId === 'transparent-logo').querySelectorAll('button').filter(button => button.dataset.variantNavigate).length, 0, 'A single option needs neither arrows nor a redundant thumbnail');
+  assert.equal(embeddedApp.elements.imageGrid.children.find(card => card.dataset.groupId === 'logo').querySelectorAll('button').filter(button => button.dataset.variantNavigate).length, 2, 'All real alternative options must remain switchable');
   await embeddedApp.elements.reviewToggle.click();
   assert.equal(embeddedApp.elements.reviewSection.dataset.expanded, 'true');
   await embeddedApp.elements.reviewToggle.click();
@@ -561,4 +696,5 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   console.log('PASS: Inbox metadata projection retains choices; missing remote derivative source stays pending and is preserved unless explicitly changed.');
   console.log('PASS: Explicit same-request catalog resume only after GET; ordinary unknown/load stay GET-only; root/page/source/target/request changes refuse; footer uses only completed operations without remaining targets.');
   console.log('PASS save-and-sync: dirty/no-op gating, save-only/reopen/reload, fixed Console authority, no Inbox import/publish, failed-save draft, unsaved-location guard, root/page/device/asset/annotation late-result refusal, same-request unknown verification, partial-target retry, and device metadata-only/new/review completion.');
+  console.log('PASS option arrows: three real originals cycle with pointer and scoped keyboard/focus, no single-image arrows or thumbnail duplication, explicit size/lineage and main/Playtest grouping retained, Inbox choices persist per candidate through browsing/reload/full-plan confirmation, unsafe buckets stay separate, and busy browsing is zero-write.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

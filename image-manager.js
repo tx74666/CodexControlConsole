@@ -29,6 +29,7 @@
   let metadataBaseline = "";
   let metadataJob = null;
   const groupSelections = new Map();
+  const candidateSelections = new Map();
   const continuations = new Map();
   const pendingStatuses = new Set(["pending", "queued", "running", "in_progress", "starting"]);
   const completeStatuses = new Set(["completed", "succeeded", "success", "done", "needs_review"]);
@@ -203,6 +204,43 @@
   const groupTitle = item => str(item?.groupTitle) || title(item);
   const variantTitle = item => str(item?.variantLabel) || "未标注方案";
   const imageKey = item => `${str(item?.space) || "root"}:${str(item?.path)}:${str(item?.sha256)}`;
+  const purposeKey = item => str(item?.groupId) || groupTitle(item).normalize("NFC").toLocaleLowerCase();
+  function variantNavigation({ key, count, index, label, container, select }) {
+    if (count < 2) return null;
+    const navigation = node("div", "variant-navigation");
+    navigation.setAttribute("role", "group");
+    navigation.setAttribute("aria-label", `${label}的方案浏览`);
+    const move = (next, action) => {
+      if (busy || pendingOperation) return;
+      select((next + count) % count);
+      [...byId(container).querySelectorAll("button")].find(button => button.dataset.navigatorKey === key && button.dataset.variantNavigate === action)?.focus({ preventScroll: true });
+    };
+    for (const [action, text, offset] of [["previous", "‹", -1], ["next", "›", 1]]) {
+      const button = node("button", "variant-arrow", text);
+      button.type = "button";
+      button.dataset.navigatorKey = key;
+      button.dataset.variantNavigate = action;
+      button.disabled = busy || Boolean(pendingOperation);
+      button.setAttribute("aria-label", `${label}，${offset < 0 ? "上一个" : "下一个"}方案，当前 ${index + 1} / ${count}`);
+      button.addEventListener("click", () => move(index + offset, action));
+      if (action === "next") {
+        const position = node("span", "variant-position", `${index + 1} / ${count}`);
+        position.setAttribute("role", "status");
+        position.setAttribute("aria-live", "polite");
+        position.setAttribute("aria-label", `${label}，第 ${index + 1} 个，共 ${count} 个方案`);
+        navigation.append(position);
+      }
+      navigation.append(button);
+    }
+    navigation.addEventListener("keydown", event => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || event.altKey || event.ctrlKey || event.metaKey
+          || !event.target?.dataset?.variantNavigate) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? 0 : event.key === "End" ? count - 1 : index + (event.key === "ArrowLeft" ? -1 : 1);
+      move(next, event.target.dataset.variantNavigate);
+    });
+    return navigation;
+  }
   function schemeKey(item) {
     const items = Array.isArray(state?.items) ? state.items : [];
     const seen = new Set();
@@ -238,6 +276,10 @@
     byId("metadataClose").disabled = busy;
     updateMetadataControls();
     for (const button of document.querySelectorAll?.("button") || []) if (button.dataset.metadataPath) button.disabled = busy || Boolean(pendingOperation);
+    for (const container of [byId("imageGrid"), byId("candidateList")]) {
+      for (const button of container.querySelectorAll("button")) if (button.dataset.variantNavigate) button.disabled = busy || Boolean(pendingOperation);
+      for (const select of container.querySelectorAll("select")) if (select.dataset.variantSize) select.disabled = busy || Boolean(pendingOperation);
+    }
     for (const fieldset of byId("candidateList").querySelectorAll("fieldset")) fieldset.disabled = busy;
     const selected = plan?.candidates?.filter(candidate => actions.has(decisions.get(str(candidate.id)))) || [];
     const unresolved = (plan?.candidates?.length || 0) - selected.length;
@@ -418,6 +460,19 @@
     if (candidate.status === "conflict") return "同标题与尺寸已有图片，内容不同。可以用新图替换，也可以保留为另一方案。";
     return "新图片，确认后加入图库。";
   }
+  function candidateGroups(candidates) {
+    const groups = new Map();
+    for (const candidate of candidates) {
+      const item = metadata(candidate.incoming) || metadata(candidate.source);
+      const compact = candidate.status === "new" && !metadata(candidate.existing) && !metadata(candidate.target)
+        && (!Array.isArray(candidate.matches) || candidate.matches.length === 0);
+      const sized = Number.isInteger(item?.width) && item.width > 0 && Number.isInteger(item?.height) && item.height > 0;
+      const key = compact && sized ? JSON.stringify([purposeKey(item), item.width, item.height, str(item.space) || "root"]) : `candidate:${str(candidate.id)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(candidate);
+    }
+    return groups;
+  }
   function renderPlan() {
     const list = byId("candidateList");
     const focus = document.activeElement?.dataset?.candidateId ? { id: document.activeElement.dataset.candidateId, action: document.activeElement.value } : null;
@@ -429,10 +484,13 @@
     if (embedded) byId("reviewTitle").textContent = state?.inboxCount ? "Inbox" : "图片确认";
     setReviewExpanded(reviewExpanded);
     const next = readContinuation(planId(plan));
-    byId("reviewNote").textContent = next ? `确认这些图片后，将自动继续同步到${next.target === "notion" ? " Notion" : "设备文件夹"}${next.next ? "及额外设备文件夹" : ""}。重复与替换候选由你选择。` : "新图在左，已有图片在右。重复与替换候选由你选择；同尺寸不代表同一张图。";
+    byId("reviewNote").textContent = next ? `确认这些图片后，将自动继续同步到${next.target === "notion" ? " Notion" : "设备文件夹"}${next.next ? "及额外设备文件夹" : ""}。重复与替换候选由你选择。` : "每张图片分别选择；确认会处理全部候选。同用途、同尺寸可左右切换，冲突卡保留新旧对照。";
     byId("planWarnings").hidden = warnings.length === 0;
     byId("planWarnings").textContent = warnings.length ? `以下 ${warnings.length} 项未处理：\n${warnings.slice(0, 6).map(value => typeof value === "string" ? value : `${str(value.path || value.file)} ${str(value.error || value.message)}`).join("\n")}${warnings.length > 6 ? "\n其余记录保留在本次检查中。" : ""}` : "";
-    for (const candidate of candidates) {
+    for (const [group, groupCandidates] of candidateGroups(candidates)) {
+      const selectionKey = `${root}:${planId(plan)}:${group}`;
+      const candidate = groupCandidates.find(value => str(value.id) === candidateSelections.get(selectionKey)) || groupCandidates[0];
+      candidateSelections.set(selectionKey, str(candidate.id));
       const id = str(candidate.id);
       const incoming = metadata(candidate.incoming) || metadata(candidate.source);
       const existing = metadata(candidate.existing) || metadata(candidate.target);
@@ -440,6 +498,7 @@
       const compact = candidate.status === "new" && !existing && matches.length === 0;
       const card = node("article", compact ? "candidate-card compact-new" : "candidate-card");
       card.dataset.status = str(candidate.status);
+      card.dataset.candidateId = id;
       const heading = node("div", "candidate-heading");
       heading.append(node("h3", "", title(incoming || existing)), node("span", "match-tag", statusLabels[candidate.status] || "请比较图片"));
       const currentPurpose = groupTitle(incoming || existing);
@@ -482,6 +541,12 @@
         choices.append(choice);
       }
       card.append(heading, purpose, comparison);
+      const navigation = variantNavigation({ key: selectionKey, count: groupCandidates.length, index: groupCandidates.indexOf(candidate),
+        label: `${currentPurpose}，${dimensions(incoming)}`, container: "candidateList", select: index => {
+          candidateSelections.set(selectionKey, str(groupCandidates[index].id));
+          renderPlan();
+        } });
+      if (navigation) card.append(navigation);
       if (!compact) card.append(node("p", "candidate-reason", candidateReason(candidate)));
       card.append(choices);
       list.append(card);
@@ -495,7 +560,7 @@
     const groups = new Map();
     for (const item of items) {
       if (!metadata(item)) continue;
-      const id = str(item.groupId) || groupTitle(item).normalize("NFC").toLocaleLowerCase();
+      const id = purposeKey(item);
       if (!groups.has(id)) groups.set(id, { id, title: groupTitle(item), items: [] });
       groups.get(id).items.push(item);
     }
@@ -519,11 +584,14 @@
     groupSelections.set(key, selection);
     const card = node("article", "asset-group-card");
     card.dataset.groupId = group.id;
+    card.dataset.currentPath = str(selected.path);
     const header = node("div", "asset-group-header");
     const schemeCount = new Set(group.items.map(schemeKey)).size;
     header.append(node("h3", "", group.title), node("span", "asset-group-stats", `${schemeCount} 方案 · ${sizes.length} 尺寸`));
     const sizeField = node("label", "asset-size-field");
     const select = node("select");
+    select.dataset.variantSize = "true";
+    select.disabled = busy || Boolean(pendingOperation);
     select.setAttribute("aria-label", `${group.title}的尺寸`);
     for (const size of sizes) {
       const option = node("option", "", `${size} · ${group.items.filter(item => dimensions(item) === size).length} 张`);
@@ -532,6 +600,7 @@
     }
     select.value = selection.size;
     select.addEventListener("change", () => {
+      if (busy || pendingOperation) return;
       selection.size = select.value;
       const previousVariant = schemeKey(selected);
       const sameVariant = group.items.find(item => dimensions(item) === select.value && previousVariant && schemeKey(item) === previousVariant);
@@ -545,30 +614,12 @@
     if (selected.derivedFromId) preview.append(node("span", "derivative-badge", "派生尺寸 · 已关联来源"));
     else if (selected.pendingDerivedFromId) preview.append(node("span", "derivative-badge", "派生来源待同步 / 待关联"));
     if (selected.hasTransparency === true) preview.append(node("span", "transparency-badge", "含透明区域"));
-    const strip = node("div", "asset-variant-strip");
-    strip.setAttribute("role", "group");
-    strip.setAttribute("aria-label", `${group.title}，${selection.size}的已有方案`);
-    for (const item of variants) {
-      const button = node("button", "asset-variant-button");
-      button.type = "button";
-      button.dataset.variantPath = str(item.path);
-      button.setAttribute("aria-pressed", String(imageKey(item) === selection.image));
-      button.setAttribute("aria-label", `查看${variantTitle(item)}，原文件${originalName(item)}`);
-      const image = node("img");
-      image.alt = title(item);
-      image.loading = "lazy";
-      image.decoding = "async";
-      image.src = previewUrl(item);
-      button.append(image, node("span", "", variantTitle(item)));
-      button.title = `${variantTitle(item)} · ${originalName(item)}`;
-      button.addEventListener("click", () => {
-        selection.image = imageKey(item);
+    const navigation = variantNavigation({ key, count: variants.length, index: variants.indexOf(selected),
+      label: `${group.title}，${selection.size}`, container: "imageGrid", select: index => {
+        selection.image = imageKey(variants[index]);
         renderCollection();
-        [...byId("imageGrid").querySelectorAll("button")].find(element => element.dataset.variantPath === str(item.path))?.focus({ preventScroll: true });
-      });
-      strip.append(button);
-    }
-    if (!embedded || variants.length > 1) preview.append(strip);
+      } });
+    if (navigation) preview.append(navigation);
     const footer = node("div", "asset-group-footer");
     footer.append(node("p", "image-path", `原文件：${str(selected.path)}`), metadataButton(selected));
     card.append(header, sizeField, preview, footer);
