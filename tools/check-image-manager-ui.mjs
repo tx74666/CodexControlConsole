@@ -40,10 +40,12 @@ const candidate = { id: 'candidate1', status: 'conflict', incoming: { ...image, 
 const review = { id: 'plan1', planId: 'plan1', candidates: [candidate], errors: [] };
 const initialState = { root: originalRoot, deviceRoot: 'E:\\Fixture Export', notionPage: '', items: [image], inboxCount: 1, plan: review };
 function makeStorage(existing = new Map()) { return { getItem: key => existing.get(key) || null, setItem: (key, value) => existing.set(key, value), removeItem: key => existing.delete(key), existing }; }
-function boot(initial, storage = makeStorage(), embedOptions = null) {
+function boot(initial, storage = makeStorage(), embedOptions = null, watchOptions = null) {
   const elements = {};
   const docEvents = {}, windowEvents = {};
   let documentFocused = true;
+  let clockNow = 0, clockId = 0, frameVisible = watchOptions?.frameVisible !== false;
+  const timers = new Map();
   const doc = { getElementById: id => elements[id], createElement: tag => new Element(tag, doc), documentElement: { dataset: {} }, addEventListener: (type, listener) => { (docEvents[type] ||= []).push(listener); }, activeElement: null,
     emit: async (name, event) => { for (const listener of docEvents[name] || []) await listener(event); }, hasFocus: () => documentFocused };
   for (const match of html.matchAll(/<(\w+)([^>]*\bid="([^"]+)"[^>]*)>/g)) { const element = new Element(match[1], doc); element.id = match[3]; element.hidden = /\shidden(?:\s|$)/.test(match[2]); elements[match[3]] = element; }
@@ -82,6 +84,13 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
     context.ResizeObserver = class { constructor(callback) { observedResize = callback; } observe() {} };
     context.MutationObserver = class { observe() {} };
   }
+  if (watchOptions) {
+    context.setTimeout = (callback, delay = 0) => { const id = ++clockId; timers.set(id, { callback, at: clockNow + Number(delay) }); return id; };
+    context.clearTimeout = id => timers.delete(id);
+    doc.hidden = Boolean(watchOptions.hidden);
+    doc.visibilityState = doc.hidden ? 'hidden' : 'visible';
+    if (embedOptions) context.window.frameElement = { getBoundingClientRect: () => ({ width: frameVisible ? 800 : 0, height: frameVisible ? 600 : 0 }) };
+  }
   vm.runInNewContext(source, context);
   return { elements, requests, replies, storage, doc, embedMessages, embedStyles,
     sendContext: (value, { origin = 'http://fixture', source = context.window?.parent } = {}) => { for (const listener of embedListeners.message || []) listener({ data: value, origin, source }); },
@@ -90,7 +99,20 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
     setClipboardRead: value => { clipboardRead = value; }, clipboardReadCount: () => clipboardReads,
     disableClipboardRead: () => { context.navigator.clipboard.read = undefined; },
     setDocumentFocus: value => { documentFocused = value; },
-    setState: value => { current = structuredClone(value); } };
+    setState: value => { current = structuredClone(value); },
+    setFrameVisible: value => { frameVisible = value; },
+    setHidden: async value => { doc.hidden = value; doc.visibilityState = value ? 'hidden' : 'visible'; await doc.emit('visibilitychange', {}); },
+    timerCount: () => timers.size,
+    advance: async (milliseconds = 0) => {
+      const target = clockNow + milliseconds; let steps = 0;
+      for (;;) {
+        const next = [...timers].filter(([, timer]) => timer.at <= target).sort((a,b) => a[1].at-b[1].at || a[0]-b[0])[0];
+        if (!next) break;
+        assert(++steps < 100, 'Deterministic watcher clock must not spin');
+        clockNow = next[1].at; timers.delete(next[0]); next[1].callback(); await flush();
+      }
+      clockNow = target; await flush();
+    } };
 }
 (async () => {
   assert(html.includes('.ico'));
@@ -1276,6 +1298,98 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   draftFrame = { getAttribute: () => 'image-manager.html?embed=steamwork', get contentDocument() { throw new Error('not same origin'); } };
   assert.equal(draftContext.steamworkImageHasDraft(), true);
   assert(hostSource.slice(draftEnd, hostSource.indexOf('function consoleWindowSessionId()', draftEnd)).includes('steamworkImageHasDraft()'), 'Automatic update reload must consult the embedded editor/busy guard');
+  const watchBase = { ...metadataState, localRevision: 'local-r1', plan: review, localWatch: { status: 'ready', pending: false } };
+  const watchAdded = { ...logoA, path: 'new-file.png', sha256: '9'.repeat(64), variantId: 'new-watched', variantLabel: 'new watched option' };
+  const watchNext = { ...watchBase, localRevision: 'local-r2', items: [...watchBase.items, watchAdded], plan: { ...review, id: 'watched-plan2', planId: 'watched-plan2' }, localWatch: { status: 'changed', pending: false } };
+  const watchReply = (revision, extra = {}) => ({ body: { root: originalRoot, localRevision: revision, changed: revision !== 'local-r1', localWatch: { status: 'ready', pending: false }, ...extra } });
+  const automatic = boot(watchBase, makeStorage(), null, {}); await flush();
+  automatic.replies.set('revision', watchReply('local-r2')); automatic.setState(watchNext);
+  await automatic.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').emit('change');
+  automatic.elements.imageSearch.value = '1280';
+  const watchGroup = automatic.elements.imageGrid.children.find(card => card.dataset.groupId === logoA.groupId);
+  if (arrow(watchGroup, 'next')) await arrow(watchGroup, 'next').click();
+  const selectedBeforeWatch = automatic.elements.imageGrid.children.find(card => card.dataset.groupId === logoA.groupId)?.dataset.currentPath;
+  await automatic.advance(0);
+  assert.equal(automatic.elements.imageSearch.value, '1280');
+  assert.equal(automatic.elements.imageGrid.children.find(card => card.dataset.groupId === logoA.groupId)?.dataset.currentPath, selectedBeforeWatch);
+  assert(automatic.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').checked, 'A stable candidate retains the current choice across watcher plan IDs');
+  assert.equal(automatic.requests.filter(request => request.action === 'state').length, 2);
+  assert.equal(new URL(automatic.requests.find(request => request.action === 'revision').url, 'http://fixture').searchParams.get('since'), 'local-r1');
+  assert.equal(automatic.requests.filter(request => request.options.method === 'POST').length, 0);
+  automatic.replies.set('revision', watchReply('local-r2')); await automatic.advance(5000);
+  assert.equal(automatic.requests.filter(request => request.action === 'state').length, 2, 'Unchanged indexed revision stays cheap');
+  const rematchedWatch = boot(watchBase, makeStorage(), null, {}); await flush();
+  const changedCandidate = { ...candidate, id: 'watched-rematch', previousCandidateId: candidate.id, status: 'new', existing: null };
+  rematchedWatch.setState({ ...watchNext, plan: { id: 'watched-rematched-plan', candidates: [changedCandidate] } }); rematchedWatch.replies.set('revision', watchReply('local-r2')); await rematchedWatch.advance(0);
+  assert(!rematchedWatch.elements.candidateList.querySelectorAll('input').some(input => input.checked), 'A rematch never inherits a choice from its previous candidate');
+  const changedMeaningWatch = boot(watchBase, makeStorage(), null, {}); await flush();
+  await changedMeaningWatch.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').emit('change');
+  changedMeaningWatch.setState({ ...watchNext, plan: { ...review, candidates: [{ ...candidate, existing: { ...candidate.existing, sha256:'f'.repeat(64) } }] } }); changedMeaningWatch.replies.set('revision', watchReply('local-r2')); await changedMeaningWatch.advance(0);
+  assert(!changedMeaningWatch.elements.candidateList.querySelectorAll('input').some(input => input.checked), 'A reused ID with changed image identity cannot retain an earlier choice');
+  const protectedWatch = boot(watchBase, makeStorage(), null, {}); await flush();
+  await protectedWatch.elements.imageGrid.querySelectorAll('button').find(button => button.dataset.metadataPath === logoA.path).click();
+  protectedWatch.elements.metadataVariantLabel.value = 'Unsent watcher draft';
+  protectedWatch.setState(watchNext); protectedWatch.replies.set('revision', watchReply('local-r2'));
+  await protectedWatch.advance(0);
+  assert.equal(protectedWatch.requests.filter(request => request.action === 'state').length, 1);
+  assert.equal(protectedWatch.elements.metadataVariantLabel.value, 'Unsent watcher draft');
+  assert.match(protectedWatch.elements.folderStatus.textContent, /编辑完成/);
+  await protectedWatch.elements.metadataDialog.close(); await protectedWatch.advance(0);
+  assert.equal(protectedWatch.requests.filter(request => request.action === 'state').length, 2, 'Finishing the protected editor resumes the deferred merge automatically');
+  const locationWatch = boot(watchBase, makeStorage(), null, {}); await flush();
+  locationWatch.elements.deviceRoot.value = 'E:\\Unsaved Watch Folder'; locationWatch.setState(watchNext); locationWatch.replies.set('revision', watchReply('local-r2')); await locationWatch.advance(0);
+  assert.equal(locationWatch.requests.filter(request => request.action === 'state').length, 1);
+  assert.equal(locationWatch.elements.deviceRoot.value, 'E:\\Unsaved Watch Folder');
+  locationWatch.elements.deviceRoot.value = watchBase.deviceRoot; await locationWatch.elements.locations.emit('toggle'); await locationWatch.advance(0);
+  assert.equal(locationWatch.requests.filter(request => request.action === 'state').length, 2);
+  const backgroundWatch = boot(watchBase, makeStorage(), { height: 600 }, {}); await flush();
+  backgroundWatch.replies.set('revision', watchReply('local-r1')); await backgroundWatch.advance(0);
+  const backgroundReads = backgroundWatch.requests.filter(request => request.action === 'revision').length;
+  backgroundWatch.setFrameVisible(false); await backgroundWatch.advance(5000);
+  assert.equal(backgroundWatch.requests.filter(request => request.action === 'revision').length, backgroundReads);
+  assert.equal(backgroundWatch.timerCount(), 0);
+  backgroundWatch.setFrameVisible(true); backgroundWatch.sendContext({ channel:'console-image-embed-v1', type:'context' }, { origin:'http://untrusted' }); await backgroundWatch.advance(0);
+  assert.equal(backgroundWatch.requests.filter(request => request.action === 'revision').length, backgroundReads);
+  backgroundWatch.sendContext({ channel:'console-image-embed-v1', type:'context' }); await backgroundWatch.advance(0);
+  assert.equal(backgroundWatch.requests.filter(request => request.action === 'revision').length, backgroundReads+1, 'A trusted visible-frame return probes immediately');
+  await backgroundWatch.setHidden(true); await backgroundWatch.advance(15000);
+  assert.equal(backgroundWatch.requests.filter(request => request.action === 'revision').length, backgroundReads+1);
+  await backgroundWatch.setHidden(false); await backgroundWatch.advance(0);
+  assert.equal(backgroundWatch.requests.filter(request => request.action === 'revision').length, backgroundReads+2);
+  const mismatchWatch = boot(watchBase, makeStorage(), null, {}); await flush(); mismatchWatch.replies.set('revision', watchReply('local-r2')); mismatchWatch.setState({ ...watchNext, localRevision:'local-r3' }); await mismatchWatch.advance(0);
+  assert.equal(mismatchWatch.elements.libraryCount.textContent, `${watchBase.items.length} 张`, 'A state snapshot with another revision must not be merged');
+  mismatchWatch.replies.set('revision', watchReply('local-r3')); await mismatchWatch.advance(5000);
+  assert.equal(mismatchWatch.elements.libraryCount.textContent, `${watchNext.items.length} 张`);
+  const lateWatch = boot(watchBase, makeStorage(), null, {}); await flush(); let releaseWatch;
+  lateWatch.replies.set('revision', () => new Promise(resolve => { releaseWatch = resolve; })); await lateWatch.advance(0);
+  lateWatch.emitWindow('focus'); lateWatch.emitWindow('focus');
+  assert.equal(lateWatch.requests.filter(request => request.action === 'revision').length, 1, 'Only one folder probe may be in flight');
+  lateWatch.replies.set('scan', { body: { ...review, state: { ...watchBase, localRevision:'action-r2' } } }); await lateWatch.elements.scanImages.click();
+  releaseWatch(watchReply('stale-background-r2')); await flush();
+  assert.equal(lateWatch.requests.filter(request => request.action === 'state').length, 1, 'A user action invalidates the older background result before a state read');
+  const unknownWatch = boot({ ...recoveryState, localRevision:'local-r1' }, makeStorage(), null, {}); await flush();
+  const originalRequest = unknownWatch.storage.localStorage.getItem(`console-image-operation:${originalRoot}`), originalMessage = unknownWatch.elements.operationStatus.textContent;
+  unknownWatch.replies.set('revision', watchReply('local-r1', { localWatch: { status:'deferred', pending:true, reason:'notion_pending', changeToken:'observed-new-files' } })); await unknownWatch.advance(0);
+  assert.equal(unknownWatch.storage.localStorage.getItem(`console-image-operation:${originalRoot}`), originalRequest);
+  assert.equal(unknownWatch.elements.operationStatus.textContent, originalMessage);
+  assert.match(unknownWatch.elements.folderStatus.textContent, /先核对原同步请求/);
+  assert.doesNotMatch(unknownWatch.elements.folderStatus.textContent, /检测到|新文件|新增/);
+  assert.equal(unknownWatch.requests.filter(request => request.action === 'state').length, 1, 'A deferred observation token does not count as an indexed revision');
+  assert.equal(unknownWatch.requests.filter(request => request.options.method === 'POST').length, 0);
+  for (const [reason, message] of [['active_review','请先处理当前图片比较'],['active_naming','请先完成名称整理'],['active_deletion','请先核对删除结果']]) {
+    unknownWatch.replies.set('revision', watchReply('local-r1', { localWatch: { status:'deferred', pending:true, reason } })); await unknownWatch.advance(5000);
+    assert(unknownWatch.elements.folderStatus.textContent.includes(message), `The real backend ${reason} reason has an actionable quiet notice`);
+    assert.equal(unknownWatch.elements.operationStatus.textContent, originalMessage);
+    assert.equal(unknownWatch.storage.localStorage.getItem(`console-image-operation:${originalRoot}`), originalRequest);
+  }
+  unknownWatch.replies.set('revision', watchReply('local-r1', { localWatch: { status:'checking', pending:true, reason:'initial_probe', lastIndexedAt:null } })); await unknownWatch.advance(5000);
+  assert.equal(unknownWatch.elements.folderStatus.textContent, '正在检查文件夹…', 'Initial checking does not claim observed additions');
+  unknownWatch.replies.set('revision', watchReply('local-r1', { localWatch: { status:'ready', pending:false, reason:'up_to_date' } })); await unknownWatch.advance(5000);
+  assert.equal(unknownWatch.elements.folderStatus.hidden, true, 'No-op checks stay quiet');
+  const failedWatch = boot(watchBase, makeStorage(), null, {}); await flush(); failedWatch.replies.set('revision', { ok:false,status:503,body:{error:'unavailable'} }); const beforeFailure = failedWatch.elements.operationStatus.textContent; await failedWatch.advance(0);
+  assert.equal(failedWatch.elements.operationStatus.textContent, beforeFailure); assert.match(failedWatch.elements.folderStatus.textContent, /稍后会再检查/);
+  assert.equal(failedWatch.requests.filter(request => request.options.method === 'POST').length, 0);
+  console.log('PASS quiet folder watch: cheap single-flight revision GETs, automatic consistent snapshots, stable choices/search/variants, rematch reselection, draft/location protection with automatic catch-up, hidden-frame/tab pause and trusted resume, stale generation/revision rejection, preserved unknown requests, deferred observation notices, and read-only error recovery.');
   console.log('PASS inline Image: original panel replacement, no duplicate entries/checklist fetch, collapsed Inbox, preserved plan, real variants, authenticated resize/theme bridge, grow/shrink and standalone compatibility.');
   console.log('PASS: IDs, literal titles, root/space preview binding, conflict defaults, failed apply preservation, reload decisions, inbox-only upload, one-click new sync, conflict gating, skipped-file visibility.');
   console.log('PASS: First-connection availability, async phase polling, operation/plan binding, no old-plan apply, completed upload receipt, unknown-result resume without reposting.');

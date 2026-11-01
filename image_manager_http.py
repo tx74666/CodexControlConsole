@@ -14,13 +14,24 @@ def _with_notion_state(result, notion):
     return result
 
 
-def image_get(service, action, query, notion=None):
+def image_get(service, action, query, notion=None, watch=None):
     values = parse_qs(query, keep_blank_values=True)
     if any(len(value) != 1 for value in values.values()):
         raise ValueError('图片查询参数不可重复。')
     values = {key: value[0] for key, value in values.items()}
     if action == 'state' and not values:
-        return _state_with_notion(service.state(), notion)
+        result = _state_with_notion(service.state(), notion)
+        if watch is not None:
+            result['localWatch'] = watch.status(result.get('root'))
+        return result
+    if (action == 'revision' and values.get('expectedRoot')
+            and not set(values) - {'expectedRoot', 'since'} and len(values.get('since', '')) <= 256):
+        current = service.local_revision(values['expectedRoot'])
+        result = {'root': current['root'], 'localRevision': current['revision'],
+                  'changed': values.get('since') != current['revision']}
+        if watch is not None:
+            result['localWatch'] = watch.status(current['root'])
+        return result
     if action == 'operation' and not set(values) - {'requestId'} and notion is not None:
         return notion.operation(values.get('requestId'))
     if action == 'delete-operation' and set(values) == {'expectedRoot', 'requestId'} and values.get('expectedRoot'):

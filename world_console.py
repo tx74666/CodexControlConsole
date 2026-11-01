@@ -65,9 +65,10 @@ from dev_room_http import dev_room_get, dev_room_post
 from resource_library import ResourceLibraryService, ResourceLibraryError, ResourceLibraryConflict
 from resource_preview import ResourcePreviewError
 from resource_http import resource_get, resource_post
-from image_manager import ImageManagerService
+from image_manager import ImageManagerService, ImageManagerError
 from image_manager_http import image_get, image_post
 from image_manager_notion import ImageManagerNotion
+from image_manager_watch import ImageFolderWatch
 from phone_companion import PhoneCompanionService
 from phone_device_store import PhoneDeviceStore
 from phone_discovery import DiscoveryAnnouncer
@@ -576,6 +577,32 @@ WORKFLOW_SERVICE.codex_work = CodexWorkController(SUBSCRIPTION_BROKER, WORKFLOW_
 IMAGE_MANAGER_NOTION = ImageManagerNotion(IMAGE_MANAGER, CACHE_DIR / "image-manager-notion-private",
     executable=find_codex_work_cli())
 
+
+def refresh_discovered_images(payload):
+    """Local catalogue discovery shares the existing Notion mutation boundary."""
+    memory = current_memory()
+    available, used = memory.get("availableBytes"), memory.get("usedPercent")
+    if (isinstance(available, (int, float)) and available < 200 * 1024 * 1024
+            or isinstance(used, (int, float)) and used >= 98):
+        return {"root": payload.get("expectedRoot", ""), "status": "deferred", "reason": "resources_busy"}
+    with IMAGE_MANAGER_NOTION.lock:
+        if IMAGE_MANAGER_NOTION.busy:
+            return {"root": payload.get("expectedRoot", ""), "status": "deferred", "reason": "notion_busy"}
+        try:
+            current, _, record = IMAGE_MANAGER_NOTION._context()
+        except ImageManagerError as error:
+            if getattr(error, "code", "") not in {"notion_target_unconfigured", "library_unconfigured"}:
+                return {"root": payload.get("expectedRoot", ""), "status": "deferred", "reason": "notion_record_unavailable"}
+        else:
+            operation = record.get("operation") or {}
+            if (os.path.normcase(str(operation.get("root", ""))) == os.path.normcase(current["root"])
+                    and operation.get("status") in {"running", "unknown", "needs_review"}):
+                return {"root": current["root"], "status": "deferred", "reason": "notion_pending"}
+        return IMAGE_MANAGER.safe_refresh_local(payload, cancelled=lambda: IMAGE_MANAGER_WATCH.stopping)
+
+
+IMAGE_MANAGER_WATCH = ImageFolderWatch(IMAGE_MANAGER, refresh_callback=refresh_discovered_images)
+
 WORLD_CACHE = CACHE_DIR / "world.geojson"
 TRANSLATION_CACHE = CACHE_DIR / "translations.json"
 WALLPAPER_DIR = media_directory("wallpapers", {".jpg", ".jpeg", ".png", ".bmp", ".webp"})
@@ -806,12 +833,14 @@ def shutdown_active_server():
 def retire_console_instance(payload):
     if (CONSOLE_DEVELOPER_UPDATE.busy
             or IMAGE_MANAGER_NOTION.busy
+            or IMAGE_MANAGER_WATCH.busy
             or getattr(globals().get("CONSOLE_REPOSITORY_PUBLISH"), "busy", False)):
         raise ValueError("本机代码正在保存或上传，请完成后再更新应用。")
     if payload.get("expectedInstanceId") != RUNTIME_INSTANCE_ID:
         raise ValueError("The running Console changed; launch it again.")
     if compare_versions(payload.get("version"), APP_VERSION) <= 0:
         raise ValueError("Only a newer Console can replace this instance.")
+    IMAGE_MANAGER_WATCH.close()
     # Respond before ending serve_forever; no process termination is involved.
     timer = threading.Timer(0.2, shutdown_active_server)
     timer.daemon = True
@@ -1823,7 +1852,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 return
             try:
                 action = parsed.path.removeprefix("/api/images/")
-                result = image_get(IMAGE_MANAGER, action, parsed.query, notion=IMAGE_MANAGER_NOTION)
+                result = image_get(IMAGE_MANAGER, action, parsed.query, notion=IMAGE_MANAGER_NOTION,
+                    watch=IMAGE_MANAGER_WATCH)
                 if action == "preview":
                     self.send_file_response(result['path'], result['mimeType'])
                 else:
@@ -13062,6 +13092,7 @@ def main():
                 "port": port, "instanceId": RUNTIME_INSTANCE_ID,
             })
             server_thread.start()
+            IMAGE_MANAGER_WATCH.start()
             WORKFLOW_SERVICE.start()
             SUBSCRIPTION_BROKER.start()
             WORKFLOW_SERVICE.codex_work.start()
@@ -13077,6 +13108,7 @@ def main():
             if not args.no_browser:
                 open_console_window(url, replace=replace_window)
         except BaseException:
+            IMAGE_MANAGER_WATCH.close()
             SUBSCRIPTION_BROKER.close()
             CHAT_RELAY_BROKER.close()
             CONSOLE_REPOSITORY_CATALOG.close()
@@ -13102,6 +13134,7 @@ def main():
     except KeyboardInterrupt:
         server.shutdown()
     finally:
+        IMAGE_MANAGER_WATCH.close()
         SUBSCRIPTION_BROKER.close()
         CHAT_RELAY_BROKER.close()
         CONSOLE_REPOSITORY_CATALOG.close()

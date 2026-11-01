@@ -1407,5 +1407,266 @@ class ImageDeletionChecks(unittest.TestCase):
                 self.assertIn(operation['status'],('failed','recovery_required'))
 
 
+class ImageDiscoveryChecks(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='console-image-discovery-')
+        self.directory = Path(self.temporary.name)
+        self.root = self.directory / 'library'
+        self.root.mkdir()
+        self.service = ImageManagerService(self.directory / 'config.json')
+        self.service.configure({'root':str(self.root)})
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def refresh(self, **keywords):
+        observed = image_manager._discovery_inventory(self.root)
+        return self.service.safe_refresh_local({'expectedRoot':str(self.root), **observed}, **keywords)
+
+    def private_bytes(self):
+        return {path.relative_to(self.root).as_posix():path.read_bytes()
+                for path in (self.root / image_manager.META).rglob('*') if path.is_file()}
+
+    def test_new_root_and_inbox_are_discovered_without_adopting_or_renaming_originals(self):
+        root_image = self.root / 'Unfinished_v9.png'
+        root_image.write_bytes(picture('red'))
+        first = self.refresh()
+        self.assertEqual(first['status'],'updated')
+        state = self.service.state()
+        self.assertEqual([item['path'] for item in state['items']],['Unfinished_v9.png'])
+        self.assertEqual(state['plan']['candidates'],[])
+        self.assertEqual(state['localRevision'],self.service.local_revision(str(self.root))['revision'])
+        incoming = self.root / 'inbox' / 'Different.png'
+        incoming.write_bytes(picture('blue'))
+        second = self.refresh()
+        self.assertEqual(second['status'],'updated')
+        state = self.service.state()
+        self.assertEqual(len(state['items']),1)
+        self.assertEqual(len(state['plan']['candidates']),1)
+        self.assertNotEqual(first['planId'],second['planId'])
+        self.assertEqual(root_image.read_bytes(),picture('red'))
+        self.assertEqual(incoming.read_bytes(),picture('blue'))
+
+    def test_in_place_change_inherits_annotation_and_external_delete_preserves_history(self):
+        source = self.root / 'Image.png'
+        source.write_bytes(picture('red'))
+        self.refresh()
+        item = self.service.state()['items'][0]
+        self.service.annotate({'expectedRoot':str(self.root),'path':item['path'],'sha256':item['sha256'],
+            'groupTitle':'Purpose','variantLabel':'Choice A'})
+        source.write_bytes(picture('blue'))
+        self.assertEqual(self.refresh()['status'],'updated')
+        changed = self.service.state()['items'][0]
+        self.assertEqual((changed['groupTitle'],changed['variantLabel']),('Purpose','Choice A'))
+        self.assertNotEqual(item['sha256'],changed['sha256'])
+        source.unlink()  # The external editor deletes its file; discovery only observes it.
+        self.assertEqual(self.refresh()['status'],'updated')
+        manifest = json.loads((self.root/image_manager.META/'library.json').read_text(encoding='utf-8'))
+        self.assertEqual(manifest['items'],[])
+        self.assertIn(item['sha256'],manifest['annotations'])
+        self.assertIn(changed['sha256'],manifest['annotations'])
+
+    def test_noop_and_touch_same_bytes_do_not_write_or_allocate_a_review(self):
+        source = self.root / 'Image.png'
+        source.write_bytes(picture('red'))
+        self.refresh()
+        before = self.private_bytes()
+        revision = self.service.local_revision()['revision']
+        with patch.object(image_manager,'_atomic_json',side_effect=AssertionError('no discovery write')):
+            self.assertEqual(self.refresh()['status'],'noop')
+            information = source.stat()
+            os.utime(source, ns=(information.st_atime_ns,information.st_mtime_ns+10_000_000))
+            with patch.object(image_manager.uuid,'uuid4',side_effect=AssertionError('no UUID for a touch')):
+                self.assertEqual(self.refresh()['status'],'noop')
+        self.assertEqual(self.private_bytes(),before)
+        self.assertEqual(self.service.local_revision()['revision'],revision)
+
+    def test_nonempty_review_is_preserved_until_user_finishes_it(self):
+        (self.root/'Image.png').write_bytes(picture('red'))
+        (self.root/'inbox'/'Other.png').write_bytes(picture('red'))
+        self.refresh()
+        plan = self.service.state()['plan']
+        (self.root/'New.png').write_bytes(picture('blue'))
+        before = self.private_bytes()
+        with patch.object(image_manager,'_metadata',side_effect=AssertionError('preserve active review')):
+            result = self.refresh()
+        self.assertEqual((result['status'],result['reason']),('deferred','active_review'))
+        self.assertEqual(self.private_bytes(),before)
+        self.assertEqual(self.service.state()['plan']['id'],plan['id'])
+        self.service.apply({'expectedRoot':str(self.root),'planId':plan['id'],
+            'decisions':[{'id':candidate['id'],'action':'keep'} for candidate in plan['candidates']]})
+        self.assertEqual(self.refresh()['status'],'noop')  # Explicit keep already refreshed the root index.
+        self.assertEqual({item['path'] for item in self.service.state()['items']},{'Image.png','New.png'})
+
+    def test_device_naming_and_prepared_delete_records_block_automatic_publication(self):
+        (self.root/'Image.png').write_bytes(picture('red'))
+        self.refresh()
+        device = self.directory/'device'
+        device.mkdir()
+        (device/'Image.png').write_bytes(picture('blue'))
+        self.service.configure({'root':str(self.root),'deviceRoot':str(device)})
+        self.service.sync_device({'expectedRoot':str(self.root),'direction':'to-device'})
+        (self.root/'New.png').write_bytes(picture('green'))
+        before = self.private_bytes()
+        self.assertEqual(self.refresh()['reason'],'active_review')
+        self.assertEqual(self.private_bytes(),before)
+        # A separate library exercises a real persistent naming preview.
+        other = self.directory/'other'
+        other.mkdir()
+        service = ImageManagerService(self.directory/'other.json')
+        service.configure({'root':str(other)})
+        (other/'Image.png').write_bytes(picture('red'))
+        item = service.scan({'expectedRoot':str(other)})['state']['items'][0]
+        service.naming_plan({'expectedRoot':str(other),'entries':[{'path':item['path'],'sha256':item['sha256'],'assetType':'Logo'}]})
+        observed = image_manager._discovery_inventory(other)
+        self.assertEqual(service.safe_refresh_local({'expectedRoot':str(other),**observed})['reason'],'active_naming')
+        # A crash can leave a prepared deletion without publishing lastDeletion.
+        clean = self.directory/'prepared'
+        clean.mkdir()
+        service = ImageManagerService(self.directory/'prepared.json')
+        service.configure({'root':str(clean)})
+        (clean/'Image.png').write_bytes(picture('red'))
+        record = clean/image_manager.META/'history'/('trash-'+'a'*32)/'operation.json'
+        image_manager._atomic_json(record,{'requestId':'a'*32,'status':'prepared'})
+        self.assertEqual(service.safe_refresh_local({'expectedRoot':str(clean),**image_manager._discovery_inventory(clean)})['reason'],'active_deletion')
+        self.assertFalse((clean/image_manager.META/'library.json').exists())
+
+    def test_incomplete_or_temporarily_unreadable_copy_never_removes_valid_index(self):
+        source = self.root/'Image.png'
+        source.write_bytes(picture('red'))
+        self.refresh()
+        (self.root/'inbox'/'Copy.png').write_bytes(picture('blue')[:30])
+        before = self.private_bytes()
+        self.assertEqual(self.refresh()['status'],'deferred')
+        self.assertEqual(self.private_bytes(),before)
+        self.assertEqual(len(self.service.state()['items']),1)
+        (self.root/'inbox'/'Copy.png').unlink()
+        information = source.stat()
+        os.utime(source,ns=(information.st_atime_ns,information.st_mtime_ns+10_000_000))
+        with patch.object(image_manager,'_metadata',side_effect=PermissionError('writer retains the file')):
+            self.assertEqual(self.refresh()['status'],'deferred')
+        self.assertEqual(self.private_bytes(),before)
+
+    def test_stale_inventory_and_cancellation_after_decode_leave_all_metadata_untouched(self):
+        source = self.root/'Image.png'
+        source.write_bytes(picture('red'))
+        observed = image_manager._discovery_inventory(self.root)
+        source.write_bytes(picture('blue'))
+        before = self.private_bytes()
+        result = self.service.safe_refresh_local({'expectedRoot':str(self.root),**observed})
+        self.assertEqual(result['reason'],'inventory_changed')
+        stopped = []
+        real_metadata = image_manager._metadata
+        def decode(*args,**kwargs):
+            value = real_metadata(*args,**kwargs)
+            stopped.append(True)
+            return value
+        with patch.object(image_manager,'_metadata',side_effect=decode):
+            result = self.refresh(cancelled=lambda:bool(stopped))
+        self.assertEqual((result['status'],result['reason']),('deferred','stopped'))
+        self.assertEqual(self.private_bytes(),before)
+        self.assertEqual(self.refresh(cancelled=lambda:True)['reason'],'stopped')
+        self.assertEqual(self.private_bytes(),before)
+
+    def test_foreign_manifest_or_review_change_during_decode_is_preserved(self):
+        for change in ('manifest','pointer'):
+            with self.subTest(change=change):
+                root = self.directory/change
+                root.mkdir()
+                service = ImageManagerService(self.directory/(change+'.json'))
+                service.configure({'root':str(root)})
+                (root/'Image.png').write_bytes(picture('red'))
+                service.safe_refresh_local({'expectedRoot':str(root),**image_manager._discovery_inventory(root)})
+                (root/'New.png').write_bytes(picture('blue'))
+                manifest = root/image_manager.META/'library.json'
+                pointer = root/image_manager.META/'latest-plan.json'
+                captured=[]
+                real_metadata = image_manager._metadata
+                def decode(*args,**kwargs):
+                    value=real_metadata(*args,**kwargs)
+                    if not captured:
+                        if change=='manifest':
+                            foreign=json.loads(manifest.read_text(encoding='utf-8'))
+                            foreign['foreignEdit']='preserve'
+                            image_manager._atomic_json(manifest,foreign)
+                            captured.append((manifest,manifest.read_bytes()))
+                        else:
+                            item=service._manifest(root)['items'][0]
+                            plan={'id':'f'*32,'status':'review','direction':'inbox',
+                                  'candidates':[{'id':'e'*32,'incoming':item,'existing':None,'matches':[]}]}
+                            image_manager._atomic_json(root/image_manager.META/'plans'/('f'*32+'.json'),plan)
+                            image_manager._atomic_json(pointer,{'planId':'f'*32})
+                            captured.append((pointer,pointer.read_bytes()))
+                    return value
+                with patch.object(image_manager,'_metadata',side_effect=decode):
+                    result=service.safe_refresh_local({'expectedRoot':str(root),**image_manager._discovery_inventory(root)})
+                self.assertEqual(result['status'],'deferred')
+                self.assertEqual(captured[0][0].read_bytes(),captured[0][1])
+
+    def test_publication_failure_rolls_back_owned_manifest_but_never_foreign_metadata(self):
+        for foreign in (False,True):
+            with self.subTest(foreign=foreign):
+                root=self.directory/('foreign' if foreign else 'owned')
+                root.mkdir()
+                service=ImageManagerService(self.directory/(root.name+'.json'))
+                service.configure({'root':str(root)})
+                (root/'Image.png').write_bytes(picture('red'))
+                service.safe_refresh_local({'expectedRoot':str(root),**image_manager._discovery_inventory(root)})
+                manifest=root/image_manager.META/'library.json'
+                pointer=root/image_manager.META/'latest-plan.json'
+                old_manifest,old_pointer=manifest.read_bytes(),pointer.read_bytes()
+                (root/'New.png').write_bytes(picture('blue'))
+                real_atomic=image_manager._atomic_json
+                captured=[]
+                def write(path,value):
+                    if Path(path)==pointer or foreign and Path(path).parent.name=='plans':
+                        if foreign and not captured:
+                            changed=json.loads(manifest.read_text(encoding='utf-8'))
+                            changed['foreignEdit']='after owned write'
+                            real_atomic(manifest,changed)
+                            captured.append(manifest.read_bytes())
+                        raise PermissionError('final publication is unavailable')
+                    return real_atomic(path,value)
+                with patch.object(image_manager,'_atomic_json',side_effect=write):
+                    result=service.safe_refresh_local({'expectedRoot':str(root),**image_manager._discovery_inventory(root)})
+                self.assertEqual((result['status'],result['reason']),('deferred','publication_failed'))
+                self.assertEqual(pointer.read_bytes(),old_pointer)
+                self.assertEqual(manifest.read_bytes(),captured[0] if foreign else old_manifest)
+                self.assertEqual((root/'Image.png').read_bytes(),picture('red'))
+                self.assertEqual((root/'New.png').read_bytes(),picture('blue'))
+
+    def test_shared_existing_original_is_not_interpreted_as_an_external_deletion(self):
+        source=self.root/'Image.png'
+        source.write_bytes(picture('red'))
+        self.refresh()
+        os.link(source,self.directory/'shared.png')
+        before=self.private_bytes()
+        self.assertEqual(self.refresh()['reason'],'unsafe_existing_image')
+        self.assertEqual(self.private_bytes(),before)
+        self.assertEqual(len(self.service.state()['items']),1)
+
+    def test_revision_is_cheap_and_state_refuses_a_mislabeled_concurrent_snapshot(self):
+        (self.root/'Image.png').write_bytes(picture('red'))
+        self.refresh()
+        with (patch.object(image_manager,'_metadata',side_effect=AssertionError('no photo decode')),
+             patch.object(image_manager,'_sha',side_effect=AssertionError('no photo hash')),
+             patch.object(image_manager.os,'scandir',side_effect=AssertionError('no recursive inventory'))):
+            revision=self.service.local_revision(str(self.root))['revision']
+        self.assertEqual(self.service.state()['localRevision'],revision)
+        manifest=self.root/image_manager.META/'library.json'
+        real_manifest=self.service._manifest
+        touched=[]
+        def read(root):
+            value=real_manifest(root)
+            if not touched:
+                changed=json.loads(json.dumps(value))
+                changed['foreignEdit']='during state'
+                image_manager._atomic_json(manifest,changed)
+                touched.append(True)
+            return value
+        with patch.object(self.service,'_manifest',side_effect=read):
+            with self.assertRaises(ImageManagerError):self.service.state()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

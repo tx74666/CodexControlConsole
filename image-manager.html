@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#111a27">
   <title>Console · Image manager</title>
   <link rel="icon" href="favicon.ico">
-  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.47-20261101">
-  <script src="image-manager-i18n.js?v=images-1.1.47-20261101" defer></script>
-  <script src="image-manager.js?v=images-variants-1.1.47-20261101" defer></script>
+  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.48-20261101">
+  <script src="image-manager-i18n.js?v=images-1.1.48-20261101" defer></script>
+  <script src="image-manager.js?v=images-variants-1.1.48-20261101" defer></script>
 </head>
 <body>
   <main class="image-shell">
@@ -60,6 +60,7 @@
     <section class="collection-section" aria-labelledby="collectionTitle">
       <div class="section-heading"><div><p class="eyebrow">BROWSE YOUR COLLECTION</p><h2 id="collectionTitle">图片</h2></div><div class="collection-tools"><button id="scanImages" class="metadata-button" type="button" data-image-en="Refresh list">刷新列表</button><button id="organizeNames" class="metadata-button" type="button" data-image-en="Organize names" hidden>整理名称</button></div><label class="search-field"><span class="visually-hidden" data-image-en="Find images by title or dimensions">按标题或尺寸查找图片</span><input id="imageSearch" type="search" placeholder="查找标题或尺寸" data-image-en-placeholder="Search titles or dimensions" maxlength="160"></label></div>
       <p id="collectionNote" class="section-note">按用途与标题分组，选择尺寸和方案查看原图。</p>
+      <p id="folderStatus" class="folder-status" role="status" aria-live="polite" hidden></p>
       <div id="imageGrid" class="image-grid" aria-busy="true"></div>
       <div id="emptyState" class="empty-state" hidden><span aria-hidden="true">▧</span><h3 data-image-en="Your images start here">你的图片，从这里开始</h3><p data-image-en="Save a library folder, add images, then choose Refresh list.">保存图库文件夹，放入图片，再点「刷新列表」。</p></div>
     </section>

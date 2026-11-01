@@ -1,7 +1,8 @@
 """Explicit local image imports and reversible, previewed folder synchronization.
 
 Original bytes are retained. A scan only writes the catalogue and a review plan;
-only apply() may replace or archive a picture. There is no background watcher.
+only explicit mutation methods may replace or archive a picture. Discovery is
+scheduled by the backend, and never applies its review candidates.
 """
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -27,6 +28,9 @@ EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff',
 MAX_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_PIXELS = 40_000_000
 MAX_FILES = 3000
+DISCOVERY_MAX_ENTRIES = 20000
+DISCOVERY_MAX_DIRECTORIES = 1000
+DISCOVERY_BUDGET_SECONDS = 1.0
 META = '.image-manager'
 STANDARD_TYPES = [
     {'code':code, 'label':label, 'sizes':[{'width':w, 'height':h} for w,h in sizes]}
@@ -142,6 +146,86 @@ def _inside(root, value, *, private=False):
     return candidate
 
 
+def _discovery_error(code, message):
+    error = ImageManagerError(message, status=409)
+    error.code = code
+    return error
+
+
+def _discovery_inventory(root, *, max_files=None, max_entries=None,
+                         max_directories=None, budget_seconds=None):
+    """Bounded fresh stat inventory. No image decoding, hashing or disk writes."""
+    root = _safe_directory(str(root))
+    identity = _identity(root)
+    maximum = MAX_FILES if max_files is None else max_files
+    entries_limit = DISCOVERY_MAX_ENTRIES if max_entries is None else max_entries
+    directory_limit = DISCOVERY_MAX_DIRECTORIES if max_directories is None else max_directories
+    budget = DISCOVERY_BUDGET_SECONDS if budget_seconds is None else budget_seconds
+    deadline = time.monotonic() + budget
+    pending, rows, entries, directories = [(root, identity)], [], 0, 0
+    try:
+        while pending:
+            current, expected_identity = pending.pop()
+            directories += 1
+            if directories > directory_limit or time.monotonic() > deadline:
+                raise _discovery_error('inventory_limit', '本地目录检查达到本次资源上限，保留原列表。')
+            def check_directory():
+                information = os.stat(current, follow_symlinks=False)
+                if (not stat.S_ISDIR(information.st_mode)
+                        or getattr(information, 'st_file_attributes', 0) & 0x400
+                        or [str(information.st_dev), str(information.st_ino)] != expected_identity):
+                    raise _discovery_error('unstable_inventory', '本地目录在检查期间改变，保留原列表。')
+                _safe_directory(str(current))
+            check_directory()
+            with os.scandir(current) as children:
+                check_directory()
+                for child in children:
+                    entries += 1
+                    if entries > entries_limit or time.monotonic() > deadline:
+                        raise _discovery_error('inventory_limit', '本地目录检查达到本次资源上限，保留原列表。')
+                    if child.name.casefold() == META or child.name.casefold().startswith('.image-import-'):
+                        continue
+                    path = Path(child.path)
+                    information = os.stat(path, follow_symlinks=False)
+                    if stat.S_ISLNK(information.st_mode) or getattr(information, 'st_file_attributes', 0) & 0x400:
+                        continue
+                    if stat.S_ISDIR(information.st_mode):
+                        if child.name.casefold() == 'inbox' and (current != root or os.name != 'nt' and child.name != 'inbox'):
+                            continue
+                        pending.append((path, [str(information.st_dev), str(information.st_ino)]))
+                    elif (stat.S_ISREG(information.st_mode) and information.st_nlink == 1
+                          and path.suffix.lower() in EXTENSIONS):
+                        relative = path.relative_to(root).as_posix()
+                        if os.name == 'nt' and relative.split('/')[0].casefold() == 'inbox':
+                            relative = 'inbox/' + relative.split('/', 1)[1]
+                        rows.append({'path':relative, 'size':information.st_size,
+                                     'mtimeNs':str(information.st_mtime_ns),
+                                     'device':str(information.st_dev), 'inode':str(information.st_ino),
+                                     'nlink':information.st_nlink})
+                        if len(rows) > maximum:
+                            raise _discovery_error('inventory_limit', '图片超过本次 3000 张检查上限，保留原列表。')
+            check_directory()
+        if _identity(_safe_directory(str(root))) != identity:
+            raise _discovery_error('unstable_inventory', '图库身份在检查期间改变，保留原列表。')
+    except OSError as error:
+        raise _discovery_error('unstable_inventory', '本地文件仍在变化或暂时无法读取，保留原列表。') from error
+    rows.sort(key=lambda row: (row['path'].casefold(), row['path']))
+    token = hashlib.sha256(json.dumps({'root':str(root), 'rootIdentity':identity, 'inventory':rows},
+        ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return {'inventory':rows, 'inventoryToken':token}
+
+
+def _record_stat(path):
+    try:
+        value = path.lstat()
+    except FileNotFoundError:
+        return None
+    if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1
+            or stat.S_ISLNK(value.st_mode) or getattr(value, 'st_file_attributes', 0) & 0x400):
+        raise ImageManagerError('图片管理记录不能经过链接或共享文件。', status=409)
+    return [str(value.st_dev), str(value.st_ino), str(value.st_size), str(value.st_mtime_ns)]
+
+
 def _title(name):
     value = unicodedata.normalize('NFC', Path(name).stem)
     value = re.sub(r'(?:\s*[-_－–—]?\s*)[\[(（]?\d{1,6}\s*[xX×＊*]\s*\d{1,6}[\])）]?(?:\s+\(\d{1,6}\))?(?=(?:[_ -]v\d+)?$)', '', value).strip(' -_－–—')
@@ -246,6 +330,7 @@ class ImageManagerService:
         self.config_path = Path(config_path)
         self.document_library = document_library
         self._mutex = threading.RLock()
+        self._discovery_cache = {}
 
     def _config(self):
         result = _json(self.config_path, {})
@@ -266,6 +351,45 @@ class ImageManagerService:
             if _identity(device) != config.get('deviceIdentity'):
                 raise ImageManagerError('设备文件夹身份已改变，请重新选择。', status=409)
         return config, root, device
+
+    def _local_root(self, expectedRoot=None, *, config=None):
+        config = self._config() if config is None else config
+        if not config.get('root'):
+            if expectedRoot:
+                raise ImageManagerError('图库已切换，请重新载入。', status=409)
+            return config, None
+        root = _safe_directory(config['root'])
+        if expectedRoot is not None and os.path.normcase(str(root)) != os.path.normcase(str(expectedRoot)):
+            raise ImageManagerError('图库已切换，请重新载入。', status=409)
+        if _identity(root) != config.get('rootIdentity'):
+            raise ImageManagerError('图库文件夹身份已改变，请重新选择。', status=409)
+        return config, root
+
+    def _local_revision_locked(self, config, root):
+        records = {'config':_record_stat(self.config_path), 'root':str(root) if root else '',
+                   'rootIdentity':_identity(root) if root else None}
+        if root:
+            for name, directory in [('latest-plan.json','plans'), ('latest-naming.json','naming-plans')]:
+                pointer = _inside(root, META + '/' + name, private=True)
+                records[name] = _record_stat(pointer)
+                if records[name] is not None:
+                    if int(records[name][2]) > 4096:
+                        raise ImageManagerError('图片计划指针过大，保留原记录。', status=409)
+                    identifier = _json(pointer, {}).get('planId')
+                    if isinstance(identifier, str) and re.fullmatch('[0-9a-f]{32}', identifier):
+                        records[directory] = _record_stat(_inside(root, META + '/' + directory + '/' + identifier + '.json', private=True))
+            records['library'] = _record_stat(_inside(root, META + '/library.json', private=True))
+        return hashlib.sha256(json.dumps(records, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+    def local_revision(self, expectedRoot=None):
+        """Cheap publication token; no photos, provider calls, scan or writes."""
+        with self._mutex:
+            before = _record_stat(self.config_path)
+            config, root = self._local_root(expectedRoot)
+            revision = self._local_revision_locked(config, root)
+            if _record_stat(self.config_path) != before:
+                raise ImageManagerError('图库设置正在改变，请稍后重新读取。', status=409)
+            return {'root':str(root) if root else '', 'revision':revision}
 
     @contextmanager
     def _locked(self, root):
@@ -1409,13 +1533,22 @@ class ImageManagerService:
                 raise
 
     def state(self):
+        with self._mutex:
+            return self._state_locked()
+
+    def _state_locked(self):
+        config_stat = _record_stat(self.config_path)
         config = self._config()
+        if _record_stat(self.config_path) != config_stat:
+            raise ImageManagerError('图库设置正在改变，请稍后重新读取。', status=409)
         if not config.get('root'):
             return {'configured': False, 'root': '', 'deviceRoot': '', 'notionPage': '',
                     'items': [], 'inboxCount': 0, 'lastSync': None, 'plan': None, 'standardNaming':False,
-                    'standardTypes':STANDARD_TYPES,'namingPlan':None,'lastNaming':None,'lastDeletion':None,'limits': {'maxFileBytes': MAX_IMAGE_BYTES}}
+                    'standardTypes':STANDARD_TYPES,'namingPlan':None,'lastNaming':None,'lastDeletion':None,
+                    'localRevision':self._local_revision_locked(config, None),'limits': {'maxFileBytes': MAX_IMAGE_BYTES}}
         config, root, device = self._roots()
         with self._mutex:
+            revision = self._local_revision_locked(config, root)
             manifest = self._manifest(root)
             inbox = _inside(root, 'inbox')
             count = 0
@@ -1440,14 +1573,18 @@ class ImageManagerService:
                 candidate = _json(_inside(root,META+'/naming-plans/'+latest_naming['planId']+'.json',private=True),{})
                 if candidate.get('status')=='review':
                     naming=self._naming_view(candidate)
-            return {'configured': True, 'root': str(root), 'deviceRoot': str(device) if device else '',
+            result = {'configured': True, 'root': str(root), 'deviceRoot': str(device) if device else '',
                     'standardNaming':manifest.get('standardNaming',False),'standardTypes':STANDARD_TYPES,
                     'namingEpoch':manifest.get('namingEpoch',''),
                     'namingPlan':naming,'lastNaming':manifest.get('lastNaming'),
                     'lastDeletion':self._last_deletion(root,manifest),
                     'notionPage': config.get('notionPage', ''), 'items': manifest['items'],
                     'inboxCount': count, 'lastSync': manifest.get('lastSync'), 'plan': plan,
+                    'localRevision':revision,
                     'limits': {'maxFileBytes': MAX_IMAGE_BYTES, 'maxPixels': MAX_PIXELS, 'maxFiles': MAX_FILES}}
+            if self._local_revision_locked(config, root) != revision or _record_stat(self.config_path) != config_stat:
+                raise ImageManagerError('图片列表在读取期间改变，请稍后重新读取。', status=409)
+            return result
 
     def _files(self, root, *, inbox=False, space='root'):
         start = _inside(root, 'inbox') if inbox else root
@@ -1520,6 +1657,210 @@ class ImageManagerService:
                 'matches': matches[:3], 'matchCount': len(matches), 'matchReason': _same(incoming, matches[0]) if matches else '',
                 'suggestedAction': 'add' if not matches else 'keep',
                 'actions': ['keep', 'add'] if len(matches) > 1 else ['keep', 'add', 'replace'] if matches else ['keep', 'add']}
+
+    def _discovery_records(self, root):
+        """CAS for the small records which can own a review or an unfinished write."""
+        tokens = {'config':_record_stat(self.config_path)}
+        def read(name):
+            path = _inside(root, META + '/' + name, private=True)
+            before = _record_stat(path)
+            value = _json(path, {}) if before is not None else {}
+            tokens[name] = None if before is None else before + [_sha(path)]
+            if _record_stat(path) != before:
+                raise ImageManagerError('图片管理记录正在改变，请稍后重新检查。', status=409)
+            return value
+        plan = {}
+        for pointer, directory in [('latest-plan.json','plans'), ('latest-naming.json','naming-plans')]:
+            reference = read(pointer)
+            identifier = reference.get('planId')
+            if identifier is not None:
+                if not isinstance(identifier, str) or not re.fullmatch('[0-9a-f]{32}', identifier):
+                    raise ImageManagerError('图片计划指针无效，保留原记录。', status=409)
+                value = read(directory + '/' + identifier + '.json')
+                if not value:
+                    raise ImageManagerError('图片计划尚未完整保存，保留原记录。', status=409)
+                if directory == 'plans':
+                    plan = value
+                    if value.get('status') in {'prepared','applying','restoring','recovery_required'}:
+                        return tokens, plan, 'transaction_pending'
+                    if value.get('status') == 'review' and (value.get('direction') != 'inbox' or value.get('candidates')):
+                        return tokens, plan, 'active_review'
+                elif (value.get('status') in {'prepared','applying','restoring','recovery_required'}
+                      or value.get('status') == 'review' and ('manifestVersion' not in value
+                          or value['manifestVersion'] == self._manifest_version(root))):
+                    return tokens, plan, 'active_naming'
+        history = _inside(root, META + '/history', private=True)
+        if history.is_dir():
+            count = 0
+            for path in sorted(history.iterdir(), key=lambda path:path.name):
+                count += 1
+                if count > 2000:
+                    raise ImageManagerError('图片历史较多，请手动核对本地变化。', status=409)
+                if path.name.startswith('trash-') and path.is_dir():
+                    value = read('history/' + path.name + '/operation.json')
+                    if value.get('status') in {'prepared','running','restoring','applying','recovery_required'}:
+                        return tokens, plan, 'active_deletion'
+        return tokens, plan, None
+
+    def safe_refresh_local(self, payload, *, cancelled=None):
+        """Publish stable local discovery only; never move/apply an original."""
+        if (not isinstance(payload, dict) or set(payload) != {'expectedRoot','inventoryToken','inventory'}
+                or not isinstance(payload.get('expectedRoot'), str) or not payload['expectedRoot']
+                or not isinstance(payload.get('inventoryToken'), str)
+                or not re.fullmatch('[0-9a-f]{64}', payload['inventoryToken'])
+                or not isinstance(payload.get('inventory'), list) or len(payload['inventory']) > MAX_FILES):
+            raise ImageManagerError('本地发现快照无效。')
+        stopped = lambda: callable(cancelled) and bool(cancelled())
+        result = {'root':payload['expectedRoot'], 'status':'deferred', 'localRevision':None}
+        if stopped():
+            return dict(result, reason='stopped')
+        if not self._mutex.acquire(blocking=False):
+            return dict(result, reason='local_busy')
+        try:
+            config, root = self._local_root(payload['expectedRoot'])
+            def reply(status, reason=None, plan_id=None):
+                value = {'root':str(root), 'status':status,
+                         'localRevision':self._local_revision_locked(config, root)}
+                if reason:
+                    value['reason'] = reason
+                if plan_id:
+                    value['planId'] = plan_id
+                return value
+            lock = _inside(root, META + '/write.lock', private=True)
+            if (not lock.is_file() or _record_stat(lock) is None
+                    or os.name == 'nt' and lock.stat().st_size == 0):
+                return reply('deferred', 'local_lock_unavailable')
+            try:
+                with self._locked(root):
+                    if stopped():
+                        return reply('deferred', 'stopped')
+                    versions, old_plan, blocked = self._discovery_records(root)
+                    if blocked:
+                        return reply('deferred', blocked)
+                    before_version = self._manifest_version(root)
+                    original = self._manifest(root)
+                    observed = _discovery_inventory(root)
+                    if (observed['inventoryToken'] != payload['inventoryToken']
+                            or observed['inventory'] != payload['inventory']):
+                        return reply('deferred', 'inventory_changed')
+                    present = {row['path'].casefold() for row in observed['inventory']}
+                    for item in original['items']:
+                        if item['path'].casefold() not in present:
+                            old_path = _inside(root, item['path'])
+                            if old_path.exists():
+                                return reply('deferred', 'unsafe_existing_image')
+                    current, pending, cache = [], [], {}
+                    for row in observed['inventory']:
+                        if stopped():
+                            return reply('deferred', 'stopped')
+                        key = (tuple(_identity(root)), row['path'], row['device'], row['inode'], row['size'], row['mtimeNs'])
+                        entry = self._discovery_cache.get(key)
+                        if entry is None:
+                            entry = _metadata(_inside(root, row['path']), root)
+                        cache[key] = json.loads(json.dumps(entry))
+                        (pending if row['path'].split('/')[0].casefold() == 'inbox' else current).append(json.loads(json.dumps(entry)))
+                    self._discovery_cache = cache
+                    after = json.loads(json.dumps(original))
+                    self._inherit_path_annotations(current + pending,
+                        self._previous_annotation_items(root, json.loads(json.dumps(original))), after['annotations'])
+                    self._enrich(current + pending, after['annotations'], standard=after.get('standardNaming', False))
+                    retained = set(after.get('retainedPairs', []))
+                    candidates, seen = [], []
+                    for entry in current:
+                        matches = [other for other in seen if _same(entry, other) and self._pair(entry, other) not in retained]
+                        if matches:
+                            candidates.append(self._candidate(entry, matches))
+                        seen.append(entry)
+                    pool = list(current)
+                    for entry in pending:
+                        candidate = self._candidate(entry, pool)
+                        if candidate['matches'] and all(self._pair(entry, other) in retained for other in candidate['matches']):
+                            continue
+                        if any(other['path'].split('/')[0].casefold() == 'inbox' for other in candidate['matches']):
+                            candidate['actions'] = ['keep','add']
+                            candidate['target'] = entry['canonicalName']
+                        candidates.append(candidate)
+                        pool.append(entry)
+                    if len(candidates) > 1000:
+                        return reply('deferred', 'candidate_limit')
+                    # Touching a file without changing bytes does not publish a
+                    # new index, allocate review IDs on disk, or change undo CAS.
+                    semantic = lambda rows: sorted(
+                        [{key:value for key,value in row.items() if key != 'mtimeNs'} for row in rows],
+                        key=lambda row:(row.get('space','root'),row['path'].casefold(),row['path']))
+                    catalogue_changed = (semantic(current) != semantic(original['items'])
+                                         or after['annotations'] != original['annotations'])
+                    if stopped():
+                        return reply('deferred', 'stopped')
+                    actual_config, actual_root = self._local_root(payload['expectedRoot'])
+                    final_inventory = _discovery_inventory(root)
+                    final_records, _, final_blocked = self._discovery_records(root)
+                    if (actual_root != root or actual_config != config or final_inventory != observed
+                            or final_records != versions or final_blocked
+                            or self._manifest_version(root) != before_version):
+                        return reply('deferred', 'publication_changed')
+                    if stopped():
+                        return reply('deferred', 'stopped')
+                    if not catalogue_changed and not candidates:
+                        return reply('noop')
+                    after['items'] = current
+                    identifier = uuid.uuid4().hex
+                    plan = {'id':identifier, 'planId':identifier, 'root':str(root), 'rootIdentity':_identity(root),
+                            'deviceRoot':config.get('deviceRoot',''), 'deviceIdentity':config.get('deviceIdentity'),
+                            'createdAt':_now(), 'direction':'inbox', 'candidates':candidates, 'errors':[], 'status':'review',
+                            'counts':{status:sum(row['status']==status for row in candidates)
+                                      for status in ('new','duplicate','conflict','ambiguous')},
+                            'namingEpoch':after.get('namingEpoch',''), 'standardNaming':after.get('standardNaming',False)}
+                    plan_path = _inside(root, META + '/plans/' + identifier + '.json', private=True)
+                    pointer = _inside(root, META + '/latest-plan.json', private=True)
+                    if plan_path.exists():
+                        return reply('deferred', 'plan_identity_collision')
+                    owned_version = None
+                    wrote_manifest = False
+                    pointer_before = _json(pointer, {})
+                    if stopped():
+                        return reply('deferred', 'stopped')
+                    try:
+                        if catalogue_changed:
+                            wrote_manifest = True
+                            _atomic_json(_inside(root, META + '/library.json', private=True), after)
+                            owned_version = self._saved_manifest_version(root, after)
+                        else:
+                            owned_version = before_version
+                        if plan['standardNaming']:
+                            plan['namingManifestVersion'] = owned_version
+                            self._standard_plan_targets(plan, after)
+                        records_now, _, blocked_now = self._discovery_records(root)
+                        if (records_now != versions or blocked_now or self._manifest_version(root) != owned_version
+                                or _discovery_inventory(root) != observed):
+                            raise ImageManagerError('本地发现发布前的记录已改变。', status=409)
+                        _atomic_json(plan_path, plan)
+                        plan_version = _record_stat(plan_path) + [_sha(plan_path)]
+                        if _json(plan_path,{}) != plan:
+                            raise ImageManagerError('本地发现计划保存后改变。', status=409)
+                        records_now, _, blocked_now = self._discovery_records(root)
+                        if (records_now != versions or blocked_now or self._manifest_version(root) != owned_version
+                                or _discovery_inventory(root) != observed):
+                            raise ImageManagerError('本地发现发布前的记录已改变。', status=409)
+                        _atomic_json(pointer, {'planId':identifier})
+                        if (_json(pointer,{}) != {'planId':identifier} or self._manifest_version(root) != owned_version
+                                or _record_stat(plan_path) + [_sha(plan_path)] != plan_version
+                                or self._local_root(payload['expectedRoot'])[0] != config):
+                            raise ImageManagerError('本地发现发布回执已改变。', status=409)
+                    except Exception:
+                        # Never undo foreign metadata or repoint its review. An
+                        # unpublished orphan plan is harmless retained evidence.
+                        if (wrote_manifest and owned_version is not None
+                                and self._manifest_version(root) == owned_version
+                                and _json(pointer,{}) == pointer_before
+                                and self._discovery_records(root)[0] == versions):
+                            _atomic_json(_inside(root, META + '/library.json', private=True), original)
+                        return reply('deferred', 'publication_failed')
+                    return reply('updated', plan_id=identifier)
+            except (ImageManagerError, OSError):
+                return reply('deferred', 'incomplete_local_snapshot')
+        finally:
+            self._mutex.release()
 
     def scan(self, payload):
         config, root, device = self._roots(payload.get('expectedRoot'))

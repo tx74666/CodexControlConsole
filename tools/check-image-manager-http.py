@@ -315,6 +315,81 @@ class ImageHTTPChecks(unittest.TestCase):
         status, _ = self.request('POST', '/api/images/sync', original, {'Origin': 'https://attacker.example'})
         self.assertEqual(status, 403)
 
+    def test_local_revision_is_cheap_root_bound_and_keeps_discovery_distinct(self):
+        calls = []
+        observer = SimpleNamespace(status=lambda expected: calls.append(expected) or {
+            'root': expected, 'status': 'deferred', 'pending': True, 'reason': 'review_pending', 'statusRevision': '7'})
+        notion = SimpleNamespace(directory=Path(self.temporary.name)/'notion-private',
+            state=lambda **kwargs: self.fail('Revision must not hash or contact Notion'))
+        inventory = lambda: {str(p.relative_to(self.root)): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        before = inventory()
+        query = urlencode({'expectedRoot': str(self.root)})
+        with patch.object(self.world, 'IMAGE_MANAGER_WATCH', observer), \
+                patch.object(self.world, 'IMAGE_MANAGER_NOTION', notion), \
+                patch.object(self.service, 'scan', side_effect=AssertionError('Implicit scan')):
+            status, result = self.request('GET', '/api/images/revision?'+query)
+            self.assertEqual(status, 200, result)
+            self.assertEqual(result['root'], str(self.root))
+            self.assertTrue(result['localRevision']); self.assertTrue(result['changed'])
+            status, unchanged = self.request('GET', '/api/images/revision?'+query+'&'+urlencode({'since': result['localRevision']}))
+            self.assertEqual(status, 200, unchanged)
+            self.assertFalse(unchanged['changed'])
+            self.assertTrue(unchanged['localWatch']['pending'], 'Observed changes must not pretend that a new catalogue was published')
+            for invalid in [query+'&unexpected=1', query+'&expectedRoot=other', query+'&since='+('x'*257), 'since=old']:
+                self.assertEqual(self.request('GET', '/api/images/revision?'+invalid)[0], 400)
+            other = urlencode({'expectedRoot': str(self.root.parent/'Other')})
+            self.assertEqual(self.request('GET', '/api/images/revision?'+other)[0], 409)
+            self.assertEqual(self.request('GET', '/api/images/revision?'+query, headers={'Origin':'https://attacker.example'})[0], 403)
+            self.assertEqual(self.request('POST', '/api/images/revision', {'expectedRoot':str(self.root)})[0], 400)
+        self.assertEqual(calls, [str(self.root), str(self.root)])
+        self.assertEqual(inventory(), before, 'Checking a revision must not write the catalogue or a review plan')
+
+    def test_state_and_revision_share_one_local_token_without_starting_observation(self):
+        projected = {'root': str(self.root), 'status':'checking', 'pending':True, 'statusRevision':'0'}
+        observer = SimpleNamespace(status=lambda expected: dict(projected), start=lambda: self.fail('GET must not start a watcher'))
+        with patch.object(self.world, 'IMAGE_MANAGER_WATCH', observer), \
+                patch.object(self.world, 'IMAGE_MANAGER_NOTION', SimpleNamespace(
+                    directory=Path(self.temporary.name)/'notion-private', state=lambda **kwargs:{})):
+            status, state = self.request('GET', '/api/images/state')
+            self.assertEqual(status, 200, state)
+            status, revision = self.request('GET', '/api/images/revision?'+urlencode({'expectedRoot':str(self.root)}))
+            self.assertEqual(status, 200, revision)
+            self.assertEqual(state['localRevision'], revision['localRevision'])
+            self.assertEqual(state['localWatch'], projected)
+
+    def test_background_refresh_respects_notion_snapshot_and_resource_guards(self):
+        from image_manager_notion import NotionSyncError
+        calls = []
+        def refresh(payload, *, cancelled):
+            self.assertFalse(cancelled())
+            calls.append(dict(payload)); return {'root':payload['expectedRoot'], 'status':'noop'}
+        provider = SimpleNamespace(lock=threading.RLock(), busy=False,
+            _context=lambda: ({'root':str(self.root)}, None, {'operation':None}))
+        payload = {'expectedRoot':str(self.root), 'inventoryToken':'stable', 'inventory':[]}
+        with patch.object(self.world, 'IMAGE_MANAGER', SimpleNamespace(safe_refresh_local=refresh)), \
+                patch.object(self.world, 'IMAGE_MANAGER_NOTION', provider), \
+                patch.object(self.world, 'IMAGE_MANAGER_WATCH', SimpleNamespace(stopping=False)), \
+                patch.object(self.world, 'current_memory', return_value={'availableBytes':1024**3, 'usedPercent':70}) as memory:
+            self.assertEqual(self.world.refresh_discovered_images(payload)['status'], 'noop')
+            for state in ['running', 'unknown', 'needs_review']:
+                provider._context = lambda: ({'root':str(self.root)}, None, {'operation':{'root':str(self.root),'status':state}})
+                self.assertEqual(self.world.refresh_discovered_images(payload)['reason'], 'notion_pending')
+            provider.busy=True
+            self.assertEqual(self.world.refresh_discovered_images(payload)['reason'], 'notion_busy')
+            provider.busy=False
+            provider._context=lambda: ({'root':str(self.root)}, None, {'operation':{'root':'D:\\Other Root','status':'unknown'}})
+            self.assertEqual(self.world.refresh_discovered_images(payload)['status'], 'noop')
+            def unconfigured(): raise NotionSyncError('notion_target_unconfigured', 'No selected page')
+            provider._context=unconfigured
+            self.assertEqual(self.world.refresh_discovered_images(payload)['status'], 'noop')
+            def invalid(): raise NotionSyncError('notion_record_invalid', 'Invalid private record')
+            provider._context=invalid
+            self.assertEqual(self.world.refresh_discovered_images(payload)['reason'], 'notion_record_unavailable')
+            for available, used in [(199*1024**2,70),(1024**3,98)]:
+                memory.return_value={'availableBytes':available,'usedPercent':used}
+                self.assertEqual(self.world.refresh_discovered_images(payload)['reason'], 'resources_busy')
+        self.assertEqual(len(calls), 3, 'Deferred discovery must never call the catalogue commit')
+
     def test_upload_review_and_preview_use_bound_root_and_reject_escape(self):
         stream = io.BytesIO()
         Image.new('RGB', (32, 24), 'purple').save(stream, format='PNG')

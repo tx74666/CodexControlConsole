@@ -98,9 +98,11 @@ $PythonSources = @(
   "image_manager.py",
   "image_manager_http.py",
   "image_manager_notion.py",
+  "image_manager_watch.py",
   "tools/check-image-manager.py",
   "tools/check-image-manager-http.py",
   "tools/check-image-manager-notion.py",
+  "tools/check-image-manager-watch.py",
   "workspace_plan.py",
   "phone_companion.py",
   "phone_device_store.py",
@@ -402,6 +404,7 @@ finally:
   Invoke-QualityStep "Resource library JavaScript syntax" { & $Node --check resources.js }
   Invoke-QualityStep "Resource library UI behavior" { & $Node tools/check-resource-ui.mjs }
   Invoke-QualityStep "Image manager imports and replacement recovery" { & $Python tools/check-image-manager.py }
+  Invoke-QualityStep "Image manager local folder discovery" { & $Python tools/check-image-manager-watch.py }
   Invoke-QualityStep "Image manager JavaScript syntax" { & $Node --check image-manager.js }
   Invoke-QualityStep "Image manager language JavaScript syntax" { & $Node --check image-manager-i18n.js }
   Invoke-QualityStep "Image manager synchronization and review UI" { & $Node tools/check-image-manager-ui.mjs }

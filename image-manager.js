@@ -57,6 +57,17 @@
   let previewItem = null;
   let deletionTarget = null;
   let deletionRequest = null;
+  let folderTimer = 0;
+  let folderInFlight = false;
+  let folderRequestSeq = 0;
+  let folderTrackedRoot = "";
+  let folderWasVisible = false;
+  let folderWakeRequested = false;
+  let folderStopped = false;
+  let folderNeedsMerge = false;
+  let folderTargetRevision = "";
+  let folderWatch = null;
+  let folderError = "";
   const groupSelections = new Map();
   const candidateSelections = new Map();
   const handledPasteEvents = new WeakSet();
@@ -87,6 +98,109 @@
     return match ? match[0].replace(/-/g, "").toLowerCase() : "";
   }
   const configuredPageId = () => pageId(state?.notionPage) || pageId(state?.notion?.pageId);
+  const folderRevision = value => typeof value?.localRevision === "string" && value.localRevision.length > 0 && value.localRevision.length <= 256 && !/[\x00-\x1f]/.test(value.localRevision) ? value.localRevision : "";
+  function folderIsVisible() {
+    if (folderStopped || document.hidden === true || document.visibilityState === "hidden") return false;
+    if (!embedded) return true;
+    try {
+      const rect = window.frameElement?.getBoundingClientRect();
+      return Boolean(rect && rect.width > 0 && rect.height > 0);
+    } catch (_) { return false; }
+  }
+  function folderMergeProtected() {
+    return busy || deletionUncertain() || configurationDirty() || byId("locations").open
+      || ["metadataDialog", "namingDialog", "previewDialog"].some(id => byId(id).open)
+      || !byId("imagePasteMenu").hidden || !byId("imageContextMenu").hidden;
+  }
+  function renderFolderStatus() {
+    const element = byId("folderStatus");
+    if (!element) return;
+    let message = "";
+    if (folderError === "scope") message = text("图库位置已变化；当前草稿与请求保留，请核对已保存的位置。", "The library location changed. Your drafts and requests are retained; check the saved locations.");
+    else if (folderError || folderWatch?.status === "error") message = text("暂时无法检测文件夹变化；当前图片和选择保留，稍后会再检查。", "Folder changes could not be checked. Images and choices are retained; checking will resume shortly.");
+    else if (folderNeedsMerge && folderMergeProtected()) message = text("检测到文件夹变化，编辑完成后会自动更新列表。", "Folder changes detected. The list will update automatically after editing.");
+    else if (folderWatch?.pending || folderWatch?.status === "deferred") {
+      const reason = str(folderWatch.reason);
+      if (["review_pending", "active_review"].includes(reason)) message = text("文件夹检查稍后继续：请先处理当前图片比较。", "Folder checking will continue after the current image review.");
+      else if (["naming_pending", "active_naming"].includes(reason)) message = text("文件夹检查稍后继续：请先完成名称整理。", "Folder checking will continue after naming is finished.");
+      else if (reason === "active_deletion") message = text("文件夹检查稍后继续：请先核对删除结果。", "Folder checking will continue after the deletion result is checked.");
+      else if (["notion_pending", "notion_busy", "notion_record_unavailable"].includes(reason)) message = text("文件夹检查稍后继续：请先核对原同步请求。", "Folder checking will continue after the original sync request is checked.");
+      else if (reason === "resources_busy") message = text("文件夹检查稍后继续，当前操作与选择保留。", "Folder checking will continue shortly. Current operations and choices are retained.");
+      else message = text("正在检查文件夹…", "Checking the folder…");
+    }
+    else if (folderNeedsMerge) message = text("检测到文件夹变化，正在更新列表…", "Folder changes detected. Updating the list…");
+    element.hidden = !message;
+    element.dataset.status = folderError ? "error" : str(folderWatch?.status);
+    setText(element, message);
+  }
+  function cancelFolderTimer() {
+    if (folderTimer && typeof clearTimeout === "function") clearTimeout(folderTimer);
+    folderTimer = 0;
+  }
+  function queueFolderRefresh(immediate = false) {
+    if (!root || !folderRevision(state) || !folderIsVisible()) {
+      cancelFolderTimer(); folderWasVisible = false; return;
+    }
+    folderWasVisible = true;
+    if (immediate) folderWakeRequested = true;
+    if (folderInFlight) return;
+    if (folderTimer && !immediate) return;
+    cancelFolderTimer();
+    const delay = folderWakeRequested ? 0 : 5000;
+    folderWakeRequested = false;
+    folderTimer = setTimeout(() => { folderTimer = 0; void checkFolderRevision(); }, delay);
+  }
+  function observeFolderVisibility() {
+    if (!folderIsVisible()) {
+      if (folderWasVisible) folderRequestSeq++;
+      folderWasVisible = false; cancelFolderTimer(); return;
+    }
+    if (!folderWasVisible) queueFolderRefresh(true);
+  }
+  function folderScopeMatches(snapshot, seq) {
+    return seq === folderRequestSeq && snapshot.generation === generation && snapshot.root === root
+      && snapshot.pageId === configuredPageId() && snapshot.deviceRoot === str(state?.deviceRoot)
+      && snapshot.notionPage === str(state?.notionPage) && snapshot.revision === folderRevision(state) && folderIsVisible();
+  }
+  async function checkFolderRevision() {
+    if (folderInFlight || !root || !folderRevision(state) || !folderIsVisible()) { observeFolderVisibility(); return; }
+    folderInFlight = true;
+    const seq = ++folderRequestSeq;
+    const snapshot = { root, pageId: configuredPageId(), notionPage: str(state?.notionPage), deviceRoot: str(state?.deviceRoot), revision: folderRevision(state), generation };
+    try {
+      const value = await call("revision", { params: { expectedRoot: snapshot.root, since: snapshot.revision } });
+      if (!folderScopeMatches(snapshot, seq)) return;
+      if (value.root !== snapshot.root || !folderRevision(value)) throw Object.assign(new Error("Folder revision scope mismatch"), { code: "root_changed" });
+      folderError = "";
+      folderWatch = metadata(value.localWatch);
+      folderTargetRevision = folderRevision(value);
+      folderNeedsMerge = folderTargetRevision !== snapshot.revision;
+      renderFolderStatus();
+      if (!folderNeedsMerge || folderMergeProtected()) return;
+      const response = await call("state");
+      if (!folderScopeMatches(snapshot, seq)) return;
+      const next = response.state || response;
+      if (next.root !== snapshot.root || str(next.deviceRoot) !== snapshot.deviceRoot || str(next.notionPage) !== snapshot.notionPage
+          || (pageId(next.notionPage) || pageId(next.notion?.pageId)) !== snapshot.pageId) throw Object.assign(new Error("Folder snapshot scope mismatch"), { code: "root_changed" });
+      if (folderRevision(next) !== folderTargetRevision || !Array.isArray(next.items)
+          || !Object.prototype.hasOwnProperty.call(next, "plan") || next.plan !== null && !extractPlan(next)) return;
+      if (folderMergeProtected()) { renderFolderStatus(); return; }
+      folderNeedsMerge = false;
+      acceptState(next, { refill: false });
+      const nextPlan = extractPlan(next);
+      if (nextPlan) acceptPlan(nextPlan, { preserveCurrent: true });
+      else {
+        rememberDecisions(); plan = null; decisions = new Map(); reviewNeedsScan = false; renderPlan();
+      }
+      folderWatch = metadata(value.localWatch) || { status: "changed", pending: false };
+      renderFolderStatus();
+    } catch (error) {
+      if (folderScopeMatches(snapshot, seq)) { folderError = error.code === "root_changed" ? "scope" : "network"; renderFolderStatus(); }
+    } finally {
+      folderInFlight = false;
+      queueFolderRefresh(folderWakeRequested);
+    }
+  }
   const notionReady = () => state?.notion?.sourceOnly !== true && (state?.notionAvailable === true || state?.notion?.canAttempt === true || state?.notion?.available === true);
   const notionScopeMatches = value => value?.root === root && Boolean(configuredPageId()) && pageId(value.pageId) === configuredPageId();
   const mainOperation = value => value && ((["console", "local"].includes(value.source) && value.target === "notion") || value.source === "notion" && ["console", "local"].includes(value.target));
@@ -387,6 +501,7 @@
         document.documentElement.style.setProperty("--image-embed-visible-top", `${value.visibleTop}px`);
       if (Number.isFinite(value.visibleHeight) && value.visibleHeight >= 100 && value.visibleHeight <= 10000)
         document.documentElement.style.setProperty("--image-embed-visible-height", `${value.visibleHeight}px`);
+      observeFolderVisibility();
       report();
     });
     if (typeof ResizeObserver !== "undefined") new ResizeObserver(report).observe(shell);
@@ -424,6 +539,8 @@
     byId("operationStatus").dataset.error = String(error);
     byId("operationStatus").dataset.tone = success ? "success" : "normal";
     updateNotionStatus();
+    renderFolderStatus();
+    if (!busy && folderNeedsMerge && !folderMergeProtected()) queueFolderRefresh(true);
   }
   function dimensions(item) {
     const width = Number(item?.width), height = Number(item?.height);
@@ -567,6 +684,8 @@
       byId("namingRestore").disabled = true;
     }
     updateNotionStatus();
+    renderFolderStatus();
+    if (!busy && folderNeedsMerge && !folderMergeProtected()) queueFolderRefresh(true);
   }
   async function call(action, { payload, form, params } = {}) {
     const headers = {};
@@ -628,9 +747,14 @@
   }
   function acceptState(value, { refill = false } = {}) {
     if (!value || typeof value !== "object") return;
+    const hadRevision = folderRevision(state);
     const nextRoot = str(value.root);
     if (root && nextRoot && nextRoot !== root) throw new Error(currentText(errors.root_changed));
     if (nextRoot) root = nextRoot;
+    if (folderTrackedRoot !== root) {
+      folderTrackedRoot = root; folderRequestSeq++; cancelFolderTimer();
+      folderWatch = null; folderError = ""; folderNeedsMerge = false; folderTargetRevision = "";
+    }
     const libraryChanged = state && Array.isArray(value.items) && JSON.stringify(state.items) !== JSON.stringify(value.items);
     const changedWithoutProof = libraryChanged && !Object.prototype.hasOwnProperty.call(value, "notionSync") && !value.notion?.syncStatus;
     state = { ...(state || {}), ...value };
@@ -672,6 +796,9 @@
     setText(byId("lastSync"), date && !Number.isNaN(date.getTime()) ? text(`上次同步 ${date.toLocaleString("zh-CN", { hour12: false })}`, `Last sync ${date.toLocaleString("en", { hour12: false })}`) : text("尚无同步记录", "No sync recorded yet"));
     renderCollection();
     updateNotionStatus();
+    if (metadata(value.localWatch)) folderWatch = metadata(value.localWatch);
+    renderFolderStatus();
+    if (!hadRevision && folderRevision(state)) queueFolderRefresh(true);
   }
   function acceptResponse(value, token, expectedRoot) {
     if (!assertCurrent(token, expectedRoot)) return false;
@@ -681,9 +808,17 @@
     if (incomingPlan) acceptPlan(incomingPlan);
     return true;
   }
-  function acceptPlan(value) {
+  const choiceMeaning = candidate => {
+    const identity = item => !metadata(item) ? str(item) : [imageKey(item), item.width, item.height, str(item.standardType), str(item.groupId || item.groupTitle)];
+    return JSON.stringify([candidate.status, candidate.matchReason, candidate.matchCount, candidate.actions,
+      identity(candidate.incoming || candidate.source), identity(candidate.existing || candidate.target), (candidate.matches || []).map(identity)]);
+  };
+  function acceptPlan(value, { preserveCurrent = false } = {}) {
     if (value.root && value.root !== root) throw new Error(currentText(errors.root_changed));
     const previousId = planId(plan);
+    const previousChoices = preserveCurrent ? new Map(decisions) : null;
+    const meanings = preserveCurrent ? new Map((plan?.candidates || []).map(candidate => [str(candidate.id), choiceMeaning(candidate)])) : null;
+    const selectedCandidates = preserveCurrent ? [...candidateGroups(plan?.candidates || [])].map(([group]) => [group, candidateSelections.get(`${root}:${previousId}:${group}`)]) : [];
     plan = value;
     reviewNeedsScan = false;
     if (previousId !== planId(plan)) decisions = new Map();
@@ -695,6 +830,11 @@
       else if (!decisions.has(id) && defaultReplacement(candidate)) decisions.set(id, "replace");
     }
     restoreDecisions();
+    if (preserveCurrent) {
+      for (const candidate of plan.candidates) if (meanings.has(str(candidate.id)) && meanings.get(str(candidate.id)) !== choiceMeaning(candidate)) decisions.delete(str(candidate.id));
+      for (const candidate of plan.candidates) if (!candidate.previousCandidateId && previousChoices.has(str(candidate.id)) && meanings.get(str(candidate.id)) === choiceMeaning(candidate)) decisions.set(str(candidate.id), previousChoices.get(str(candidate.id)));
+      for (const [group, selected] of selectedCandidates) if (plan.candidates.some(candidate => str(candidate.id) === selected && !candidate.previousCandidateId && meanings.get(selected) === choiceMeaning(candidate))) candidateSelections.set(`${root}:${planId(plan)}:${group}`, selected);
+    }
     rememberDecisions();
     renderPlan();
   }
@@ -1398,6 +1538,7 @@
     menu.hidden = true;
     byId("dropZone").setAttribute("aria-expanded", "false");
     if (restoreFocus) byId("dropZone").focus({ preventScroll: true });
+    queueFolderRefresh(true);
   }
   function showPasteMenu(event) {
     if (!imagePasteScope(event)) return;
@@ -1418,6 +1559,7 @@
     const target = deletionTarget;
     deletionTarget = null;
     if (restoreFocus) target?.focus?.focus?.({ preventScroll: true });
+    queueFolderRefresh(true);
   }
   function deletionScope(value, snapshot, includePlan = true) {
     return value?.root === snapshot.root && root === snapshot.root && str(value.deviceRoot) === snapshot.deviceRoot
@@ -1891,6 +2033,7 @@
   byId("metadataDialog").addEventListener("close", () => {
     const path = metadataTarget?.path;
     metadataTarget = null;
+    queueFolderRefresh(true);
     setTimeout(() => {
       const current = [...byId("imageGrid").querySelectorAll("button"), ...byId("candidateList").querySelectorAll("button")].find(button => button.dataset.metadataPath === path);
       (current || metadataFocus)?.focus({ preventScroll: true });
@@ -1902,7 +2045,8 @@
   byId("namingRestore").addEventListener("click", restoreNaming);
   byId("namingClose").addEventListener("click", () => { if (!busy) byId("namingDialog").close(); });
   byId("namingDialog").addEventListener("cancel", event => { if (busy) event.preventDefault(); });
-  byId("namingDialog").addEventListener("close", () => { namingFocus?.focus({ preventScroll: true }); });
+  byId("namingDialog").addEventListener("close", () => { namingFocus?.focus({ preventScroll: true }); queueFolderRefresh(true); });
+  byId("locations").addEventListener("toggle", () => { renderFolderStatus(); if (!byId("locations").open) queueFolderRefresh(true); });
   byId("imageSearch").addEventListener("input", renderCollection);
   byId("imageFiles").addEventListener("change", event => uploadFiles(event.target.files));
   byId("reviewApply").addEventListener("click", reviewApply);
@@ -1928,6 +2072,7 @@
     byId("previewImageWrap").replaceChildren();
     publishPreviewState(false);
     previewFocus?.focus({ preventScroll: true });
+    queueFolderRefresh(true);
   });
   const dropZone = byId("dropZone");
     const openPicker = () => { if (!busy && !pendingOperation && !deletionUncertain() && root) byId("imageFiles").click(); };
@@ -1953,7 +2098,11 @@
     window.addEventListener("resize", () => closePasteMenu());
     window.addEventListener("blur", () => closeImageContextMenu());
     window.addEventListener("resize", () => closeImageContextMenu());
+    window.addEventListener("focus", () => queueFolderRefresh(true));
+    window.addEventListener("pagehide", () => { folderStopped = true; folderRequestSeq++; cancelFolderTimer(); folderWasVisible = false; });
+    window.addEventListener("pageshow", () => { folderStopped = false; queueFolderRefresh(true); });
   }
+  document.addEventListener("visibilitychange", () => { observeFolderVisibility(); if (folderIsVisible()) queueFolderRefresh(true); });
   dropZone.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openPicker(); } });
   dropZone.addEventListener("dragover", event => { event.preventDefault(); if (!busy && root) dropZone.classList.add("drag-over"); });
   dropZone.addEventListener("dragleave", event => { if (!dropZone.contains(event.relatedTarget)) dropZone.classList.remove("drag-over"); });
