@@ -150,7 +150,7 @@ python device_library.py compare --root "D:\Your documents\電腦與工作環境
 
 ### Image manager
 
-**Console → Document → Image manager**, also beside **Steamwork → Promo Art**, connects a chosen local image folder, its inbox and a native Notion folder. Drag in originals, compare duplicate or title-and-size matches, confirm replacements and synchronize selected locations. Opening the page reads saved results; replacement plans preserve originals and reject later file changes. Notion uses the existing signed-in Codex connection on demand, with original-file download and SHA-256 verification. See [Image manager](docs/image-manager.md) for directions, recovery and transfer limits.
+**Steamwork → Image** replaces the former Asset Log / Steam asset checklist in place. It connects a chosen local image folder, its inbox and a native Notion folder. Browse originals and options, compare duplicates, confirm replacements and synchronize selected locations. Configuration stays collapsed; the separate Document row and Promo Art-adjacent shortcut have been removed. Opening the panel reads saved results; replacement plans preserve originals and reject later file changes. Notion uses the existing signed-in Codex connection on demand, with original-file download and SHA-256 verification. See [Image manager](docs/image-manager.md) for directions, recovery and transfer limits.
 
 ### Local reading inbox
 

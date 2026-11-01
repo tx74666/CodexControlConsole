@@ -3016,7 +3016,15 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             else:
                 self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
+        frame_page = urllib.parse.urlsplit(self.path)
+        image_embed = (
+            self.command in {"GET", "HEAD"}
+            and frame_page.path == "/image-manager.html"
+            and urllib.parse.parse_qs(frame_page.query, keep_blank_values=True).get("embed") == ["steamwork"]
+        )
+        self.send_header("X-Frame-Options", "SAMEORIGIN" if image_embed else "DENY")
+        if image_embed:
+            self.send_header("Content-Security-Policy", "frame-ancestors 'self'")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header(
             "Permissions-Policy",

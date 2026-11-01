@@ -4069,6 +4069,12 @@ button.blender-hub-card:active {
   background: var(--meta-bg);
 }
 
+.steamwork-image-panel { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); min-width: 0; }
+.steamwork-image-panel > h3 { margin: 0 0 17px; font-size: 18px; font-weight: 650; line-height: 1.4; }
+.steamwork-image-status { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.steamwork-image-frame { display: block; width: 100%; height: 480px; border: 0; background: transparent; overflow: hidden; }
+.steamwork-image-frame:not([data-ready="true"]) { visibility: hidden; }
+
 .steamwork-assets-head {
   display: flex;
   align-items: center;

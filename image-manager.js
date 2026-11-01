@@ -2,6 +2,9 @@
 (() => {
   const byId = id => document.getElementById(id);
   const endpoint = "/api/images/";
+  const embedded = typeof window !== "undefined" && window.parent !== window
+    && new URLSearchParams(window.location.search).get("embed") === "steamwork";
+  let reviewExpanded = !embedded;
   const actions = new Set(["replace", "keep", "add"]);
   const statusLabels = { new: "新图片", duplicate: "重复图片", conflict: "替换候选", ambiguous: "多个匹配，请比较" };
   const errors = {
@@ -65,6 +68,49 @@
       && pageId(operation.pageId) === configuredPageId();
   }
   const continuationKey = id => `console-image-continuation:${root}:${id}`;
+  function setReviewExpanded(expanded) {
+    reviewExpanded = Boolean(expanded);
+    byId("reviewSection").dataset.expanded = String(reviewExpanded);
+    byId("reviewToggle").setAttribute("aria-expanded", String(reviewExpanded));
+    byId("reviewToggle").textContent = reviewExpanded ? "收起" : "查看 / 确认";
+  }
+  function initializeEmbeddedImage() {
+    if (!embedded) return;
+    document.documentElement.dataset.embed = "steamwork";
+    byId("collectionTitle").textContent = "图库";
+    byId("reviewToggle").hidden = false;
+    const shell = document.querySelector(".image-shell");
+    if (!shell) return;
+    let pending = false, previousHeight = 0;
+    const report = () => {
+      if (pending) return;
+      pending = true;
+      window.requestAnimationFrame(() => {
+        pending = false;
+        const height = Math.ceil(shell.getBoundingClientRect().height);
+        if (height < 1 || height === previousHeight) return;
+        previousHeight = height;
+        window.parent.postMessage({ channel: "console-image-embed-v1", type: "size", height }, window.location.origin);
+      });
+    };
+    window.addEventListener("message", event => {
+      const value = event.data;
+      if (event.source !== window.parent || event.origin !== window.location.origin || !value
+          || typeof value !== "object" || Array.isArray(value) || value.channel !== "console-image-embed-v1" || value.type !== "context") return;
+      if (["dark", "light"].includes(value.theme)) document.documentElement.dataset.theme = value.theme;
+      if (["en", "zh-CN"].includes(value.language)) document.documentElement.dataset.hostLanguage = value.language;
+      if (Number.isFinite(value.visibleTop) && value.visibleTop >= 0 && value.visibleTop <= 2000000)
+        document.documentElement.style.setProperty("--image-embed-visible-top", `${value.visibleTop}px`);
+      if (Number.isFinite(value.visibleHeight) && value.visibleHeight >= 100 && value.visibleHeight <= 10000)
+        document.documentElement.style.setProperty("--image-embed-visible-height", `${value.visibleHeight}px`);
+      report();
+    });
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(report).observe(shell);
+    if (typeof MutationObserver !== "undefined") new MutationObserver(report).observe(shell, { childList: true, subtree: true, attributes: true });
+    window.addEventListener("resize", report);
+    window.parent.postMessage({ channel: "console-image-embed-v1", type: "ready" }, window.location.origin);
+    report();
+  }
   function validInstruction(value, depth = 0) {
     return value && typeof value === "object" && depth < 3 && value.source === "console" && ["notion", "device"].includes(value.target) && (!value.next || validInstruction(value.next, depth + 1));
   }
@@ -319,6 +365,8 @@
     const warnings = Array.isArray(plan?.errors) ? plan.errors : [];
     byId("reviewSection").hidden = candidates.length === 0 && warnings.length === 0;
     byId("reviewCount").textContent = `${candidates.length} 项待确认`;
+    if (embedded) byId("reviewTitle").textContent = state?.inboxCount ? "Inbox" : "图片确认";
+    setReviewExpanded(reviewExpanded);
     const next = readContinuation(planId(plan));
     byId("reviewNote").textContent = next ? `确认这些图片后，将自动继续同步到${next.target === "notion" ? " Notion" : "设备文件夹"}${next.next ? "及额外设备文件夹" : ""}。重复与替换候选由你选择。` : "新图在左，已有图片在右。重复与替换候选由你选择；同尺寸不代表同一张图。";
     byId("planWarnings").hidden = warnings.length === 0;
@@ -459,7 +507,7 @@
       });
       strip.append(button);
     }
-    preview.append(strip);
+    if (!embedded || variants.length > 1) preview.append(strip);
     const footer = node("div", "asset-group-footer");
     footer.append(node("p", "image-path", `原文件：${str(selected.path)}`), metadataButton(selected));
     card.append(header, sizeField, preview, footer);
@@ -591,7 +639,7 @@
       if (!acceptResponse(value, token, expectedRoot)) return;
       const count = plan?.candidates?.length || 0;
       notice(count ? `检查完成，${count} 项图片待确认。` : "检查完成，没有待处理的图片。", false, true);
-      if (count) byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" });
+      if (count) { setReviewExpanded(true); byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" }); }
     });
   }
   async function uploadFiles(fileList) {
@@ -610,7 +658,7 @@
       const value = await call("upload", { form });
       if (!acceptResponse(value, token, expectedRoot)) return;
       notice("图片已放进 inbox。比较新旧图片并确认处理方式后，再应用更改。", false, true);
-      if (plan?.candidates?.length) byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" });
+      if (plan?.candidates?.length) { setReviewExpanded(true); byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" }); }
     });
     byId("imageFiles").value = "";
   }
@@ -680,7 +728,7 @@
       return;
     }
     notice(count ? `已准备 ${count} 项同步内容，确认下方选择后${after ? "自动继续同步" : "执行"}。` : str(value.message) || "同步检查完成，没有待处理的差异。", false, true);
-    if (count) byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" });
+    if (count) { setReviewExpanded(true); byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" }); }
   }
   function operationMessage(operation) {
     const stages = { queued: "等待开始", starting: "准备同步", connecting: "连接 Notion", verifying: "核验页面与附件", listing: "读取图片清单", scanning: "检查图片", downloading: "下载原图", uploading: "上传原图", reading: "读取 Notion 页面", fetching: "读取 Notion 页面", planning: "准备图片比较", applying: "保存图片", verifying_download: "核对下载原图", verify: "核验图片", completed: "同步完成" };
@@ -819,6 +867,7 @@
   byId("imageSearch").addEventListener("input", renderCollection);
   byId("imageFiles").addEventListener("change", event => uploadFiles(event.target.files));
   byId("reviewApply").addEventListener("click", reviewApply);
+  byId("reviewToggle").addEventListener("click", () => setReviewExpanded(!reviewExpanded));
   byId("closePreview").addEventListener("click", () => byId("previewDialog").close());
   byId("previewDialog").addEventListener("close", () => { byId("previewImageWrap").replaceChildren(); previewFocus?.focus({ preventScroll: true }); });
   const dropZone = byId("dropZone");
@@ -830,6 +879,7 @@
   dropZone.addEventListener("drop", event => { event.preventDefault(); dropZone.classList.remove("drag-over"); void uploadFiles(event.dataTransfer?.files); });
   document.addEventListener("dragover", event => { if ([...(event.dataTransfer?.types || [])].includes("Files")) event.preventDefault(); });
   document.addEventListener("drop", event => { if ([...(event.dataTransfer?.types || [])].includes("Files")) event.preventDefault(); });
+  initializeEmbeddedImage();
   updateControls();
   void loadState();
 })();

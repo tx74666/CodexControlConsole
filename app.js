@@ -81,10 +81,21 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.1.36";
+const consoleUiVersion = "1.1.37";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
+
+function steamworkImageHasDraft() {
+  const frame = document.getElementById("steamworkImageFrame");
+  if (!frame?.getAttribute("src")) return false;
+  try {
+    const content = frame.contentDocument;
+    if (!content) return true;
+    return Boolean(content.getElementById("metadataDialog")?.open || content.getElementById("locations")?.open
+      || content.getElementById("imageGrid")?.getAttribute("aria-busy") === "true");
+  } catch { return true; }
+}
 
 function refreshForNewConsoleVersion(version) {
   if (consoleVersionReloadPending || typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) return;
@@ -96,7 +107,8 @@ function refreshForNewConsoleVersion(version) {
       || window.ConsoleRepositoryPublish?.hasDraft()
       || window.ConsoleRepositoryPublish && !window.ConsoleRepositoryPublish.canReload()
       || window.ConsoleLyricsTimeline?.hasDraft()
-      || window.ConsoleLyricsTimeline && !window.ConsoleLyricsTimeline.canReload()) return;
+      || window.ConsoleLyricsTimeline && !window.ConsoleLyricsTimeline.canReload()
+      || steamworkImageHasDraft()) return;
   if (!saveWorkspaceTodoDraft()) return;
   consoleVersionReloadPending = true;
   window.location.reload();
@@ -646,6 +658,8 @@ const i18n = {
     steamworkGameContent: "\u53d1\u5e03",
     steamworkPublishTool: "SteamPipe GUI",
     steamworkArtAssets: "\u5ba3\u4f20\u56fe",
+    steamworkImageLoading: "正在读取图片…",
+    steamworkImageUnavailable: "图片暂时无法读取，请刷新当前页面。",
     steamworkGameContentLabel: "Content",
     steamworkGameContentTitle: "\u5bfc\u5165\u6e38\u620f\u5185\u5bb9",
     steamworkGameContentReady: "\u628a\u6e38\u620f\u6784\u5efa\u6587\u4ef6\u62d6\u5230 ContentBuilder/content\u3002",
@@ -1530,6 +1544,8 @@ const i18n = {
     steamworkGameContent: "Ship",
     steamworkPublishTool: "SteamPipe GUI",
     steamworkArtAssets: "Promo Art",
+    steamworkImageLoading: "Loading images…",
+    steamworkImageUnavailable: "Images could not load. Refresh this page to try again.",
     steamworkGameContentLabel: "Content",
     steamworkGameContentTitle: "Import game content",
     steamworkGameContentReady: "Drop game build files into ContentBuilder/content.",
@@ -2283,6 +2299,8 @@ const els = {
   steamworkAssetRoot: document.getElementById("steamworkAssetRoot"),
   steamworkAssetSummary: document.getElementById("steamworkAssetSummary"),
   steamworkAssetList: document.getElementById("steamworkAssetList"),
+  steamworkImageFrame: document.getElementById("steamworkImageFrame"),
+  steamworkImageStatus: document.getElementById("steamworkImageStatus"),
   steamworkAssetFileInput: document.getElementById("steamworkAssetFileInput"),
   unityStatusText: document.getElementById("unityStatusText"),
   unityBridgeStatus: document.getElementById("unityBridgeStatus"),
@@ -2658,7 +2676,7 @@ const hasSteamwork = Boolean(
   els.openSteamworkGameContent ||
   els.openSteamworkPublishTool ||
   els.openSteamworkArtAsset ||
-  els.steamworkAssetList
+  els.steamworkAssetList || els.steamworkImageFrame
 );
 const musicTierGroups = [
   { id: "first", labelKey: "musicTierFirst" },
@@ -2949,6 +2967,7 @@ async function loadModuleData(id) {
     case "unity":
       return (await loadUnityBridgeStatus()) !== false;
     case "steamwork":
+      if (els.steamworkImageFrame) { openSteamworkImagePanel(); return true; }
       return hasSteamwork ? (await loadSteamworkAssets()) !== false : true;
     case "randomrealm":
       return loadRandomRealmMusicOrderStatus();
@@ -2984,6 +3003,7 @@ function syncRuntimeActivity(options = {}) {
       scheduleWorkspaceDesktopLayoutInitialization();
       void loadActiveConsoleWorkspaceViewData();
     }
+    if (activeModuleId === "steamwork") scheduleSteamworkImageContext();
   }
 
   syncLyricsAnimationLoop();
@@ -5941,6 +5961,7 @@ function applyTheme() {
   if (els.themeToggle) {
     els.themeToggle.textContent = text(themeLabelKey(nextTheme(theme)));
   }
+  syncSteamworkImageFrame();
 }
 
 function applyThemeHistory(nextMode) {
@@ -20402,6 +20423,55 @@ function openSteamworksWebLink(url, labelKey) {
   }
 }
 
+function syncSteamworkImageFrame() {
+  const frame = els.steamworkImageFrame;
+  if (!frame?.contentWindow || !frame.getAttribute("src")) return;
+  const rect = frame.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+  const visibleTop = Math.max(0, -rect.top);
+  const visibleHeight = Math.max(160, Math.min(rect.height, window.innerHeight - rect.top) - visibleTop);
+  frame.contentWindow.postMessage({ channel: "console-image-embed-v1", type: "context",
+    theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+    language: language === "zh" ? "zh-CN" : "en", visibleTop, visibleHeight }, window.location.origin);
+}
+
+function scheduleSteamworkImageContext() {
+  const frame = els.steamworkImageFrame;
+  if (!frame || frame.imageContextPending) return;
+  frame.imageContextPending = true;
+  window.requestAnimationFrame(() => { frame.imageContextPending = false; syncSteamworkImageFrame(); });
+}
+
+function receiveSteamworkImageMessage(event) {
+  const frame = els.steamworkImageFrame;
+  const value = event.data;
+  if (!frame?.contentWindow || event.source !== frame.contentWindow || event.origin !== window.location.origin
+      || !value || typeof value !== "object" || Array.isArray(value) || value.channel !== "console-image-embed-v1") return;
+  if (value.type === "size") {
+    if (!Number.isFinite(value.height) || value.height < 1 || value.height > 2000000) return;
+    frame.style.height = `${Math.ceil(value.height) + 2}px`;
+    frame.dataset.ready = "true";
+    if (els.steamworkImageStatus) els.steamworkImageStatus.hidden = true;
+    window.clearTimeout(frame.imageReadyTimer);
+    scheduleSteamworkImageContext();
+  } else if (value.type === "ready" || value.type === "viewport") syncSteamworkImageFrame();
+}
+
+function openSteamworkImagePanel() {
+  const frame = els.steamworkImageFrame;
+  if (!frame) return;
+  if (!frame.getAttribute("src")) {
+    frame.addEventListener("load", syncSteamworkImageFrame);
+    frame.src = new URL("image-manager.html?embed=steamwork", window.location.href).href;
+    frame.imageReadyTimer = window.setTimeout(() => {
+      if (frame.dataset.ready === "true" || !els.steamworkImageStatus) return;
+      els.steamworkImageStatus.hidden = false;
+      els.steamworkImageStatus.textContent = text("steamworkImageUnavailable");
+    }, 15000);
+  }
+  syncSteamworkImageFrame();
+}
+
 function steamworkTargetLabel(kind) {
   return kind === "publishTool" ? text("steamworkPublishTool") : text("steamworkGameContent");
 }
@@ -21671,6 +21741,11 @@ if (hasMusic && els.musicAddCookieButton) {
 }
 if (hasMusic && els.musicCookieFileInput) {
   els.musicCookieFileInput.addEventListener("change", event => uploadMusicCookieFile(event.target.files));
+}
+if (els.steamworkImageFrame) {
+  window.addEventListener("message", receiveSteamworkImageMessage);
+  window.addEventListener("resize", scheduleSteamworkImageContext);
+  window.addEventListener("scroll", scheduleSteamworkImageContext, { passive: true });
 }
 if (hasSteamwork && els.openSteamworkDashboard) {
   els.openSteamworkDashboard.addEventListener("click", () => openSteamworksWebLink(steamworksAppUrl, "steamworkDashboard"));

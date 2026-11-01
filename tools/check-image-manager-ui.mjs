@@ -33,7 +33,7 @@ const candidate = { id: 'candidate1', status: 'conflict', incoming: { ...image, 
 const review = { id: 'plan1', planId: 'plan1', candidates: [candidate], errors: [] };
 const initialState = { root: originalRoot, deviceRoot: '', notionPage: '', items: [image], inboxCount: 1, plan: review };
 function makeStorage(existing = new Map()) { return { getItem: key => existing.get(key) || null, setItem: (key, value) => existing.set(key, value), removeItem: key => existing.delete(key), existing }; }
-function boot(initial, storage = makeStorage()) {
+function boot(initial, storage = makeStorage(), embedOptions = null) {
   const elements = {};
   const doc = { getElementById: id => elements[id], createElement: tag => new Element(tag, doc), documentElement: { dataset: {} }, addEventListener() {}, activeElement: null };
   for (const id of html.matchAll(/id="([^"]+)"/g)) { const element = new Element('div', doc); element.id = id[1]; elements[id[1]] = element; }
@@ -51,8 +51,25 @@ function boot(initial, storage = makeStorage()) {
     const result = typeof reply === 'function' ? reply(requests.at(-1)) : reply || (action === 'state' ? { body: current } : { body: { state: current } });
     return { ok: result.ok !== false, status: result.status || 200, json: async () => structuredClone(result.body) };
   }};
+  const embedMessages = [], embedListeners = {}, embedStyles = {};
+  let observedResize = () => {};
+  if (embedOptions) {
+    const shell = new Element('main', doc);
+    shell.getBoundingClientRect = () => ({ height: embedOptions.height || 600 });
+    doc.querySelector = selector => selector === '.image-shell' ? shell : null;
+    doc.documentElement.style = { setProperty: (name, value) => { embedStyles[name] = value; } };
+    context.window = { parent: { postMessage: (message, origin) => embedMessages.push({ message, origin }) },
+      location: { search: '?embed=steamwork', origin: 'http://fixture' },
+      addEventListener: (type, listener) => { embedListeners[type] = listener; },
+      requestAnimationFrame: callback => setImmediate(callback) };
+    context.ResizeObserver = class { constructor(callback) { observedResize = callback; } observe() {} };
+    context.MutationObserver = class { observe() {} };
+  }
   vm.runInNewContext(source, context);
-  return { elements, requests, replies, storage, setState: value => { current = structuredClone(value); } };
+  return { elements, requests, replies, storage, doc, embedMessages, embedStyles,
+    sendContext: (value, { origin = 'http://fixture', source = context.window?.parent } = {}) => embedListeners.message?.({ data: value, origin, source }),
+    resizeEmbed: height => { embedOptions.height = height; observedResize(); },
+    setState: value => { current = structuredClone(value); } };
 }
 (async () => {
   assert(html.includes('.ico'));
@@ -301,6 +318,91 @@ function boot(initial, storage = makeStorage()) {
     assert.equal(unproven.elements.checkOperation.hidden, true, 'Generic failed receipts must not gain a replay path without exact positive public evidence');
     assert.equal(unproven.requests.filter(request => request.action === 'sync').length, 0);
   }
+  const indexSource = fs.readFileSync(resolve(projectRoot, 'index.html'), 'utf8');
+  const hostSource = fs.readFileSync(resolve(projectRoot, 'app.js'), 'utf8');
+  assert(indexSource.includes('id="steamworkImageTitle">Image</h3>'));
+  assert(indexSource.includes('data-src="image-manager.html?embed=steamwork"'));
+  for (const id of ['imageManagerOpen','steamworkAssetList','steamworkAssetRoot','steamworkAssetSummary','steamworkAssetFileInput']) assert(!indexSource.includes(`id="${id}"`), `Removed checklist/extra entry must stay absent: ${id}`);
+  assert(!indexSource.includes('href="image-manager.html"'), 'Primary Image experience must not be an extra standalone link');
+  assert(html.includes('href="/steamwork.html"'), 'Standalone compatibility page must return to the actual Image host');
+  const eightPlan = { ...addPlan, candidates: Array.from({ length: 8 }, (_, i) => ({ ...addPlan.candidates[0], id: `inbox-${i}`, incoming: { ...image, path: `inbox/new-${i}.png` } })) };
+  const embeddedApp = boot({ ...groupedState, plan: eightPlan, inboxCount: 8 }, makeStorage(), { height: 600 }); await flush();
+  assert.equal(embeddedApp.doc.documentElement.dataset.embed, 'steamwork');
+  assert.equal(embeddedApp.elements.reviewSection.dataset.expanded, 'false', 'Restored Inbox must not push the primary gallery below eight review cards');
+  assert.equal(embeddedApp.elements.candidateList.children.length, 8, 'Collapsing reviews must preserve the real plan');
+  assert.equal(embeddedApp.elements.imageGrid.children.length, 2);
+  assert.equal(embeddedApp.elements.imageGrid.children.find(card => card.dataset.groupId === 'transparent-logo').querySelectorAll('button').filter(button => button.dataset.variantPath).length, 0, 'A single option must not repeat the full preview as a thumbnail');
+  assert.equal(embeddedApp.elements.imageGrid.children.find(card => card.dataset.groupId === 'logo').querySelectorAll('button').filter(button => button.dataset.variantPath).length, 2, 'All real alternative options must remain switchable');
+  await embeddedApp.elements.reviewToggle.click();
+  assert.equal(embeddedApp.elements.reviewSection.dataset.expanded, 'true');
+  await embeddedApp.elements.reviewToggle.click();
+  assert.equal(embeddedApp.requests.filter(request => ['apply','sync','scan','upload'].includes(request.action)).length, 0, 'Opening or expanding an Inbox must never alter originals or trigger synchronization');
+  embeddedApp.replies.set('scan', { body: eightPlan });
+  await embeddedApp.elements.scanImages.click();
+  assert.equal(embeddedApp.elements.reviewSection.dataset.expanded, 'true', 'An explicit check must reveal its comparison results');
+  assert(embeddedApp.embedMessages.some(value => value.message.type === 'ready' && value.origin === 'http://fixture'));
+  assert(embeddedApp.embedMessages.some(value => value.message.type === 'size' && value.message.height === 600));
+  embeddedApp.resizeEmbed(240); await flush();
+  assert(embeddedApp.embedMessages.some(value => value.message.type === 'size' && value.message.height === 240), 'Embed sizing must shrink as well as grow');
+  const trustedContext = { channel: 'console-image-embed-v1', type: 'context', theme: 'light', language: 'en', visibleTop: 120, visibleHeight: 640 };
+  embeddedApp.sendContext(trustedContext, { origin: 'https://outside.invalid' });
+  embeddedApp.sendContext(trustedContext, { source: {} });
+  assert.equal(embeddedApp.doc.documentElement.dataset.theme, undefined);
+  embeddedApp.sendContext(trustedContext); await flush();
+  assert.equal(embeddedApp.doc.documentElement.dataset.theme, 'light');
+  assert.equal(embeddedApp.doc.documentElement.dataset.hostLanguage, 'en');
+  assert.equal(embeddedApp.embedStyles['--image-embed-visible-top'], '120px');
+  assert.equal(embeddedApp.embedStyles['--image-embed-visible-height'], '640px');
+  const hostFrame = { contentWindow: {}, style: { height: '480px' }, dataset: {}, imageReadyTimer: 1 };
+  const hostContext = { els: { steamworkImageFrame: hostFrame, steamworkImageStatus: { hidden: false } }, window: { location: { origin: 'http://fixture' }, clearTimeout() {} }, scheduleSteamworkImageContext() {}, syncSteamworkImageFrame() {} };
+  const receiverStart = hostSource.indexOf('function receiveSteamworkImageMessage(event) {');
+  const receiverEnd = hostSource.indexOf('function openSteamworkImagePanel()', receiverStart);
+  vm.runInNewContext(hostSource.slice(receiverStart, receiverEnd), hostContext);
+  const sendHeight = (height, override = {}) => hostContext.receiveSteamworkImageMessage({ source: hostFrame.contentWindow, origin: 'http://fixture', data: { channel: 'console-image-embed-v1', type: 'size', height }, ...override });
+  sendHeight(900, { origin: 'https://outside.invalid' }); sendHeight(900, { source: {} });
+  for (const value of [NaN, -1, Infinity, 2000001, '900']) sendHeight(value);
+  assert.equal(hostFrame.style.height, '480px', 'Untrusted frames/origins or invalid heights must not resize the host');
+  sendHeight(700); assert.equal(hostFrame.style.height, '702px');
+  sendHeight(250); assert.equal(hostFrame.style.height, '252px');
+  assert.equal(hostFrame.dataset.ready, 'true');
+  const contextStart = hostSource.indexOf('function syncSteamworkImageFrame() {');
+  const contextEnd = hostSource.indexOf('function scheduleSteamworkImageContext()', contextStart);
+  const sentContexts = [];
+  let currentFrameRect = { width: 0, height: 0, top: 0 };
+  const contextFrame = { contentWindow: { postMessage: value => sentContexts.push(value) }, getAttribute: () => 'image-manager.html?embed=steamwork', getBoundingClientRect: () => currentFrameRect };
+  const viewportContext = { els: { steamworkImageFrame: contextFrame }, document: { documentElement: { dataset: { theme: 'dark' } } }, language: 'en', window: { innerHeight: 900, location: { origin: 'http://fixture' } } };
+  vm.runInNewContext(hostSource.slice(contextStart, contextEnd), viewportContext);
+  viewportContext.syncSteamworkImageFrame();
+  assert.equal(sentContexts.length, 0, 'Hidden module frames must not overwrite a valid dialog viewport with 160px');
+  currentFrameRect = { width: 1000, height: 800, top: 150 };
+  viewportContext.syncSteamworkImageFrame();
+  assert.equal(sentContexts[0].visibleHeight, 750);
+  assert(hostSource.includes('if (activeModuleId === "steamwork") scheduleSteamworkImageContext();'), 'Returning to a loaded Steamwork module must refresh its viewport without reloading data');
+  const moduleStart = hostSource.indexOf('    case "steamwork":');
+  const moduleEnd = hostSource.indexOf('    case "randomrealm":', moduleStart);
+  let inlineOpens = 0;
+  const moduleContext = { els: { steamworkImageFrame: {} }, openSteamworkImagePanel() { inlineOpens++; }, hasSteamwork: true, loadSteamworkAssets() { throw new Error('Legacy checklist must not be requested by the new Image panel'); } };
+  assert.equal(await vm.runInNewContext(`(async () => {${hostSource.slice(moduleStart, moduleEnd).replace('    case "steamwork":','')}})()`, moduleContext), true);
+  assert.equal(inlineOpens, 1);
+  const draftStart = hostSource.indexOf('function steamworkImageHasDraft() {');
+  const draftEnd = hostSource.indexOf('function refreshForNewConsoleVersion(', draftStart);
+  let draftFrame = null;
+  const draftContext = { document: { getElementById: () => draftFrame } };
+  vm.runInNewContext(hostSource.slice(draftStart, draftEnd), draftContext);
+  assert.equal(draftContext.steamworkImageHasDraft(), false);
+  draftFrame = { getAttribute: () => null };
+  assert.equal(draftContext.steamworkImageHasDraft(), false);
+  const frameFields = { metadataDialog: { open: false }, locations: { open: false }, imageGrid: { getAttribute: () => 'false' } };
+  draftFrame = { getAttribute: () => 'image-manager.html?embed=steamwork', contentDocument: { getElementById: id => frameFields[id] } };
+  assert.equal(draftContext.steamworkImageHasDraft(), false);
+  frameFields.metadataDialog.open = true; assert.equal(draftContext.steamworkImageHasDraft(), true);
+  frameFields.metadataDialog.open = false; frameFields.locations.open = true; assert.equal(draftContext.steamworkImageHasDraft(), true);
+  frameFields.locations.open = false; frameFields.imageGrid.getAttribute = () => 'true'; assert.equal(draftContext.steamworkImageHasDraft(), true);
+  frameFields.imageGrid.getAttribute = () => 'false'; assert.equal(draftContext.steamworkImageHasDraft(), false);
+  draftFrame = { getAttribute: () => 'image-manager.html?embed=steamwork', get contentDocument() { throw new Error('not same origin'); } };
+  assert.equal(draftContext.steamworkImageHasDraft(), true);
+  assert(hostSource.slice(draftEnd, hostSource.indexOf('function consoleWindowSessionId()', draftEnd)).includes('steamworkImageHasDraft()'), 'Automatic update reload must consult the embedded editor/busy guard');
+  console.log('PASS inline Image: original panel replacement, no duplicate entries/checklist fetch, collapsed Inbox, preserved plan, real variants, authenticated resize/theme bridge, grow/shrink and standalone compatibility.');
   console.log('PASS: IDs, literal titles, root/space preview binding, conflict defaults, failed apply preservation, reload decisions, inbox-only upload, one-click new sync, conflict gating, skipped-file visibility.');
   console.log('PASS: First-connection availability, async phase polling, operation/plan binding, no old-plan apply, completed upload receipt, unknown-result resume without reposting.');
   console.log('PASS: Compact new cards, full-width conflict comparison, local inbox-to-Notion-to-device sequence, saved conflict continuation after reload, undo receipt and changed-file rejection.');

@@ -50,11 +50,11 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="styles.css?v=console-images-1.1.36-20261101">
+  <link rel="stylesheet" href="styles.css?v=console-images-1.1.37-20261101">
   <link rel="stylesheet" href="transfer-panel.css?v=console-transfer-1.0.93-20261011">
   <link rel="stylesheet" href="workflow-panel.css?v=console-mobile-refresh-1.0.93-20261011">
   <link rel="stylesheet" href="codex-work-panel.css?v=console-mobile-refresh-1.0.93-20261011">
-  <link rel="stylesheet" href="conversations-panel.css?v=console-images-1.1.36-20261101">
+  <link rel="stylesheet" href="conversations-panel.css?v=console-images-1.1.37-20261101">
   <link rel="stylesheet" href="incubator-panel.css?v=console-mobile-refresh-1.0.93-20261011">
   <link rel="stylesheet" href="console-developer-update.css?v=console-developer-update-1.0.93-20261011">
   <link rel="stylesheet" href="console-repository-publish.css?v=console-repository-publish-1.1.32">
@@ -283,7 +283,6 @@
             <div id="documentInboxEntries" class="document-inbox-entries" role="tabpanel" aria-labelledby="documentInboxTabInbox"></div>
           </section>
           <a id="resourceLibraryOpen" class="document-resources-entry" href="resources.html" style="text-decoration:none"><strong>资源库</strong><span>看图挑选 / 已收藏 / 联网找资源</span><span aria-hidden="true">↗</span></a>
-          <a id="imageManagerOpen" class="document-resources-entry" href="image-manager.html" style="text-decoration:none"><strong>Image manager</strong><span>图库 / Inbox / 重复对比 / 同步</span><span aria-hidden="true">↗</span></a>
           <button id="documentResourcesOpen" class="document-resources-entry" type="button" aria-haspopup="dialog"><strong data-i18n="documentResourcesTitle">资料</strong><span data-i18n="documentResourcesEntry">阅读重点 / AI 记录</span><span aria-hidden="true">↗</span></button>
           <dialog id="documentResourcesDialog" class="document-resources-dialog" aria-labelledby="documentResourcesTitle">
             <div class="document-resources-head"><h2 id="documentResourcesTitle" data-i18n="documentResourcesTitle">资料</h2><button id="documentResourcesClose" class="ghost-button" type="button" data-i18n="documentResourcesClose" autofocus>关闭</button></div>
@@ -1145,22 +1144,13 @@
           <button id="openSteamworkGameContent" class="ghost-button" type="button" data-i18n="steamworkGameContent">Ship</button>
           <button id="openSteamworkPublishTool" class="ghost-button" type="button" data-i18n="steamworkPublishTool">SteamPipe GUI</button>
           <button id="openSteamworkArtAsset" class="ghost-button" type="button" data-i18n="steamworkArtAssets">Promo Art</button>
-          <a class="ghost-button" href="image-manager.html" style="text-decoration:none">Image manager</a>
         </div>
 
-        <details class="steamwork-assets" aria-label="Steamwork asset checklist">
-          <summary class="steamwork-assets-head">
-            <div>
-              <span data-i18n="steamworkAssetsLabel">Assets</span>
-              <h3 data-i18n="steamworkAssetsTitle">Steam asset checklist</h3>
-              <small id="steamworkAssetRoot" class="steamwork-asset-root"></small>
-            </div>
-            <span id="steamworkAssetSummary" class="workspace-pill" data-i18n="steamworkAssetLoading">Loading assets</span>
-          </summary>
-          <div id="steamworkAssetList" class="steamwork-asset-list">
-            <div class="steamwork-empty" data-i18n="steamworkAssetLoading">Loading assets</div>
-          </div>
-        </details>
+        <section id="steamworkImagePanel" class="steamwork-image-panel" aria-labelledby="steamworkImageTitle">
+          <h3 id="steamworkImageTitle">Image</h3>
+          <p id="steamworkImageStatus" class="steamwork-image-status" role="status" data-i18n="steamworkImageLoading">正在读取图片…</p>
+          <iframe id="steamworkImageFrame" class="steamwork-image-frame" title="Image" data-src="image-manager.html?embed=steamwork" scrolling="no" referrerpolicy="same-origin"></iframe>
+        </section>
 
         <details class="steamwork-tips" aria-label="Steamwork publish tips" open>
           <summary>
@@ -1444,7 +1434,6 @@
   <input id="randomRealmTextureFileInput" type="file" multiple accept=".zip,.png,.jpg,.jpeg,.tga,.tif,.tiff,.bmp,.webp,.exr,.hdr,image/png,image/jpeg,image/bmp,image/webp" hidden>
   <input id="steamworkGameContentFileInput" type="file" multiple hidden>
   <input id="steamworkPublishToolFileInput" type="file" multiple hidden>
-  <input id="steamworkAssetFileInput" type="file" accept=".png,.jpg,.jpeg,.webp,.ico,.psd,.mp4,.mov,.wmv,image/png,image/jpeg,image/webp,video/mp4,video/quicktime" multiple hidden>
   <audio id="audioPlayer" preload="metadata"></audio>
 
 <script src="/api/release-defaults.js"></script>
@@ -1452,12 +1441,12 @@
 <script src="transfer-panel.js?v=console-transfer-1.0.93-20261011"></script>
 <script src="workflow-panel.js?v=console-mobile-refresh-1.0.93-20261011"></script>
 <script src="codex-work-panel.js?v=console-mobile-refresh-1.0.93-20261011"></script>
-<script src="conversations-panel.js?v=console-images-1.1.36-20261101"></script>
+<script src="conversations-panel.js?v=console-images-1.1.37-20261101"></script>
 <script src="incubator-panel.js?v=console-mobile-refresh-1.0.93-20261011"></script>
 <script src="dev-room-editor.js?v=dev-room-readable-1"></script>
 
   <script src="lyrics-sentence-timeline.js?v=1.1.14"></script>
-  <script src="app.js?v=console-images-1.1.36-20261101"></script>
+  <script src="app.js?v=console-images-1.1.37-20261101"></script>
 <script src="phone-pairing.js?v=console-connect-1.0.27"></script>
 <script src="phone-offline-export.js?v=console-connect-1.0.27"></script>
 <script src="console-developer-update.js?v=console-developer-update-1.0.93-20261011"></script>

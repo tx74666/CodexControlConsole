@@ -6,13 +6,13 @@
   <meta name="theme-color" content="#111a27">
   <title>Console · Image manager</title>
   <link rel="icon" href="favicon.ico">
-  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.36-20261101">
-  <script src="image-manager.js?v=images-variants-1.1.36-20261101" defer></script>
+  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.37-20261101">
+  <script src="image-manager.js?v=images-variants-1.1.37-20261101" defer></script>
 </head>
 <body>
   <main class="image-shell">
     <header class="page-header">
-      <a class="back-link" href="/?consoleView=document"><span aria-hidden="true">←</span> 返回 Console</a>
+      <a class="back-link" href="/steamwork.html"><span aria-hidden="true">←</span> 返回 Steamwork</a>
       <div class="heading-row"><div><p class="eyebrow">CONSOLE · YOUR IMAGE LIBRARY</p><h1>Image manager<span class="title-dot" aria-hidden="true">.</span></h1></div><span class="header-mark" aria-hidden="true">▧</span></div>
       <p class="page-intro">放进文件夹，检查新旧图片，选好再同步。标题与实际尺寸一起保留。</p>
     </header>
@@ -46,7 +46,7 @@
     </section>
 
     <section id="reviewSection" class="review-section" aria-labelledby="reviewTitle" hidden>
-      <div class="section-heading"><div><p class="eyebrow">REVIEW BEFORE REPLACING</p><h2 id="reviewTitle">确认图片</h2></div><span id="reviewCount" class="count-badge"></span></div>
+      <div class="section-heading"><div><p class="eyebrow">REVIEW BEFORE REPLACING</p><h2 id="reviewTitle">确认图片</h2></div><span id="reviewCount" class="count-badge"></span><button id="reviewToggle" class="secondary-button" type="button" aria-expanded="false" aria-controls="candidateList" hidden>查看 / 确认</button></div>
       <p id="reviewNote" class="section-note">新图在左，已有图片在右。重复与替换候选由你选择；同尺寸不代表同一张图。</p>
       <p id="planWarnings" class="plan-warnings" role="status" hidden></p>
       <div id="candidateList" class="candidate-list"></div>

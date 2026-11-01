@@ -165,3 +165,32 @@ dialog::backdrop { background: rgba(5,10,19,.8); }
 @media (max-width: 680px) { .image-shell { padding: 20px 18px; } .library-panel { padding: 18px; } .heading-row { margin-top: 20px; } .header-mark { font-size: 40px; } .connection-grid { grid-template-columns: 1fr; gap: 16px; margin-top: 18px; } #configForm { grid-template-columns: 1fr; } .drop-zone { padding: 17px 13px; gap: 10px; } .inbox-badge { padding: 5px; font-size: 9px; } .sync-controls { gap: 7px; } .compact-field select { max-width: 148px; padding: 11px 6px; } .compact-field > span { display: none; } .comparison { grid-template-columns: 1fr; } .comparison-side + .comparison-side { border-left: 0; border-top: 1px solid var(--line); } .comparison-side { padding: 13px; } .thumbnail-button img { height: 190px; } .image-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 11px; } .image-card .thumbnail-button img { height: 145px; } .image-card-content { padding: 10px; } .page-footer { flex-direction: column; gap: 6px; } .section-heading { gap: 10px; } h2 { font-size: 19px; } .search-field { width: 45%; } .candidate-heading { padding: 14px; } .match-tag { font-size: 9px; white-space: normal; text-align: center; } .decision-choices { padding: 11px; } .decision-choice { padding: 8px; } .review-footer { align-items: flex-start; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0s !important; transition: none !important; } }
 @media (max-width: 680px) { .image-grid { grid-template-columns: 1fr; } .asset-group-preview .thumbnail-button img { height: 210px; } }
+
+html[data-embed="steamwork"], html[data-embed="steamwork"] body { min-height: 0; height: auto; background: transparent; overflow: clip; }
+html[data-embed="steamwork"] .image-shell { max-width: none; margin: 0; padding: 0; }
+html[data-embed="steamwork"] .page-header,
+html[data-embed="steamwork"] .page-footer,
+html[data-embed="steamwork"] .connection-grid,
+html[data-embed="steamwork"] .library-panel > .section-heading,
+html[data-embed="steamwork"] .eyebrow,
+html[data-embed="steamwork"] .inbox-badge { display: none; }
+html[data-embed="steamwork"] .library-panel { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+html[data-embed="steamwork"] .locations { margin-top: 0; border-top: 0; }
+html[data-embed="steamwork"] .locations > summary { padding-top: 0; font-size: 11px; }
+html[data-embed="steamwork"] .drop-zone { margin-top: 13px; padding: 13px 15px; }
+html[data-embed="steamwork"] .action-bar { margin-top: 12px; gap: 10px; }
+html[data-embed="steamwork"] .sync-controls { max-width: 100%; }
+html[data-embed="steamwork"] .operation-status { margin-top: 10px; }
+html[data-embed="steamwork"] .review-section { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; }
+html[data-embed="steamwork"] .review-section .section-heading { gap: 10px; }
+html[data-embed="steamwork"] .review-section .section-heading > div { margin-right: auto; }
+html[data-embed="steamwork"] .review-section h2 { font-size: 14px; }
+html[data-embed="steamwork"] #reviewToggle { min-height: 31px; padding: 7px 10px; font-size: 11px; }
+html[data-embed="steamwork"] .review-section[data-expanded="false"] > .section-note,
+html[data-embed="steamwork"] .review-section[data-expanded="false"] > .plan-warnings,
+html[data-embed="steamwork"] .review-section[data-expanded="false"] > .candidate-list,
+html[data-embed="steamwork"] .review-section[data-expanded="false"] > .review-footer { display: none; }
+html[data-embed="steamwork"] .collection-section { margin-top: 23px; }
+html[data-embed="steamwork"] .collection-section h2 { font-size: 17px; }
+html[data-embed="steamwork"] dialog[open] { position: fixed; inset: auto 0 auto; top: calc(var(--image-embed-visible-top, 0px) + 16px); margin: 0 auto; max-height: calc(var(--image-embed-visible-height, 80vh) - 32px); overflow: auto; }
+html[data-embed="steamwork"] #previewImageWrap img { max-height: calc(var(--image-embed-visible-height, 80vh) - 155px); }

@@ -55,7 +55,7 @@ class ImageHTTPChecks(unittest.TestCase):
         self.worker.join(5)
         self.server.server_close()
 
-    def request(self, method, path, payload=None, headers=None):
+    def request(self, method, path, payload=None, headers=None, *, response_headers=False):
         outgoing = dict(headers or {})
         body = payload
         if isinstance(payload, dict):
@@ -70,6 +70,8 @@ class ImageHTTPChecks(unittest.TestCase):
                 result = json.loads(raw)
             except (ValueError, UnicodeError):
                 result = raw
+            if response_headers:
+                return response.status, result, {key.lower():value for key,value in response.getheaders()}
             return response.status, result
         finally:
             client.close()
@@ -83,6 +85,22 @@ class ImageHTTPChecks(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn(b'image-manager.js', shell)
         self.assertEqual(list(self.root.iterdir()), before)
+
+    def test_only_explicit_image_embed_can_be_framed_by_its_own_console_origin(self):
+        for method in ('GET', 'HEAD'):
+            status, _, headers = self.request(method, '/image-manager.html?embed=steamwork', response_headers=True)
+            self.assertEqual(status, 200)
+            self.assertEqual(headers.get('x-frame-options'), 'SAMEORIGIN')
+            self.assertEqual(headers.get('content-security-policy'), "frame-ancestors 'self'")
+        for path in ('/image-manager.html', '/image-manager.html?embed=other',
+                     '/image-manager.html?embed=steamwork&embed=other',
+                     '/image-manager.html?embed=steamwork&embed=',
+                     '/index.html?embed=steamwork', '/image-manager.js?embed=steamwork',
+                     '/api/images/state?embed=steamwork'):
+            with self.subTest(path=path):
+                _, _, headers = self.request('GET', path, response_headers=True)
+                self.assertEqual(headers.get('x-frame-options'), 'DENY')
+                self.assertNotIn('content-security-policy', headers)
 
     def test_untrusted_host_origin_and_nonlocal_requests_cannot_write(self):
         payload = {'expectedRoot': str(self.root)}

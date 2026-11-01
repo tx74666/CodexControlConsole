@@ -1,6 +1,6 @@
 # Image manager
 
-Open **Console → Document → Image manager**, or the same link beside **Steamwork → Promo Art**. The page shares the existing installed Console and its user data. Opening it reads the saved catalogue; scans and synchronization run when requested.
+Open **Steamwork → Image**, in the position previously occupied by Asset Log / Steam asset checklist. Image replaces that checklist with image browsing, Inbox review, options and directional synchronization. Configuration and saved Inbox review remain collapsed until needed; checking or importing pictures opens their review. A single available option does not repeat its thumbnail beside the main preview. The separate Document row and Promo Art-adjacent shortcut have been removed; the existing standalone URL remains compatible. Opening the panel reads the saved catalogue; scans and synchronization run when requested.
 
 Choose an existing local image folder and a native Notion folder. The local folder holds the library; its `inbox/` accepts new pictures. Dragging files onto the page stages their original bytes in an inbox batch. PNG, JPEG, WebP, GIF, BMP, TIFF and ICO are supported. An optional separate folder can be used for an additional device or mounted drive.
 
