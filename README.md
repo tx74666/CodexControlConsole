@@ -148,6 +148,10 @@ python device_library.py status --root "D:\Your documents\電腦與工作環境"
 python device_library.py compare --root "D:\Your documents\電腦與工作環境" --before "<snapshot-id>" --after "<snapshot-id>"
 ```
 
+### Image manager
+
+**Console → Document → Image manager**, also beside **Steamwork → Promo Art**, connects a chosen local image folder, its inbox and a native Notion folder. Drag in originals, compare duplicate or title-and-size matches, confirm replacements and synchronize selected locations. Opening the page reads saved results; replacement plans preserve originals and reject later file changes. Notion uses the existing signed-in Codex connection on demand, with original-file download and SHA-256 verification. See [Image manager](docs/image-manager.md) for directions, recovery and transfer limits.
+
 ### Local reading inbox
 
 Document groups local reports into a compact **To read / Later / Archive** tab bar below the device overview. Opening a report does not change its state. Checking **Read** moves it to Archive; unchecking returns it to To read. A small bookmark button moves a report to Later, or back to To read if it is already in Later. Later holds reports for follow-up without adding to the Document attention badge. Each category shows its own count and stays accessible when empty.

@@ -109,6 +109,8 @@ def main():
             "DeveloperUpdateError": DeveloperUpdateError, "CONSOLE_DEVELOPER_UPDATE": service,
             "BLENDER_MUTATION_API_PATHS": frozenset(),
             "PHONE_DEVICE_STORE": SimpleNamespace(directory=app_dir / "phone-private"),
+            "IMAGE_MANAGER": SimpleNamespace(config_path=app_dir / "cache/image-manager.json"),
+            "IMAGE_MANAGER_NOTION": SimpleNamespace(directory=app_dir / "cache/image-manager-notion-private", busy=False),
             "WORKFLOW_DATA_DIR": app_dir / "workflow-private",
             "TRUSTED_LOCAL_REQUEST_HOSTNAMES": {"localhost"},
             "_PRIVATE_REQUEST_NETWORKS": tuple(ipaddress.ip_network(value) for value in

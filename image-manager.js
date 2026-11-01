@@ -1,0 +1,835 @@
+"use strict";
+(() => {
+  const byId = id => document.getElementById(id);
+  const endpoint = "/api/images/";
+  const actions = new Set(["replace", "keep", "add"]);
+  const statusLabels = { new: "新图片", duplicate: "重复图片", conflict: "替换候选", ambiguous: "多个匹配，请比较" };
+  const errors = {
+    root_changed: "图库位置已变化，请重新打开页面读取。当前选择已保留。",
+    revision_conflict: "图片在比较后发生了变化，请重新检查后选择。",
+    plan_stale: "图片在比较后发生了变化，请重新检查后选择。",
+    plan_not_found: "这份比较记录已不可用，请重新检查图片。",
+    notion_unavailable: "Notion 同步连接尚未就绪。页面地址可先保存，本地图与设备同步仍可使用。",
+    device_not_configured: "请先在「图库与同步位置」填写设备文件夹。"
+  };
+  let state = null;
+  let root = "";
+  let busy = false;
+  let generation = 0;
+  let plan = null;
+  let decisions = new Map();
+  let previewFocus = null;
+  let pendingOperation = null;
+  let lastApplied = null;
+  let metadataTarget = null;
+  let metadataFocus = null;
+  const groupSelections = new Map();
+  const continuations = new Map();
+  const pendingStatuses = new Set(["pending", "queued", "running", "in_progress", "starting"]);
+  const completeStatuses = new Set(["completed", "succeeded", "success", "done", "needs_review"]);
+  const str = value => typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
+  const node = (tag, className, value) => {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (value !== undefined) element.textContent = value;
+    return element;
+  };
+  const metadata = value => value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const planId = value => str(value?.planId || value?.id);
+  const decisionKey = () => `console-image-decisions:${root}:${planId(plan)}`;
+  const operationKey = () => `console-image-operation:${root}`;
+  function pageId(value) {
+    const match = str(value).match(/[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}/i);
+    return match ? match[0].replace(/-/g, "").toLowerCase() : "";
+  }
+  const configuredPageId = () => pageId(state?.notionPage) || pageId(state?.notion?.pageId);
+  function canRecheckOperation(operation) {
+    return operation?.status === "unknown" && operation.code === "catalog_attached_unverified"
+      || operation?.recheckable === true && operation.recheckKind === "verified_completion"
+        && (operation.status === "failed" && operation.code === "notion_sync_failed"
+            || operation.status === "unknown" && operation.code === "verified_completion_unrecorded");
+  }
+  function recoveryScopeMatches(operation, expectedRoot) {
+    const pending = pendingOperation;
+    const source = byId("syncSource").value, target = byId("syncTarget").value;
+    const actualSource = source === "local" && ["notion", "all"].includes(target) ? "console" : source;
+    const actualTarget = target === "all" ? source === "notion" ? "console" : "notion" : target;
+    const selectionMatches = (!pending?.uiSource || pending.uiSource === source)
+      && (!pending?.uiTarget || pending.uiTarget === target)
+      && ((source === operation.source && target === operation.target)
+          || (actualSource === operation.source && actualTarget === operation.target));
+    return pending && operation.requestId === pending.requestId
+      && operation.root === expectedRoot && operation.root === root && operation.root === pending.root
+      && operation.source === pending.source && operation.target === pending.target && selectionMatches
+      && Boolean(pageId(operation.pageId)) && pageId(operation.pageId) === pending.pageId
+      && pageId(operation.pageId) === configuredPageId();
+  }
+  const continuationKey = id => `console-image-continuation:${root}:${id}`;
+  function validInstruction(value, depth = 0) {
+    return value && typeof value === "object" && depth < 3 && value.source === "console" && ["notion", "device"].includes(value.target) && (!value.next || validInstruction(value.next, depth + 1));
+  }
+  function rememberContinuation(id, instruction) {
+    const value = { root, planId: id, instruction };
+    continuations.set(continuationKey(id), value);
+    try { sessionStorage.setItem(continuationKey(id), JSON.stringify(value)); } catch (_) { /* Keep the continuation in memory when storage is unavailable. */ }
+  }
+  function readContinuation(id) {
+    try {
+      const value = continuations.get(continuationKey(id)) || JSON.parse(sessionStorage.getItem(continuationKey(id)) || "null");
+      return value?.root === root && value?.planId === id && validInstruction(value.instruction) ? value.instruction : null;
+    } catch (_) { return null; }
+  }
+  function clearContinuation(id) {
+    continuations.delete(continuationKey(id));
+    try { sessionStorage.removeItem(continuationKey(id)); } catch (_) { /* Optional storage. */ }
+  }
+
+  try {
+    const theme = localStorage.getItem("codexControl.theme.v1");
+    if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+  } catch (_) { /* Theme storage is optional. */ }
+
+  function notice(message, error = false, success = false) {
+    byId("operationStatus").textContent = message;
+    byId("operationStatus").dataset.error = String(error);
+    byId("operationStatus").dataset.tone = success ? "success" : "normal";
+  }
+  function dimensions(item) {
+    const width = Number(item?.width), height = Number(item?.height);
+    return Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0 ? `${width} × ${height}` : "尺寸待读取";
+  }
+  function title(item) {
+    return str(item?.displayTitle || item?.title || item?.name || item?.path?.split(/[\\/]/).at(-1)) || "未命名图片";
+  }
+  const originalName = item => str(item?.name || item?.path?.split(/[\\/]/).at(-1));
+  const groupTitle = item => str(item?.groupTitle) || title(item);
+  const variantTitle = item => str(item?.variantLabel) || "未标注方案";
+  const imageKey = item => `${str(item?.space) || "root"}:${str(item?.path)}:${str(item?.sha256)}`;
+  function schemeKey(item) {
+    const items = Array.isArray(state?.items) ? state.items : [];
+    const seen = new Set();
+    let current = item;
+    while (current?.derivedFromId && !seen.has(current.derivedFromId)) {
+      seen.add(current.derivedFromId);
+      const parent = items.find(value => str(value.assetId || value.sha256) === current.derivedFromId || value.id === current.derivedFromId);
+      if (!parent) break;
+      current = parent;
+    }
+    return str(current?.variantId || current?.assetId || current?.sha256 || current?.path);
+  }
+  function previewUrl(item) {
+    const path = str(item?.previewPath || item?.path);
+    if (!path || !root) return "";
+    const query = new URLSearchParams({ path, expectedRoot: root });
+    if (item?.space === "device") query.set("space", "device");
+    return `${endpoint}preview?${query}`;
+  }
+  function updateControls() {
+    for (const id of ["libraryRoot", "deviceRoot", "notionPage", "saveConfig", "syncSource", "syncTarget"]) byId(id).disabled = busy;
+    for (const id of ["scanImages", "syncImages", "imageFiles"]) byId(id).disabled = busy || !root || Boolean(pendingOperation);
+    byId("dropZone").setAttribute("aria-disabled", String(busy || !root || Boolean(pendingOperation)));
+    byId("dropZone").tabIndex = busy || !root || pendingOperation ? -1 : 0;
+    byId("imageGrid").setAttribute("aria-busy", String(busy));
+    byId("operationStatus").dataset.busy = String(busy);
+    byId("checkOperation").hidden = !pendingOperation || busy;
+    byId("checkOperation").disabled = busy;
+    if (pendingOperation) byId("syncImages").disabled = true;
+    byId("restoreImages").hidden = !lastApplied || lastApplied.root !== root;
+    byId("restoreImages").disabled = busy || Boolean(pendingOperation);
+    for (const id of ["metadataGroupTitle", "metadataVariantLabel", "metadataDerivedFrom", "metadataSave", "metadataClose"]) byId(id).disabled = busy;
+    for (const button of document.querySelectorAll?.("button") || []) if (button.dataset.metadataPath) button.disabled = busy || Boolean(pendingOperation);
+    for (const fieldset of byId("candidateList").querySelectorAll("fieldset")) fieldset.disabled = busy;
+    const selected = plan?.candidates?.filter(candidate => actions.has(decisions.get(str(candidate.id)))) || [];
+    const unresolved = (plan?.candidates?.length || 0) - selected.length;
+    byId("reviewApply").disabled = busy || Boolean(pendingOperation) || selected.length === 0 || unresolved !== 0;
+    byId("reviewApply").textContent = unresolved ? `还有 ${unresolved} 项待选择` : selected.length ? `确认所选 ${selected.length} 项` : "先选择处理方式";
+    byId("decisionSummary").textContent = selected.length ? `已选择 ${selected.length} 项${unresolved ? `，还有 ${unresolved} 项待选择` : ""}` : "重复和替换候选需要你选择处理方式。";
+  }
+  async function call(action, { payload, form, params } = {}) {
+    const headers = {};
+    if (payload !== undefined) headers["Content-Type"] = "application/json";
+    const response = await fetch(`${endpoint}${action}${params ? `?${new URLSearchParams(params)}` : ""}`, {
+      method: payload !== undefined || form ? "POST" : "GET", headers,
+      credentials: "same-origin", mode: "same-origin", cache: "no-store", redirect: "error",
+      ...(form ? { body: form } : payload !== undefined ? { body: JSON.stringify(payload) } : {})
+    });
+    let value;
+    try { value = await response.json(); } catch (_) { throw new Error("暂时无法读取图片服务，当前图片与选择已保留。"); }
+    if (!response.ok || value?.ok === false) {
+      const code = str(value?.code || value?.error);
+      const error = new Error(errors[code] || str(value?.message) || str(value?.error) || `这次操作未完成（${response.status}），当前选择已保留。`);
+      error.code = code;
+      error.httpStatus = response.status;
+      throw error;
+    }
+    return value;
+  }
+  function assertCurrent(token, expectedRoot) {
+    return token === generation && (!expectedRoot || expectedRoot === root);
+  }
+  async function run(message, task) {
+    if (busy) return;
+    busy = true;
+    const token = ++generation;
+    const expectedRoot = root;
+    notice(message);
+    updateControls();
+    try { await task(token, expectedRoot); }
+    catch (error) { if (assertCurrent(token, expectedRoot)) notice(error.message || "这次操作未完成，当前选择已保留。", true); }
+    finally { if (token === generation) { busy = false; updateControls(); } }
+  }
+  function rememberDecisions() {
+    if (!planId(plan)) return;
+    try { sessionStorage.setItem(decisionKey(), JSON.stringify([...decisions])); } catch (_) { /* The server retains the plan. */ }
+  }
+  function restoreDecisions() {
+    const allowed = new Set(plan.candidates.map(candidate => str(candidate.id)));
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(decisionKey()) || "null");
+      if (Array.isArray(saved)) for (const entry of saved) {
+        if (Array.isArray(entry) && allowed.has(entry[0]) && actions.has(entry[1])) decisions.set(entry[0], entry[1]);
+      }
+    } catch (_) { /* Invalid or unavailable optional storage does not change the plan. */ }
+  }
+  function extractPlan(value) {
+    const candidate = value?.plan || value?.pendingPlan || (Array.isArray(value?.candidates) ? value : null);
+    return candidate && planId(candidate) && Array.isArray(candidate.candidates) ? candidate : null;
+  }
+  function acceptState(value, { refill = false } = {}) {
+    if (!value || typeof value !== "object") return;
+    const nextRoot = str(value.root);
+    if (root && nextRoot && nextRoot !== root) throw new Error(errors.root_changed);
+    if (nextRoot) root = nextRoot;
+    state = { ...(state || {}), ...value };
+    byId("rootSummary").textContent = root || "尚未选择图库";
+    byId("rootSummary").dataset.connected = String(Boolean(root));
+    byId("deviceSummary").textContent = str(state.deviceRoot) || "使用本地图库";
+    byId("deviceSummary").dataset.connected = String(Boolean(state.deviceRoot || root));
+    const connected = state.notionAvailable === true || state.notion?.canAttempt === true || state.notion?.available === true;
+    const verified = state.notion?.verified === true || state.notionAvailable === true;
+    byId("notionSummary").textContent = verified ? "已连接" : connected ? "可同步 · 首次将核验连接" : state.notionPage ? "已保存目标 · 连接待就绪" : "未配置 · 连接待就绪";
+    byId("notionSummary").dataset.connected = String(verified);
+    byId("notionConfigNote").textContent = verified ? "已核验连接，可在下方选择同步方向。" : connected ? "可选择同步；首次操作会核验页面与附件访问。" : "目前可保存页面地址；Notion 同步连接尚未就绪。";
+    for (const select of [byId("syncSource"), byId("syncTarget")]) {
+      const option = select.querySelector('option[value="notion"]');
+      option.disabled = !connected;
+      option.textContent = connected ? "Notion" : "Notion · 连接待就绪";
+      if (select.value === "notion" && !connected) select.value = select.id === "syncSource" ? "local" : "console";
+    }
+    byId("inboxCount").textContent = `inbox ${Number.isInteger(state.inboxCount) ? state.inboxCount : 0}`;
+    if (refill) {
+      byId("libraryRoot").value = root;
+      byId("deviceRoot").value = str(state.deviceRoot);
+      byId("notionPage").value = str(state.notionPage);
+    }
+    if (!root) byId("locations").open = true;
+    const last = state.lastSync;
+    const time = str(typeof last === "object" ? last?.completedAt || last?.at || last?.time || last?.appliedAt : last);
+    const completionTimes = [time];
+    for (const operation of [state.operation, state.notion?.operation]) {
+      if (operation?.status === "completed" && (operation.remainingTargets === undefined
+          || Array.isArray(operation.remainingTargets) && operation.remainingTargets.length === 0)) completionTimes.push(str(operation.finishedAt));
+    }
+    const dates = completionTimes.filter(Boolean).map(value => new Date(value)).filter(value => !Number.isNaN(value.getTime()));
+    const date = dates.length ? new Date(Math.max(...dates.map(value => value.getTime()))) : null;
+    byId("lastSync").textContent = date && !Number.isNaN(date.getTime()) ? `上次同步 ${date.toLocaleString("zh-CN", { hour12: false })}` : "尚无同步记录";
+    renderCollection();
+  }
+  function acceptResponse(value, token, expectedRoot) {
+    if (!assertCurrent(token, expectedRoot)) return false;
+    if (value.state) acceptState(value.state);
+    else if (typeof value.root === "string") acceptState(value);
+    const incomingPlan = extractPlan(value) || extractPlan(value.state);
+    if (incomingPlan) acceptPlan(incomingPlan);
+    return true;
+  }
+  function acceptPlan(value) {
+    if (value.root && value.root !== root) throw new Error(errors.root_changed);
+    const previousId = planId(plan);
+    plan = value;
+    if (previousId !== planId(plan)) decisions = new Map();
+    for (const candidate of plan.candidates) {
+      const id = str(candidate.id);
+      if (!decisions.has(id) && candidate.status === "new") decisions.set(id, "add");
+    }
+    restoreDecisions();
+    rememberDecisions();
+    renderPlan();
+  }
+  function createThumbnail(item, label) {
+    const button = node("button", "thumbnail-button");
+    button.type = "button";
+    button.setAttribute("aria-label", `放大查看${label || title(item)}，${dimensions(item)}`);
+    const url = previewUrl(item);
+    if (!url) { button.classList.add("image-unavailable"); button.disabled = true; return button; }
+    const image = node("img");
+    image.alt = title(item);
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.addEventListener("error", () => { button.classList.add("image-unavailable"); button.disabled = true; });
+    image.src = url;
+    button.append(image);
+    button.addEventListener("click", () => showPreview(item, button));
+    return button;
+  }
+  function metadataButton(item) {
+    if (item?.space === "device") return node("p", "image-path", "设备副本 · 在本地图库编辑方案信息");
+    const button = node("button", "metadata-button", "方案信息");
+    button.type = "button";
+    button.dataset.metadataPath = str(item?.path);
+    button.disabled = busy || Boolean(pendingOperation) || !item?.path || !item?.sha256;
+    button.setAttribute("aria-label", `编辑${title(item)}的方案信息，保留原文件名`);
+    button.addEventListener("click", () => openMetadata(item, button));
+    return button;
+  }
+  function imageDetails(item, path = true) {
+    const content = node("div", "image-details");
+    content.append(node("p", "image-title", title(item)), node("span", "image-dimensions", dimensions(item)));
+    if (path && item.path) content.append(node("p", "image-path", `原文件：${str(item.path)}`));
+    if (item.variantLabel) content.append(node("p", "image-path", `${variantTitle(item)}${item.derivedFromId ? " · 派生尺寸" : item.pendingDerivedFromId ? " · 派生来源待同步 / 待关联" : ""}`));
+    if (item.sha256) {
+      const details = node("details", "hash-details");
+      details.append(node("summary", "", "文件指纹"), node("code", "", str(item.sha256)));
+      content.append(details);
+    }
+    content.append(metadataButton(item));
+    return content;
+  }
+  function comparisonSide(item, label) {
+    const side = node("div", "comparison-side");
+    side.append(node("p", "side-label", label));
+    if (item) side.append(createThumbnail(item, label), imageDetails(item));
+    else side.append(node("div", "empty-comparison", "还没有对应图片"));
+    return side;
+  }
+  function candidateReason(candidate) {
+    if (candidate.reason) return str(candidate.reason);
+    if (candidate.matchReason === "bytes") return "文件指纹相同，内容完全一致。可以保留已有图片，避免重复收录。";
+    if (candidate.matchReason === "pixels") return "像素内容相同，可能使用不同格式。请比较后选择保留或替换。";
+    if (candidate.status === "duplicate") return candidate.incoming?.sha256 && candidate.incoming.sha256 === candidate.existing?.sha256 ? "文件内容完全相同。可以保留已有图片，避免重复收录。" : "检测到相同图像内容，可能使用了不同格式；请比较后选择。";
+    if (candidate.status === "ambiguous") return "存在多个匹配，请核对标题、尺寸和图片内容，再选择处理方式。";
+    if (candidate.status === "conflict") return "同标题与尺寸已有图片，内容不同。可以用新图替换，也可以保留为另一方案。";
+    return "新图片，确认后加入图库。";
+  }
+  function renderPlan() {
+    const list = byId("candidateList");
+    const focus = document.activeElement?.dataset?.candidateId ? { id: document.activeElement.dataset.candidateId, action: document.activeElement.value } : null;
+    list.replaceChildren();
+    const candidates = plan?.candidates || [];
+    const warnings = Array.isArray(plan?.errors) ? plan.errors : [];
+    byId("reviewSection").hidden = candidates.length === 0 && warnings.length === 0;
+    byId("reviewCount").textContent = `${candidates.length} 项待确认`;
+    const next = readContinuation(planId(plan));
+    byId("reviewNote").textContent = next ? `确认这些图片后，将自动继续同步到${next.target === "notion" ? " Notion" : "设备文件夹"}${next.next ? "及额外设备文件夹" : ""}。重复与替换候选由你选择。` : "新图在左，已有图片在右。重复与替换候选由你选择；同尺寸不代表同一张图。";
+    byId("planWarnings").hidden = warnings.length === 0;
+    byId("planWarnings").textContent = warnings.length ? `以下 ${warnings.length} 项未处理：\n${warnings.slice(0, 6).map(value => typeof value === "string" ? value : `${str(value.path || value.file)} ${str(value.error || value.message)}`).join("\n")}${warnings.length > 6 ? "\n其余记录保留在本次检查中。" : ""}` : "";
+    for (const candidate of candidates) {
+      const id = str(candidate.id);
+      const incoming = metadata(candidate.incoming) || metadata(candidate.source);
+      const existing = metadata(candidate.existing) || metadata(candidate.target);
+      const matches = Array.isArray(candidate.matches) ? candidate.matches.filter(metadata) : [];
+      const compact = candidate.status === "new" && !existing && matches.length === 0;
+      const card = node("article", compact ? "candidate-card compact-new" : "candidate-card");
+      card.dataset.status = str(candidate.status);
+      const heading = node("div", "candidate-heading");
+      heading.append(node("h3", "", title(incoming || existing)), node("span", "match-tag", statusLabels[candidate.status] || "请比较图片"));
+      const currentPurpose = groupTitle(incoming || existing);
+      const samePurpose = (Array.isArray(state?.items) ? state.items : []).filter(item => incoming?.groupId && item.groupId ? incoming.groupId === item.groupId : groupTitle(item).normalize("NFC").toLocaleLowerCase() === currentPurpose.normalize("NFC").toLocaleLowerCase());
+      const purposeSchemes = new Set(samePurpose.map(schemeKey)).size;
+      const purpose = node("p", "candidate-purpose", `用途：${currentPurpose}${purposeSchemes ? ` · 已有 ${purposeSchemes} 个方案` : ""}`);
+      const comparison = node("div", compact ? "compact-preview" : "comparison");
+      if (compact) {
+        comparison.append(createThumbnail(incoming), node("span", "image-dimensions", dimensions(incoming)));
+        if (incoming?.variantLabel) comparison.append(node("p", "compact-variant-label", `${variantTitle(incoming)}${incoming.derivedFromId ? " · 派生尺寸" : incoming.pendingDerivedFromId ? " · 派生来源待同步 / 待关联" : ""}`));
+        comparison.append(metadataButton(incoming));
+      }
+      else comparison.append(comparisonSide(incoming, "新图片 / 同步来源"));
+      if (!compact && !existing && matches.length) {
+        const side = node("div", "comparison-side");
+        side.append(node("p", "side-label", `已有图片 / ${matches.length} 张匹配`));
+        for (const match of matches) {
+          const matchView = node("div", "match-preview");
+          matchView.append(createThumbnail(match, "已有图片"), imageDetails(match));
+          side.append(matchView);
+        }
+        comparison.append(side);
+      } else if (!compact) comparison.append(comparisonSide(existing, "已有图片 / 同步目标"));
+      const choices = node("fieldset", "decision-choices");
+      choices.append(node("legend", "visually-hidden", `${title(incoming || existing)}的处理方式`));
+      const identical = ["bytes", "pixels"].includes(candidate.matchReason) || candidate.status === "duplicate";
+      const addLabel = identical ? "另存副本" : "保留为另一方案";
+      const options = existing ? [["replace", "用新图替换"], ["keep", "保留已有"], ["add", addLabel]] : matches.length ? [["keep", "保留现状"], ["add", addLabel]] : [["add", "加入图库"], ["keep", "暂不加入"]];
+      for (const [action, label] of options) {
+        if (Array.isArray(candidate.actions) && !candidate.actions.includes(action)) continue;
+        const choice = node("label", "decision-choice");
+        const input = node("input");
+        input.type = "radio";
+        input.name = `image-decision-${id}`;
+        input.value = action;
+        input.dataset.candidateId = id;
+        input.checked = decisions.get(id) === action;
+        input.addEventListener("change", () => { decisions.set(id, action); rememberDecisions(); updateControls(); });
+        choice.append(input, node("span", "", label));
+        choices.append(choice);
+      }
+      card.append(heading, purpose, comparison);
+      if (!compact) card.append(node("p", "candidate-reason", candidateReason(candidate)));
+      card.append(choices);
+      list.append(card);
+    }
+    if (focus) [...list.querySelectorAll("input")].find(input => input.dataset.candidateId === focus.id && input.value === focus.action)?.focus({ preventScroll: true });
+    updateControls();
+  }
+  function renderCollection() {
+    const items = Array.isArray(state?.items) ? state.items : [];
+    const query = byId("imageSearch").value.trim().toLocaleLowerCase();
+    const groups = new Map();
+    for (const item of items) {
+      if (!metadata(item)) continue;
+      const id = str(item.groupId) || groupTitle(item).normalize("NFC").toLocaleLowerCase();
+      if (!groups.has(id)) groups.set(id, { id, title: groupTitle(item), items: [] });
+      groups.get(id).items.push(item);
+    }
+    const filtered = [...groups.values()].filter(group => !query || group.items.some(item => `${group.title} ${title(item)} ${str(item.title)} ${variantTitle(item)} ${dimensions(item)} ${str(item.path)}`.toLocaleLowerCase().includes(query)));
+    byId("libraryCount").textContent = `${items.length} 张`;
+    byId("collectionNote").textContent = query ? `找到 ${filtered.length} 组，组内所有尺寸和方案均可查看。` : `${groups.size} 组 · ${items.length} 张图片。按用途与标题分组，选择尺寸和方案查看原图。`;
+    byId("imageGrid").replaceChildren();
+    for (const group of filtered) byId("imageGrid").append(renderGroup(group));
+    byId("emptyState").hidden = filtered.length !== 0;
+    byId("emptyState").querySelector("h3").textContent = query ? "没有匹配的图片" : "你的图片，从这里开始";
+    byId("emptyState").querySelector("p").textContent = query ? "换一个标题或尺寸试试。" : "保存图库位置，放入图片，再点「检查图片」。";
+  }
+  function renderGroup(group) {
+    const key = `${root}:${group.id}`;
+    const sizes = [...new Set(group.items.map(dimensions))];
+    const selection = groupSelections.get(key) || { size: sizes[0], image: imageKey(group.items[0]) };
+    if (!sizes.includes(selection.size)) selection.size = sizes[0];
+    const variants = group.items.filter(item => dimensions(item) === selection.size);
+    const selected = variants.find(item => imageKey(item) === selection.image) || variants[0];
+    selection.image = imageKey(selected);
+    groupSelections.set(key, selection);
+    const card = node("article", "asset-group-card");
+    card.dataset.groupId = group.id;
+    const header = node("div", "asset-group-header");
+    const schemeCount = new Set(group.items.map(schemeKey)).size;
+    header.append(node("h3", "", group.title), node("span", "asset-group-stats", `${schemeCount} 方案 · ${sizes.length} 尺寸`));
+    const sizeField = node("label", "asset-size-field");
+    const select = node("select");
+    select.setAttribute("aria-label", `${group.title}的尺寸`);
+    for (const size of sizes) {
+      const option = node("option", "", `${size} · ${group.items.filter(item => dimensions(item) === size).length} 张`);
+      option.value = size;
+      select.append(option);
+    }
+    select.value = selection.size;
+    select.addEventListener("change", () => {
+      selection.size = select.value;
+      const previousVariant = schemeKey(selected);
+      const sameVariant = group.items.find(item => dimensions(item) === select.value && previousVariant && schemeKey(item) === previousVariant);
+      selection.image = sameVariant ? imageKey(sameVariant) : "";
+      renderCollection();
+      [...byId("imageGrid").querySelectorAll("article")].find(element => element.dataset.groupId === group.id)?.querySelector("select")?.focus({ preventScroll: true });
+    });
+    sizeField.append(node("span", "", "尺寸"), select);
+    const preview = node("div", "asset-group-preview");
+    preview.append(createThumbnail(selected), node("p", "asset-variant-summary", `${variantTitle(selected)} · ${dimensions(selected)}`));
+    if (selected.derivedFromId) preview.append(node("span", "derivative-badge", "派生尺寸 · 已关联来源"));
+    else if (selected.pendingDerivedFromId) preview.append(node("span", "derivative-badge", "派生来源待同步 / 待关联"));
+    if (selected.hasTransparency === true) preview.append(node("span", "transparency-badge", "含透明区域"));
+    const strip = node("div", "asset-variant-strip");
+    strip.setAttribute("role", "group");
+    strip.setAttribute("aria-label", `${group.title}，${selection.size}的已有方案`);
+    for (const item of variants) {
+      const button = node("button", "asset-variant-button");
+      button.type = "button";
+      button.dataset.variantPath = str(item.path);
+      button.setAttribute("aria-pressed", String(imageKey(item) === selection.image));
+      button.setAttribute("aria-label", `查看${variantTitle(item)}，原文件${originalName(item)}`);
+      const image = node("img");
+      image.alt = title(item);
+      image.loading = "lazy";
+      image.decoding = "async";
+      image.src = previewUrl(item);
+      button.append(image, node("span", "", variantTitle(item)));
+      button.title = `${variantTitle(item)} · ${originalName(item)}`;
+      button.addEventListener("click", () => {
+        selection.image = imageKey(item);
+        renderCollection();
+        [...byId("imageGrid").querySelectorAll("button")].find(element => element.dataset.variantPath === str(item.path))?.focus({ preventScroll: true });
+      });
+      strip.append(button);
+    }
+    preview.append(strip);
+    const footer = node("div", "asset-group-footer");
+    footer.append(node("p", "image-path", `原文件：${str(selected.path)}`), metadataButton(selected));
+    card.append(header, sizeField, preview, footer);
+    return card;
+  }
+  function showPreview(item, trigger) {
+    previewFocus = trigger;
+    const image = node("img");
+    image.alt = title(item);
+    image.src = previewUrl(item);
+    byId("previewTitle").textContent = title(item);
+    byId("previewMeta").textContent = `${dimensions(item)}${item.path ? ` · ${str(item.path)}` : ""}`;
+    byId("previewImageWrap").replaceChildren(image);
+    byId("previewDialog").showModal();
+  }
+  function openMetadata(item, trigger) {
+    if (busy || pendingOperation || !item?.path || !item?.sha256 || item.space === "device") return;
+    metadataTarget = { ...item, expectedRoot: root };
+    metadataFocus = trigger;
+    byId("metadataOriginal").textContent = `原文件：${str(item.path)} · ${dimensions(item)}`;
+    byId("metadataGroupTitle").value = groupTitle(item);
+    byId("metadataVariantLabel").value = str(item.variantLabel);
+    const sources = byId("metadataDerivedFrom");
+    sources.replaceChildren();
+    const none = node("option", "", "原始素材 / 未关联来源");
+    none.value = "";
+    sources.append(none);
+    const ids = new Set();
+    for (const source of Array.isArray(state?.items) ? state.items : []) {
+      const id = str(source.assetId || source.sha256 || source.id);
+      if (!id || id === str(item.assetId || item.sha256) || ids.has(id)) continue;
+      ids.add(id);
+      const option = node("option", "", `${groupTitle(source)} · ${variantTitle(source)} · ${dimensions(source)} · ${originalName(source)}`);
+      option.value = id;
+      sources.append(option);
+    }
+    if (item.derivedFromId && !ids.has(item.derivedFromId)) {
+      const existing = node("option", "", "已关联的来源（当前图库未显示）");
+      existing.value = str(item.derivedFromId);
+      sources.append(existing);
+    }
+    if (!item.derivedFromId && item.pendingDerivedFromId) {
+      const pending = node("option", "", "派生来源待同步 / 待关联（保留现有记录）");
+      pending.value = "__pending_source__";
+      sources.append(pending);
+    }
+    sources.value = !item.derivedFromId && item.pendingDerivedFromId ? "__pending_source__" : str(item.derivedFromId);
+    byId("metadataStatus").textContent = "";
+    byId("metadataStatus").dataset.error = "false";
+    byId("metadataDialog").showModal();
+    byId("metadataGroupTitle").focus();
+  }
+  function updatePlanMetadata(item) {
+    if (!plan || !item) return;
+    const patch = current => current && current.path === item.path && current.sha256 === item.sha256 && (current.space || "root") === (item.space || "root") ? { ...current, ...item } : current;
+    for (const candidate of plan.candidates) {
+      candidate.incoming = patch(candidate.incoming);
+      candidate.existing = patch(candidate.existing);
+      if (Array.isArray(candidate.matches)) candidate.matches = candidate.matches.map(patch);
+    }
+    renderPlan();
+  }
+  async function saveMetadata(event) {
+    event.preventDefault();
+    if (!metadataTarget || metadataTarget.expectedRoot !== root || busy || pendingOperation) return;
+    const payload = { expectedRoot: root, path: metadataTarget.path, sha256: metadataTarget.sha256, space: "root", groupTitle: byId("metadataGroupTitle").value.trim(), variantLabel: byId("metadataVariantLabel").value.trim() };
+    if (byId("metadataDerivedFrom").value !== "__pending_source__") payload.derivedFromId = byId("metadataDerivedFrom").value;
+    if (!payload.groupTitle || !payload.variantLabel) return;
+    await run("正在保存方案信息…", async (token, expectedRoot) => {
+      byId("metadataStatus").textContent = "正在保存…";
+      byId("metadataStatus").dataset.error = "false";
+      try {
+        const value = await call("metadata", { payload });
+        if (!acceptResponse(value, token, expectedRoot)) return;
+        if (value.item) updatePlanMetadata(value.item);
+        byId("metadataDialog").close();
+        notice("方案信息已保存，原文件名与图片内容保持不变。", false, true);
+      } catch (error) {
+        byId("metadataStatus").textContent = error.message || "保存未完成，填写内容已保留。";
+        byId("metadataStatus").dataset.error = "true";
+        throw error;
+      }
+    });
+  }
+  async function loadState() {
+    await run("正在读取图库…", async (token, expectedRoot) => {
+      const value = await call("state");
+      if (!assertCurrent(token, expectedRoot)) return;
+      acceptState(value.state || value, { refill: true });
+      const savedPlan = extractPlan(value) || extractPlan(value.state);
+      if (savedPlan) acceptPlan(savedPlan);
+      notice(savedPlan?.candidates?.length ? "已恢复上次的图片比较，可以继续选择。" : root ? "就绪。放入图片后，点「检查图片」查看新增和重复候选。" : "先保存本地图库位置。", false);
+      const active = value.operation || value.state?.operation || state?.notion?.operation;
+      let saved;
+      try { saved = JSON.parse(localStorage.getItem(operationKey()) || "null"); } catch (_) { /* The server can also restore its operation. */ }
+      if (saved?.requestId || (active?.requestId && (pendingStatuses.has(active.status) || active.status === "unknown" || canRecheckOperation(active)))) {
+        pendingOperation = saved?.requestId ? saved : { requestId: active.requestId, autoApply: true };
+        const restoreSource = pendingOperation.uiSource || active?.source;
+        const restoreTarget = pendingOperation.uiTarget || active?.target;
+        if (["local", "console", "notion"].includes(restoreSource)) byId("syncSource").value = restoreSource;
+        if (["console", "device", "notion", "all"].includes(restoreTarget)) byId("syncTarget").value = restoreTarget;
+        await pollOperation(active?.requestId === pendingOperation.requestId ? active : { requestId: pendingOperation.requestId, status: "pending" }, token, root);
+      }
+    });
+  }
+  async function saveConfig(event) {
+    event.preventDefault();
+    const nextRoot = byId("libraryRoot").value.trim();
+    if (!nextRoot) return;
+    const payload = { root: nextRoot, deviceRoot: byId("deviceRoot").value.trim(), notionPage: byId("notionPage").value.trim(), expectedRoot: root };
+    await run("正在保存图库位置…", async (token, expectedRoot) => {
+      const value = await call("config", { payload });
+      if (!assertCurrent(token, expectedRoot)) return;
+      const nextState = value.state || value;
+      const actualRoot = str(nextState.root);
+      if (!actualRoot) throw new Error("保存结果没有返回图库位置，请重新读取确认。");
+      if (actualRoot !== root) { root = ""; state = null; plan = null; pendingOperation = null; lastApplied = null; decisions = new Map(); renderPlan(); }
+      acceptState(nextState, { refill: true });
+      const savedPlan = extractPlan(value) || extractPlan(nextState);
+      if (savedPlan) acceptPlan(savedPlan);
+      byId("configStatus").textContent = "位置已保存";
+      byId("locations").open = false;
+      notice("位置已保存，可以放入图片或选择同步方向。", false, true);
+    });
+  }
+  async function scanImages() {
+    await run("正在检查图库与 inbox…", async (token, expectedRoot) => {
+      const value = await call("scan", { payload: { expectedRoot } });
+      if (!acceptResponse(value, token, expectedRoot)) return;
+      const count = plan?.candidates?.length || 0;
+      notice(count ? `检查完成，${count} 项图片待确认。` : "检查完成，没有待处理的图片。", false, true);
+      if (count) byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+  async function uploadFiles(fileList) {
+    const files = [...(fileList || [])];
+    if (busy || pendingOperation || !root || !files.length) return;
+    const byteLimit = Number(state?.limits?.maxFileBytes);
+    if (Number.isFinite(byteLimit) && byteLimit > 0 && files.some(file => file.size > byteLimit)) {
+      notice(`有图片超过单张 ${Math.floor(byteLimit / 1024 / 1024)} MiB 限制，请分开检查后再加入。`, true);
+      byId("imageFiles").value = "";
+      return;
+    }
+    const form = new FormData();
+    form.append("expectedRoot", root);
+    for (const file of files) form.append("files", file, file.name);
+    await run(`正在把 ${files.length} 张图片放进 inbox…`, async (token, expectedRoot) => {
+      const value = await call("upload", { form });
+      if (!acceptResponse(value, token, expectedRoot)) return;
+      notice("图片已放进 inbox。比较新旧图片并确认处理方式后，再应用更改。", false, true);
+      if (plan?.candidates?.length) byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    byId("imageFiles").value = "";
+  }
+  async function syncImages() {
+    const source = byId("syncSource").value, target = byId("syncTarget").value;
+    if ((source === "notion" || target === "notion" || target === "all") && state?.notionAvailable !== true && state?.notion?.canAttempt !== true && state?.notion?.available !== true) { notice(errors.notion_unavailable, true); return; }
+    await run("正在检查同步内容…", async (token, expectedRoot) => {
+      const afterDevice = target === "all" && state?.deviceRoot ? { source: "console", target: "device", deviceRoot: str(state.deviceRoot) } : null;
+      if (source === "local" && ["notion", "all"].includes(target)) {
+        const value = await call("scan", { payload: { expectedRoot } });
+        await finishSync(value, token, expectedRoot, true, { source: "console", target: "notion", notionPage: str(state?.notionPage), next: afterDevice });
+        return;
+      }
+      const actualTarget = target === "all" ? source === "notion" ? "console" : "notion" : target;
+      await dispatchSync(source, actualTarget, token, expectedRoot, afterDevice);
+    });
+  }
+  async function dispatchSync(source, target, token, expectedRoot, after = null) {
+    if (!assertCurrent(token, expectedRoot)) return;
+    const requestId = crypto.randomUUID();
+    const isNotion = source === "notion" || target === "notion";
+    if (isNotion) {
+      pendingOperation = { requestId, autoApply: true, after, root: expectedRoot, source, target,
+        pageId: configuredPageId(), uiSource: byId("syncSource").value, uiTarget: byId("syncTarget").value };
+      try { localStorage.setItem(operationKey(), JSON.stringify(pendingOperation)); } catch (_) { /* The server persists its own operation. */ }
+      notice(source === "notion" ? "正在从 Notion 同步图片…" : "正在同步到 Notion…");
+    } else notice("正在检查设备文件夹的同步内容…");
+    let value;
+    try { value = await call("sync", { payload: { source, target, expectedRoot, requestId } }); }
+    catch (error) { if (isNotion && [400, 422].includes(error.httpStatus)) clearOperation(); throw error; }
+    if (!assertCurrent(token, expectedRoot)) return;
+    if (value.operation) {
+      if (value.state) acceptState(value.state);
+      await pollOperation(value.operation, token, expectedRoot);
+      return;
+    }
+    if (isNotion) clearOperation();
+    await finishSync(value, token, expectedRoot, true, after);
+  }
+  async function continueSync(instruction, token, expectedRoot) {
+    if (instruction.target === "device" && instruction.deviceRoot !== undefined && instruction.deviceRoot !== str(state?.deviceRoot)) throw new Error("额外设备文件夹已改变，已暂停后续同步，请重新选择目标。");
+    if (instruction.target === "notion" && instruction.notionPage !== undefined && instruction.notionPage !== str(state?.notionPage)) throw new Error("Notion 目标页面已改变，已暂停后续同步，请重新选择目标。");
+    await dispatchSync(instruction.source, instruction.target, token, expectedRoot, instruction.next || null);
+  }
+  function clearOperation() {
+    try { localStorage.removeItem(operationKey()); } catch (_) { /* Optional storage. */ }
+    pendingOperation = null;
+  }
+  async function finishSync(value, token, expectedRoot, autoApply, after = null) {
+    if (!assertCurrent(token, expectedRoot)) return;
+    if (value.state) acceptState(value.state);
+    else if (typeof value.root === "string") acceptState(value);
+    const syncPlan = extractPlan(value);
+    if (syncPlan && after && validInstruction(after)) rememberContinuation(planId(syncPlan), after);
+    if (syncPlan) acceptPlan(syncPlan);
+    const count = syncPlan?.candidates?.length || 0;
+    const errorCount = Array.isArray(syncPlan?.errors) ? syncPlan.errors.length : 0;
+    if (autoApply && count && !errorCount && syncPlan.candidates.every(candidate => candidate.status === "new")) {
+      notice(`正在同步 ${count} 张新图片…`);
+      await commitBatch({ planId: planId(syncPlan), expectedRoot, decisions: syncPlan.candidates.map(candidate => ({ id: str(candidate.id), action: "add" })) }, token, expectedRoot);
+      return;
+    }
+    if (!count && errorCount) { notice(`有 ${errorCount} 项图片未能读取，后续同步已暂停，请先检查下方记录。`, true); return; }
+    if (!count && after && validInstruction(after)) {
+      if (syncPlan) clearContinuation(planId(syncPlan));
+      await continueSync(after, token, expectedRoot);
+      return;
+    }
+    notice(count ? `已准备 ${count} 项同步内容，确认下方选择后${after ? "自动继续同步" : "执行"}。` : str(value.message) || "同步检查完成，没有待处理的差异。", false, true);
+    if (count) byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  function operationMessage(operation) {
+    const stages = { queued: "等待开始", starting: "准备同步", connecting: "连接 Notion", verifying: "核验页面与附件", listing: "读取图片清单", scanning: "检查图片", downloading: "下载原图", uploading: "上传原图", reading: "读取 Notion 页面", fetching: "读取 Notion 页面", planning: "准备图片比较", applying: "保存图片", verifying_download: "核对下载原图", verify: "核验图片", completed: "同步完成" };
+    const stage = stages[operation.stage || operation.phase] || (pendingStatuses.has(operation.status) ? "正在同步，请稍候" : "正在核对同步结果");
+    return `${stage}…`;
+  }
+  async function pollOperation(initial, token, expectedRoot) {
+    const requestId = str(initial?.requestId || pendingOperation?.requestId);
+    if (!requestId) throw new Error("同步未返回可核对的记录，请保留页面并重新读取状态。");
+    if (pendingOperation?.requestId && pendingOperation.requestId !== requestId) throw new Error("返回的同步记录与本次请求不同，请继续核对原请求。");
+    pendingOperation = { ...pendingOperation, requestId, autoApply: pendingOperation?.autoApply !== false,
+      after: validInstruction(pendingOperation?.after) ? pendingOperation.after : null,
+      root: pendingOperation?.root || initial.root, source: pendingOperation?.source || initial.source,
+      target: pendingOperation?.target || initial.target, pageId: pendingOperation?.pageId || pageId(initial.pageId),
+      uiSource: pendingOperation?.uiSource || byId("syncSource").value, uiTarget: pendingOperation?.uiTarget || byId("syncTarget").value };
+    try { localStorage.setItem(operationKey(), JSON.stringify(pendingOperation)); } catch (_) { /* Optional storage. */ }
+    let operation = initial;
+    while (assertCurrent(token, expectedRoot)) {
+      if (operation.root && operation.root !== expectedRoot) throw new Error("同步回执对应另一个图库，原请求已保留，请继续核对。");
+      if (completeStatuses.has(operation.status)) {
+        const autoApply = pendingOperation.autoApply;
+        const after = pendingOperation.after;
+        const latest = await call("state");
+        if (!assertCurrent(token, expectedRoot)) return;
+        const nextState = latest.state || latest;
+        const savedPlan = extractPlan(latest) || extractPlan(nextState);
+        const resultPlan = extractPlan(operation.result);
+        if (operation.planId && planId(resultPlan || savedPlan) !== operation.planId) throw new Error("同步的图片比较记录尚未对应，原请求已保留，请继续核对。");
+        const syncPlan = resultPlan || (operation.planId ? savedPlan : null);
+        if (operation.status === "needs_review" && !syncPlan) throw new Error("同步尚未返回匹配的图片比较记录，请继续核对。");
+        clearOperation();
+        if (syncPlan) { plan = null; decisions = new Map(); renderPlan(); }
+        const value = { ...(operation.result || {}), state: nextState, ...(syncPlan ? { plan: syncPlan } : {}), message: str(operation.message || operation.result?.message) };
+        await finishSync(value, token, expectedRoot, autoApply && Boolean(operation.planId && planId(syncPlan) === operation.planId), after);
+        return;
+      }
+      if (operation.status && !pendingStatuses.has(operation.status)) {
+        if (["failed", "error", "cancelled", "canceled"].includes(operation.status) && !canRecheckOperation(operation)) clearOperation();
+        throw new Error(str(operation.error?.message || operation.error || operation.message) || "同步尚未完成，原请求已保留，请继续核对。");
+      }
+      notice(operationMessage(operation));
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (!assertCurrent(token, expectedRoot)) return;
+      const value = await call("operation", { params: { requestId } });
+      operation = value.operation || value;
+      if (operation.requestId && operation.requestId !== requestId) throw new Error("同步回执不匹配，原请求已保留，请继续核对。");
+    }
+  }
+  async function resumeOperation() {
+    if (!pendingOperation) return;
+    await run("正在核对上次同步…", async (token, expectedRoot) => {
+      const value = await call("operation", { params: { requestId: pendingOperation.requestId } });
+      const operation = value.operation || value;
+      if (canRecheckOperation(operation)) {
+        const latest = await call("state");
+        if (!assertCurrent(token, expectedRoot)) return;
+        acceptState(latest.state || latest);
+        if (!recoveryScopeMatches(operation, expectedRoot)) throw new Error("原同步的图库、页面或方向已改变，已保留原请求，不会向其他位置恢复。");
+        const recovered = await call("sync", { payload: { expectedRoot, requestId: operation.requestId, source: operation.source, target: operation.target } });
+        if (!assertCurrent(token, expectedRoot)) return;
+        const recoveredOperation = recovered.operation || recovered;
+        if (!recoveryScopeMatches(recoveredOperation, expectedRoot)) throw new Error("恢复回执与原同步范围不一致，原请求已保留，请继续核对。");
+        await pollOperation(recoveredOperation, token, expectedRoot);
+        return;
+      }
+      await pollOperation(operation, token, expectedRoot);
+    });
+  }
+  function reviewApply() {
+    if (busy || !plan) return;
+    const selected = plan.candidates.filter(candidate => actions.has(decisions.get(str(candidate.id)))).map(candidate => ({ id: str(candidate.id), action: decisions.get(str(candidate.id)) }));
+    if (!selected.length || selected.length !== plan.candidates.length) return;
+    void applyBatch({ planId: planId(plan), expectedRoot: root, decisions: selected });
+  }
+  async function applyBatch(payload) {
+    if (!payload || payload.expectedRoot !== root || payload.planId !== planId(plan)) { notice("图库或比较记录已变化，请重新确认。", true); return; }
+    await run("正在应用已确认的图片操作…", async (token, expectedRoot) => {
+      await commitBatch(payload, token, expectedRoot);
+    });
+  }
+  async function commitBatch(payload, token, expectedRoot) {
+    const value = await call("apply", { payload });
+    if (!assertCurrent(token, expectedRoot)) return;
+    const after = readContinuation(payload.planId);
+    if (str(value.planId)) lastApplied = { root: expectedRoot, planId: str(value.planId) };
+    try { sessionStorage.removeItem(decisionKey()); } catch (_) { /* Optional storage. */ }
+    plan = null;
+    decisions = new Map();
+    renderPlan();
+    acceptResponse(value, token, expectedRoot);
+    if (!value.state) {
+      const updated = await call("state");
+      if (assertCurrent(token, expectedRoot)) {
+        acceptState(updated.state || updated);
+        const remaining = extractPlan(updated) || extractPlan(updated.state);
+        if (remaining) acceptPlan(remaining);
+      }
+    }
+    notice(str(value.message) || "已应用所选操作。", false, true);
+    if (after && assertCurrent(token, expectedRoot)) {
+      clearContinuation(payload.planId);
+      await continueSync(after, token, expectedRoot);
+    }
+  }
+  async function restoreImages() {
+    if (!lastApplied || lastApplied.root !== root || pendingOperation) return;
+    const payload = { expectedRoot: root, planId: lastApplied.planId };
+    await run("正在撤回上次本地图片操作…", async (token, expectedRoot) => {
+      const value = await call("restore", { payload });
+      if (!assertCurrent(token, expectedRoot)) return;
+      lastApplied = null;
+      plan = null;
+      decisions = new Map();
+      renderPlan();
+      if (value.state) acceptState(value.state);
+      notice("已撤回上次本地图片操作。Notion 上已保存的附件保持原状。", false, true);
+    });
+  }
+
+  byId("configForm").addEventListener("submit", saveConfig);
+  byId("scanImages").addEventListener("click", scanImages);
+  byId("syncImages").addEventListener("click", syncImages);
+  byId("checkOperation").addEventListener("click", resumeOperation);
+  byId("restoreImages").addEventListener("click", restoreImages);
+  byId("metadataForm").addEventListener("submit", saveMetadata);
+  byId("metadataClose").addEventListener("click", () => { if (!busy) byId("metadataDialog").close(); });
+  byId("metadataDialog").addEventListener("cancel", event => { if (busy) event.preventDefault(); });
+  byId("metadataDialog").addEventListener("close", () => {
+    const path = metadataTarget?.path;
+    metadataTarget = null;
+    setTimeout(() => {
+      const current = [...byId("imageGrid").querySelectorAll("button"), ...byId("candidateList").querySelectorAll("button")].find(button => button.dataset.metadataPath === path);
+      (current || metadataFocus)?.focus({ preventScroll: true });
+    }, 0);
+  });
+  byId("imageSearch").addEventListener("input", renderCollection);
+  byId("imageFiles").addEventListener("change", event => uploadFiles(event.target.files));
+  byId("reviewApply").addEventListener("click", reviewApply);
+  byId("closePreview").addEventListener("click", () => byId("previewDialog").close());
+  byId("previewDialog").addEventListener("close", () => { byId("previewImageWrap").replaceChildren(); previewFocus?.focus({ preventScroll: true }); });
+  const dropZone = byId("dropZone");
+    const openPicker = () => { if (!busy && !pendingOperation && root) byId("imageFiles").click(); };
+  dropZone.addEventListener("click", openPicker);
+  dropZone.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openPicker(); } });
+  dropZone.addEventListener("dragover", event => { event.preventDefault(); if (!busy && root) dropZone.classList.add("drag-over"); });
+  dropZone.addEventListener("dragleave", event => { if (!dropZone.contains(event.relatedTarget)) dropZone.classList.remove("drag-over"); });
+  dropZone.addEventListener("drop", event => { event.preventDefault(); dropZone.classList.remove("drag-over"); void uploadFiles(event.dataTransfer?.files); });
+  document.addEventListener("dragover", event => { if ([...(event.dataTransfer?.types || [])].includes("Files")) event.preventDefault(); });
+  document.addEventListener("drop", event => { if ([...(event.dataTransfer?.types || [])].includes("Files")) event.preventDefault(); });
+  updateControls();
+  void loadState();
+})();

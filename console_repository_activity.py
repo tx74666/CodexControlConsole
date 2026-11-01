@@ -521,10 +521,25 @@ class ScopeStore:
         return None
 
     def _recover_claim(self, value, scan, record):
-        if (scan.get("state") != "unknown" or scan.get("reason") != "no_boundary_in_bounded_tail"
-                or not self._valid_scope(value) or record is None or value.get("threadId") != record["threadId"]
+        if (not self._valid_scope(value) or record is None or value.get("threadId") != record["threadId"]
                 or value.get("cwd") != record["cwd"] or not isinstance(value.get("anchor"), dict)
                 or value["anchor"].get("path") != record["rolloutPath"]):
+            return None
+        no_boundary = (scan.get("state") == "unknown"
+                       and scan.get("reason") == "no_boundary_in_bounded_tail")
+        # A user already covered by the original anchor can remain in the tail
+        # after its typed turn context has fallen out of the bounded window.
+        # This is only a candidate for recovery: the unchanged typed anchor and
+        # every appended byte must still pass the independent streamed proof.
+        starts = scan.get("starts")
+        historical_user_tail = (
+            scan.get("state") == "active" and scan.get("currentTurnId") is None
+            and scan.get("reason") == "typed_rollout_boundary"
+            and type(value["anchor"].get("size")) is int
+            and isinstance(starts, list) and bool(starts)
+            and all(isinstance(start, dict) and type(start.get("offset")) is int
+                    and 0 <= start["offset"] < value["anchor"]["size"] for start in starts))
+        if not (no_boundary or historical_user_tail):
             return None
         return self._scope_proof(value, scan, allow_same_turn_context=False)
 

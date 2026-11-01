@@ -95,6 +95,12 @@ $PythonSources = @(
   "resource_sources.py",
   "resource_preview.py",
   "resource_http.py",
+  "image_manager.py",
+  "image_manager_http.py",
+  "image_manager_notion.py",
+  "tools/check-image-manager.py",
+  "tools/check-image-manager-http.py",
+  "tools/check-image-manager-notion.py",
   "workspace_plan.py",
   "phone_companion.py",
   "phone_device_store.py",
@@ -250,6 +256,10 @@ try {
     "console-developer-update.css",
     "tools/check-console-developer-update-ui.mjs",
     "reader.html",
+    "image-manager.html",
+    "image-manager.js",
+    "image-manager.css",
+    "tools/check-image-manager-ui.mjs",
     "document-reader.js",
     "document-reader.css",
     "phone-pairing.js",
@@ -390,6 +400,11 @@ finally:
   Invoke-QualityStep "Conversation browser syntax" { & $Node --check conversations-panel.js }
   Invoke-QualityStep "Resource library JavaScript syntax" { & $Node --check resources.js }
   Invoke-QualityStep "Resource library UI behavior" { & $Node tools/check-resource-ui.mjs }
+  Invoke-QualityStep "Image manager imports and replacement recovery" { & $Python tools/check-image-manager.py }
+  Invoke-QualityStep "Image manager JavaScript syntax" { & $Node --check image-manager.js }
+  Invoke-QualityStep "Image manager synchronization and review UI" { & $Node tools/check-image-manager-ui.mjs }
+  Invoke-QualityStep "Image manager desktop HTTP boundaries" { & $Python tools/check-image-manager-http.py }
+  Invoke-QualityStep "Image manager Notion original synchronization" { & $Python tools/check-image-manager-notion.py }
   Invoke-QualityStep "Conversation browser UI" { & $Node tools/check-conversations-ui.mjs }
   Invoke-QualityStep "Task incubator UI" { & $Node tools/check-incubator-ui.mjs }
   Invoke-QualityStep "Workflow JavaScript syntax" { & $Node --check workflow-panel.js }

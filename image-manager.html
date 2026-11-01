@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111a27">
+  <title>Console · Image manager</title>
+  <link rel="icon" href="favicon.ico">
+  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.36-20261101">
+  <script src="image-manager.js?v=images-variants-1.1.36-20261101" defer></script>
+</head>
+<body>
+  <main class="image-shell">
+    <header class="page-header">
+      <a class="back-link" href="/?consoleView=document"><span aria-hidden="true">←</span> 返回 Console</a>
+      <div class="heading-row"><div><p class="eyebrow">CONSOLE · YOUR IMAGE LIBRARY</p><h1>Image manager<span class="title-dot" aria-hidden="true">.</span></h1></div><span class="header-mark" aria-hidden="true">▧</span></div>
+      <p class="page-intro">放进文件夹，检查新旧图片，选好再同步。标题与实际尺寸一起保留。</p>
+    </header>
+
+    <section class="library-panel" aria-labelledby="libraryTitle">
+      <div class="section-heading"><div><p class="eyebrow">LIBRARY & CONNECTIONS</p><h2 id="libraryTitle">我的图库</h2></div><span id="libraryCount" class="count-badge">—</span></div>
+      <div class="connection-grid">
+        <div class="connection"><span class="connection-label">本地图库 · Console</span><strong id="rootSummary">正在读取…</strong></div>
+        <div class="connection"><span class="connection-label">本地设备</span><strong id="deviceSummary">使用本地图库</strong></div>
+        <div class="connection"><span class="connection-label">Notion</span><strong id="notionSummary">正在读取连接状态…</strong></div>
+      </div>
+      <details id="locations" class="locations"><summary>图库与同步位置 <span aria-hidden="true">＋</span></summary>
+        <form id="configForm" autocomplete="off">
+          <label class="field full-width"><span>本地图库文件夹</span><input id="libraryRoot" type="text" maxlength="1024" placeholder="填写图片文件夹的完整路径" required><small>把新图片放进这个文件夹或其中的 inbox，再点「检查图片」。</small></label>
+          <label class="field"><span>额外设备文件夹 <small>可选</small></span><input id="deviceRoot" type="text" maxlength="1024" placeholder="另一个本地、移动硬盘或已挂载设备的文件夹"><small>留空时，本地同步使用上面的图库文件夹。</small></label>
+          <label class="field"><span>Notion 图片页面 <small>可选</small></span><input id="notionPage" type="text" inputmode="url" maxlength="2048" placeholder="https://www.notion.so/… 或页面 ID"><small id="notionConfigNote">保存页面地址后，还需可用的同步连接。</small></label>
+          <div class="form-footer full-width"><button id="saveConfig" class="secondary-button" type="submit">保存位置</button><span id="configStatus" class="muted" role="status"></span></div>
+        </form>
+      </details>
+      <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="选择图片放入 inbox，也可把图片拖到这里" aria-describedby="dropHelp">
+        <span class="drop-symbol" aria-hidden="true">＋</span><div><strong>把图片拖到这里</strong><span id="dropHelp">或点击选择图片 · 先放进 inbox，确认后再替换</span></div><span id="inboxCount" class="inbox-badge">inbox 0</span>
+      </div>
+      <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,image/x-icon,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.ico" multiple hidden>
+      <div class="action-bar">
+        <button id="scanImages" class="secondary-button" type="button">检查图片</button>
+        <div class="sync-controls"><label class="compact-field"><span>从</span><select id="syncSource" aria-label="同步来源"><option value="local">本地图库</option><option value="console">Console</option><option value="notion" disabled>Notion · 连接待就绪</option></select></label><span class="sync-arrow" aria-hidden="true">→</span><label class="compact-field"><span>到</span><select id="syncTarget" aria-label="同步目标"><option value="console">Console</option><option value="device">设备文件夹</option><option value="notion" disabled>Notion · 连接待就绪</option><option value="all">全部已连接位置</option></select></label><button id="syncImages" class="primary-button" type="button">同步</button></div>
+      </div>
+      <p id="operationStatus" class="operation-status" role="status" aria-live="polite">正在读取图库…</p>
+      <button id="checkOperation" class="secondary-button resume-button" type="button" hidden>继续核对上次同步</button>
+      <button id="restoreImages" class="secondary-button resume-button" type="button" hidden>撤回上次本地操作</button>
+    </section>
+
+    <section id="reviewSection" class="review-section" aria-labelledby="reviewTitle" hidden>
+      <div class="section-heading"><div><p class="eyebrow">REVIEW BEFORE REPLACING</p><h2 id="reviewTitle">确认图片</h2></div><span id="reviewCount" class="count-badge"></span></div>
+      <p id="reviewNote" class="section-note">新图在左，已有图片在右。重复与替换候选由你选择；同尺寸不代表同一张图。</p>
+      <p id="planWarnings" class="plan-warnings" role="status" hidden></p>
+      <div id="candidateList" class="candidate-list"></div>
+      <div class="review-footer"><p id="decisionSummary" class="muted" aria-live="polite"></p><button id="reviewApply" class="primary-button" type="button">确认所选操作</button></div>
+    </section>
+
+    <section class="collection-section" aria-labelledby="collectionTitle">
+      <div class="section-heading"><div><p class="eyebrow">BROWSE YOUR COLLECTION</p><h2 id="collectionTitle">图片</h2></div><label class="search-field"><span class="visually-hidden">按标题或尺寸查找图片</span><input id="imageSearch" type="search" placeholder="查找标题或尺寸" maxlength="160"></label></div>
+      <p id="collectionNote" class="section-note">按用途与标题分组，选择尺寸和方案查看原图。</p>
+      <div id="imageGrid" class="image-grid" aria-busy="true"></div>
+      <div id="emptyState" class="empty-state" hidden><span aria-hidden="true">▧</span><h3>你的图片，从这里开始</h3><p>保存图库位置，放入图片，再点「检查图片」。</p></div>
+    </section>
+    <footer class="page-footer"><span id="lastSync">尚无同步记录</span><span>保留原图 · 确认替换 · 按需同步</span></footer>
+  </main>
+
+  <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle"><div class="dialog-heading"><h2 id="previewTitle">图片预览</h2><button id="closePreview" class="icon-button" type="button" aria-label="关闭图片预览">×</button></div><div id="previewImageWrap"></div><p id="previewMeta" class="muted"></p></dialog>
+  <dialog id="metadataDialog" class="metadata-dialog" aria-labelledby="metadataTitle" aria-describedby="metadataOriginal">
+    <form id="metadataForm" autocomplete="off">
+      <div class="dialog-heading"><h2 id="metadataTitle">方案信息</h2><button id="metadataClose" class="icon-button" type="button" aria-label="关闭方案信息">×</button></div>
+      <p id="metadataOriginal" class="original-file"></p>
+      <p class="muted">这里只整理用途、方案与来源关系，保留原文件名和图片内容。</p>
+      <div class="metadata-fields">
+        <label class="field"><span>用途 / 标题</span><input id="metadataGroupTitle" maxlength="140" required placeholder="例如：透明Logo、商店主图"></label>
+        <label class="field"><span>方案名称</span><input id="metadataVariantLabel" maxlength="80" required placeholder="为这张已有图片标注方案"></label>
+        <label class="field"><span>派生来源 <small>可选</small></span><select id="metadataDerivedFrom"><option value="">原始素材 / 未关联来源</option></select><small>明确指定来源后，可按方案查看对应的派生尺寸。</small></label>
+      </div>
+      <p id="metadataStatus" class="operation-status" role="status" aria-live="polite"></p>
+      <div class="metadata-actions"><button id="metadataSave" class="primary-button" type="submit">保存方案信息</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

@@ -58,6 +58,42 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(record["rawReason"], "no_boundary_in_bounded_tail")
         self.assertIsNone(self.guard().busy_diagnostic(self.repo))
 
+    def historical_user_tail(self):
+        self.write({"type": "turn_context", "payload": {"turn_id": TURN}}, True)
+        self.pad(MAX_SCAN_BYTES - 65536 - self.rollout.stat().st_size)
+        self.write({"type": "response_item", "payload": {"type": "message", "role": "user", "content": "already anchored"}}, True)
+        self.claim = self.store.declare(OWNER, "read_only")
+        self.original_anchor = dict(self.claim["anchor"])
+        self.pad(131072)
+        scan = scan_rollout(self.rollout)
+        self.assertEqual((scan["state"], scan["reason"], scan["currentTurnId"]),
+                         ("active", "typed_rollout_boundary", None))
+        self.assertTrue(scan["starts"])
+        self.assertTrue(all(start["offset"] < self.original_anchor["size"] for start in scan["starts"]))
+        return scan
+
+    def test_anchored_user_remaining_after_context_exits_tail_can_recover(self):
+        self.historical_user_tail()
+        result = self.resolve()
+        self.assertEqual((result["status"], result["mode"], result["turnId"]),
+                         ("verified", "read_only", TURN))
+        self.assertEqual(result["lifecycleProof"]["appendBytes"], 131072)
+        self.assertIsNone(self.guard().busy_diagnostic(self.repo))
+        changed = self.store.declare(OWNER, "edit", [self.repo])
+        self.assertEqual(changed["anchor"], self.original_anchor)
+        self.assertEqual(changed["turnId"], TURN)
+
+    def test_new_user_after_anchor_still_refuses_historical_user_recovery(self):
+        self.historical_user_tail()
+        self.write({"type": "response_item", "payload": {"type": "message", "role": "user", "content": "new steering"}}, True)
+        scan = scan_rollout(self.rollout)
+        self.assertEqual((scan["state"], scan["currentTurnId"]), ("active", None))
+        self.assertTrue(any(start["offset"] >= self.original_anchor["size"] for start in scan["starts"]))
+        self.assertEqual(self.resolve()["status"], "unverified")
+        self.assertIsNotNone(self.guard().busy_diagnostic(self.repo))
+        with self.assertRaises(ScopeError):
+            self.store.declare(OWNER, "edit", [self.repo])
+
     def test_actual_six_mib_append_streamed_without_advancing_anchor(self):
         self.forgotten_tail(6 * 1024 * 1024)
         result = self.resolve()

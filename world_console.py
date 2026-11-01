@@ -65,6 +65,9 @@ from dev_room_http import dev_room_get, dev_room_post
 from resource_library import ResourceLibraryService, ResourceLibraryError, ResourceLibraryConflict
 from resource_preview import ResourcePreviewError
 from resource_http import resource_get, resource_post
+from image_manager import ImageManagerService
+from image_manager_http import image_get, image_post
+from image_manager_notion import ImageManagerNotion
 from phone_companion import PhoneCompanionService
 from phone_device_store import PhoneDeviceStore
 from phone_discovery import DiscoveryAnnouncer
@@ -294,6 +297,7 @@ MEDIA_CONFIG_FILE = USER_DATA_DIR / "media.json"
 DOCUMENT_LIBRARY = DocumentLibraryService(CACHE_DIR / "documents.json")
 DEV_ROOM = DevRoomService(DOCUMENT_LIBRARY)
 RESOURCE_LIBRARY = ResourceLibraryService(DOCUMENT_LIBRARY)
+IMAGE_MANAGER = ImageManagerService(CACHE_DIR / "image-manager.json", DOCUMENT_LIBRARY)
 _transfer_local_data = Path(os.environ.get("LOCALAPPDATA", "").strip() or Path.home() / "AppData" / "Local")
 TRANSFER_STORE = TransferStore(lambda: DOCUMENT_LIBRARY.state().get("root", ""),
                               _transfer_local_data / "CodexControlConsole" / "transfers", public_root=APP_DIR)
@@ -569,6 +573,8 @@ SUBSCRIPTION_BROKER = SubscriptionBroker(WORKFLOW_SERVICE)
 WORKFLOW_SERVICE.subscription = SUBSCRIPTION_BROKER
 WORKFLOW_SERVICE.codex_work = CodexWorkController(SUBSCRIPTION_BROKER, WORKFLOW_DATA_DIR,
     version=APP_VERSION, executable=find_codex_work_cli())
+IMAGE_MANAGER_NOTION = ImageManagerNotion(IMAGE_MANAGER, CACHE_DIR / "image-manager-notion-private",
+    executable=find_codex_work_cli())
 
 WORLD_CACHE = CACHE_DIR / "world.geojson"
 TRANSLATION_CACHE = CACHE_DIR / "translations.json"
@@ -799,6 +805,7 @@ def shutdown_active_server():
 
 def retire_console_instance(payload):
     if (CONSOLE_DEVELOPER_UPDATE.busy
+            or IMAGE_MANAGER_NOTION.busy
             or getattr(globals().get("CONSOLE_REPOSITORY_PUBLISH"), "busy", False)):
         raise ValueError("本机代码正在保存或上传，请完成后再更新应用。")
     if payload.get("expectedInstanceId") != RUNTIME_INSTANCE_ID:
@@ -814,6 +821,7 @@ def retire_console_instance(payload):
 
 def shutdown_if_no_background_work():
     if (PHONE_COMPANION.enabled or WORKFLOW_SERVICE.background_enabled
+            or IMAGE_MANAGER_NOTION.busy
             or WORKFLOW_SERVICE.has_pending_jobs() or CONSOLE_DEVELOPER_UPDATE.busy
             or getattr(globals().get("CONSOLE_REPOSITORY_PUBLISH"), "busy", False)):
         return
@@ -1810,6 +1818,24 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             except (OSError, RuntimeError):
                 self.send_json({"error": "本机开发状态暂时无法读取，请稍后重新读取。"}, status=503)
             return
+        if parsed.path.startswith("/api/images/"):
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            try:
+                action = parsed.path.removeprefix("/api/images/")
+                result = image_get(IMAGE_MANAGER, action, parsed.query, notion=IMAGE_MANAGER_NOTION)
+                if action == "preview":
+                    self.send_file_response(result['path'], result['mimeType'])
+                else:
+                    self.send_json(result)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=getattr(error, "status", 400))
+            except (OSError, RuntimeError):
+                self.send_json({"error": "图片库暂时无法读取，请检查所选文件夹。"}, status=503)
+            return
+        if parsed.path == "/image-manager.html":
+            self.send_file_response(APP_DIR / "image-manager.html", "text/html; charset=utf-8")
+            return
         if parsed.path == "/resources.html":
             self.send_file_response(APP_DIR / "resources.html", "text/html; charset=utf-8")
             return
@@ -2254,6 +2280,8 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         try:
             target = Path(self.translate_path(self.path)).resolve()
             return (target.is_relative_to(PHONE_DEVICE_STORE.directory) or target.is_relative_to(WORKFLOW_DATA_DIR)
+                    or target == IMAGE_MANAGER.config_path.resolve()
+                    or target.is_relative_to(IMAGE_MANAGER_NOTION.directory)
                     or target.is_relative_to(CONSOLE_DEVELOPER_UPDATE.state_dir)
                     or (globals().get("CONSOLE_REPOSITORY_PUBLISH") is not None
                         and target.is_relative_to(CONSOLE_REPOSITORY_PUBLISH.state_dir)))
@@ -2374,6 +2402,36 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             except (OSError, RuntimeError):
                 self.send_json({"error": "更新请求未取得明确回执，请核对原请求状态。",
                     "code": "developer_update_unavailable"}, status=503)
+            return
+        if parsed.path.startswith("/api/images/"):
+            if not self.require_local_request():
+                return
+            try:
+                if parsed.query:
+                    raise ValueError("图片操作地址无效。")
+                action = parsed.path.removeprefix("/api/images/")
+                if action == "upload":
+                    fields, files = self.read_multipart_form(97 * 1024 * 1024)
+                    if set(fields) != {"expectedRoot"} or any(file.get('field') != 'files' for file in files):
+                        raise ValueError("请选择图库后再导入图片。")
+                    uploaded = []
+                    for file in files:
+                        data = file.get('data')
+                        if not isinstance(data, bytes):
+                            with data.open() as stream:
+                                data = stream.read()
+                        uploaded.append((file['filename'], data))
+                    result = IMAGE_MANAGER.import_files(uploaded, fields)
+                else:
+                    result = image_post(IMAGE_MANAGER, action, self.read_json_body(max_bytes=256 * 1024),
+                        notion=IMAGE_MANAGER_NOTION)
+                self.send_json(result)
+            except RequestBodyError as error:
+                self.send_json({"error": str(error)}, status=error.status)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=getattr(error, "status", 400))
+            except (OSError, RuntimeError):
+                self.send_json({"error": "图片操作尚未完成，请保留当前选择并核对原计划。"}, status=503)
             return
         if parsed.path.startswith("/api/resources/"):
             if not self.require_local_request():

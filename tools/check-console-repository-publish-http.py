@@ -150,6 +150,8 @@ def main():
             "CONSOLE_DEVELOPER_UPDATE": SimpleNamespace(busy=False, state_dir=root / "cache/developer-update-private"),
             "BLENDER_MUTATION_API_PATHS": frozenset(),
             "PHONE_DEVICE_STORE": SimpleNamespace(directory=root / "phone-private"),
+            "IMAGE_MANAGER": SimpleNamespace(config_path=root / "cache/image-manager.json"),
+            "IMAGE_MANAGER_NOTION": SimpleNamespace(directory=root / "cache/image-manager-notion-private", busy=False),
             "WORKFLOW_DATA_DIR": root / "workflow-private",
             "TRUSTED_LOCAL_REQUEST_HOSTNAMES": {"localhost"},
             "_PRIVATE_REQUEST_NETWORKS": tuple(ipaddress.ip_network(v) for v in

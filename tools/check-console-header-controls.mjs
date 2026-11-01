@@ -9,7 +9,7 @@ import { runInNewContext } from "node:vm";
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const legacyIds = ["consoleDeveloperModeTop", "consoleDeveloperSettingsTop", "consoleUpdateTop"];
 const managementIds = ["consoleDeveloperTools", "consoleUpdateAuto", "consoleUpdateRefresh", "consoleUpdateInstall", "consoleUninstall", "updateProductConsole", "updateProductWorld"];
-const requiredPages = ["index.html", "music.html", "workspace.html", "reader.html", "resources.html", "subscription.html"];
+const requiredPages = ["index.html", "music.html", "workspace.html", "reader.html", "resources.html", "subscription.html", "image-manager.html"];
 const headerButtonIds = new Set(["languageToggle", "themeToggle", "moduleArchiveDrop"]);
 const moduleIds = new Set(["manager", "workspace", "blender", "unity", "steamwork", "randomrealm", "music", "wallpaper"]);
 const voidTags = new Set("area base br col embed hr img input link meta param source track wbr".split(" "));
