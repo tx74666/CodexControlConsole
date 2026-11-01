@@ -25,12 +25,14 @@ const context = {
   desktopWorkflowPanel: { hasDraft() { return false; } },
   desktopIncubatorPanel: { hasDraft() { return false; } },
   desktopConversationsPanel: { canReload() { return true; } },
+  document: { getElementById() { return null; } },
   localStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) },
   window: { location: { reload() { reloads++; } } }
 };
 runInNewContext(`const consoleUiVersion = ${JSON.stringify(buildVersion)}; let consoleVersionReloadPending = false;
 ${extract('saveWorkspaceTodoDraft')}
 ${extract('restoreWorkspaceTodoDraft')}
+${extract('steamworkImageHasDraft')}
 ${extract('refreshForNewConsoleVersion')}`, context);
 runInNewContext(extract('hasReachedUpdateVersion'), context);
 assert(context.hasReachedUpdateVersion('1.0.8', '1.0.8'));
@@ -75,6 +77,26 @@ context.desktopCodexWorkPanel.canReload = () => false;
 context.refreshForNewConsoleVersion('99.0.0');
 assert.equal(reloads, 0, 'active Work, permission setup, or unsafe Work persistence must block automatic reload');
 context.desktopCodexWorkPanel.canReload = () => true;
+const noImageFrame = context.document.getElementById;
+const imageFields = { metadataDialog: { open: false }, locations: { open: false }, imageGrid: { getAttribute() { return 'false'; } } };
+context.document.getElementById = id => {
+  assert.equal(id, 'steamworkImageFrame');
+  return { getAttribute() { return 'image-manager.html?embed=steamwork'; }, contentDocument: { getElementById: field => imageFields[field] } };
+};
+for (const field of ['metadataDialog', 'locations', 'imageGrid']) {
+  if (field === 'imageGrid') imageFields.imageGrid.getAttribute = () => 'true';
+  else imageFields[field].open = true;
+  context.refreshForNewConsoleVersion('99.0.0');
+  assert.equal(reloads, 0, `${field} in the embedded Image must block automatic reload`);
+  if (field === 'imageGrid') imageFields.imageGrid.getAttribute = () => 'false';
+  else imageFields[field].open = false;
+}
+assert.equal(context.steamworkImageHasDraft(), false, 'closed, idle Image resumes the normal reload gate');
+context.document.getElementById = () => ({ getAttribute() { return 'image-manager.html?embed=steamwork'; }, get contentDocument() { throw new Error('frame origin unavailable'); } });
+context.refreshForNewConsoleVersion('99.0.0');
+assert.equal(reloads, 0, 'an unreadable frame must not discard unknown Image edits');
+context.document.getElementById = noImageFrame;
+assert.equal(context.steamworkImageHasDraft(), false, 'ordinary pages without an Image frame retain existing behavior');
 const workingStorage = { ...context.localStorage };
 for (const failure of ['set throws', 'set ignored', 'read throws', 'read mismatch']) {
   stored.set('draft', 'previous saved draft');

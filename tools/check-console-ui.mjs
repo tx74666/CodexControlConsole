@@ -155,12 +155,18 @@ function staticChecks() {
     "randomRealmTextureFileInput",
     "steamworkGameContentFileInput",
     "steamworkPublishToolFileInput",
-    "steamworkAssetFileInput",
     "desktopLayoutFileInput"
   ];
   assert(
     programmaticFileInputs.every(id => new RegExp(`id="${id}"[^>]+hidden`).test(consoleHtml)),
     "Programmatic Console file inputs must not remain in the keyboard tab order"
+  );
+  assert(
+    ["steamworkAssetFileInput", "steamworkAssetList", "steamworkAssetRoot", "steamworkAssetSummary", "imageManagerOpen"]
+      .every(id => !new RegExp(`id="${id}"`).test(consoleHtml))
+      && !/class="[^"]*\bsteamwork-assets\b/.test(consoleHtml)
+      && !/Steam asset checklist|ASSET LOG/.test(consoleHtml),
+    "Retired Steamwork Asset Log controls and duplicate Image entries must not return"
   );
   const musicHtml = readFileSync(join(projectRoot, "music.html"), "utf8");
   assert(
@@ -2277,11 +2283,11 @@ async function runBrowserChecks(client) {
   const lazyState = await evaluate(client, `({
     musicCards: document.querySelectorAll('.music-dock .track-card').length,
     wallpaperCards: document.querySelectorAll('.wallpaper-card').length,
-    steamRoot: document.querySelector('#steamworkAssetRoot')?.textContent?.trim() || ''
+    imageSource: document.querySelector('#steamworkImageFrame')?.getAttribute('src') || ''
   })`);
   assert(lazyState.musicCards === 0, "music data loaded before the Music module was opened");
   assert(lazyState.wallpaperCards === 0, "wallpaper data loaded before the Wallpaper module was opened");
-  assert(lazyState.steamRoot === "", "Steamwork data loaded before the Steamwork module was opened");
+  assert(lazyState.imageSource === "", "Image data loaded before the Steamwork module was opened");
 
   if (process.env.CONSOLE_UI_SCREENSHOT) {
     if (["light", "dark"].includes(process.env.CONSOLE_UI_THEME || "")) {
@@ -2797,9 +2803,12 @@ async function runBrowserChecks(client) {
 
   await clickModule(client, "steamwork");
   await waitForValue(
-    () => evaluate(client, "document.querySelector('#steamworkAssetRoot')?.textContent?.trim() || ''"),
-    value => Boolean(value),
-    "Steamwork assets did not load on first open",
+    () => evaluate(client, `(() => {
+      const frame = document.querySelector('#steamworkImageFrame');
+      return { ready: frame?.dataset.ready || '', connected: frame?.contentDocument?.querySelector('#rootSummary')?.dataset.connected || '' };
+    })()`),
+    value => value?.ready === "true" && ["true", "false"].includes(value?.connected),
+    "Steamwork Image catalogue did not load in its inline panel on first open",
     30000
   );
 
