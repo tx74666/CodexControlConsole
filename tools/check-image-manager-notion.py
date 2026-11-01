@@ -45,6 +45,9 @@ class FakeRemote:
         self.page_mode = page_mode
         self.page_writes = 0
         self.fail_page_before_write = self.fail_page_after_write = False
+        self.page_error = None
+        self.fetch_flags = {}
+        self.on_fetch = None
         self.page_text = ('User notes before\n\n<synced-block url="https://app.notion.com/p/' + PAGE.replace('-','') + '#' + OTHER.replace('-','')
             + '">\n## Image\n\n<toggle>\n同步记录\n\n' + notion_module.GALLERY_MARKER + '\n</toggle>\n</synced-block>\n\nUser notes after')
 
@@ -58,8 +61,9 @@ class FakeRemote:
     def call(self, action, arguments):
         self.calls.append((action, arguments))
         if action == 'fetch':
+            if self.on_fetch:self.on_fetch()
             return {'id': PAGE, 'metadata': {'type': 'page' if self.page_mode else 'folder'},
-                'text': self.page_text if self.page_mode else '\n'.join('<image source="' + ref + '" />' for ref in self.originals)}
+                'text': self.page_text if self.page_mode else '\n'.join('<image source="' + ref + '" />' for ref in self.originals),**self.fetch_flags}
         if action == 'prepare':
             identifier = str(uuid.uuid4())
             self.uploads[identifier] = {'name': arguments['filename']}
@@ -78,6 +82,7 @@ class FakeRemote:
             return {'files': [{'url': reference} for reference in arguments['references']]}
         if action == 'page':
             self.page_writes += 1
+            if self.page_error:raise self.page_error
             if self.fail_page_before_write:
                 raise NotionSyncError('test_page_unknown', '页面写入回执未知。', unknown=True)
             assert arguments['page_id'] == PAGE and arguments['command'] == 'update_content'
@@ -1177,6 +1182,182 @@ class Checks(unittest.TestCase):
         self.assertEqual(result['notionSync']['syncedFingerprint'],first['notionSync']['syncedFingerprint'])
         self.assertTrue(any(data==self.data for data in self.remote.originals.values()))
         self.assertEqual(self.remote.posts,1)
+
+    def pending_original_fixture(self, later=True):
+        self.remote = FakeRemote(page_mode=True)
+        if later:
+            (self.root/'ZLater.png').write_bytes(png('blue'))
+            self.service.scan({'expectedRoot':str(self.root)})
+        self.remote.page_error = NotionSyncError('notion_tool_error','Original attach failed.')
+        failed = self.sync(source='console')
+        self.remote.page_error = None
+        self.assertEqual(failed['operation']['code'],'notion_tool_error')
+        self.assertTrue(failed['operation']['recheckable'])
+        self.assertEqual(failed['operation']['recheckKind'],'upload_receipt')
+        path = self.directory/'private'/('page-'+PAGE+'.json')
+        return failed,path,json.loads(path.read_text(encoding='utf-8'))
+
+    def retry_original(self, request='retry-new', retry_of='first'):
+        self.provider.sync({'source':'console','target':'notion','expectedRoot':str(self.root),
+            'requestId':request,'retryOf':retry_of})
+        return self.provider.wait(5)
+
+    def test_original_recheck_is_read_only_and_legacy_receipt_gets_bounded_explicit_retry_offer(self):
+        failed,path,record = self.pending_original_fixture()
+        receipt = record['receipts'][0]
+        for key in ('requestId','operationId','root','pageId','exportFingerprint','uploadSource'):
+            receipt.pop(key,None)
+        original_receipt = dict(receipt)
+        path.write_text(json.dumps(record),encoding='utf-8')
+        calls,posts = len(self.remote.calls),self.remote.posts
+        checked = self.sync(source='console')
+        operation = checked['operation']
+        self.assertEqual((operation['id'],operation['requestId']),(failed['operation']['id'],'first'))
+        self.assertEqual((operation['status'],operation['code']),('failed','recovery_unavailable'))
+        self.assertTrue(operation['retryable'])
+        self.assertEqual(operation['retryOf'],'first')
+        self.assertEqual(len(operation['missingOriginals']),2)
+        self.assertEqual(self.remote.posts,posts)
+        self.assertTrue(all(action in {'fetch','download'} for action,_ in self.remote.calls[calls:]))
+        self.assertNotIn('recoveryEvidence',operation)
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['receipts'][0],original_receipt)
+        calls = len(self.remote.calls)
+        self.sync(source='console')
+        self.assertEqual(len(self.remote.calls),calls,'Same old request never starts the new retry intent')
+
+    def test_new_explicit_retry_uploads_missing_only_and_preserves_old_evidence_and_request_replay(self):
+        _,path,record = self.pending_original_fixture()
+        old = dict(record['receipts'][0])
+        self.sync(source='console')
+        result = self.retry_original()
+        self.assertEqual(result['operation']['status'],'completed')
+        self.assertEqual(result['notionSync']['status'],'synced')
+        self.assertEqual(self.remote.posts,3)  # One orphan from old intent, two explicitly authorized missing originals.
+        after = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(next(row for row in after['receipts'] if row['id']==old['id']),old)
+        new = next(row for row in after['receipts'] if old['id'] in row.get('supersedesReceiptIds',[]))
+        self.assertEqual((new['retryOf'],new['requestId']),('first','retry-new'))
+        self.assertTrue(new['uploadSource'].startswith('file-upload://'))
+        self.assertNotIn('uploadSource',json.dumps(result['operation']))
+        self.assertNotIn('SECRET_SHOULD_NEVER_BE_SAVED',path.read_text(encoding='utf-8'))
+        calls,posts = len(self.remote.calls),self.remote.posts
+        self.provider.sync({'source':'console','target':'notion','expectedRoot':str(self.root),'requestId':'retry-new'})
+        self.assertEqual((len(self.remote.calls),self.remote.posts),(calls,posts))
+        with self.assertRaises(NotionSyncError):self.retry_original(request='first')
+        with self.assertRaises(NotionSyncError):
+            self.provider.sync({'source':'console','target':'notion','expectedRoot':str(self.root),
+                                'requestId':'null-retry','retryOf':None})
+
+    def test_retry_local_scope_change_stops_before_prepare_and_new_snapshot_can_be_checked(self):
+        self.pending_original_fixture()
+        self.sync(source='console')
+        item = self.service.state()['items'][0]
+        self.service.annotate({'expectedRoot':str(self.root),'path':item['path'],'sha256':item['sha256'],
+            'groupTitle':'Changed purpose','variantLabel':'Changed'})
+        calls,posts = len(self.remote.calls),self.remote.posts
+        with self.assertRaises(NotionSyncError):self.retry_original()
+        self.assertEqual((len(self.remote.calls),self.remote.posts),(calls,posts))
+        blocked = self.sync(source='console',request='new-snapshot')
+        self.assertEqual(blocked['operation']['code'],'upload_receipt_unresolved')
+        self.assertTrue(blocked['operation']['recheckable'])
+        self.assertEqual(self.remote.posts,posts)
+        checked = self.sync(source='console',request='new-snapshot')
+        self.assertTrue(checked['operation']['retryable'])
+        self.assertEqual(checked['operation']['retryOf'],'new-snapshot')
+
+    def test_target_cas_change_after_recheck_refuses_every_new_upload(self):
+        _,path,record = self.pending_original_fixture()
+        self.sync(source='console')
+        original_text = self.remote.page_text
+        self.remote.page_text = self.remote.page_text.replace('## Image','## Image\nNew user note',1)
+        prepares = sum(action=='prepare' for action,_ in self.remote.calls)
+        result = self.retry_original()
+        self.assertEqual((result['operation']['status'],result['operation']['code']),('failed','recovery_evidence_stale'))
+        self.assertEqual(sum(action=='prepare' for action,_ in self.remote.calls),prepares)
+        self.assertEqual(self.remote.posts,1)
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['receipts'][0],record['receipts'][0])
+        self.remote.page_text = original_text
+        reads = []
+        def change_local_during_fetch():
+            reads.append(True)
+            if len(reads)==2:
+                item = self.service.state()['items'][0]
+                self.service.annotate({'expectedRoot':str(self.root),'path':item['path'],'sha256':item['sha256'],
+                    'groupTitle':'Changed during read','variantLabel':'B'})
+        self.remote.on_fetch = change_local_during_fetch
+        failed = self.retry_original(request='concurrent-local-edit')
+        self.assertEqual(failed['operation']['code'],'recovery_evidence_stale')
+        self.assertEqual(sum(action=='prepare' for action,_ in self.remote.calls),prepares)
+
+    def test_recovery_negative_evidence_rejects_truncation_unknown_omission_and_unclosed_region(self):
+        _,path,baseline = self.pending_original_fixture()
+        original_text = self.remote.page_text
+        cases = [({'truncated':True},original_text),({'metadata':{'type':'page','truncated':True}},original_text),
+            ({'unknown_block_count':1},original_text),({'omitted_children':['x']},original_text),
+            ({},original_text.replace('<toggle>','<unknown-block />\n<toggle>',1)),
+            ({},original_text.replace('</synced-block>','',1)),
+            ({},original_text.replace('<toggle>','<columns><column>\n<toggle>',1))]
+        for flags,text in cases:
+            with self.subTest(flags=flags):
+                path.write_text(json.dumps(baseline),encoding='utf-8')
+                self.remote.fetch_flags,self.remote.page_text = flags,text
+                calls = len(self.remote.calls)
+                result = self.sync(source='console')
+                self.assertNotEqual(result['operation'].get('retryable'),True)
+                self.assertNotEqual(result['notionSync']['status'],'synced')
+                self.assertTrue(all(action in {'fetch','download'} for action,_ in self.remote.calls[calls:]))
+                self.assertEqual(self.remote.posts,1)
+
+    def test_recovery_refuses_native_file_inside_or_outside_owned_gallery(self):
+        _,path,baseline = self.pending_original_fixture()
+        text = self.remote.page_text
+        ref = 'notion-file-block://'+PAGE+'/'+str(uuid.uuid4())+'?name=Sample.png'
+        self.remote.originals[ref] = self.data
+        for outside in (False,True):
+            with self.subTest(outside=outside):
+                path.write_text(json.dumps(baseline),encoding='utf-8')
+                tag = '<file source="'+ref+'">Original image</file>'
+                self.remote.page_text = text+'\n'+tag if outside else text.replace('</toggle>',tag+'\n</toggle>',1)
+                result = self.sync(source='console')
+                self.assertEqual(result['operation']['code'],'recovery_attachment_review')
+                self.assertNotEqual(result['operation'].get('retryable'),True)
+                self.assertEqual(self.remote.posts,1)
+
+    def test_recheck_already_attached_originals_complete_without_upload_but_reject_wrong_caption(self):
+        _,path,record = self.pending_original_fixture(later=False)
+        self.remote.add_image('Sample - 7x5.png',self.data,caption='Sample · 方案1 · 7×5')
+        self.remote.add_catalog({
+            row['sha256']:row['metadata'] for row in record['operation']['exportSnapshot']['entries']})
+        calls,posts = len(self.remote.calls),self.remote.posts
+        result = self.sync(source='console')
+        self.assertEqual((result['operation']['status'],result['notionSync']['status']),('completed','synced'))
+        self.assertEqual(self.remote.posts,posts)
+        self.assertTrue(all(action in {'fetch','download'} for action,_ in self.remote.calls[calls:]))
+        path.write_text(json.dumps(record),encoding='utf-8')
+        self.remote.page_text = self.remote.page_text.replace('Sample · 方案1 · 7×5','Wrong external caption')
+        failed = self.sync(source='console')
+        self.assertNotEqual(failed['notionSync']['status'],'synced')
+        self.assertNotEqual(failed['operation']['status'],'completed')
+
+    def test_target_mutation_between_negative_fetches_and_legacy_without_snapshot_never_authorize_retry(self):
+        _,path,record = self.pending_original_fixture()
+        reads = []
+        def change_second_fetch():
+            reads.append(True)
+            if len(reads)==2:self.remote.page_text=self.remote.page_text.replace('## Image','## Image\nChanged',1)
+        self.remote.on_fetch = change_second_fetch
+        result = self.sync(source='console')
+        self.assertEqual(result['operation']['code'],'recovery_target_changed')
+        self.assertNotEqual(result['operation'].get('retryable'),True)
+        self.assertEqual(self.remote.posts,1)
+        self.remote.on_fetch = None
+        record['operation'].pop('exportSnapshot',None)
+        path.write_text(json.dumps(record),encoding='utf-8')
+        calls = len(self.remote.calls)
+        result = self.sync(source='console')
+        self.assertFalse(result['operation']['recheckable'])
+        self.assertEqual(len(self.remote.calls),calls)
+        with self.assertRaises(NotionSyncError):self.retry_original()
 
 
 if __name__ == '__main__':

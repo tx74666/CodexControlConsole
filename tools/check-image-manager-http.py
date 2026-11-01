@@ -274,6 +274,47 @@ class ImageHTTPChecks(unittest.TestCase):
         self.assertEqual(image_post(service, 'sync', original, notion), {'requestId': original['requestId']},
                          'The provider must retain authority over checking the same in-flight request')
 
+    def test_console_notion_directions_reach_provider_without_local_self_sync(self):
+        calls = []
+        def provider_sync(payload):
+            calls.append(payload)
+            return {'operation': {'requestId': payload['requestId'], 'status': 'running'}}
+        provider = SimpleNamespace(busy=False, sync=provider_sync)
+        with patch.object(self.world, 'IMAGE_MANAGER_NOTION', provider), \
+                patch.object(self.service, 'scan', side_effect=AssertionError('Unexpected self-sync scan')), \
+                patch.object(self.service, 'sync_device', side_effect=AssertionError('Unexpected device sync')):
+            for source, target in [('console', 'notion'), ('notion', 'console')]:
+                payload = {'expectedRoot': str(self.root), 'source': source, 'target': target, 'requestId': source+'-request'}
+                status, result = self.request('POST', '/api/images/sync', payload)
+                self.assertEqual(status, 200, result)
+                self.assertEqual(calls[-1], payload)
+                self.assertEqual(result['operation']['requestId'], payload['requestId'])
+        self.assertEqual(len(calls), 2)
+
+    def test_missing_original_retry_requires_explicit_new_scoped_notion_request(self):
+        calls = []
+        def provider_sync(payload):
+            calls.append(payload)
+            return {'operation': {'requestId': payload['requestId'], 'status': 'running'}}
+        provider = SimpleNamespace(busy=False, sync=provider_sync)
+        original = {'expectedRoot': str(self.root), 'source': 'console', 'target': 'notion',
+                    'requestId': 'new-user-request', 'retryOf': 'previous-request'}
+        with patch.object(self.world, 'IMAGE_MANAGER_NOTION', provider):
+            status, result = self.request('POST', '/api/images/sync', original)
+            self.assertEqual(status, 200, result)
+            self.assertEqual(calls, [original])
+            invalid = [{'requestId': original['retryOf']}, {'requestId': None}, {'requestId': ''},
+                       {'retryOf': None}, {'retryOf': ''}, {'retryOf': '../other'}, {'retryOf': 'a'*101},
+                       {'source': 'notion', 'target': 'console'}, {'target': 'all'}, {'target': 'device'},
+                       {'source': 'local', 'target': 'local'}, {'unexpected': True}]
+            for change in invalid:
+                with self.subTest(change=change):
+                    status, _ = self.request('POST', '/api/images/sync', {**original, **change})
+                    self.assertEqual(status, 400)
+            self.assertEqual(calls, [original], 'Invalid retries must not reach any provider write path')
+        status, _ = self.request('POST', '/api/images/sync', original, {'Origin': 'https://attacker.example'})
+        self.assertEqual(status, 403)
+
     def test_upload_review_and_preview_use_bound_root_and_reject_escape(self):
         stream = io.BytesIO()
         Image.new('RGB', (32, 24), 'purple').save(stream, format='PNG')

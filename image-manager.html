@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#111a27">
   <title>Console · Image manager</title>
   <link rel="icon" href="favicon.ico">
-  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.46-20261101">
-  <script src="image-manager-i18n.js?v=images-1.1.46-20261101" defer></script>
-  <script src="image-manager.js?v=images-variants-1.1.46-20261101" defer></script>
+  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.47-20261101">
+  <script src="image-manager-i18n.js?v=images-1.1.47-20261101" defer></script>
+  <script src="image-manager.js?v=images-variants-1.1.47-20261101" defer></script>
 </head>
 <body>
   <main class="image-shell">
@@ -21,30 +21,30 @@
     <section class="library-panel" aria-labelledby="libraryTitle">
       <div class="section-heading"><div><p class="eyebrow">LIBRARY & CONNECTIONS</p><h2 id="libraryTitle" data-image-en="My library">我的图库</h2></div><span id="libraryCount" class="count-badge">—</span></div>
       <div class="connection-grid">
-        <div class="connection"><span class="connection-label" data-image-en="Local library · Console">本地图库 · Console</span><strong id="rootSummary">正在读取…</strong></div>
-        <div class="connection"><span class="connection-label" data-image-en="Local device">本地设备</span><strong id="deviceSummary">使用本地图库</strong></div>
+        <div class="connection"><span class="connection-label" data-image-en="Console library">Console 图库</span><strong id="rootSummary">正在读取…</strong></div>
         <div class="connection"><span class="connection-label">Notion</span><strong id="notionSummary">正在读取连接状态…</strong></div>
       </div>
       <details id="locations" class="locations"><summary><span data-image-en="Library and sync locations">图库与同步位置</span> <span aria-hidden="true">＋</span></summary>
         <form id="configForm" autocomplete="off">
-          <label class="field full-width"><span data-image-en="Current image folder">当前图片文件夹</span><input id="libraryRoot" type="text" maxlength="1024" placeholder="填写图片文件夹的完整路径" data-image-en-placeholder="Full path to your image folder" required><small data-image-en="Put new images here or in Inbox, then choose Update local to review them.">把新图片放进这里或 Inbox，再点「更新本地」核对。</small></label>
-          <label class="field"><span><span data-image-en="Additional device folder">额外设备文件夹</span> <small data-image-en="Optional">可选</small></span><input id="deviceRoot" type="text" maxlength="1024" placeholder="另一个本地、移动硬盘或已挂载设备的文件夹" data-image-en-placeholder="A folder on another local drive, external drive, or mounted device"><small data-image-en="Leave blank to use the library folder above for local sync.">留空时，本地同步使用上面的图库文件夹。</small></label>
+          <label class="field full-width"><span data-image-en="Console library folder">Console 图库文件夹</span><input id="libraryRoot" type="text" maxlength="1024" placeholder="填写图片文件夹的完整路径" data-image-en-placeholder="Full path to your image folder" required><small data-image-en="Console uses this folder directly. Choose Refresh list when files change outside Console.">Console 直接使用此文件夹；在外部修改图片后，可点「刷新列表」核对。</small></label>
+          <label class="field"><span><span data-image-en="Additional device folder">额外设备文件夹</span> <small data-image-en="Optional">可选</small></span><input id="deviceRoot" type="text" maxlength="1024" placeholder="另一个本地、移动硬盘或已挂载设备的文件夹" data-image-en-placeholder="A folder on another local drive, external drive, or mounted device"><small id="deviceSummary">未配置设备文件夹</small></label>
           <label class="field"><span><span data-image-en="Notion image page">Notion 图片页面</span> <small data-image-en="Optional">可选</small></span><input id="notionPage" type="text" inputmode="url" maxlength="2048" placeholder="https://www.notion.so/… 或页面 ID" data-image-en-placeholder="https://www.notion.so/… or page ID"><small id="notionConfigNote">保存页面地址后，还需可用的同步连接。</small></label>
           <div class="form-footer full-width"><button id="saveConfig" class="secondary-button" type="submit" data-image-en="Save locations">保存位置</button><span id="configStatus" class="muted" role="status"></span></div>
         </form>
+        <details id="deviceTransfer" class="advanced-sync"><summary data-image-en="Device transfer">设备传输</summary><div class="sync-controls"><label class="compact-field"><span class="visually-hidden" data-image-en="Device transfer direction">设备传输方向</span><select id="deviceDirection" aria-label="设备传输方向" data-image-en-aria-label="Device transfer direction"><option value="to-device" data-image-en="Console → Device folder">Console → 设备文件夹</option><option value="from-device" data-image-en="Device folder → Console">设备文件夹 → Console</option></select></label><button id="transferDeviceImages" class="secondary-button" type="button" data-image-en="Transfer files">传输文件</button></div><p id="deviceTransferHint" class="sync-hint" data-image-en="Use the optional device folder above. Images that need review stay in the comparison list.">使用上方可选设备文件夹；需确认的图片仍进入比较列表。</p></details>
+        <div id="advancedSync" hidden><select id="syncSource" hidden><option value="console">Console</option><option value="local">Console</option><option value="device">Device</option><option value="notion">Notion</option></select><select id="syncTarget" hidden><option value="device">Device</option><option value="notion">Notion</option><option value="console">Console</option><option value="all">All</option></select><button id="advancedSyncImages" type="button" hidden>Legacy request</button><p id="advancedSyncHint" hidden></p><button id="checkOperation" class="secondary-button resume-button" type="button" data-image-en="Check the original request" hidden>核对原请求</button></div>
       </details>
       <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="选择、拖入或粘贴图片到 Inbox" data-image-en-aria-label="Choose, drop, or paste images into Inbox" aria-describedby="dropHelp" aria-haspopup="menu" aria-controls="imagePasteMenu">
         <span class="drop-symbol" aria-hidden="true">＋</span><div><strong data-image-en="Drop images here">把图片拖到这里</strong><span id="dropHelp" data-image-en="Or choose files, right-click to paste, or press Ctrl+V · Review in Inbox before adding to the library">或点击选择、右键粘贴图片（Ctrl+V）· 先进入 Inbox，确认后入库</span></div><span id="inboxCount" class="inbox-badge">inbox 0</span>
       </div>
       <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,image/x-icon,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.ico" multiple hidden>
       <div class="action-bar">
-        <div class="image-import-actions"><button id="scanImages" class="secondary-button" type="button" data-image-en="Update local">更新本地</button><button id="pasteImages" class="secondary-button paste-images-button" type="button" data-image-en="Paste image">粘贴图片</button></div>
-        <div class="notion-main-actions"><span id="notionSyncState" class="notion-sync-state" data-status="unavailable" role="status" aria-live="polite" data-image-en="Notion not ready">Notion 未就绪</span><button id="syncImages" class="primary-button" type="button" data-image-en="Sync to Notion" aria-describedby="notionSyncHint">同步到 Notion</button></div>
+        <div class="image-import-actions"><button id="pasteImages" class="secondary-button paste-images-button" type="button" data-image-en="Paste image">粘贴图片</button></div>
+        <div class="notion-main-actions"><label class="sync-direction-field"><span class="visually-hidden" data-image-en="Sync direction">同步方向</span><select id="syncDirection" aria-label="同步方向" data-image-en-aria-label="Sync direction"><option value="console-to-notion">Console → Notion</option><option value="notion-to-console">Notion → Console</option></select></label><button id="syncImages" class="primary-button" type="button" data-image-en="Sync" aria-describedby="notionSyncHint">同步</button></div>
       </div>
+      <span id="notionSyncState" class="notion-sync-state sync-status-line" data-status="unavailable" role="status" aria-live="polite" data-image-en="Notion not ready">Notion 未就绪</span>
       <p id="notionSyncHint" class="sync-hint" data-image-en="Sync confirmed images from the current folder to Notion. Review Inbox images before adding them.">把当前文件夹已确认的图片同步到 Notion；Inbox 图片先确认入库。</p>
-      <details id="advancedSync" class="advanced-sync"><summary data-image-en="Advanced sync directions">高级同步方向</summary><div class="sync-controls"><label class="compact-field"><span data-image-en="From">从</span><select id="syncSource" aria-label="同步来源" data-image-en-aria-label="Sync source"><option value="console" data-image-en="Current folder">当前文件夹</option><option value="local" data-image-en="Current folder (legacy request)" hidden>当前文件夹（原请求）</option><option value="notion" disabled>Notion · 连接待就绪</option></select></label><span class="sync-arrow" aria-hidden="true">→</span><label class="compact-field"><span data-image-en="To">到</span><select id="syncTarget" aria-label="同步目标" data-image-en-aria-label="Sync destination"><option value="notion" disabled>Notion · 连接待就绪</option><option value="device" data-image-en="Device folder">设备文件夹</option><option value="console" data-image-en="Current folder">当前文件夹</option><option value="all" data-image-en="All configured destinations">全部已配置位置</option></select></label><button id="advancedSyncImages" class="secondary-button" type="button" data-image-en="Run selected direction">执行所选方向</button></div><p id="advancedSyncHint" class="sync-hint" data-image-en="For device sync or reading images back from Notion. The main button always syncs to Notion.">用于设备同步或从 Notion 回读；上方主按钮始终同步到 Notion。</p></details>
       <p id="operationStatus" class="operation-status" role="status" aria-live="polite">正在读取图库…</p>
-      <button id="checkOperation" class="secondary-button resume-button" type="button" data-image-en="Continue checking the last sync" hidden>继续核对上次同步</button>
       <button id="restoreImages" class="secondary-button resume-button" type="button" data-image-en="Undo last local operation" hidden>撤回上次本地操作</button>
       <button id="undoDelete" class="secondary-button resume-button" type="button" data-image-en="Undo delete" hidden>撤回删除</button>
     </section>
@@ -58,10 +58,10 @@
     </section>
 
     <section class="collection-section" aria-labelledby="collectionTitle">
-      <div class="section-heading"><div><p class="eyebrow">BROWSE YOUR COLLECTION</p><h2 id="collectionTitle">图片</h2></div><button id="organizeNames" class="metadata-button" type="button" data-image-en="Organize names" hidden>整理名称</button><label class="search-field"><span class="visually-hidden" data-image-en="Find images by title or dimensions">按标题或尺寸查找图片</span><input id="imageSearch" type="search" placeholder="查找标题或尺寸" data-image-en-placeholder="Search titles or dimensions" maxlength="160"></label></div>
+      <div class="section-heading"><div><p class="eyebrow">BROWSE YOUR COLLECTION</p><h2 id="collectionTitle">图片</h2></div><div class="collection-tools"><button id="scanImages" class="metadata-button" type="button" data-image-en="Refresh list">刷新列表</button><button id="organizeNames" class="metadata-button" type="button" data-image-en="Organize names" hidden>整理名称</button></div><label class="search-field"><span class="visually-hidden" data-image-en="Find images by title or dimensions">按标题或尺寸查找图片</span><input id="imageSearch" type="search" placeholder="查找标题或尺寸" data-image-en-placeholder="Search titles or dimensions" maxlength="160"></label></div>
       <p id="collectionNote" class="section-note">按用途与标题分组，选择尺寸和方案查看原图。</p>
       <div id="imageGrid" class="image-grid" aria-busy="true"></div>
-      <div id="emptyState" class="empty-state" hidden><span aria-hidden="true">▧</span><h3 data-image-en="Your images start here">你的图片，从这里开始</h3><p data-image-en="Save a library location, add images, then choose Update local.">保存图库位置，放入图片，再点「更新本地」。</p></div>
+      <div id="emptyState" class="empty-state" hidden><span aria-hidden="true">▧</span><h3 data-image-en="Your images start here">你的图片，从这里开始</h3><p data-image-en="Save a library folder, add images, then choose Refresh list.">保存图库文件夹，放入图片，再点「刷新列表」。</p></div>
     </section>
     <footer class="page-footer"><span id="lastSync">尚无同步记录</span><span data-image-en="Keep originals · Review replacements · Sync when needed">保留原图 · 确认替换 · 按需同步</span></footer>
     <div id="imagePasteMenu" class="image-paste-menu" role="menu" aria-label="图片操作" data-image-en-aria-label="Image actions" hidden><button id="imagePasteCommand" type="button" role="menuitem" data-image-en="Paste image">粘贴图片</button></div>

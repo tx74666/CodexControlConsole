@@ -1,4 +1,5 @@
 """Desktop-only Image manager dispatch; the HTTP host enforces local origin."""
+import re
 from urllib.parse import parse_qs
 
 
@@ -66,10 +67,17 @@ def _image_post(service, action, payload, notion=None):
         return service.delete(payload)
     if action == 'delete-restore' and set(payload) == {'expectedRoot', 'requestId'}:
         return service.delete_restore(payload)
-    if action == 'sync' and not set(payload) - {'expectedRoot', 'source', 'target', 'requestId'}:
+    if action == 'sync' and not set(payload) - {'expectedRoot', 'source', 'target', 'requestId', 'retryOf'}:
         source, target = payload.get('source'), payload.get('target')
         if source not in {'local', 'console', 'device', 'notion'} or target not in {'console', 'local', 'device', 'notion', 'all'}:
             raise ValueError('请选择同步来源和目标。')
+        if 'retryOf' in payload:
+            previous, current = payload['retryOf'], payload.get('requestId')
+            if (source not in {'console', 'local'} or target != 'notion'
+                    or not isinstance(previous, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', previous)
+                    or not isinstance(current, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', current)
+                    or previous == current):
+                raise ValueError('重试缺失原图需要新的请求编号，并保持 Console 到 Notion 的方向。')
         if source == 'notion' or target in {'notion', 'all'}:
             if notion is None:
                 raise ValueError('Notion 同步连接尚未就绪；本地图库与导入功能可以正常使用。')

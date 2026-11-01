@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import datetime, timezone, timedelta
 import hashlib
 import html
+from html.parser import HTMLParser
 import io
 import json
 import os
@@ -40,7 +41,8 @@ SHA_RE = re.compile(r'[0-9a-f]{64}\Z')
 OPERATION_FIELDS = ('id', 'requestId', 'source', 'target', 'root', 'pageId', 'status', 'phase',
     'code', 'message', 'startedAt', 'finishedAt', 'resumedAt', 'priorVerificationFailure',
     'items', 'catalog', 'annotations', 'planId', 'completedTargets', 'remainingTargets', 'verifiedOriginals',
-    'exportSnapshot', 'exportCatalogSha256')
+    'exportSnapshot', 'exportCatalogSha256', 'retryOf', 'retryable', 'missingOriginals', 'recoveryEvidence')
+UNRESOLVED_ORIGINAL = {'upload_preparing','upload_pending','upload_unknown','uploaded_unattached','attach_unknown','attached_unverified'}
 RPC_TOOLS = {
     'fetch': 'notion.fetch',
     'prepare': 'notion.notion-create-file-upload',
@@ -358,23 +360,84 @@ def _verified_completion(operation):
         and _same_catalog_name(_reference_name(catalog['reference']), catalog['filename']))
 
 
-def _recheck_kind(operation):
+def _pending_originals(record, operation):
+    rows = _export_rows(operation.get('exportSnapshot')) if isinstance(operation, dict) else None
+    if (not rows or operation.get('source') not in {'local','console'} or operation.get('target') not in {'notion','all'}
+            or operation.get('pageId') != record.get('pageId')):
+        return []
+    expected = {row['sha256'] for row in rows}
+    return [row for row in record.get('receipts', []) if isinstance(row, dict) and row.get('direction') == 'upload'
+            and row.get('status') in UNRESOLVED_ORIGINAL and row.get('sha256') in expected
+            and isinstance(row.get('id'), str) and re.fullmatch('[0-9a-f]{32}', row['id'])]
+
+
+def _complete_target(entity, target_id):
+    if (not isinstance(entity, dict) or _identifier(entity.get('id')) != target_id
+            or entity.get('metadata', {}).get('type') not in {'page','folder'}):
+        raise NotionSyncError('notion_folder_incomplete', '目标图库身份未完整核实；未发送任何上传。')
+    for part in (entity, entity.get('metadata', {})):
+        if any(part.get(key) for key in ('truncated','unknown_block_count','unknown_block_ids','omitted',
+                'omitted_children','omitted_block_count','has_more','next_cursor')):
+            raise NotionSyncError('notion_folder_incomplete', '目标内容有截断或省略；不能据此判断原件缺失。')
+    text = entity.get('text')
+    if (not isinstance(text, str) or len(text) > 1024*1024
+            or re.search(r'<(?:unknown(?:-block)?|omitted|truncated)\b|<!--[^>]*(?:omitted|truncated)',text,re.I)):
+        raise NotionSyncError('notion_folder_incomplete', '目标内容未完整读取；未发送任何上传。')
+
+
+def _owned_complete(entity):
+    region = _page_region(entity)['text']
+    class Structure(HTMLParser):
+        def __init__(self):
+            super().__init__(); self.stack=[]; self.invalid=False
+        def handle_starttag(self, tag, attrs):
+            if (tag not in {'synced-block','columns','column','image','file','toggle'}
+                    or self.stack and self.stack[-1] in {'image','file'}
+                    or tag=='column' and (not self.stack or self.stack[-1]!='columns')
+                    or self.stack and self.stack[-1]=='columns' and tag!='column'):
+                self.invalid=True
+            self.stack.append(tag)
+        def handle_endtag(self,tag):
+            if not self.stack or self.stack[-1]!=tag:self.invalid=True
+            else:self.stack.pop()
+        def handle_comment(self,data):
+            if re.search('unknown|omitted|truncated',data,re.I):self.invalid=True
+    parser=Structure(); parser.feed(region); parser.close()
+    if parser.invalid or parser.stack:
+        raise NotionSyncError('notion_gallery_incomplete','图片区结构有省略、未知或未闭合内容；未发送任何上传。')
+    _stable_refs(entity)
+
+
+def _recheck_kind(operation, record=None):
     if not isinstance(operation, dict):
         return None
     if operation.get('status') == 'unknown' and operation.get('code') == 'catalog_attached_unverified':
         return 'catalog'
+    if (record is not None and operation.get('status') in {'unknown','failed'}
+            and operation.get('code') in {'upload_receipt_unresolved','attached_original_unverified','notion_tool_error',
+                'notion_page_update_warning','notion_gallery_unverified','codex_response_timeout','codex_rpc_failed',
+                'codex_connection_closed','file_transfer_unknown','upload_response_invalid','upload_markdown_unverified',
+                'recovery_target_changed','recovery_attachment_review'}
+            and _pending_originals(record, operation)):
+        return 'upload_receipt'
     eligible = (operation.get('status'), operation.get('code')) in {
         ('failed','notion_sync_failed'), ('unknown','verified_completion_unrecorded')}
     return 'verified_completion' if eligible and _verified_completion(operation) else None
 
 
-def _operation_view(operation):
+def _operation_view(operation, record=None):
     if not isinstance(operation, dict):
         return operation
     view = json.loads(json.dumps(operation))
     view.pop('exportSnapshot', None)
     view.pop('exportCatalogSha256', None)
-    kind = _recheck_kind(operation)
+    view.pop('recoveryEvidence', None)
+    for item in view.get('items', []):
+        if isinstance(item, dict):
+            item.pop('uploadSource',None)
+    if view.get('retryable') is True and view.get('code') == 'recovery_unavailable':
+        view['retryOf'] = view['requestId']
+    kind = _recheck_kind(operation, record)
     view.update(recheckable=bool(kind), recheckKind=kind)
     return view
 
@@ -581,6 +644,7 @@ class CodexNotionRPC:
         result = _unwrap(self._call('mcpServer/tool/call', {'threadId': self.thread_id,
             'server': 'codex_apps', 'tool': RPC_TOOLS[action], 'arguments': arguments}))
         if action == 'fetch':
+            _complete_target(result, self.target_id)
             if (result.get('truncated') or result.get('unknown_block_count')
                     or result.get('unknown_block_ids') or _identifier(result.get('id')) != self.target_id
                     or result.get('metadata', {}).get('type') not in {'folder', 'page'}
@@ -877,7 +941,7 @@ class ImageManagerNotion:
         current = self.service.state() if local_state is None else local_state
         try:
             _, _, record = self._context(local_state=current)
-            operation = _operation_view(record.get('operation'))
+            operation = _operation_view(record.get('operation'), record)
             if operation and os.path.normcase(operation.get('root', '')) != os.path.normcase(current.get('root', '')):
                 operation = None
             if operation and operation.get('status') == 'running' and not self.busy:
@@ -920,7 +984,7 @@ class ImageManagerNotion:
             operation = record['operations'].get(requestId)
             if not isinstance(operation, dict) or operation.get('requestId') != requestId:
                 raise NotionSyncError('sync_request_not_found', '尚未找到此同步请求的回执。', status=404)
-            operation = _operation_view(operation)
+            operation = _operation_view(operation, record)
             latest = record.get('operation') or {}
             if operation.get('status') == 'running' and (operation.get('id') != latest.get('id') or not self.busy):
                 operation.update(status='unknown', message='此请求没有在途回执，保留原编号供核对。')
@@ -929,7 +993,7 @@ class ImageManagerNotion:
         return result
 
     def sync(self, payload):
-        if not isinstance(payload, dict) or set(payload) - {'source', 'target', 'expectedRoot', 'requestId'}:
+        if not isinstance(payload, dict) or set(payload) - {'source', 'target', 'expectedRoot', 'requestId','retryOf'}:
             raise NotionSyncError('sync_request_invalid', '图片同步参数无效。')
         source, target = payload.get('source', 'local'), payload.get('target', 'notion')
         if not ((source in {'local', 'console'} and target in {'notion', 'all'})
@@ -938,13 +1002,21 @@ class ImageManagerNotion:
         request_id = payload.get('requestId') or uuid.uuid4().hex
         if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', request_id):
             raise NotionSyncError('sync_request_invalid', '图片同步请求编号无效。')
+        retry_of = payload.get('retryOf')
+        if 'retryOf' in payload and (not isinstance(retry_of,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',retry_of)
+                or not payload.get('requestId') or request_id == retry_of or source not in {'local','console'} or target != 'notion'):
+            raise NotionSyncError('sync_retry_invalid', '重试必须是明确的新请求，并且仅从 Console 同步到 Notion。')
         with self.lock:
             current, path, record = self._context(payload)
             previous = record['operations'].get(request_id)
             if previous:
+                if retry_of is None and previous.get('retryOf'):
+                    retry_of = previous['retryOf']
+                if previous.get('retryOf') != retry_of:
+                    raise NotionSyncError('sync_request_identity_changed', '原请求的重试授权不能改变。')
                 if (previous.get('root'), previous.get('source'), previous.get('target'), previous.get('pageId')) != (current['root'], source, target, record['pageId']):
                     raise NotionSyncError('sync_request_identity_changed', '同步请求编号已用于另一范围，请重新发起。')
-                if not _recheck_kind(previous):
+                if not _recheck_kind(previous, record):
                     return self.operation(request_id)
             if self.worker and self.worker.is_alive():
                 raise NotionSyncError('sync_busy', '当前图片同步尚未结束。')
@@ -957,8 +1029,8 @@ class ImageManagerNotion:
                 if previous:
                     if (previous.get('root'), previous.get('source'), previous.get('target'), previous.get('pageId')) != (current['root'], source, target, record['pageId']):
                         raise NotionSyncError('sync_request_identity_changed', '同步请求编号已用于另一范围，请重新发起。')
-                    if _recheck_kind(previous):
-                        recheck_kind = _recheck_kind(previous)
+                    if _recheck_kind(previous, record):
+                        recheck_kind = _recheck_kind(previous, record)
                         operation = json.loads(json.dumps(previous))
                         operation['priorVerificationFailure'] = {'code': operation.get('code'),
                             'finishedAt': operation.get('finishedAt')}
@@ -970,16 +1042,22 @@ class ImageManagerNotion:
                         _release_file_lock(held)
                         return self.operation(request_id)
                 else:
+                    if retry_of is not None:
+                        self._retry_evidence(record, retry_of, current)
                     operation = {'id': uuid.uuid4().hex, 'requestId': request_id, 'source': source, 'target': target,
                         'root': current['root'], 'pageId': record['pageId'], 'status': 'running', 'phase': 'connecting',
                         'startedAt': _now(), 'items': [], 'message': '正在连接 Notion。'}
+                    if retry_of is not None:
+                        operation['retryOf'] = retry_of
                     record['operation'] = operation
                     reconcile = False
                 self._remember_operation(record)
                 _atomic_json(path, record)
                 frozen = dict(payload, _targetId=record['pageId'])
+                if retry_of is not None:
+                    frozen['retryOf'] = retry_of
                 if reconcile:
-                    frozen['_reconcileCatalog'] = True
+                    frozen['_reconcileOriginals' if reconcile == 'upload_receipt' else '_reconcileCatalog'] = True
                     if reconcile == 'verified_completion':
                         frozen['_verifyOriginals'] = True
                 self.worker = threading.Thread(target=self._run, args=(frozen, path, record, held), daemon=True)
@@ -1001,6 +1079,111 @@ class ImageManagerNotion:
             except Exception:
                 record['verifiedExports'] = previous
                 raise
+
+    def _retry_evidence(self, record, request_id, current):
+        prior = record.get('operations', {}).get(request_id, {})
+        evidence = prior.get('recoveryEvidence') or {}
+        snapshot = prior.get('exportSnapshot')
+        if (prior.get('status') != 'failed' or prior.get('code') != 'recovery_unavailable'
+                or prior.get('retryable') is not True or prior.get('root') != current['root']
+                or prior.get('pageId') != record['pageId'] or _export_rows(snapshot) is None
+                or evidence.get('root') != current['root'] or evidence.get('pageId') != record['pageId']
+                or evidence.get('requestId') != request_id or evidence.get('snapshotFingerprint') != snapshot['fingerprint']
+                or evidence.get('complete') is not True or not isinstance(evidence.get('targetFingerprint'),str)
+                or not SHA_RE.fullmatch(evidence['targetFingerprint'])
+                or self._export_snapshot(current)['fingerprint'] != snapshot['fingerprint']):
+            raise NotionSyncError('recovery_evidence_stale', '本地内容或原核对范围已变化；未发送新上传，请重新核对。')
+        ids = evidence.get('receiptIds')
+        missing = evidence.get('missingSha256')
+        digests = {row['sha256'] for row in _export_rows(snapshot)}
+        if (not isinstance(ids,list) or not isinstance(missing,list) or len(ids)>MAX_BATCH
+                or any(not isinstance(value,str) or not re.fullmatch('[0-9a-f]{32}',value) for value in ids)
+                or not set(missing)<=digests
+                or any(not any(row.get('id')==value and row.get('direction')=='upload' and row.get('sha256') in digests
+                               for row in record['receipts']) for value in ids)):
+            raise NotionSyncError('recovery_evidence_stale','原上传证据不再匹配；未发送新上传。')
+        return evidence
+
+    @staticmethod
+    def _target_structure(entity, page_id):
+        _complete_target(entity, page_id)
+        data = {'type':entity['metadata']['type'],'references':sorted(_stable_refs(entity))}
+        if entity['metadata']['type'] == 'page':
+            _owned_complete(entity)
+            outside = set(html.unescape(ref) for ref in SOURCE_RE.findall(entity['text'])) - set(_stable_refs(entity))
+            if any(REF_RE.fullmatch(ref) and not _catalog_identity(_reference_name(ref)) for ref in outside):
+                raise NotionSyncError('recovery_attachment_review',
+                    '同页其他区域仍有原生附件，不能据图片区缺失授权重传；未发送新上传。',unknown=True)
+            if any(not _catalog_identity(_reference_name(html.unescape(ref)))
+                   for ref in FILE_SOURCE_RE.findall(_page_region(entity)['text'])):
+                raise NotionSyncError('recovery_attachment_review',
+                    '图片区含其他原生文件附件，不能把未显示的文件视为缺失；未发送新上传。',unknown=True)
+            data['region'] = _page_region(entity)['text']
+        elif not any(part.get('truncated') is False and type(part.get('unknown_block_count')) is int
+                     and part['unknown_block_count']==0 for part in (entity,entity.get('metadata',{}))):
+            raise NotionSyncError('notion_folder_incomplete','文件夹未提供完整读取证据；未发送任何新上传。')
+        return hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+
+    def _target_evidence(self, record, rpc, transport, entity):
+        structure = self._target_structure(entity, record['pageId'])
+        # Negative evidence cannot come from cached receipt hashes.
+        remote = self._remote_hashes(rpc, transport, entity, {'receipts':[]})
+        catalog = self._read_catalog(rpc, transport, entity)
+        latest = rpc.call('fetch', {'id':record['pageId']})
+        if self._target_structure(latest, record['pageId']) != structure:
+            raise NotionSyncError('recovery_target_changed', '目标在核对期间变化；未发送任何上传，请重新核对。',unknown=True)
+        value = {'structure':structure,'originals':sorted(remote),'catalogSha256':catalog['sha256']}
+        fingerprint = hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
+        return remote, catalog, fingerprint
+
+    def _reconcile_originals(self, payload, path, record, rpc, transport, entity):
+        operation = record['operation']
+        snapshot = operation.get('exportSnapshot')
+        rows = _export_rows(snapshot)
+        pending = _pending_originals(record, operation)
+        current = self._check_root(payload)
+        if not rows or not pending or self._export_snapshot(current)['fingerprint'] != snapshot['fingerprint']:
+            raise NotionSyncError('recovery_snapshot_changed', '原请求的本地快照已变化；未发送或重传图片。')
+        remote, catalog, target_fingerprint = self._target_evidence(record, rpc, transport, entity)
+        current = self._check_root(payload)
+        if self._export_snapshot(current)['fingerprint'] != snapshot['fingerprint']:
+            raise NotionSyncError('recovery_snapshot_changed', '核对期间本地内容变化；未发送任何上传。')
+        for receipt in pending:
+            if receipt['sha256'] in remote:
+                receipt.update(status='verified',reference=remote[receipt['sha256']],verifiedAt=_now())
+        missing = []
+        for row in rows:
+            if row['sha256'] not in remote and not any(item['sha256']==row['sha256'] for item in missing):
+                missing.append({'sha256':row['sha256'],'filename':row['syncName'],
+                    'blockedReceiptIds':[item['id'] for item in pending if item['sha256']==row['sha256']]})
+        if not missing and catalog['sha256'] is not None and _snapshot_matches_catalog(snapshot,catalog['entries']):
+            if entity['metadata']['type']=='page':
+                expected_rows = self._page_rows(rpc,transport,entity,catalog['entries'])
+                self._verify_page_rows(rpc,transport,entity,expected_rows,uncertain=False)
+            existing = list(operation.get('items',[]))
+            items = []
+            for row in rows:
+                found = next((item for item in existing if item.get('sha256')==row['sha256']),None)
+                if found is not None:
+                    existing.remove(found)
+                    items.append(found)
+                else:
+                    items.append({'name':row['filename'],'sha256':row['sha256'],'status':'unchanged','reference':remote[row['sha256']]})
+            operation.pop('code',None)
+            self._save(path,record,status='completed',phase='finished',items=items,completedTargets=['notion'],
+                remainingTargets=['device'] if payload.get('target')=='all' and current.get('deviceRoot') else [],
+                catalog={'status':'verified','sha256':catalog['sha256'],'reference':catalog['reference'],'filename':catalog['filename']},
+                exportCatalogSha256=catalog['sha256'],finishedAt=_now(),
+                message='原请求的原图与方案目录已只读回读核实；没有重新上传。')
+            return
+        evidence = {'complete':True,'root':operation['root'],'pageId':record['pageId'],'requestId':operation['requestId'],
+            'scope':'owned_gallery' if entity['metadata']['type']=='page' else 'folder',
+            'snapshotFingerprint':snapshot['fingerprint'],'targetFingerprint':target_fingerprint,
+            'missingSha256':[row['sha256'] for row in missing],
+            'receiptIds':[row['id'] for row in pending], 'verifiedAt':_now()}
+        self._save(path,record,status='failed',phase='finished',code='recovery_unavailable',retryable=True,
+            missingOriginals=missing,recoveryEvidence=evidence,finishedAt=_now(),
+            message='已完整核对当前 Notion 图库，原请求仍未完成。旧上传记录已保留；下次明确点击同步才会新建请求，仅发送仍缺失的原图并核对目录。')
 
     def _preserve_verified_completion(self, path, record):
         operation = record['operation']
@@ -1396,7 +1579,9 @@ class ImageManagerNotion:
                 record['bridgeVerifiedAt'] = _now()
                 self._save(path, record, phase='reading', message='正在核对原件与已保存版本。')
                 transport = self.transfer_factory()
-                if payload.get('_reconcileCatalog'):
+                if payload.get('_reconcileOriginals'):
+                    self._reconcile_originals(payload,path,record,rpc,transport,folder)
+                elif payload.get('_reconcileCatalog'):
                     self._reconcile_catalog(payload, path, record, rpc, transport, folder)
                 elif payload.get('source') == 'notion':
                     self._pull(payload, path, record, rpc, transport, folder)
@@ -1439,6 +1624,19 @@ class ImageManagerNotion:
         planned_entries = dict(catalog['entries'])
         planned_entries.update(local_entries)
         _validate_entries(planned_entries, known=set(remote) | set(local_entries))
+        allowed_receipts = set()
+        if payload.get('retryOf'):
+            evidence = self._retry_evidence(record,payload['retryOf'],current)
+            remote, catalog, observed = self._target_evidence(record,rpc,transport,folder)
+            if observed != evidence['targetFingerprint']:
+                raise NotionSyncError('recovery_evidence_stale','Notion 图库在原核对后变化；未开始新上传，请重新核对。')
+            self._retry_evidence(record,payload['retryOf'],self._check_root(payload))
+            allowed_receipts = set(evidence['receiptIds'])
+        if any(row.get('direction')=='upload' and row.get('status') in UNRESOLVED_ORIGINAL
+               and row.get('sha256') in local_entries and row.get('sha256') not in remote
+               and row.get('id') not in allowed_receipts for row in record['receipts']):
+            raise NotionSyncError('upload_receipt_unresolved',
+                '已有原件上传记录需要只读核对；本次尚未开始任何新上传。',unknown=True)
         for metadata in items:
             self._check_root(payload)
             if metadata.get('space', 'root') != 'root' or metadata.get('path', '').split('/')[0].casefold() in {'inbox', '.image-manager'}:
@@ -1460,7 +1658,7 @@ class ImageManagerNotion:
                 self._save(path, record)
                 continue
             existing = [x for x in record['receipts'] if x.get('sha256') == digest and x.get('direction') == 'upload']
-            blocked = next((x for x in existing if x.get('status') in {'upload_preparing', 'upload_unknown', 'uploaded_unattached', 'attach_unknown', 'attached_unverified'}), None)
+            blocked = next((x for x in existing if x.get('status') in UNRESOLVED_ORIGINAL and x.get('id') not in allowed_receipts), None)
             if blocked:
                 raise NotionSyncError('upload_receipt_unresolved', '此原件已有未核实的上传请求，已保留同一编号；请先核对，不会重复上传。', unknown=True)
             # A different device may have appended this original after our first
@@ -1478,6 +1676,10 @@ class ImageManagerNotion:
                 'path': metadata['path'], 'sha256': digest, 'size': len(data), 'width': metadata.get('width'),
                 'height': metadata.get('height'), 'direction': 'upload', 'status': 'upload_preparing',
                 'metadata': _entry(metadata), 'createdAt': _now()}
+            receipt.update(requestId=record['operation']['requestId'],operationId=record['operation']['id'],
+                root=record['operation']['root'],pageId=record['pageId'],exportFingerprint=record['operation']['exportSnapshot']['fingerprint'])
+            if payload.get('retryOf'):
+                receipt.update(retryOf=payload['retryOf'],supersedesReceiptIds=[row['id'] for row in existing if row.get('id') in allowed_receipts])
             record['receipts'].append(receipt)
             self._save(path, record, phase='uploading', message='正在保存原件到 Notion。')
             snapshot = self.directory / ('original-' + receipt['id'] + source.suffix.lower())
@@ -1496,6 +1698,7 @@ class ImageManagerNotion:
                 uploaded = transport.upload(prepared, snapshot)
                 if uploaded.get('status') != 'uploaded' or _identifier(uploaded.get('id', uploaded.get('file_upload_id'))) != _identifier(receipt['uploadId']):
                     raise NotionSyncError('upload_response_invalid', '原件上传回执不匹配，未重复发送。', unknown=True)
+                receipt['uploadSource'] = _upload_source(uploaded)
                 receipt['status'] = 'uploaded_unattached'
                 self._save(path, record)
                 self._check_root(payload)
@@ -1522,7 +1725,7 @@ class ImageManagerNotion:
                     raise NotionSyncError('attached_original_unverified', 'Notion 已接收附页请求，原件完整性尚未核实；不会重传。', unknown=True)
                 receipt.update(status='verified', reference=matched, verifiedAt=_now())
                 remote[digest] = matched
-                record['operation']['items'].append({k: v for k, v in receipt.items() if k not in {'path'}})
+                record['operation']['items'].append({k: v for k, v in receipt.items() if k not in {'path','uploadSource'}})
                 self._save(path, record)
             finally:
                 snapshot.unlink(missing_ok=True)
