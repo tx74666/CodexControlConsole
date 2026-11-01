@@ -114,6 +114,51 @@ class ImageHTTPChecks(unittest.TestCase):
             status, _ = self.request('POST', '/api/images/scan', payload)
             self.assertEqual(status, 403)
 
+    def test_naming_actions_are_explicit_post_only_and_strictly_scoped(self):
+        from image_manager_http import image_post
+        expected = {'expectedRoot':str(self.root), 'entries':[]}
+        service = SimpleNamespace(naming_plan=lambda payload:{'received':payload},
+            naming_apply=lambda payload:{'received':payload}, naming_restore=lambda payload:{'received':payload})
+        for action, payload in [('naming-plan',expected),
+                ('naming-apply',{'expectedRoot':str(self.root),'planId':'a'*32}),
+                ('naming-restore',{'expectedRoot':str(self.root),'planId':'a'*32})]:
+            self.assertEqual(image_post(service,action,payload,notion=SimpleNamespace(busy=False)),{'received':payload})
+            with self.assertRaises(ValueError):
+                image_post(service,action,dict(payload,unexpected=True))
+            with self.assertRaises(ValueError):
+                image_post(service,action,{key:value for key,value in payload.items() if key!='expectedRoot'})
+            self.assertGreaterEqual(self.request('GET','/api/images/'+action)[0],400)
+            self.assertEqual(self.request('POST','/api/images/'+action,payload,{'Origin':'https://attacker.example'})[0],403)
+        for action in ['naming-apply','naming-restore']:
+            with self.assertRaisesRegex(ValueError,'正在同步'):
+                image_post(service,action,{'expectedRoot':str(self.root),'planId':'a'*32},notion=SimpleNamespace(busy=True))
+        # Previewing names does not write images or monopolize an in-flight sync.
+        self.assertEqual(image_post(service,'naming-plan',expected,notion=SimpleNamespace(busy=True)),{'received':expected})
+
+    def test_naming_preview_apply_and_restore_preserve_original_bytes(self):
+        original = self.root/'Old-event-v9.png'
+        Image.new('RGB',(800,450),'teal').save(original)
+        before = original.read_bytes()
+        self.service.scan({'expectedRoot':str(self.root)})
+        item = self.service.state()['items'][0]
+        status, plan = self.request('POST','/api/images/naming-plan',{
+            'expectedRoot':str(self.root), 'entries':[{'path':item['path'],
+                'sha256':item['sha256'],'assetType':'EventCover'}]})
+        self.assertEqual(status,200,plan)
+        self.assertTrue(plan['canApply'])
+        self.assertTrue(original.is_file(),'Preview must not rename a picture')
+        status, result = self.request('POST','/api/images/naming-apply',{
+            'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertEqual(status,200,result)
+        standard = self.root/'EventCover_800x450.png'
+        self.assertEqual(standard.read_bytes(),before)
+        self.assertFalse(original.exists())
+        status, result = self.request('POST','/api/images/naming-restore',{
+            'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertEqual(status,200,result)
+        self.assertEqual(original.read_bytes(),before)
+        self.assertFalse(standard.exists())
+
     def test_upload_review_and_preview_use_bound_root_and_reject_escape(self):
         stream = io.BytesIO()
         Image.new('RGB', (32, 24), 'purple').save(stream, format='PNG')

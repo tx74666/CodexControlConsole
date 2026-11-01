@@ -1243,6 +1243,12 @@ class ImageManagerNotion:
     def _push(self, payload, path, record, rpc, transport, folder):
         current = self._check_root(payload)
         items = current.get('items', [])
+        if current.get('standardNaming') and any(
+                item.get('namingNeedsReview') or not item.get('standardType')
+                for item in items if item.get('space', 'root') == 'root'
+                and item.get('path', '').split('/')[0].casefold() not in {'inbox', '.image-manager'}):
+            raise NotionSyncError('standard_naming_required',
+                '有图片尚未确认标准用途；请先选择用途并完成命名，再同步到 Notion。未上传任何新原图或方案目录。')
         if len(items) > MAX_BATCH:
             raise NotionSyncError('local_batch_limit', '单批最多同步 50 张已入库图片。')
         remote = self._remote_hashes(rpc, transport, folder, record)

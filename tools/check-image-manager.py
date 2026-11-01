@@ -1,5 +1,6 @@
 """Small original-byte and replacement-safety checks using disposable images."""
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -687,6 +688,404 @@ class ImageManagerChecks(unittest.TestCase):
         self.assertEqual(replace.call_count,8)
         self.assertEqual(target.read_bytes(),original)
         self.assertEqual(list(self.directory.glob('state.json.*.tmp')),[])
+
+
+class StandardNamingChecks(unittest.TestCase):
+    """142 adoption is explicit and preserves original bytes and later edits."""
+    setUp = ImageManagerChecks.setUp
+    tearDown = ImageManagerChecks.tearDown
+    scan = ImageManagerChecks.scan
+    apply = ImageManagerChecks.apply
+    annotate = ImageManagerChecks.annotate
+
+    def naming(self, types):
+        items = self.service.state()['items']
+        return self.service.naming_plan({'expectedRoot':str(self.root),'entries':[
+            {'path':item['path'],'sha256':item['sha256'],'assetType':types[item['path']]}
+            for item in items if item['path'] in types]})
+
+    def adopt(self, types):
+        plan = self.naming(types)
+        return plan, self.service.naming_apply({'expectedRoot':str(self.root),'planId':plan['planId']})
+
+    @staticmethod
+    def sized(color, size):
+        stream = io.BytesIO()
+        Image.new('RGB',size,color).save(stream,format='PNG')
+        return stream.getvalue()
+
+    def visible_bytes(self, root=None):
+        root = root or self.root
+        return {path.relative_to(root).as_posix():path.read_bytes() for path in root.rglob('*')
+                if path.is_file() and image_manager.META not in path.relative_to(root).parts}
+
+    def test_explicit_standard_adoption_uses_actual_format_dimensions_and_keeps_semantics_on_undo(self):
+        originals = {'Mira_story_v9_Final_999x999.png':picture('red','JPEG'),
+                     'Parent_999x999.png':picture('green')}
+        for name,data in originals.items():
+            (self.root / name).write_bytes(data)
+        before = {item['path']:item for item in self.scan()['state']['items']}
+        self.assertFalse(self.service.state()['standardNaming'])
+        self.assertIn('v9',before['Mira_story_v9_Final_999x999.png']['syncName'])
+        child = self.annotate(before['Mira_story_v9_Final_999x999.png'],group='Old purpose',label='Blue option',
+                              derivedFromId=before['Parent_999x999.png']['sha256'])['item']
+        self.assertFalse(self.service.state()['standardNaming'])
+        plan,receipt = self.adopt({'Mira_story_v9_Final_999x999.png':'LibraryHeader',
+                                  'Parent_999x999.png':'LibraryHero'})
+        after = {item['groupTitle']:item for item in receipt['state']['items']}
+        self.assertTrue(receipt['state']['standardNaming'])
+        self.assertEqual(after['LibraryHeader']['path'],'LibraryHeader_24x16.jpg')
+        self.assertEqual(after['LibraryHero']['path'],'LibraryHero_24x16.png')
+        self.assertEqual((after['LibraryHeader']['width'],after['LibraryHeader']['height']),(24,16))
+        for item in after.values():
+            self.assertEqual(item['syncName'],item['canonicalName'])
+            self.assertEqual(item['canonicalName'],Path(item['path']).name)
+        self.assertEqual((after['LibraryHeader']['variantId'],after['LibraryHeader']['variantLabel'],
+                          after['LibraryHeader']['derivedFromId']),
+                         (child['variantId'],'Blue option',before['Parent_999x999.png']['sha256']))
+        for row in receipt['results']:
+            self.assertEqual((self.root / row['to']).read_bytes(),originals[row['from']])
+        version = self.service._manifest_version(self.root)
+        replay = self.service.naming_apply({'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertTrue(replay['replayed'])
+        self.assertEqual(self.service._manifest_version(self.root),version)
+        restored = self.service.naming_restore({'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertTrue(restored['restored'])
+        self.assertEqual(self.visible_bytes(),originals)
+        self.assertFalse(restored['state']['standardNaming'])
+        restored_child = next(item for item in restored['state']['items'] if item['sha256']==child['sha256'])
+        self.assertEqual((restored_child['groupTitle'],restored_child['variantLabel'],restored_child['derivedFromId']),
+                         ('Old purpose','Blue option',before['Parent_999x999.png']['sha256']))
+
+    def test_same_type_size_options_keep_one_strict_basename_and_distinct_originals(self):
+        originals = {'First_Final.png':picture('red'),'Second_v9.png':picture('blue')}
+        for name,data in originals.items():
+            (self.root / name).write_bytes(data)
+        before = self.scan()['state']['items']
+        first,second = before
+        self.annotate(first,group='HeaderCapsule',label='A')
+        self.annotate(second,group='HeaderCapsule',label='B',derivedFromId=first['sha256'])
+        plan,receipt = self.adopt({name:'HeaderCapsule' for name in originals})
+        items = receipt['state']['items']
+        self.assertEqual(len({item['path'] for item in items}),2)
+        self.assertEqual({Path(item['path']).name for item in items},{'HeaderCapsule_24x16.png'})
+        self.assertTrue(all(item['path'].startswith('Options/HeaderCapsule/') for item in items))
+        self.assertEqual({item['syncName'] for item in items},{'HeaderCapsule_24x16.png'})
+        self.assertEqual({item['variantLabel'] for item in items},{'A','B'})
+        self.assertEqual({item['sha256'] for item in items},{hashlib.sha256(data).hexdigest() for data in originals.values()})
+        self.assertEqual(next(item for item in items if item['variantLabel']=='B')['derivedFromId'],first['sha256'])
+        self.service.naming_restore({'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertEqual(self.visible_bytes(),originals)
+
+    def test_unindexed_foreign_canonical_target_is_a_conflict_not_a_silent_option(self):
+        original,foreign = picture('red'),picture('blue')
+        (self.root / 'Story.png').write_bytes(original)
+        self.scan()
+        (self.root / 'LibraryHero_24x16.png').write_bytes(foreign)
+        plan = self.naming({'Story.png':'LibraryHero'})
+        self.assertFalse(plan['canApply'])
+        self.assertEqual(plan['candidates'][0]['status'],'conflict')
+        with self.assertRaises(ImageManagerError):
+            self.service.naming_apply({'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertEqual(self.visible_bytes(),{'Story.png':original,'LibraryHero_24x16.png':foreign})
+        self.assertFalse((self.root / 'Options').exists())
+
+    def test_changed_source_and_foreign_manifest_reject_prepared_naming_without_writes(self):
+        path = self.root / 'Story.png'
+        path.write_bytes(picture('red'))
+        self.scan()
+        plan = self.naming({'Story.png':'LibraryHero'})
+        path.write_bytes(picture('blue'))
+        with self.assertRaises(ImageManagerError):
+            self.service.naming_apply({'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertEqual(path.read_bytes(),picture('blue'))
+        self.scan()
+        plan = self.naming({'Story.png':'LibraryHero'})
+        manifest_path = self.root / image_manager.META / 'library.json'
+        foreign = json.loads(manifest_path.read_text(encoding='utf-8'))
+        foreign['foreignEdit'] = 'preserve'
+        image_manager._atomic_json(manifest_path,foreign)
+        snapshot = manifest_path.read_bytes()
+        with self.assertRaises(ImageManagerError):
+            self.service.naming_apply({'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertEqual(manifest_path.read_bytes(),snapshot)
+        self.assertEqual(self.visible_bytes(),{'Story.png':picture('blue')})
+
+    def test_naming_rejects_hardlinks_path_escape_and_changed_root_identity(self):
+        source = self.root / 'Story.png'
+        source.write_bytes(picture('red'))
+        item = self.scan()['state']['items'][0]
+        external = self.directory / 'linked.png'
+        os.link(source,external)
+        with self.assertRaises(ImageManagerError):
+            self.naming({'Story.png':'LibraryHero'})
+        self.assertEqual(source.read_bytes(),external.read_bytes())
+        external.unlink()
+        with self.assertRaises(ImageManagerError):
+            self.service.naming_plan({'expectedRoot':str(self.root),'entries':[
+                {'path':'../outside.png','sha256':item['sha256'],'assetType':'LibraryHero'}]})
+        plan = self.naming({'Story.png':'LibraryHero'})
+        preserved = self.directory / 'preserved-root'
+        self.root.rename(preserved)
+        self.root.mkdir()
+        with self.assertRaises(ImageManagerError):
+            self.service.naming_apply({'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertEqual((preserved / source.name).read_bytes(),picture('red'))
+        self.assertEqual(list(self.root.iterdir()),[])
+
+    def test_naming_checks_existing_option_parent_identity_before_moving_images(self):
+        for name,color in [('One.png','red'),('Two.png','blue')]:
+            (self.root / name).write_bytes(picture(color))
+        self.scan()
+        parent = self.root / 'Options/LibraryHero'
+        parent.mkdir(parents=True)
+        plan = self.naming({'One.png':'LibraryHero','Two.png':'LibraryHero'})
+        parent.rename(self.root / 'Options/preserved-parent')
+        parent.mkdir()
+        with self.assertRaises(ImageManagerError):
+            self.service.naming_apply({'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertEqual(self.visible_bytes(),{'One.png':picture('red'),'Two.png':picture('blue')})
+
+    def test_final_receipt_failures_roll_back_only_owned_manifest_and_paths(self):
+        for mode in ('apply','restore'):
+            for boundary in ('owned_receipt','foreign_version','foreign_receipt'):
+                with self.subTest(mode=mode,boundary=boundary):
+                    root = self.directory / (mode+'-'+boundary)
+                    root.mkdir()
+                    service = ImageManagerService(self.directory / (root.name+'.json'))
+                    service.configure({'root':str(root)})
+                    original = picture('red')
+                    (root / 'Story.png').write_bytes(original)
+                    item = service.scan({'expectedRoot':str(root)})['state']['items'][0]
+                    plan = service.naming_plan({'expectedRoot':str(root),'entries':[
+                        {'path':item['path'],'sha256':item['sha256'],'assetType':'LibraryHero'}]})
+                    payload = {'expectedRoot':str(root),'planId':plan['planId']}
+                    if mode=='restore':
+                        service.naming_apply(payload)
+                    meta = root / image_manager.META
+                    manifest_path = meta / 'library.json'
+                    plan_path = meta / 'naming-plans' / (plan['planId']+'.json')
+                    before = manifest_path.read_bytes()
+                    real_atomic = image_manager._atomic_json
+                    real_version = service._saved_manifest_version
+                    injected,foreign_bytes = [],[]
+
+                    def inject_foreign():
+                        foreign = json.loads(manifest_path.read_text(encoding='utf-8'))
+                        foreign['foreignEdit'] = boundary
+                        foreign['annotations'][item['sha256']]['variantLabel'] = 'Foreign label'
+                        real_atomic(manifest_path,foreign)
+                        foreign_bytes.append(manifest_path.read_bytes())
+
+                    def receipt_write(path,value):
+                        if (Path(path)==plan_path and value.get('status')==('completed' if mode=='apply' else 'restored')
+                                and not injected and boundary!='foreign_version'):
+                            injected.append(True)
+                            if boundary=='foreign_receipt':
+                                inject_foreign()
+                            raise PermissionError('fixture final durable receipt failure')
+                        return real_atomic(path,value)
+
+                    def capture_version(directory,expected):
+                        if boundary=='foreign_version' and not injected:
+                            injected.append(True)
+                            inject_foreign()
+                            raise PermissionError('fixture ownership capture failure')
+                        return real_version(directory,expected)
+
+                    with patch.object(image_manager,'_atomic_json',side_effect=receipt_write):
+                        with patch.object(service,'_saved_manifest_version',side_effect=capture_version):
+                            with self.assertRaises(PermissionError):
+                                (service.naming_apply if mode=='apply' else service.naming_restore)(payload)
+                    self.assertTrue(injected)
+                    foreign = boundary.startswith('foreign')
+                    expected_name = ('LibraryHero_24x16.png' if mode=='apply' else 'Story.png') if foreign else (
+                        'Story.png' if mode=='apply' else 'LibraryHero_24x16.png')
+                    self.assertEqual(self.visible_bytes(root),{expected_name:original})
+                    self.assertEqual(manifest_path.read_bytes(),foreign_bytes[0] if foreign else before)
+                    record = json.loads(plan_path.read_text(encoding='utf-8'))
+                    journal = json.loads((meta / 'history' / ('naming-'+plan['planId']) / 'recovery.json').read_text(encoding='utf-8'))
+                    self.assertEqual(record['status'],journal['status'])
+                    self.assertEqual(record['status'],'recovery_required' if foreign or mode=='restore' else 'rolled_back')
+                    self.assertNotEqual(record['status'],'completed')
+
+    def test_naming_and_undo_never_revive_old_image_apply_or_restore_plans(self):
+        for completed in (False,True):
+            with self.subTest(completedImagePlan=completed):
+                root = self.directory / ('completed' if completed else 'pending')
+                root.mkdir()
+                service = ImageManagerService(self.directory / (root.name+'.json'))
+                service.configure({'root':str(root)})
+                original = picture('red')
+                if completed:
+                    old = service.import_files([('Story.png',original)],{'expectedRoot':str(root)})
+                    old_payload = {'expectedRoot':str(root),'planId':old['planId'],
+                                   'decisions':[{'id':row['id'],'action':'add'} for row in old['candidates']]}
+                    service.apply(old_payload)
+                else:
+                    (root / 'Story.png').write_bytes(original)
+                    service.scan({'expectedRoot':str(root)})
+                    old = service.import_files([('Pending.png',picture('blue'))],{'expectedRoot':str(root)})
+                    old_payload = {'expectedRoot':str(root),'planId':old['planId'],
+                                   'decisions':[{'id':row['id'],'action':'add'} for row in old['candidates']]}
+                item = service.state()['items'][0]
+                epochs = [service.state()['namingEpoch']]
+                naming = service.naming_plan({'expectedRoot':str(root),'entries':[
+                    {'path':item['path'],'sha256':item['sha256'],'assetType':'LibraryHero'}]})
+                payload = {'expectedRoot':str(root),'planId':naming['planId']}
+                service.naming_apply(payload)
+                for phase in ('named','undone'):
+                    if phase=='undone':
+                        service.naming_restore(payload)
+                    epochs.append(service.state()['namingEpoch'])
+                    images = self.visible_bytes(root)
+                    manifest_path = root / image_manager.META / 'library.json'
+                    manifest = manifest_path.read_bytes()
+                    with self.assertRaises(ImageManagerError):
+                        if completed:
+                            service.restore({'expectedRoot':str(root),'planId':old['planId']})
+                        else:
+                            service.apply(old_payload)
+                    self.assertEqual(self.visible_bytes(root),images)
+                    self.assertEqual(manifest_path.read_bytes(),manifest)
+                self.assertEqual(len(set(epochs)),3)
+
+    def test_two_file_swap_and_undo_preserve_both_originals(self):
+        originals = {'HeaderCapsule_24x16.png':picture('red'),'LibraryHeader_24x16.png':picture('blue')}
+        for name,data in originals.items():
+            (self.root / name).write_bytes(data)
+        self.scan()
+        plan,_ = self.adopt({'HeaderCapsule_24x16.png':'LibraryHeader','LibraryHeader_24x16.png':'HeaderCapsule'})
+        self.assertEqual((self.root / 'LibraryHeader_24x16.png').read_bytes(),picture('red'))
+        self.assertEqual((self.root / 'HeaderCapsule_24x16.png').read_bytes(),picture('blue'))
+        self.service.naming_restore({'expectedRoot':str(self.root),'planId':plan['planId']})
+        self.assertEqual(self.visible_bytes(),originals)
+
+    def test_indexed_purpose_edit_renames_atomically_but_variant_edit_keeps_the_image_path(self):
+        original = picture('red')
+        (self.root / 'Story.png').write_bytes(original)
+        self.scan()
+        _,receipt = self.adopt({'Story.png':'HeaderCapsule'})
+        item = receipt['state']['items'][0]
+        epoch = receipt['state']['namingEpoch']
+        variant = self.annotate(item,group='HeaderCapsule',label='B')['item']
+        self.assertEqual(variant['path'],item['path'])
+        self.assertEqual(self.service.state()['namingEpoch'],epoch)
+        renamed = self.annotate(variant,group='LibraryHeader',label='B')
+        self.assertEqual(renamed['item']['path'],'LibraryHeader_24x16.png')
+        self.assertEqual(renamed['item']['variantId'],item['variantId'])
+        self.assertEqual(renamed['item']['variantLabel'],'B')
+        self.assertEqual(renamed['renamed']['from'],item['path'])
+        self.assertEqual(self.visible_bytes(),{'LibraryHeader_24x16.png':original})
+        self.assertNotEqual(renamed['state']['namingEpoch'],epoch)
+
+    def test_inbox_unique_size_is_only_a_suggestion_until_manual_adoption_and_unknown_root_cannot_export(self):
+        (self.root / 'Known.png').write_bytes(picture('red'))
+        self.scan()
+        self.adopt({'Known.png':'LibraryHero'})
+        original = self.sized('blue',(800,450))
+        plan = self.service.import_files([('Clipboard_story_Final.png',original)],{'expectedRoot':str(self.root)})
+        incoming = plan['candidates'][0]['incoming']
+        self.assertEqual(incoming['standardType'],'')
+        self.assertEqual(incoming['suggestedStandardType'],'EventCover')
+        self.assertTrue(incoming['namingNeedsReview'])
+        self.assertNotEqual(self.service._manifest(self.root)['annotations'].get(incoming['sha256'],{}).get('groupTitle'),'EventCover')
+        receipt = self.apply(plan,'add')
+        adopted = next(item for item in receipt['state']['items'] if item['sha256']==incoming['sha256'])
+        self.assertEqual((adopted['path'],adopted['groupTitle'],adopted['standardType']),
+                         ('EventCover_800x450.png','EventCover','EventCover'))
+        self.assertFalse(adopted['namingNeedsReview'])
+        self.assertEqual((self.root / adopted['path']).read_bytes(),original)
+        unknown = self.sized('green',(600,900))
+        (self.root / 'External_story_Final.png').write_bytes(unknown)
+        item = next(item for item in self.scan()['state']['items'] if item['name']=='External_story_Final.png')
+        self.assertEqual((item['standardType'],item['suggestedStandardType']),('','LibraryCapsule'))
+        self.assertTrue(item['namingNeedsReview'])
+        self.service.configure({'root':str(self.root),'deviceRoot':str(self.device)})
+        with self.assertRaises(ImageManagerError):
+            self.service.sync_device({'expectedRoot':str(self.root),'direction':'to-device'})
+        self.assertEqual(self.visible_bytes(self.device),{})
+        self.assertEqual((self.root / item['path']).read_bytes(),unknown)
+
+    def test_inbox_ambiguous_920_type_edit_rematches_only_changed_candidate_in_same_plan(self):
+        red,blue = self.sized('red',(920,430)),self.sized('blue',(920,430))
+        (self.root / 'Header.png').write_bytes(red)
+        self.scan()
+        self.adopt({'Header.png':'HeaderCapsule'})
+        plan = self.service.import_files([('Unknown_story.png',blue),('Other_pending.png',picture('green'))],
+                                         {'expectedRoot':str(self.root)})
+        changed = next(row for row in plan['candidates'] if row['incoming']['width']==920)
+        other = next(row for row in plan['candidates'] if row['id']!=changed['id'])
+        self.assertEqual(changed['incoming']['standardType'],'')
+        self.assertEqual(changed['incoming']['suggestedStandardType'],'')
+        self.assertEqual(changed['status'],'new')
+        edited = self.annotate(changed['incoming'],group='HeaderCapsule',label='B')
+        rebuilt = edited['state']['plan']
+        self.assertEqual(rebuilt['planId'],plan['planId'])
+        current = next(row for row in rebuilt['candidates'] if row['incoming']['sha256']==changed['incoming']['sha256'])
+        untouched = next(row for row in rebuilt['candidates'] if row['incoming']['sha256']==other['incoming']['sha256'])
+        self.assertNotEqual(current['id'],changed['id'])
+        self.assertEqual(current['previousCandidateId'],changed['id'])
+        self.assertEqual((current['status'],current['existing']['path']),('conflict','HeaderCapsule_920x430.png'))
+        self.assertEqual(untouched['id'],other['id'])
+        self.assertEqual((self.root / changed['incoming']['path']).read_bytes(),blue)
+        self.assertEqual((self.root / 'HeaderCapsule_920x430.png').read_bytes(),red)
+
+    def test_standard_inbox_apply_preserves_foreign_manifest_and_current_paths_on_transfer_or_receipt_failure(self):
+        for phase in ('copy','receipt'):
+            with self.subTest(phase=phase):
+                root = self.directory / ('inbox-'+phase)
+                root.mkdir()
+                service = ImageManagerService(self.directory / (root.name+'.json'))
+                service.configure({'root':str(root)})
+                original,incoming = picture('red'),self.sized('blue',(800,450))
+                (root / 'Known.png').write_bytes(original)
+                known = service.scan({'expectedRoot':str(root)})['state']['items'][0]
+                naming = service.naming_plan({'expectedRoot':str(root),'entries':[
+                    {'path':known['path'],'sha256':known['sha256'],'assetType':'HeaderCapsule'}]})
+                service.naming_apply({'expectedRoot':str(root),'planId':naming['planId']})
+                plan = service.import_files([('Pending_story.png',incoming)],{'expectedRoot':str(root)})
+                meta = root / image_manager.META
+                manifest_path = meta / 'library.json'
+                plan_path = meta / 'plans' / (plan['planId']+'.json')
+                real_atomic,real_copy = image_manager._atomic_json,image_manager.shutil.copy2
+                injected,foreign_bytes = [],[]
+
+                def foreign_edit():
+                    foreign = json.loads(manifest_path.read_text(encoding='utf-8'))
+                    foreign['foreignEdit'] = phase
+                    foreign['annotations'][known['sha256']]['variantLabel'] = 'Foreign label'
+                    real_atomic(manifest_path,foreign)
+                    foreign_bytes.append(manifest_path.read_bytes())
+                    injected.append(True)
+
+                def copy(source,destination,*args,**kwargs):
+                    result = real_copy(source,destination,*args,**kwargs)
+                    if phase=='copy' and Path(destination).name.startswith('.image-import-') and not injected:
+                        foreign_edit()
+                    return result
+
+                def write(path,value):
+                    if phase=='receipt' and Path(path)==plan_path and value.get('status')=='completed' and not injected:
+                        foreign_edit()
+                        raise PermissionError('fixture final adopt receipt failure')
+                    return real_atomic(path,value)
+
+                with patch.object(image_manager.shutil,'copy2',side_effect=copy):
+                    with patch.object(image_manager,'_atomic_json',side_effect=write):
+                        with self.assertRaises((ImageManagerError,PermissionError)):
+                            service.apply({'expectedRoot':str(root),'planId':plan['planId'],
+                                'decisions':[{'id':row['id'],'action':'add'} for row in plan['candidates']]})
+                self.assertTrue(injected)
+                self.assertEqual(manifest_path.read_bytes(),foreign_bytes[0])
+                images = self.visible_bytes(root)
+                self.assertEqual(images['HeaderCapsule_24x16.png'],original)
+                self.assertEqual(sum(value==incoming for value in images.values()),1)
+                if phase=='receipt':
+                    self.assertEqual(images['EventCover_800x450.png'],incoming)
+                stored = json.loads(plan_path.read_text(encoding='utf-8'))
+                journal = json.loads((meta / 'history' / plan['planId'] / 'recovery.json').read_text(encoding='utf-8'))
+                self.assertEqual((stored['status'],journal['status']),('recovery_required','recovery_required'))
 
 
 if __name__ == '__main__':

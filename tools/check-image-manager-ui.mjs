@@ -25,7 +25,10 @@ class Element {
   close() { this.open = false; return this.emit('close'); }
   scrollIntoView() {}
   contains(other) { return this === other || this.querySelectorAll('*').includes(other); }
-  async emit(name, extra = {}) { for (const callback of this.events[name] || []) await callback({ target: this, preventDefault() {}, ...extra }); }
+  async emit(name, extra = {}) {
+    if (name === 'change' && this.type === 'radio') for (const input of this.doc.querySelector('.image-shell').querySelectorAll('input')) if (input.name === this.name) input.checked = input === this;
+    for (const callback of this.events[name] || []) await callback({ target: this, preventDefault() {}, ...extra });
+  }
   click() { return this.emit('click'); }
 }
 const flush = async () => { for (let i = 0; i < 7; i++) await new Promise(resolve => setImmediate(resolve)); };
@@ -620,6 +623,218 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
     assert.equal(unproven.elements.checkOperation.hidden, true, 'Generic failed receipts must not gain a replay path without exact positive public evidence');
     assert.equal(unproven.requests.filter(request => request.action === 'sync').length, 0);
   }
+  const namingTypes = [
+    { code: 'GameIcon', label: '游戏图标', sizes: [{ width: 256, height: 256 }] },
+    { code: 'PlaytestGameIcon', label: 'Playtest 图标', sizes: [{ width: 256, height: 256 }] },
+    { code: 'HeaderCapsule', label: '商店横幅', sizes: [{ width: 920, height: 430 }] },
+    { code: 'LibraryHeader', label: '库横幅', sizes: [{ width: 920, height: 430 }] },
+    { code: 'EventCover', label: '活动封面', sizes: [{ width: 800, height: 450 }] },
+    { code: 'Logo', label: 'Logo', sizes: [{ width: 1280, height: 720 }] },
+    { code: 'TransparentLogo', label: '透明 Logo', sizes: [{ width: 1280, height: 720 }] }
+  ];
+  const standardIcon = { ...logoA, path: 'aaa story Final v9.png', width: 256, height: 256, groupTitle: 'GameIcon', groupId: 'game-icon', standardType: 'GameIcon', standardName: 'GameIcon_256x256.png', canonicalName: 'GameIcon_256x256.png', namingNeedsReview: false };
+  const standardIconB = { ...standardIcon, id: logoB.id, sha256: logoB.sha256, assetId: logoB.assetId, variantId: logoB.variantId, variantLabel: logoB.variantLabel, path: 'Icon version 2.png' };
+  const standardSmall = { ...standardIcon, id: logoSmall.id, sha256: logoSmall.sha256, assetId: logoSmall.assetId, variantId: logoSmall.variantId, path: 'Small Final.png', width: 64, height: 64, standardName: 'GameIcon_64x64.png', canonicalName: 'GameIcon_64x64.png', derivedFromId: standardIcon.sha256 };
+  const standardTransparent = { ...togo, groupTitle: 'TransparentLogo', groupId: 'transparent-logo', standardType: 'TransparentLogo', standardName: 'TransparentLogo_1280x720.png', canonicalName: 'TransparentLogo_1280x720.png', namingNeedsReview: false };
+  const standardState = { ...groupedState, items: [standardIcon, standardIconB, standardSmall, standardTransparent], standardNaming: true, standardTypes: namingTypes, plan: null, notionPage: '', deviceRoot: '' };
+  const namingStartState = { ...standardState, standardNaming: false, plan: review };
+  const expectedNames = ['Options/GameIcon/stable-option-a/GameIcon_256x256.png','Options/GameIcon/stable-option-b/GameIcon_256x256.png','GameIcon_64x64.png','TransparentLogo_1280x720.png'];
+  const namingPreviewPlan = { id: 'standard-naming-preview', planId: 'standard-naming-preview', kind: 'naming', status: 'review', canApply: true, errors: [], candidates: standardState.items.map((item, index) => ({ id: `name-${index}`, source: item.path, target: expectedNames[index], fromPath: item.path, targetPath: expectedNames[index], assetType: item.standardType, standardName: item.standardName, width: item.width, height: item.height, sha256: item.sha256, variantLabel: item.variantLabel, status: 'rename' })) };
+  const renamedItems = standardState.items.map((item, index) => ({ ...item, path: expectedNames[index] }));
+  const renamedState = { ...standardState, items: renamedItems, plan: review, namingPlan: null, lastNaming: { planId: namingPreviewPlan.id } };
+  const namingResults = namingPreviewPlan.candidates.map(candidate => ({ from: candidate.fromPath, to: candidate.targetPath, sha256: candidate.sha256 }));
+  const arrange = boot(namingStartState); await flush();
+  const selectedBeforeNaming = arrange.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep'); await selectedBeforeNaming.emit('change');
+  await arrange.elements.organizeNames.click();
+  assert.equal(arrange.elements.namingDialog.open, true); assert.equal(arrange.elements.namingList.children.length, 4);
+  assert.equal(arrange.elements.namingApply.disabled, true, 'Naming requires a server preview before confirmation');
+  assert.equal(arrange.requests.filter(request => request.options.method === 'POST').length, 0, 'Opening name organization does not rename or scan');
+  arrange.replies.set('naming-plan', request => {
+    assert.equal(request.body.expectedRoot, originalRoot);
+    assert.deepEqual(request.body.entries, standardState.items.map(item => ({ path: item.path, sha256: item.sha256, assetType: item.standardType })));
+    return { body: { ...namingPreviewPlan, state: { ...namingStartState, namingPlan: namingPreviewPlan } } };
+  });
+  await arrange.elements.namingPreview.click();
+  assert.equal(arrange.elements.namingApply.disabled, false);
+  assert(arrange.elements.namingList.children[1].querySelectorAll('p').some(element => element.textContent.includes(expectedNames[1])), 'Same-name alternatives use the backend Options directory without version or collision suffixes');
+  assert.equal(arrange.elements.reviewCount.textContent, '1 项待确认');
+  arrange.replies.set('naming-apply', { ok: false, status: 409, body: { error: '原图在预览后改变' } });
+  await arrange.elements.namingApply.click();
+  assert.equal(arrange.elements.namingApply.disabled, false, 'A failed confirmation retains the original preview and selected purposes');
+  assert.equal(arrange.elements.namingList.querySelectorAll('select')[0].value, 'GameIcon');
+  arrange.replies.set('naming-apply', () => { arrange.setState(renamedState); return { body: { ok: true, planId: namingPreviewPlan.id, renamed: 4, unchanged: 0, results: namingResults, state: renamedState } }; });
+  await arrange.elements.namingApply.click();
+  assert.equal(arrange.elements.namingRestore.hidden, false); assert.equal(arrange.elements.namingApply.disabled, true);
+  assert.equal(arrange.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').checked, true, 'Naming a library must not consume or reset the separate Inbox review');
+  assert.deepEqual(arrange.requests.filter(request => request.options.method === 'POST').map(request => request.action), ['naming-plan','naming-apply','naming-apply']);
+  assert.equal(renamedState.items[2].derivedFromId, standardSmall.derivedFromId);
+  assert.equal(renamedState.items[1].variantId, standardIconB.variantId);
+  arrange.replies.set('naming-restore', { ok: false, status: 409, body: { error: '文件已有后续修改，不能覆盖' } });
+  await arrange.elements.namingRestore.click();
+  assert.equal(arrange.elements.namingRestore.hidden, false);
+  arrange.replies.set('naming-restore', { body: { ok: true, planId: namingPreviewPlan.id, restored: true, results: namingResults.map(result => ({ from: result.to, to: result.from, sha256: result.sha256 })), state: { ...namingStartState, lastNaming: null } } });
+  await arrange.elements.namingRestore.click(); assert.equal(arrange.elements.namingRestore.hidden, true);
+  assert.equal(arrange.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').checked, true);
+  for (const explicitNull of [true, false]) {
+    const keepReview = boot(namingStartState); await flush();
+    await keepReview.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').emit('change');
+    await keepReview.elements.organizeNames.click();
+    keepReview.replies.set('naming-plan', { body: { ...namingPreviewPlan, state: namingStartState } }); await keepReview.elements.namingPreview.click();
+    const afterNames = { ...renamedState }; if (explicitNull) afterNames.plan = null; else delete afterNames.plan;
+    keepReview.replies.set('naming-apply', { body: { ok: true, planId: namingPreviewPlan.id, renamed: 4, results: namingResults, state: afterNames } });
+    await keepReview.elements.namingApply.click();
+    assert.equal(keepReview.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').checked, true);
+    assert.equal(keepReview.elements.reviewApply.disabled, explicitNull, 'Only an explicitly invalidated Inbox plan becomes stale; an omitted plan field must not invalidate it');
+    if (explicitNull) {
+      assert.match(keepReview.elements.decisionSummary.textContent, /名称已变化.*原选择已保留/);
+      await keepReview.elements.reviewApply.click();
+      assert.equal(keepReview.requests.filter(request => request.action === 'apply').length, 0);
+      keepReview.replies.set('scan', { body: { ...review, id: 'fresh-after-name-change', state: renamedState } });
+      await keepReview.elements.scanImages.click();
+      await keepReview.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').emit('change');
+      assert.equal(keepReview.elements.reviewApply.disabled, false, 'An explicit new comparison clears the naming-stale gate');
+    }
+  }
+  const pendingNaming = boot({ ...namingStartState, namingPlan: namingPreviewPlan }); await flush();
+  await pendingNaming.elements.organizeNames.click(); assert.equal(pendingNaming.elements.namingApply.disabled, false, 'Reload can recover a matching persisted name preview without issuing a write');
+  assert.equal(pendingNaming.requests.filter(request => request.options.method === 'POST').length, 0);
+  const selectedPreview = { ...namingPreviewPlan, candidates: namingPreviewPlan.candidates.map((candidate, index) => index ? candidate : { ...candidate, assetType: 'PlaytestGameIcon', targetPath: 'PlaytestGameIcon_256x256.png', target: 'PlaytestGameIcon_256x256.png', standardName: 'PlaytestGameIcon_256x256.png' }) };
+  const recoveredSelection = boot({ ...namingStartState, namingPlan: selectedPreview }); await flush(); await recoveredSelection.elements.organizeNames.click();
+  assert.equal(recoveredSelection.elements.namingList.querySelector('select').value, 'PlaytestGameIcon', 'A persisted preview restores its explicit purpose even in a fresh browser session');
+  assert.equal(recoveredSelection.elements.namingApply.disabled, false);
+  const unknownNamingItem = { ...standardIcon, standardType: '', standardName: '', namingNeedsReview: true };
+  const unknownNaming = boot({ ...namingStartState, items: [unknownNamingItem] }); await flush(); await unknownNaming.elements.organizeNames.click();
+  assert.equal(unknownNaming.elements.namingPreview.disabled, true, 'Ambiguous purpose must be selected explicitly rather than inferred from dimensions');
+  unknownNaming.elements.namingList.querySelector('select').value = 'PlaytestGameIcon'; await unknownNaming.elements.namingList.querySelector('select').emit('change');
+  assert.equal(unknownNaming.elements.namingPreview.disabled, false);
+  unknownNaming.replies.set('naming-plan', { ok: false, status: 409, body: { error: '预览未完成' } });
+  await unknownNaming.elements.namingPreview.click(); assert.equal(unknownNaming.elements.namingList.querySelector('select').value, 'PlaytestGameIcon', 'Preview failures retain the chosen standard type');
+  const conflictNaming = boot(namingStartState); await flush(); await conflictNaming.elements.organizeNames.click();
+  conflictNaming.replies.set('naming-plan', { body: { ...namingPreviewPlan, canApply: false, errors: ['目标已被占用'], candidates: namingPreviewPlan.candidates.map((candidate, index) => index ? candidate : { ...candidate, status: 'conflict', error: '目标已被占用' }), state: namingStartState } });
+  await conflictNaming.elements.namingPreview.click(); await conflictNaming.elements.namingApply.click();
+  assert.equal(conflictNaming.elements.namingApply.disabled, true);
+  assert.equal(conflictNaming.requests.filter(request => request.action === 'naming-apply').length, 0);
+  const namingDraftLocation = boot(namingStartState); await flush(); namingDraftLocation.elements.deviceRoot.value = 'E:\\Unsaved Naming Location';
+  await namingDraftLocation.elements.organizeNames.click(); assert.notEqual(namingDraftLocation.elements.namingDialog.open, true);
+  assert.equal(namingDraftLocation.requests.filter(request => request.options.method === 'POST').length, 0);
+  const busyNaming = boot(namingStartState); await flush(); await busyNaming.elements.organizeNames.click(); let completeNamingPreview;
+  busyNaming.replies.set('naming-plan', () => new Promise(resolve => { completeNamingPreview = resolve; }));
+  const namingInFlight = busyNaming.elements.namingPreview.click(); await flush();
+  assert.equal(busyNaming.elements.imageGrid.attributes['aria-busy'], 'true');
+  assert.equal(busyNaming.elements.namingClose.disabled, true); assert(busyNaming.elements.namingList.querySelectorAll('select').every(select => select.disabled));
+  await busyNaming.elements.namingApply.click(); await busyNaming.elements.namingClose.click();
+  assert.equal(busyNaming.elements.namingDialog.open, true); assert.equal(busyNaming.requests.filter(request => request.action === 'naming-apply').length, 0);
+  completeNamingPreview({ body: { ...namingPreviewPlan, state: namingStartState } }); await namingInFlight;
+  for (const changed of [{ root: 'D:\\Other Naming Root' }, { notionPage: `https://www.notion.so/${pageB}` }, { deviceRoot: 'E:\\Other Naming Device' }, { items: [{ ...standardIcon, sha256: 'changed' }, ...standardState.items.slice(1)] }]) {
+    const lateNaming = boot(namingStartState); await flush(); await lateNaming.elements.organizeNames.click();
+    lateNaming.replies.set('naming-plan', { body: { ...namingPreviewPlan, state: { ...namingStartState, ...changed } } });
+    await lateNaming.elements.namingPreview.click(); assert.equal(lateNaming.elements.namingApply.disabled, true);
+    assert.equal(lateNaming.requests.filter(request => request.action === 'naming-apply').length, 0);
+  }
+  for (const changed of [{ planId: 'other-naming-plan' }, { results: [{ ...namingResults[0], to: '../outside.png' }, ...namingResults.slice(1)] }, { results: namingResults.slice(1) }, { state: { ...renamedState, root: 'D:\\Other Receipt Root' } }, { state: { ...renamedState, items: renamedItems.map((item, index) => index ? item : { ...item, standardType: 'PlaytestGameIcon' }) } }, { state: { ...renamedState, items: renamedItems.map((item, index) => index ? item : { ...item, variantId: 'lost-original-variant' }) } }, { state: { ...renamedState, items: renamedItems.map((item, index) => index === 2 ? { ...item, derivedFromId: '' } : item) } }]) {
+    const badNamingReceipt = boot(namingStartState); await flush(); await badNamingReceipt.elements.organizeNames.click();
+    badNamingReceipt.replies.set('naming-plan', { body: { ...namingPreviewPlan, state: namingStartState } }); await badNamingReceipt.elements.namingPreview.click();
+    badNamingReceipt.replies.set('naming-apply', { body: { ok: true, planId: namingPreviewPlan.id, renamed: 4, results: namingResults, state: renamedState, ...changed } });
+    await badNamingReceipt.elements.namingApply.click();
+    assert.equal(badNamingReceipt.elements.namingStatus.dataset.error, 'true');
+    assert.equal(badNamingReceipt.elements.imageGrid.children[0].dataset.currentPath, standardIcon.path, 'A mismatched naming receipt cannot replace the current library');
+  }
+  const unknownInboxItem = { ...standardIcon, path: 'inbox/aaa.png', standardType: '', standardName: '', namingNeedsReview: true };
+  const unknownInboxPlan = { id: 'unknown-inbox-type', candidates: [{ ...addPlan.candidates[0], id: 'untyped-inbox', incoming: unknownInboxItem }] };
+  const unknownAdoption = boot({ ...standardState, plan: unknownInboxPlan }); await flush();
+  assert.equal(unknownAdoption.elements.reviewApply.disabled, true); await unknownAdoption.elements.reviewApply.click();
+  assert.equal(unknownAdoption.requests.filter(request => request.action === 'apply').length, 0);
+  await unknownAdoption.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').emit('change');
+  assert.equal(unknownAdoption.elements.reviewApply.disabled, false, 'Keeping an untyped Inbox picture out does not require adopting a purpose');
+  const unknownAuto = boot(standardState); await flush(); unknownAuto.replies.set('sync', { body: unknownInboxPlan });
+  await unknownAuto.elements.syncImages.click(); assert.equal(unknownAuto.requests.filter(request => request.action === 'apply').length, 0, 'Standard-policy unknown files must never be auto-adopted');
+  const knownSuggestion = { ...unknownInboxItem, width: 800, height: 450, standardType: 'EventCover', standardName: 'EventCover_800x450.png', canonicalName: 'EventCover_800x450.png', namingNeedsReview: false };
+  const knownSuggestionPlan = { id: 'known-event-cover', candidates: [{ ...addPlan.candidates[0], incoming: knownSuggestion }] };
+  const suggestedAuto = boot(standardState); await flush(); suggestedAuto.replies.set('sync', { body: knownSuggestionPlan });
+  suggestedAuto.replies.set('apply', { body: { ok: true, state: standardState } }); await suggestedAuto.elements.syncImages.click();
+  assert.equal(suggestedAuto.requests.filter(request => request.action === 'apply').length, 1, 'An already confirmed canonical type can retain the existing one-click synchronization behavior');
+  const suggestionOnly = { ...knownSuggestion, standardType: '', suggestedStandardType: 'EventCover', namingNeedsReview: true };
+  const suggestionOnlyPlan = { id: 'suggestion-needs-adoption', candidates: [{ ...addPlan.candidates[0], incoming: suggestionOnly }] };
+  const explicitSuggestion = boot(standardState); await flush(); explicitSuggestion.replies.set('sync', { body: suggestionOnlyPlan });
+  explicitSuggestion.replies.set('apply', { body: { ok: true, state: standardState } }); await explicitSuggestion.elements.syncImages.click();
+  assert.equal(explicitSuggestion.requests.filter(request => request.action === 'apply').length, 0, 'A size-only suggestion must never be automatically adopted by synchronization');
+  assert.equal(explicitSuggestion.elements.reviewApply.disabled, false, 'The displayed Inbox-only suggestion can be accepted at the explicit adoption boundary');
+  assert(explicitSuggestion.elements.candidateList.querySelectorAll('p').some(element => /建议用途 EventCover.*确认采用后.*EventCover_800x450/.test(element.textContent)));
+  await explicitSuggestion.elements.reviewApply.click(); await flush();
+  assert.equal(explicitSuggestion.requests.filter(request => request.action === 'apply').length, 1);
+  assert.equal(explicitSuggestion.requests.filter(request => request.action === 'metadata').length, 0, 'Accepting a valid displayed Inbox suggestion does not require an extra metadata dialog');
+  const indexedSuggestion = boot({ ...standardState, plan: { id: 'root-suggestion-not-adoption', candidates: [{ ...addPlan.candidates[0], incoming: { ...suggestionOnly, path: 'story v9.png' } }] } }); await flush();
+  assert.equal(indexedSuggestion.elements.reviewApply.disabled, true, 'An indexed root story image cannot be treated as an approved type based only on its dimensions');
+  const explicitMetadataSuggestion = boot({ ...standardState, items: [{ ...suggestionOnly, path: 'story v9.png' }] }); await flush();
+  await explicitMetadataSuggestion.elements.imageGrid.querySelectorAll('button').find(button => button.dataset.metadataPath).click();
+  assert.equal(explicitMetadataSuggestion.elements.metadataStandardType.value, 'EventCover');
+  assert.equal(explicitMetadataSuggestion.elements.metadataSaveOnly.disabled, false, 'A visible suggested type remains an unsaved semantic choice until the user confirms it');
+  assert.equal(explicitMetadataSuggestion.requests.filter(request => request.options.method === 'POST').length, 0);
+  const rematched = boot({ ...standardState, plan: { id: 'same-plan-rematch', candidates: [{ ...candidate, id: 'changed-match', incoming: unknownInboxItem }, { ...addPlan.candidates[0], id: 'unaffected', incoming: { ...standardTransparent, path: 'inbox/Togo.png' } }] } }); await flush();
+  await rematched.elements.candidateList.querySelectorAll('input').find(input => input.dataset.candidateId === 'changed-match' && input.value === 'replace').emit('change');
+  await rematched.elements.candidateList.querySelectorAll('input').find(input => input.dataset.candidateId === 'unaffected' && input.value === 'keep').emit('change');
+  await rematched.elements.candidateList.querySelectorAll('button').find(button => button.dataset.metadataPath === unknownInboxItem.path).click();
+  assert.equal(rematched.elements.metadataGroupTitle.hidden, true); assert.equal(rematched.elements.metadataStandardType.hidden, false);
+  rematched.elements.metadataStandardType.value = 'GameIcon'; await rematched.elements.metadataStandardType.emit('change');
+  assert.match(rematched.elements.metadataStandardName.textContent, /GameIcon_256x256\.png/);
+  const typedInbox = { ...unknownInboxItem, groupTitle: 'GameIcon', standardType: 'GameIcon', standardName: 'GameIcon_256x256.png', canonicalName: 'GameIcon_256x256.png', namingNeedsReview: false };
+  const rebuiltPlan = { id: 'same-plan-rematch', candidates: [{ id: 'fresh-match', previousCandidateId: 'changed-match', status: 'new', incoming: typedInbox, actions: ['add','keep'] }, { ...addPlan.candidates[0], id: 'unaffected', incoming: { ...standardTransparent, path: 'inbox/Togo.png' } }] };
+  rematched.replies.set('metadata', { body: { ok: true, item: typedInbox, planRebuilt: true, plan: rebuiltPlan, state: { ...standardState, plan: rebuiltPlan } } });
+  await rematched.elements.metadataSaveOnly.click();
+  assert.equal(rematched.requests.findLast(request => request.action === 'metadata').body.groupTitle, 'GameIcon');
+  assert.equal(rematched.elements.candidateList.querySelectorAll('input').filter(input => input.dataset.candidateId === 'fresh-match' && input.checked).length, 0, 'A rematched new candidate cannot inherit replace or receive the new-file add default');
+  assert.equal(rematched.elements.candidateList.querySelectorAll('input').find(input => input.dataset.candidateId === 'unaffected' && input.value === 'keep').checked, true);
+  assert.equal(rematched.elements.reviewApply.disabled, true); assert.equal(rematched.requests.filter(request => ['apply','sync'].includes(request.action)).length, 0);
+  const standardMetadataState = { ...standardState, notionPage: `https://www.notion.so/${pageA}`, notion: { canAttempt: true, pageId: pageA } };
+  const renamedMetadataItem = { ...standardIcon, path: 'PlaytestGameIcon_256x256.png', groupTitle: 'PlaytestGameIcon', groupId: 'playtest-game-icon', standardType: 'PlaytestGameIcon', standardName: 'PlaytestGameIcon_256x256.png', canonicalName: 'PlaytestGameIcon_256x256.png' };
+  const renamedMetadataState = { ...standardMetadataState, items: [renamedMetadataItem, ...standardState.items.slice(1)] };
+  const renameMetadataReceipt = { ok: true, item: renamedMetadataItem, renamed: { from: standardIcon.path, to: renamedMetadataItem.path, sha256: standardIcon.sha256 }, state: renamedMetadataState };
+  const editStandardType = async view => {
+    await view.elements.imageGrid.querySelectorAll('button').find(button => button.dataset.metadataPath === standardIcon.path).click();
+    view.elements.metadataStandardType.value = 'PlaytestGameIcon'; await view.elements.metadataStandardType.emit('change');
+  };
+  const metadataRename = boot(standardMetadataState); await flush(); await editStandardType(metadataRename);
+  metadataRename.replies.set('metadata', () => { metadataRename.setState(renamedMetadataState); return { body: renameMetadataReceipt }; });
+  metadataRename.replies.set('sync', request => ({ body: { operation: completedPush(request) } }));
+  metadataRename.elements.syncSource.value = 'notion'; metadataRename.elements.syncTarget.value = 'console';
+  await metadataRename.elements.metadataForm.emit('submit');
+  assert.match(metadataRename.elements.metadataOriginal.textContent, /PlaytestGameIcon_256x256\.png/);
+  assert.match(metadataRename.elements.metadataStatus.textContent, /已保存，并同步/);
+  assert.deepEqual(metadataRename.requests.filter(request => request.options.method === 'POST').map(request => request.action), ['metadata','sync'], 'An atomic purpose rename can save then push from the verified new path without applying Inbox work');
+  assert.equal(metadataRename.requests.find(request => request.action === 'sync').body.source, 'console');
+  assert.equal(metadataRename.elements.imageGrid.children.find(card => card.dataset.groupId === 'playtest-game-icon').dataset.currentPath, renamedMetadataItem.path, 'A canonical main-to-Playtest purpose change is reflected as its own group rather than another main-game option');
+  assert.equal(metadataRename.elements.metadataSave.disabled, true, 'Verified rename completion must not leave a phantom dirty edit');
+  const localRename = boot(standardMetadataState); await flush(); await editStandardType(localRename);
+  localRename.replies.set('metadata', () => { localRename.setState(renamedMetadataState); return { body: renameMetadataReceipt }; });
+  await localRename.elements.metadataSaveOnly.click(); await localRename.elements.metadataClose.click();
+  const resumeRenamed = boot(renamedMetadataState, localRename.storage); await flush();
+  await resumeRenamed.elements.imageGrid.querySelectorAll('button').find(button => button.dataset.metadataPath === renamedMetadataItem.path).click();
+  assert.equal(resumeRenamed.elements.metadataSave.textContent, '同步已保存修改', 'A save-only purpose rename persists its pending sync against the verified new path');
+  resumeRenamed.replies.set('sync', request => ({ body: { operation: completedPush(request) } })); await resumeRenamed.elements.metadataForm.emit('submit');
+  assert.equal(resumeRenamed.requests.filter(request => request.action === 'metadata').length, 0);
+  assert.equal(resumeRenamed.requests.filter(request => request.action === 'sync').length, 1);
+  const indexedNameReview = boot({ ...standardMetadataState, plan: review }); await flush();
+  await indexedNameReview.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').emit('change');
+  await editStandardType(indexedNameReview);
+  indexedNameReview.replies.set('metadata', { body: { ...renameMetadataReceipt, state: { ...renamedMetadataState, plan: null } } });
+  await indexedNameReview.elements.metadataSaveOnly.click();
+  assert.equal(indexedNameReview.elements.reviewApply.disabled, true);
+  assert.equal(indexedNameReview.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').checked, true);
+  assert.match(indexedNameReview.elements.decisionSummary.textContent, /名称已变化/);
+  assert.deepEqual(indexedNameReview.requests.filter(request => request.options.method === 'POST').map(request => request.action), ['metadata'], 'An atomic indexed rename invalidates the old review without an automatic scan or apply');
+  const realDimensionItem = { ...standardIcon, width: 333, height: 222, standardName: 'GameIcon_333x222.png', canonicalName: 'GameIcon_333x222.png' };
+  const realDimensionView = boot({ ...standardState, items: [realDimensionItem] }); await flush();
+  await realDimensionView.elements.imageGrid.querySelectorAll('button').find(button => button.dataset.metadataPath).click();
+  assert.match(realDimensionView.elements.metadataStandardName.textContent, /GameIcon_333x222\.png/, 'Recommended Steam sizes must not replace the image\'s actual dimensions');
+  assert.equal(realDimensionView.requests.filter(request => request.options.method === 'POST').length, 0);
+  for (const changed of [{ renamed: undefined }, { renamed: { from: 'other.png', to: renamedMetadataItem.path, sha256: standardIcon.sha256 } }, { renamed: { from: standardIcon.path, to: renamedMetadataItem.path, sha256: 'other-sha' } }, { state: { ...renamedMetadataState, notionPage: `https://www.notion.so/${pageB}` } }, { state: { ...renamedMetadataState, items: [{ ...renamedMetadataItem, sha256: 'other-sha' }, ...standardState.items.slice(1)] } }]) {
+    const badMetadataRename = boot(standardMetadataState); await flush(); await editStandardType(badMetadataRename);
+    badMetadataRename.replies.set('metadata', { body: { ...renameMetadataReceipt, ...changed } });
+    await badMetadataRename.elements.metadataForm.emit('submit');
+    assert.equal(badMetadataRename.requests.filter(request => request.action === 'sync').length, 0, 'Only a matching old→new path/hash receipt may become the saved synchronization source');
+    assert.equal(badMetadataRename.elements.metadataStandardType.value, 'PlaytestGameIcon');
+    assert.equal(badMetadataRename.elements.metadataStatus.dataset.error, 'true');
+  }
   const clipboardState = { ...groupedState, plan: null, inboxCount: 0, notionPage: `https://www.notion.so/${pageA}`, deviceRoot: 'E:\\Clipboard Fixture', limits: { maxFileBytes: 64 * 1024 * 1024 } };
   const pngBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0X0AAAAASUVORK5CYII=', 'base64');
   const clipboardPng = new Blob([pngBytes], { type: 'image/png' });
@@ -682,7 +897,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
     await textPaste.doc.emit('paste', fieldEvent);
     assert.equal(fieldEvent.defaultPrevented, false, 'Inputs, textareas, selects and inherited contenteditable retain their normal paste');
   }
-  for (const dialog of ['metadataDialog','previewDialog']) {
+  for (const dialog of ['metadataDialog','previewDialog','namingDialog']) {
     textPaste.elements[dialog].open = true; textPaste.elements.dropZone.focus();
     const modalEvent = nativePasteEvent(textPaste.elements.dropZone, [copiedFile]);
     await textPaste.doc.emit('paste', modalEvent); await textPaste.elements.pasteImages.click();
@@ -856,11 +1071,12 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   assert.equal(draftContext.steamworkImageHasDraft(), false);
   draftFrame = { getAttribute: () => null };
   assert.equal(draftContext.steamworkImageHasDraft(), false);
-  const frameFields = { metadataDialog: { open: false }, locations: { open: false }, imageGrid: { getAttribute: () => 'false' } };
+  const frameFields = { metadataDialog: { open: false }, namingDialog: { open: false }, locations: { open: false }, imageGrid: { getAttribute: () => 'false' } };
   draftFrame = { getAttribute: () => 'image-manager.html?embed=steamwork', contentDocument: { getElementById: id => frameFields[id] } };
   assert.equal(draftContext.steamworkImageHasDraft(), false);
   frameFields.metadataDialog.open = true; assert.equal(draftContext.steamworkImageHasDraft(), true);
-  frameFields.metadataDialog.open = false; frameFields.locations.open = true; assert.equal(draftContext.steamworkImageHasDraft(), true);
+  frameFields.metadataDialog.open = false; frameFields.namingDialog.open = true; assert.equal(draftContext.steamworkImageHasDraft(), true);
+  frameFields.namingDialog.open = false; frameFields.locations.open = true; assert.equal(draftContext.steamworkImageHasDraft(), true);
   frameFields.locations.open = false; frameFields.imageGrid.getAttribute = () => 'true'; assert.equal(draftContext.steamworkImageHasDraft(), true);
   frameFields.imageGrid.getAttribute = () => 'false'; assert.equal(draftContext.steamworkImageHasDraft(), false);
   draftFrame = { getAttribute: () => 'image-manager.html?embed=steamwork', get contentDocument() { throw new Error('not same origin'); } };
@@ -876,4 +1092,5 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   console.log('PASS save-and-sync: dirty/no-op gating, save-only/reopen/reload, fixed Console authority, no Inbox import/publish, failed-save draft, unsaved-location guard, root/page/device/asset/annotation late-result refusal, same-request unknown verification, partial-target retry, and device metadata-only/new/review completion.');
   console.log('PASS option arrows: three real originals cycle with pointer and scoped keyboard/focus, no single-image arrows or thumbnail duplication, explicit size/lineage and main/Playtest grouping retained, Inbox choices persist per candidate through browsing/reload/full-plan confirmation, unsafe buckets stay separate, and busy browsing is zero-write.');
   console.log('PASS paste images: explicit-only image ClipboardItem/native files/items, one MIME per item and event/API de-duplication, safe MIME filenames and unchanged returned Blob bytes, Inbox-only upload, body-focus and text/modal boundaries, menu dismissal/iframe-visible clamp, no text/HTML/URL reads, permission fallback, size/empty/format guards, and late root/device/page/plan/pending-operation rejection. No OS clipboard is accessed by fixtures.');
+  console.log('PASS standard naming: explicit canonical types and real dimensions, independent library preview/apply/restore with Options alternatives and preserved Inbox choices, failed/late/conflicting receipt protection, unknown adoption gating and unique backend suggestions, rematched candidate-only reselection, verified metadata old→new path migration before Console sync, saved pending rename recovery, busy/modal/reload protection, and legacy compatibility.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

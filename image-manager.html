@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#111a27">
   <title>Console · Image manager</title>
   <link rel="icon" href="favicon.ico">
-  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.41-20261101">
-  <script src="image-manager.js?v=images-variants-1.1.41-20261101" defer></script>
+  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.42-20261101">
+  <script src="image-manager.js?v=images-variants-1.1.42-20261101" defer></script>
 </head>
 <body>
   <main class="image-shell">
@@ -54,7 +54,7 @@
     </section>
 
     <section class="collection-section" aria-labelledby="collectionTitle">
-      <div class="section-heading"><div><p class="eyebrow">BROWSE YOUR COLLECTION</p><h2 id="collectionTitle">图片</h2></div><label class="search-field"><span class="visually-hidden">按标题或尺寸查找图片</span><input id="imageSearch" type="search" placeholder="查找标题或尺寸" maxlength="160"></label></div>
+      <div class="section-heading"><div><p class="eyebrow">BROWSE YOUR COLLECTION</p><h2 id="collectionTitle">图片</h2></div><button id="organizeNames" class="metadata-button" type="button" hidden>整理名称</button><label class="search-field"><span class="visually-hidden">按标题或尺寸查找图片</span><input id="imageSearch" type="search" placeholder="查找标题或尺寸" maxlength="160"></label></div>
       <p id="collectionNote" class="section-note">按用途与标题分组，选择尺寸和方案查看原图。</p>
       <div id="imageGrid" class="image-grid" aria-busy="true"></div>
       <div id="emptyState" class="empty-state" hidden><span aria-hidden="true">▧</span><h3>你的图片，从这里开始</h3><p>保存图库位置，放入图片，再点「检查图片」。</p></div>
@@ -68,15 +68,22 @@
     <form id="metadataForm" autocomplete="off">
       <div class="dialog-heading"><h2 id="metadataTitle">方案信息</h2><button id="metadataClose" class="icon-button" type="button" aria-label="关闭方案信息">×</button></div>
       <p id="metadataOriginal" class="original-file"></p>
-      <p class="muted">这里只整理用途、方案与来源关系，保留原文件名和图片内容。</p>
+      <p id="metadataNamingHint" class="muted">整理用途、方案与来源关系，保留图片内容。</p>
       <div class="metadata-fields">
-        <label class="field"><span>用途 / 标题</span><input id="metadataGroupTitle" maxlength="140" required placeholder="例如：透明Logo、商店主图"></label>
+        <label class="field"><span id="metadataPurposeLabel">用途 / 标题</span><input id="metadataGroupTitle" maxlength="140" required placeholder="例如：透明Logo、商店主图"><select id="metadataStandardType" aria-label="标准用途" hidden></select><small id="metadataStandardName" hidden></small></label>
         <label class="field"><span>方案名称</span><input id="metadataVariantLabel" maxlength="80" required placeholder="为这张已有图片标注方案"></label>
         <label class="field"><span>派生来源 <small>可选</small></span><select id="metadataDerivedFrom"><option value="">原始素材 / 未关联来源</option></select><small>明确指定来源后，可按方案查看对应的派生尺寸。</small></label>
       </div>
       <p id="metadataStatus" class="operation-status" role="status" aria-live="polite"></p>
       <div class="metadata-actions"><button id="metadataSaveOnly" class="secondary-button" type="button" disabled>仅保存</button><button id="metadataSave" class="primary-button" type="submit" disabled>保存并同步</button></div>
     </form>
+  </dialog>
+  <dialog id="namingDialog" class="naming-dialog" aria-labelledby="namingTitle">
+    <div class="dialog-heading"><h2 id="namingTitle">整理名称</h2><button id="namingClose" class="icon-button" type="button" aria-label="关闭名称整理">×</button></div>
+    <p class="muted">选择标准用途，预览后确认。文件名使用「用途_宽x高.格式」，多个方案分别保留。</p>
+    <div id="namingList" class="naming-list"></div>
+    <p id="namingStatus" class="operation-status" role="status" aria-live="polite"></p>
+    <div class="naming-actions"><button id="namingRestore" class="secondary-button" type="button" hidden>撤回上次整理</button><button id="namingPreview" class="secondary-button" type="button">预览标准名称</button><button id="namingApply" class="primary-button" type="button" disabled>确认整理名称</button></div>
   </dialog>
 </body>
 </html>

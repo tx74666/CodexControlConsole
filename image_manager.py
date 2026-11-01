@@ -28,6 +28,31 @@ MAX_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_PIXELS = 40_000_000
 MAX_FILES = 3000
 META = '.image-manager'
+STANDARD_TYPES = [
+    {'code':code, 'label':label, 'sizes':[{'width':w, 'height':h} for w,h in sizes]}
+    for code,label,sizes in [
+        ('EventCover','活动封面',[(800,450)]), ('GameIcon','主游戏图标',[(256,256)]),
+        ('PlaytestGameIcon','Playtest 图标',[(256,256)]), ('HeaderCapsule','商店页头图',[(920,430)]),
+        ('LibraryHeader','库页头图',[(920,430)]), ('LibraryCapsule','库封面',[(600,900)]),
+        ('MainCapsule','主胶囊图',[(1232,706)]), ('SmallCapsule','小胶囊图',[(462,174)]),
+        ('LibraryHero','库背景',[(3840,1240)]), ('Logo','Logo',[(1280,720)]),
+        ('TransparentLogo','透明Logo',[(1280,720)]), ('LibraryLogo','库 Logo',[(1280,720)])]]
+_TYPE_ALIASES = {row['code'].casefold():row['code'] for row in STANDARD_TYPES}
+_TYPE_ALIASES.update({'togo':'TransparentLogo', '透明logo':'TransparentLogo',
+    '主游戏 · 图标':'GameIcon', 'playtest · 图标':'PlaytestGameIcon'})
+
+
+def _standard_type(title, width=None, height=None):
+    value = _TYPE_ALIASES.get(unicodedata.normalize('NFC', str(title)).strip().casefold(), '')
+    if value:
+        return value
+    choices = [row['code'] for row in STANDARD_TYPES
+               if {'width':width,'height':height} in row['sizes']]
+    return choices[0] if len(choices) == 1 else ''
+
+
+def _name_key(value):
+    return unicodedata.normalize('NFC', value).casefold()
 
 
 class ImageManagerError(ValueError):
@@ -359,7 +384,7 @@ class ImageManagerService:
 
     def _merge_device_annotations(self, manifest, catalogue, entries):
         annotations = json.loads(json.dumps(manifest['annotations']))
-        self._enrich(catalogue, annotations)
+        self._enrich(catalogue, annotations, standard=manifest.get('standardNaming', False))
         available = {item['sha256'] for item in catalogue}
         changed, unresolved = [], []
         for entry in entries:
@@ -377,7 +402,7 @@ class ImageManagerService:
             if parent and parent not in available:
                 unresolved.append({'sha256':digest, 'derivedFromId':parent, 'reason':'source_not_local'})
         self._validate_annotation_graph(annotations)
-        self._enrich(catalogue, annotations)
+        self._enrich(catalogue, annotations, standard=manifest.get('standardNaming', False))
         manifest.update(annotations=annotations, items=catalogue)
         return {'applied':len(changed), 'unresolved':len(unresolved), 'unresolvedEntries':unresolved}
 
@@ -417,7 +442,7 @@ class ImageManagerService:
                 annotations[item['sha256']] = self._inherit_annotation(annotations[old['sha256']])
 
     @staticmethod
-    def _enrich(items, annotations):
+    def _enrich(items, annotations, *, standard=False):
         """Project semantic metadata; callers choose whether to persist the map."""
         counters = {}
         for value in annotations.values():
@@ -435,10 +460,11 @@ class ImageManagerService:
             title, filename_label = _filename_annotation(item['title'])
             annotation = annotations.get(digest)
             if annotation is None:
-                group = _group_id(title)
+                initial_title = title
+                group = _group_id(initial_title)
                 number = counters.get(group, 0) + 1
                 counters[group] = number
-                annotation = {'groupTitle': title, 'groupId': group,
+                annotation = {'groupTitle': initial_title, 'groupId': group,
                     'variantId': 'variant-' + digest, 'variantNumber': number,
                     'variantLabel': filename_label or f'方案{number}',
                     'variantExplicit': filename_label is not None,
@@ -446,7 +472,7 @@ class ImageManagerService:
                 annotations[digest] = annotation
             group_title = _annotation_text(annotation.get('groupTitle', title), '图片组名称', 140)
             annotation['groupId'] = _group_id(group_title)
-            item.update({'assetId': digest, 'displayTitle': '透明Logo' if title == 'Togo' else title,
+            item.update({'assetId': digest, 'displayTitle': '透明Logo' if title in {'Togo','TransparentLogo'} else title,
                 'groupId': annotation['groupId'], 'groupTitle': group_title,
                 'variantId': annotation.setdefault('variantId', 'variant-' + digest),
                 'variantLabel': _annotation_text(annotation.get('variantLabel', '方案1'), '方案名称', 100),
@@ -454,6 +480,17 @@ class ImageManagerService:
                 'derivedFromId': annotation.get('derivedFromId', ''),
                 'pendingDerivedFromId': annotation.get('pendingDerivedFromId', '')})
             item.setdefault('hasTransparency', None)
+            code = _TYPE_ALIASES.get(group_title.casefold(),'')
+            suggested = _standard_type('', item['width'], item['height'])
+            pending = item['path'].split('/')[0].casefold() == 'inbox'
+            proposed = code or suggested
+            suffix = Path(item['canonicalName']).suffix
+            item.update(standardType=code, suggestedStandardType=suggested,
+                        standardName=f"{proposed}_{item['width']}x{item['height']}{suffix}" if proposed else '',
+                        namingNeedsReview=not bool(code), standardNaming=bool(standard))
+            if standard and (code or pending and suggested):
+                match_type = code or suggested
+                item.update(groupTitle=match_type, groupId=_group_id(match_type), canonicalName=item['standardName'])
         available = {item['sha256'] for item in items}
         for annotation in annotations.values():
             pending = annotation.get('pendingDerivedFromId')
@@ -467,6 +504,9 @@ class ImageManagerService:
         for item in items:
             groups.setdefault(item['groupId'], set()).add(item['variantId'])
         for item in items:
+            if standard:
+                item['syncName'] = item['standardName'] if item['standardType'] else ''
+                continue
             explicit_name = item['variantExplicit'] or len(groups[item['groupId']]) > 1
             suffix = Path(item['canonicalName']).suffix
             if explicit_name:
@@ -494,10 +534,10 @@ class ImageManagerService:
         pending, pending_errors = self._files(root, inbox=True)
         return regular + pending, errors + pending_errors
 
-    def _write_annotations_locked(self, root, manifest, catalogue, entries, *, allow_missing):
+    def _write_annotations_locked(self, root, manifest, catalogue, entries, *, allow_missing, commit=True):
         annotations = json.loads(json.dumps(manifest['annotations']))
         self._inherit_path_annotations(catalogue, self._previous_annotation_items(root, manifest), annotations)
-        self._enrich(catalogue, annotations)
+        self._enrich(catalogue, annotations, standard=manifest.get('standardNaming', False))
         available = {item['sha256']: item for item in catalogue}
         identifiers = {item['id']: item['sha256'] for item in catalogue}
         changed, skipped, unresolved = [], [], []
@@ -529,6 +569,11 @@ class ImageManagerService:
                     continue
                 raise ImageManagerError('图片已改变或不在当前图库中，请重新检查。', status=409)
             value = annotations[digest]
+            if manifest.get('standardNaming') and any(item['sha256']==digest for item in manifest['items']):
+                code=_TYPE_ALIASES.get(title.casefold(),'')
+                if not code:
+                    raise ImageManagerError('已采用库只可保存明确标准用途。',status=409)
+                title=code
             value.update(groupTitle=title, groupId=_group_id(title), variantLabel=label, variantExplicit=True)
             if 'derivedFromId' in entry:
                 if parent and parent not in available:
@@ -555,10 +600,76 @@ class ImageManagerService:
                 self._fresh(available[digest], {'root':root})
         self._roots(str(root))
         manifest['annotations'] = annotations
-        self._enrich(manifest['items'], annotations)
-        _atomic_json(_inside(root, META + '/library.json', private=True), manifest)
-        self._enrich(catalogue, annotations)
+        self._enrich(manifest['items'], annotations, standard=manifest.get('standardNaming', False))
+        if commit:
+            _atomic_json(_inside(root, META + '/library.json', private=True), manifest)
+        self._enrich(catalogue, annotations, standard=manifest.get('standardNaming', False))
         return {'ok':True,'applied':len(changed),'skipped':skipped,'unresolved':unresolved}, catalogue
+
+    def _commit_annotation_changes(self,root,manifest,catalogue,entries,version):
+        if self._manifest_version(root)!=version:
+            raise ImageManagerError('方案信息刚有修改，请重新读取后保存。',status=409)
+        original=self._manifest(root)
+        changed={entry['sha256'] for entry in entries}
+        renames=[]
+        if manifest.get('standardNaming'):
+            for item in original['items']:
+                if item['sha256'] not in changed:
+                    continue
+                code=_TYPE_ALIASES.get(manifest['annotations'][item['sha256']]['groupTitle'].casefold(),'')
+                name=f"{code}_{item['width']}x{item['height']}{Path(item['canonicalName']).suffix}"
+                old_type=_TYPE_ALIASES.get(original['annotations'].get(item['sha256'],{}).get('groupTitle','').casefold(),'')
+                if code and (Path(item['path']).name!=name or old_type!=code):
+                    renames.append({'path':item['path'],'sha256':item['sha256'],'assetType':code})
+        if renames:
+            proposal=self._build_naming_plan(root,renames,prepared_manifest=manifest,expected_version=version)
+            path=_inside(root,META+'/naming-plans/'+proposal['planId']+'.json',private=True)
+            receipt=self._apply_naming_locked(root,path,proposal)
+            return {'naming':receipt,'planInvalidated':True}
+        self._roots(str(root))
+        _atomic_json(_inside(root,META+'/library.json',private=True),manifest)
+        rebuilt=self._rematch_standard_plan(root,manifest,catalogue)
+        return {'planRebuilt':bool(rebuilt),**({'plan':rebuilt} if rebuilt else {})}
+
+    def _rematch_standard_plan(self,root,manifest,catalogue):
+        if not manifest.get('standardNaming'):
+            return None
+        latest=_json(_inside(root,META+'/latest-plan.json',private=True),{})
+        identifier=latest.get('planId','')
+        if not re.fullmatch('[0-9a-f]{32}',str(identifier)):
+            return None
+        path=_inside(root,META+'/plans/'+identifier+'.json',private=True)
+        plan=_json(path,{})
+        if plan.get('status')!='review' or plan.get('direction')!='inbox' or plan.get('namingEpoch','')!=manifest.get('namingEpoch',''):
+            return None
+        original={(row['incoming']['path'],row['incoming']['sha256']):row for row in plan['candidates']}
+        regular=[item for item in catalogue if item['path'].split('/')[0].casefold()!='inbox']
+        pending=sorted((item for item in catalogue if item['path'].split('/')[0].casefold()=='inbox'),key=lambda item:item['path'].casefold())
+        candidates=[row for row in plan['candidates'] if row['incoming']['path'].split('/')[0].casefold()!='inbox']
+        pool=list(regular)
+        retained=set(manifest.get('retainedPairs',[]))
+        for item in pending:
+            candidate=self._candidate(item,pool)
+            if any(other['path'].split('/')[0].casefold()=='inbox' for other in candidate['matches']):
+                candidate['actions']=['keep','add']
+            if not candidate['matches'] or not all(self._pair(item,other) in retained for other in candidate['matches']):
+                candidates.append(candidate)
+            pool.append(item)
+        plan['candidates']=candidates
+        self._standard_plan_targets(plan,manifest)
+        def fingerprint(row):
+            return (row['status'],row['target'],row['targetSpace'],row.get('standardTargets'),
+                    [(item['path'],item['sha256']) for item in row['matches']],row['incoming'].get('standardType'))
+        for candidate in candidates:
+            before=original.get((candidate['incoming']['path'],candidate['incoming']['sha256']))
+            if before and fingerprint(before)==fingerprint(candidate):
+                candidate['id']=before['id']
+            elif before:
+                candidate['previousCandidateId']=before['id']
+        plan['namingManifestVersion']=self._manifest_version(root)
+        plan['counts']={key:sum(row['status']==key for row in candidates) for key in ('new','duplicate','conflict','ambiguous')}
+        _atomic_json(path,plan)
+        return plan
 
     def annotate(self, payload):
         if (not isinstance(payload, dict) or set(payload) - {'expectedRoot','path','sha256','groupTitle','variantLabel','derivedFromId','space'}
@@ -572,6 +683,7 @@ class ImageManagerService:
                 raise ImageManagerError('只可标注大小受支持的图库图片。')
             if not source.is_file() or _sha(source) != payload['sha256']:
                 raise ImageManagerError('图片在编辑后已改变，请重新检查再标注。', status=409)
+            version=self._manifest_version(root)
             manifest = self._manifest(root)
             catalogue, errors = self._annotation_catalogue(root)
             matching = [item for item in catalogue if item['sha256'] == payload['sha256']
@@ -580,10 +692,20 @@ class ImageManagerService:
                 raise ImageManagerError('图片在编辑后已改变，请重新检查再标注。', status=409)
             catalogue = [item for item in catalogue if item is not matching[0]] + matching[:1]
             entry = {key:payload[key] for key in ('sha256','groupTitle','variantLabel','derivedFromId') if key in payload}
-            result, catalogue = self._write_annotations_locked(root, manifest, catalogue, [entry], allow_missing=False)
+            if (manifest.get('standardNaming') and payload['path'].split('/')[0].casefold()=='inbox'
+                    and any(item['sha256']==payload['sha256'] for item in manifest['items'])
+                    and _TYPE_ALIASES.get(payload['groupTitle'].casefold(),'')!=_TYPE_ALIASES.get(manifest['annotations'].get(payload['sha256'],{}).get('groupTitle','').casefold(),'')):
+                raise ImageManagerError('同一原件已入库，请在已入库图片上修改用途。',status=409)
+            result, catalogue = self._write_annotations_locked(root, manifest, catalogue, [entry], allow_missing=False,commit=False)
+            committed=self._commit_annotation_changes(root,manifest,catalogue,[entry],version)
+            if 'naming' in committed:
+                receipt=committed['naming']
+                mapping=next(row for row in receipt['results'] if row['from']==payload['path'])
+                item=next(item for item in receipt['state']['items'] if item['path']==mapping['to'] and item['sha256']==payload['sha256'])
+                return {**result,'item':item,'renamed':mapping,'planInvalidated':True,'errors':errors,'state':receipt['state']}
             item = next(item for item in catalogue if item['sha256'] == payload['sha256']
                         and item['path'].casefold() == payload['path'].casefold())
-            return {**result,'item':item,'errors':errors,'state':self.state()}
+            return {**result,**committed,'item':item,'errors':errors,'state':self.state()}
 
     def import_annotations(self, payload):
         if (not isinstance(payload, dict) or set(payload) != {'expectedRoot','entries'}
@@ -591,16 +713,408 @@ class ImageManagerService:
             raise ImageManagerError('方案目录导入参数无效。')
         config, root, device = self._roots(payload['expectedRoot'])
         with self._locked(root):
+            version=self._manifest_version(root)
             manifest = self._manifest(root)
             catalogue, errors = self._annotation_catalogue(root)
-            result, catalogue = self._write_annotations_locked(root, manifest, catalogue, payload['entries'], allow_missing=True)
-            return {**result,'errors':errors,'state':self.state()}
+            result, catalogue = self._write_annotations_locked(root, manifest, catalogue, payload['entries'], allow_missing=True,commit=False)
+            committed=self._commit_annotation_changes(root,manifest,catalogue,payload['entries'],version)
+            return {**result,**committed,'errors':errors,'state':self.state()}
+
+    @staticmethod
+    def _naming_file(root, relative):
+        path = _inside(root, relative, private=relative.startswith(META + '/'))
+        before = path.stat()
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ImageManagerError('命名只允许独立原图，不能经过链接或共享文件。', status=409)
+        digest = _sha(path)
+        after = path.stat()
+        token = lambda v: [str(v.st_dev), str(v.st_ino), str(v.st_size), str(v.st_mtime_ns)]
+        if token(before) != token(after) or after.st_nlink != 1:
+            raise ImageManagerError('命名期间原图已改变。', status=409)
+        return token(after) + [digest]
+
+    @staticmethod
+    def _move_name(root, source, target):
+        old = _inside(root, source, private=source.startswith(META + '/'))
+        new = _inside(root, target, private=target.startswith(META + '/'))
+        new.parent.mkdir(parents=True, exist_ok=True)
+        _inside(root, target, private=target.startswith(META + '/'))
+        if new.exists():
+            raise ImageManagerError('命名目标已存在，未覆盖任何文件。', status=409)
+        if os.name == 'nt':
+            # Windows rename refuses an existing destination. Do not use replace.
+            os.rename(old, new)
+        else:
+            # Atomic no-clobber destination creation on POSIX too.
+            os.link(old, new)
+            try:
+                old.unlink()
+            except OSError:
+                if old.exists() and new.exists() and os.path.samefile(old, new):
+                    new.unlink()
+                raise
+
+    @staticmethod
+    def _option_path(item):
+        identifier = item.get('variantId') or 'variant-' + item['sha256']
+        identifier = re.sub('[^A-Za-z0-9_-]', '', identifier)[:90]
+        return f"Options/{item['standardType']}/{identifier}/{item['standardName']}"
+
+    def _standard_path(self, item, pool):
+        code=item.get('standardType')
+        if not code and item['path'].split('/')[0].casefold()=='inbox':
+            code=item.get('suggestedStandardType')
+        if not code:
+            raise ImageManagerError('请先明确标准用途，再采用图片；唯一尺寸建议可在确认采用时认可。',status=409)
+        value=dict(item,standardType=code)
+        value['standardName']=f"{code}_{item['width']}x{item['height']}{Path(item['canonicalName']).suffix}"
+        others=[other for other in pool if other.get('sha256')!=item['sha256']
+                and other.get('standardName')==value['standardName']
+                and (other.get('standardType') or other['path'].split('/')[0].casefold()=='inbox')]
+        return self._option_path(value) if others else value['standardName']
+
+    def _naming_guard(self, root, plan, version):
+        self._roots(str(root))
+        if _identity(root) != plan['rootIdentity'] or self._manifest_version(root) != version:
+            raise ImageManagerError('图库或方案信息已变化，请重新预览命名。', status=409)
+        for relative, identity in plan.get('parentIdentities', []):
+            if _identity(_inside(root, relative)) != identity:
+                raise ImageManagerError('命名目标目录身份已变化。', status=409)
+
+    def _naming_recovery_version(self,root,plan,directory):
+        # Recovery must never follow a replaced root or redirected history path.
+        # An unreadable/foreign catalogue also cannot establish write ownership.
+        self._roots(str(root))
+        if _identity(root)!=plan['rootIdentity']:
+            raise ImageManagerError('图库身份已变化；请从原命名恢复记录核对，未写入新目录。',status=409)
+        _inside(root,directory.relative_to(root).as_posix(),private=True)
+        try:
+            return self._manifest_version(root)
+        except (OSError,ImageManagerError):
+            return None
+
+    def _rollback_names(self, root, rows, positions, destination, directory):
+        failures, staged = [], []
+        for index,row in enumerate(rows):
+            current=positions[row['source']]
+            if current==row[destination]:
+                continue
+            try:
+                if self._naming_file(root,current)!=row['sourceToken']:
+                    raise ImageManagerError('原图已有后续更改。',status=409)
+                temporary=(directory/('rollback-'+uuid.uuid4().hex+'-'+str(index)+Path(current).suffix)).relative_to(root).as_posix()
+                self._move_name(root,current,temporary)
+                positions[row['source']]=temporary
+                staged.append(row)
+            except (OSError,ImageManagerError):
+                failures.append(row['source'])
+        for row in staged:
+            try:
+                self._move_name(root,positions[row['source']],row[destination])
+                positions[row['source']]=row[destination]
+            except (OSError,ImageManagerError):
+                failures.append(row['source'])
+        return failures
+
+    def _build_naming_plan(self, root, entries, *, prepared_manifest=None, expected_version=None):
+        version = self._manifest_version(root)
+        if expected_version is not None and version!=expected_version:
+            raise ImageManagerError('方案在准备命名时已有新修改。',status=409)
+        original = self._manifest(root)
+        manifest = json.loads(json.dumps(prepared_manifest or original))
+        current, errors = self._files(root)
+        if errors:
+            raise ImageManagerError('图库有无法读取的图片，请先核对，再规范命名。', status=409)
+        indexed = {(item['path'], item['sha256']) for item in original['items']}
+        annotations = manifest['annotations']
+        self._enrich(current, annotations)
+        selected, seen, types = [], set(), {}
+        for entry in entries:
+            if (not isinstance(entry, dict) or set(entry) != {'path','sha256','assetType'}
+                    or not isinstance(entry['assetType'], str) or not isinstance(entry['path'],str)
+                    or not isinstance(entry['sha256'],str) or not re.fullmatch('[0-9a-f]{64}',entry['sha256'])):
+                raise ImageManagerError('请逐项指定图片、指纹和标准用途。')
+            code = _TYPE_ALIASES.get(entry['assetType'].strip().casefold(), '')
+            key = (entry['path'], entry['sha256'])
+            if not code or key not in indexed or key in seen or str(entry['path']).split('/')[0].casefold() == 'inbox':
+                raise ImageManagerError('标准命名只可选择当前已入库原图和明确用途。', status=409)
+            seen.add(key)
+            if entry['sha256'] in types and types[entry['sha256']] != code:
+                raise ImageManagerError('同一原件不能同时指定不同用途，请分开核对。', status=409)
+            types[entry['sha256']] = code
+            item = next((item for item in current if (item['path'],item['sha256']) == key), None)
+            if item is None:
+                raise ImageManagerError('预览前原图已改变，请重新读取。', status=409)
+            value = annotations[item['sha256']]
+            value.update(groupTitle=code, groupId=_group_id(code))
+            selected.append(item)
+        for digest,code in types.items():
+            previous=_TYPE_ALIASES.get(original['annotations'].get(digest,{}).get('groupTitle','').casefold(),'')
+            if previous!=code and any(key not in seen for key in indexed if key[1]==digest):
+                raise ImageManagerError('同一原件在图库有多份位置，请一并预览用途命名。',status=409)
+        self._enrich(current, annotations, standard=True)
+        by_name = {}
+        for item in current:
+            if item['standardType'] and (item['path'],item['sha256']) in indexed:
+                by_name.setdefault(_name_key(item['standardName']), []).append(item)
+        plan_id = uuid.uuid4().hex
+        sources = {_name_key(item['path']) for item in selected}
+        targets, candidates, parents = set(), [], {}
+        for item in selected:
+            source = item['path']
+            target = self._option_path(item) if len(by_name[_name_key(item['standardName'])]) > 1 else item['standardName']
+            path = _inside(root, target)
+            conflict = (_name_key(target) in targets or (path.exists() and _name_key(target) not in sources))
+            targets.add(_name_key(target))
+            for parent in path.parents:
+                if parent == root:
+                    break
+                if parent.exists():
+                    relative = parent.relative_to(root).as_posix()
+                    parents[relative] = _identity(parent)
+            row = {'id':uuid.uuid4().hex, 'source':source, 'target':target, 'fromPath':source,
+                   'targetPath':target, 'assetType':item['standardType'], 'standardName':item['standardName'],
+                   'width':item['width'], 'height':item['height'], 'sha256':item['sha256'],
+                   'variantLabel':item['variantLabel'], 'status':'conflict' if conflict else 'unchanged' if source == target else 'rename',
+                   'sourceToken':self._naming_file(root, source)}
+            if conflict:
+                row['error'] = '目标已有其他文件或多个原图要求同一位置；未自动合并。'
+            candidates.append(row)
+        plan = {'ok':True,'id':plan_id,'planId':plan_id,'kind':'naming','status':'review','root':str(root),
+                'rootIdentity':_identity(root),'manifestVersion':version,'namingEpoch':original.get('namingEpoch',''),
+                'createdAt':_now(),'candidates':candidates,'errors':[],
+                'canApply':not any(row['status']=='conflict' for row in candidates),
+                'parentIdentities':list(parents.items()),'annotations':annotations}
+        self._naming_guard(root, plan, version)
+        _atomic_json(_inside(root, META + '/naming-plans/' + plan_id + '.json', private=True), plan)
+        _atomic_json(_inside(root, META + '/latest-naming.json', private=True), {'planId':plan_id})
+        return plan
+
+    @staticmethod
+    def _naming_view(plan):
+        return {key:value for key,value in plan.items() if key not in {'annotations','manifestVersion','parentIdentities'}}
+
+    def naming_plan(self, payload):
+        if (not isinstance(payload, dict) or set(payload) != {'expectedRoot','entries'}
+                or not isinstance(payload['entries'], list) or not 1 <= len(payload['entries']) <= 1000):
+            raise ImageManagerError('请选择本次要规范命名的已入库图片。')
+        _, root, _ = self._roots(payload['expectedRoot'])
+        with self._locked(root):
+            plan = self._build_naming_plan(root, payload['entries'])
+            return {**self._naming_view(plan),'state':self.state()}
+
+    def _load_naming(self, root, payload):
+        if not isinstance(payload, dict) or set(payload) != {'expectedRoot','planId'} or not re.fullmatch('[0-9a-f]{32}', str(payload['planId'])):
+            raise ImageManagerError('命名计划参数无效。')
+        path = _inside(root, META + '/naming-plans/' + payload['planId'] + '.json', private=True)
+        plan = _json(path, None)
+        if not isinstance(plan, dict) or plan.get('root') != str(root) or plan.get('rootIdentity') != _identity(root):
+            raise ImageManagerError('命名计划或图库身份不符。', status=409)
+        return path, plan
+
+    def naming_apply(self, payload):
+        _, root, _ = self._roots(payload.get('expectedRoot'))
+        with self._locked(root):
+            path, plan = self._load_naming(root, payload)
+            return self._apply_naming_locked(root, path, plan)
+
+    def _apply_naming_locked(self, root, path, plan):
+        directory = _inside(root, META + '/history/naming-' + plan['planId'], private=True)
+        journal_path = directory / 'recovery.json'
+        if plan['status'] == 'completed':
+            journal = _json(journal_path, {})
+            if (journal.get('status') != 'completed' or self._manifest(root).get('namingEpoch') != plan.get('afterEpoch')
+                    or any(self._naming_file(root,row['target'])[-1] != row['sha256'] for row in plan['candidates'])):
+                raise ImageManagerError('命名回执与当前原图不符，请重新核对。', status=409)
+            return {**plan['receipt'],'replayed':True,'state':self.state()}
+        if plan['status'] != 'review' or not plan['canApply']:
+            raise ImageManagerError('命名计划有冲突或恢复事项，请重新预览。', status=409)
+        self._naming_guard(root, plan, plan['manifestVersion'])
+        for row in plan['candidates']:
+            if self._naming_file(root,row['source']) != row['sourceToken']:
+                raise ImageManagerError('原图在预览后已改变，请重新预览命名。', status=409)
+        original = self._manifest(root)
+        directory.mkdir(parents=True, exist_ok=False)
+        _atomic_json(directory / 'catalogue-before.json', original)
+        journal = {'planId':plan['planId'],'kind':'naming','status':'prepared','files':[],'startedAt':_now()}
+        for index,row in enumerate(plan['candidates']):
+            backup = directory / (str(index) + Path(row['source']).suffix)
+            shutil.copy2(_inside(root,row['source']),backup)
+            if _sha(backup) != row['sha256'] or self._naming_file(root,row['source']) != row['sourceToken']:
+                raise ImageManagerError('命名备份期间原图已变化。', status=409)
+            journal['files'].append({'source':row['source'],'target':row['target'],'sha256':row['sha256'],
+                                     'backup':backup.name,'token':row['sourceToken']})
+        _atomic_json(journal_path,journal)
+        positions = {row['source']:row['source'] for row in plan['candidates']}
+        owned_version = None
+        write_attempted = False
+        try:
+            self._naming_guard(root,plan,plan['manifestVersion'])
+            for index,row in enumerate(plan['candidates']):
+                if row['source'] == row['target']:
+                    continue
+                if self._naming_file(root,row['source']) != row['sourceToken']:
+                    raise ImageManagerError('原图在改名边界已变化。',status=409)
+                temporary = (directory / ('stage-' + str(index) + Path(row['source']).suffix)).relative_to(root).as_posix()
+                self._move_name(root,row['source'],temporary)
+                positions[row['source']] = temporary
+                journal['positions'] = positions.copy()
+                _atomic_json(journal_path,journal)
+            for row in plan['candidates']:
+                current = positions[row['source']]
+                if current == row['target']:
+                    continue
+                self._naming_guard(root,plan,plan['manifestVersion'])
+                if self._naming_file(root,current) != row['sourceToken']:
+                    raise ImageManagerError('暂存原图已有变化。',status=409)
+                self._move_name(root,current,row['target'])
+                positions[row['source']] = row['target']
+                if self._naming_file(root,row['target']) != row['sourceToken']:
+                    raise ImageManagerError('命名后原图身份校验失败。',status=409)
+                journal['positions'] = positions.copy()
+                _atomic_json(journal_path,journal)
+            current,errors = self._files(root)
+            if errors:
+                raise ImageManagerError('改名后无法完整核验图库。',status=409)
+            if any(self._naming_file(root,row['target'])!=row['sourceToken'] for row in plan['candidates']):
+                raise ImageManagerError('改名完成前原图或目录身份有变化。',status=409)
+            self._naming_guard(root,plan,plan['manifestVersion'])
+            after = json.loads(json.dumps(original))
+            after.update(items=current,annotations=plan['annotations'],standardNaming=True,namingEpoch=uuid.uuid4().hex,
+                         lastNaming={'planId':plan['planId'],'at':_now(),'renamed':sum(row['source']!=row['target'] for row in plan['candidates'])})
+            self._enrich(current,after['annotations'],standard=True)
+            write_attempted = True
+            _atomic_json(_inside(root,META+'/library.json',private=True),after)
+            owned_version = self._saved_manifest_version(root,after)
+            receipt = {'ok':True,'planId':plan['planId'],'renamed':after['lastNaming']['renamed'],
+                'unchanged':len(plan['candidates'])-after['lastNaming']['renamed'],
+                'results':[{'from':row['source'],'to':row['target'],'sha256':row['sha256']} for row in plan['candidates']],
+                'historyPath':str(directory),'completedAt':_now()}
+            journal.update(status='completed',afterEpoch=after['namingEpoch'])
+            _atomic_json(journal_path,journal)
+            state = self.state()
+            state['namingPlan'] = None
+            plan.update(status='completed',receipt=receipt,afterEpoch=after['namingEpoch'],afterManifestVersion=owned_version)
+            _atomic_json(path,plan)  # Final durable commit point.
+            return {**receipt,'state':state}
+        except Exception:
+            actual=self._naming_recovery_version(root,plan,directory)
+            owned=(actual==plan['manifestVersion'] or owned_version is not None and actual==owned_version)
+            failures=(self._rollback_names(root,plan['candidates'],positions,'source',directory)
+                      if owned else ['catalogue: foreign version; named paths preserved'])
+            try:
+                actual=self._manifest_version(root)
+                if actual==plan['manifestVersion']:
+                    pass
+                elif not write_attempted or owned_version is None or actual!=owned_version:
+                    raise ImageManagerError('方案已有后续修改，未覆盖。',status=409)
+                else:
+                    self._roots(str(root))
+                    _atomic_json(_inside(root,META+'/library.json',private=True),original)
+            except (OSError,ImageManagerError):
+                failures.append('catalogue')
+            journal.update(status='recovery_required' if failures else 'rolled_back',failedPaths=failures,positions=positions)
+            _atomic_json(journal_path,journal)
+            plan.update(status=journal['status'])
+            plan.pop('receipt',None)
+            _atomic_json(path,plan)
+            raise
+
+    def naming_restore(self,payload):
+        _,root,_=self._roots(payload.get('expectedRoot'))
+        with self._locked(root):
+            path,plan=self._load_naming(root,payload)
+            directory=_inside(root,META+'/history/naming-'+plan['planId'],private=True)
+            journal=_json(directory/'recovery.json',{})
+            if plan.get('status')=='restored' and journal.get('status')=='restored':
+                if (self._manifest(root).get('namingEpoch')!=plan.get('restoredEpoch')
+                        or any(self._naming_file(root,row['source'])!=row['sourceToken'] for row in plan['candidates'])):
+                    raise ImageManagerError('撤回记录之后图库已有新变化，请重新核对。',status=409)
+                return {'ok':True,'planId':plan['planId'],'restored':True,'replayed':True,'results':plan['restoreResults'],'state':self.state()}
+            if plan.get('status')!='completed' or journal.get('status')!='completed':
+                raise ImageManagerError('此命名记录不能直接撤回，请先核对恢复记录。',status=409)
+            self._naming_guard(root,plan,plan['afterManifestVersion'])
+            targets={_name_key(row['target']) for row in plan['candidates']}
+            for row in plan['candidates']:
+                if self._naming_file(root,row['target'])!=row['sourceToken']:
+                    raise ImageManagerError('原图在命名后又被修改，撤回不会覆盖。',status=409)
+                if _inside(root,row['source']).exists() and _name_key(row['source']) not in targets:
+                    raise ImageManagerError('旧位置已有文件，撤回不会覆盖。',status=409)
+            # Restore uses a separate, fully journaled naming transaction too.
+            original=self._manifest(root)
+            before=_json(directory/'catalogue-before.json',None)
+            if not isinstance(before,dict):
+                raise ImageManagerError('命名恢复索引缺失。',status=409)
+            positions={row['source']:row['target'] for row in plan['candidates']}
+            own=None
+            try:
+                for index,row in enumerate(plan['candidates']):
+                    if row['source']!=row['target']:
+                        self._naming_guard(root,plan,plan['afterManifestVersion'])
+                        if self._naming_file(root,row['target'])!=row['sourceToken']:
+                            raise ImageManagerError('撤回期间原图有新修改。',status=409)
+                        temporary=(directory/('restore-stage-'+str(index)+Path(row['source']).suffix)).relative_to(root).as_posix()
+                        self._move_name(root,row['target'],temporary)
+                        positions[row['source']]=temporary
+                        journal['restorePositions']=positions.copy()
+                        _atomic_json(directory/'recovery.json',journal)
+                for row in plan['candidates']:
+                    if positions[row['source']]!=row['source']:
+                        self._naming_guard(root,plan,plan['afterManifestVersion'])
+                        if self._naming_file(root,positions[row['source']])!=row['sourceToken']:
+                            raise ImageManagerError('撤回暂存原图已有新修改。',status=409)
+                        self._move_name(root,positions[row['source']],row['source'])
+                        positions[row['source']]=row['source']
+                        if self._naming_file(root,row['source'])!=row['sourceToken']:
+                            raise ImageManagerError('撤回后原图身份校验失败。',status=409)
+                        journal['restorePositions']=positions.copy()
+                        _atomic_json(directory/'recovery.json',journal)
+                if any(self._naming_file(root,row['source'])!=row['sourceToken'] for row in plan['candidates']):
+                    raise ImageManagerError('撤回完成前原图或目录身份有变化。',status=409)
+                self._naming_guard(root,plan,plan['afterManifestVersion'])
+                restored=json.loads(json.dumps(before))
+                restored['namingEpoch']=uuid.uuid4().hex  # Never revive an older image plan.
+                restored['lastNaming']=None
+                _atomic_json(_inside(root,META+'/library.json',private=True),restored)
+                own=self._saved_manifest_version(root,restored)
+                results=[{'from':row['target'],'to':row['source'],'sha256':row['sha256']} for row in plan['candidates']]
+                journal.update(status='restored',restoredAt=_now())
+                _atomic_json(directory/'recovery.json',journal)
+                state=self.state()
+                plan.update(status='restored',restoreResults=results,restoredEpoch=restored['namingEpoch'])
+                _atomic_json(path,plan)
+                return {'ok':True,'planId':plan['planId'],'restored':True,'results':results,'state':state}
+            except Exception:
+                # Preserve a foreign subsequent file/manifest; never force undo.
+                actual=self._naming_recovery_version(root,plan,directory)
+                owned=(actual==plan['afterManifestVersion'] or own is not None and actual==own)
+                failures=(self._rollback_names(root,plan['candidates'],positions,'target',directory)
+                          if owned else ['catalogue: foreign version; current paths preserved'])
+                try:
+                    actual=self._manifest_version(root)
+                    if actual==plan['afterManifestVersion']:
+                        pass
+                    elif own is None or actual!=own:
+                        raise ImageManagerError('撤回时方案有后续修改。',status=409)
+                    else:
+                        self._roots(str(root))
+                        _atomic_json(_inside(root,META+'/library.json',private=True),original)
+                except (OSError,ImageManagerError):
+                    failures.append('catalogue')
+                journal['status']='recovery_required'
+                journal['failedPaths']=failures
+                journal['restorePositions']=positions
+                _atomic_json(directory/'recovery.json',journal)
+                plan['status']='recovery_required'
+                _atomic_json(path,plan)
+                raise
 
     def state(self):
         config = self._config()
         if not config.get('root'):
             return {'configured': False, 'root': '', 'deviceRoot': '', 'notionPage': '',
-                    'items': [], 'inboxCount': 0, 'lastSync': None, 'plan': None, 'limits': {'maxFileBytes': MAX_IMAGE_BYTES}}
+                    'items': [], 'inboxCount': 0, 'lastSync': None, 'plan': None, 'standardNaming':False,
+                    'standardTypes':STANDARD_TYPES,'namingPlan':None,'lastNaming':None,'limits': {'maxFileBytes': MAX_IMAGE_BYTES}}
         config, root, device = self._roots()
         with self._mutex:
             manifest = self._manifest(root)
@@ -616,12 +1130,21 @@ class ImageManagerService:
             plan = None
             if re.fullmatch(r'[0-9a-f]{32}', str(latest.get('planId', ''))):
                 saved = _json(_inside(root, META + '/plans/' + latest['planId'] + '.json', private=True), {})
-                if saved.get('status') == 'review':
+                if saved.get('status') == 'review' and saved.get('namingEpoch','') == manifest.get('namingEpoch',''):
                     plan = saved
             annotations = json.loads(json.dumps(manifest['annotations']))
             self._enrich(manifest['items'] + [item for item in self._plan_items(plan)
-                         if item.get('space', 'root') == 'root'], annotations)
+                         if item.get('space', 'root') == 'root'], annotations, standard=manifest.get('standardNaming', False))
+            latest_naming = _json(_inside(root,META+'/latest-naming.json',private=True),{})
+            naming = None
+            if re.fullmatch('[0-9a-f]{32}',str(latest_naming.get('planId',''))):
+                candidate = _json(_inside(root,META+'/naming-plans/'+latest_naming['planId']+'.json',private=True),{})
+                if candidate.get('status')=='review':
+                    naming=self._naming_view(candidate)
             return {'configured': True, 'root': str(root), 'deviceRoot': str(device) if device else '',
+                    'standardNaming':manifest.get('standardNaming',False),'standardTypes':STANDARD_TYPES,
+                    'namingEpoch':manifest.get('namingEpoch',''),
+                    'namingPlan':naming,'lastNaming':manifest.get('lastNaming'),
                     'notionPage': config.get('notionPage', ''), 'items': manifest['items'],
                     'inboxCount': count, 'lastSync': manifest.get('lastSync'), 'plan': plan,
                     'limits': {'maxFileBytes': MAX_IMAGE_BYTES, 'maxPixels': MAX_PIXELS, 'maxFiles': MAX_FILES}}
@@ -656,11 +1179,31 @@ class ImageManagerService:
                 'createdAt': _now(), 'direction': direction, 'candidates': candidates, 'errors': errors,
                 'status': 'review', 'counts': {value: sum(c['status'] == value for c in candidates)
                                             for value in ('new', 'duplicate', 'conflict', 'ambiguous')}}
+        manifest=self._manifest(root)
+        plan['namingEpoch']=manifest.get('namingEpoch','')
+        plan['standardNaming']=manifest.get('standardNaming',False)
+        if plan['standardNaming']:
+            plan['namingManifestVersion']=self._manifest_version(root)
+            self._standard_plan_targets(plan,manifest)
         if device_metadata is not None:
             plan['deviceMetadata'] = device_metadata
         _atomic_json(_inside(root, META + '/plans/' + plan_id + '.json', private=True), plan)
         _atomic_json(_inside(root, META + '/latest-plan.json', private=True), {'planId': plan_id})
         return plan
+
+    def _standard_plan_targets(self,plan,manifest):
+        pool=manifest['items']+[row['incoming'] for row in plan['candidates']]
+        for candidate in plan['candidates']:
+            incoming=candidate['incoming']
+            candidate.pop('namingNeedsReview',None)
+            try:
+                candidate['standardTargets']={'add':self._standard_path(incoming,pool)}
+                previous=candidate.get('existing')
+                peers=[item for item in pool if previous is None or (item.get('space','root'),item['path'])!=(previous.get('space','root'),previous['path'])]
+                candidate['standardTargets']['replace']=self._standard_path(incoming,peers)
+                candidate['target']=candidate['standardTargets']['replace' if previous else 'add']
+            except ImageManagerError:
+                candidate['namingNeedsReview']=True
 
     def _candidate(self, incoming, existing, *, target_space='root'):
         matches = [entry for entry in existing if _same(incoming, entry)]
@@ -685,7 +1228,7 @@ class ImageManagerService:
             current, errors = self._files(root)
             pending, incoming_errors = self._files(root, inbox=True)
             self._inherit_path_annotations(current + pending, self._previous_annotation_items(root, previous), previous['annotations'])
-            self._enrich(current + pending, previous['annotations'])
+            self._enrich(current + pending, previous['annotations'], standard=previous.get('standardNaming', False))
             retained = set(previous.get('retainedPairs', []))
             candidates, seen = [], []
             for entry in current:
@@ -792,13 +1335,16 @@ class ImageManagerService:
             remote, remote_errors = self._files(device)
             for directory, current, catalogue in ((root, manifest, local), (device, device_manifest, remote)):
                 self._inherit_path_annotations(catalogue, self._previous_annotation_items(directory, current), current['annotations'])
-                self._enrich(catalogue, current['annotations'])
+                self._enrich(catalogue, current['annotations'], standard=manifest.get('standardNaming', False) or current.get('standardNaming', False))
             remote_view = json.loads(json.dumps(remote))
             for entry in remote_view:
                 entry['space'] = 'device'
                 entry['id'] = hashlib.sha256(('device:' + entry['path']).encode()).hexdigest()[:24]
                 entry['previewUrl'] = '/api/images/preview?' + urlencode({'path': entry['path'], 'expectedRoot': str(root), 'space': 'device'})
             source, destination = (local, remote_view) if direction == 'to-device' else (remote_view, local)
+            if (manifest.get('standardNaming') or device_manifest.get('standardNaming')) and any(
+                    item.get('namingNeedsReview') or not item.get('standardType') for item in source):
+                raise ImageManagerError('同步来源含用途未确认的图片，请先确认正式用途；未写入设备或图库。',status=409)
             target_manifest, target_catalogue = (device_manifest, remote) if direction == 'to-device' else (manifest, local)
             destination_hashes = {item['sha256'] for item in destination}
             entries = [self._device_entry(item) for item in source]
@@ -868,6 +1414,8 @@ class ImageManagerService:
                 or plan['deviceRoot'] != (str(device) if device else '')
                 or plan['deviceIdentity'] != (_identity(device) if device else None)):
             raise ImageManagerError('同步目标已改变，请重新检查。', status=409)
+        if plan.get('namingEpoch','') != self._manifest(root).get('namingEpoch',''):
+            raise ImageManagerError('正式命名已变化，请重新检查图片；旧计划不会按旧路径应用。',status=409)
         decisions = payload.get('decisions', [])
         if not isinstance(decisions, list):
             raise ImageManagerError('请选择每张候选图片的处理方式。')
@@ -886,11 +1434,14 @@ class ImageManagerService:
             return {**plan['receipt'], 'replayed': True, 'state': self.state()}
         if plan['status'] != 'review':
             raise ImageManagerError('此计划仍有待核对的恢复记录，请先检查。', status=409)
+        if plan.get('standardNaming') and plan.get('namingManifestVersion')!=self._manifest_version(root):
+            raise ImageManagerError('用途或命名匹配已变化，请重新检查后选择。',status=409)
         if set(choices) != {value['id'] for value in plan['candidates']}:
             raise ImageManagerError('请确认全部候选图片后再应用。')
         manifest = self._manifest(root)
         original_manifest = json.loads(json.dumps(manifest))
         device_context = plan.get('deviceMetadata')
+        standard_root_version=plan.get('namingManifestVersion') if plan.get('standardNaming') else None
         device_versions = []
         original_device_manifest = device_written_version = None
         device_write_attempted = False
@@ -902,7 +1453,7 @@ class ImageManagerService:
             self._device_guard(root, device, device_versions)
             original_device_manifest = self._manifest(device)
         self._enrich(manifest['items'] + [item for item in self._plan_items(plan)
-                     if item.get('space', 'root') == 'root'], manifest['annotations'])
+                     if item.get('space', 'root') == 'root'], manifest['annotations'], standard=manifest.get('standardNaming', False))
         retained = set(manifest.get('retainedPairs', []))
         operations, touched, reserved = [], set(), set()
         for candidate in plan['candidates']:
@@ -921,7 +1472,24 @@ class ImageManagerService:
                 operations.append({'action': 'keep', 'source': source, 'candidate': candidate})
                 continue
             target_root = roots[candidate['targetSpace']]
-            if action == 'replace':
+            standard=manifest.get('standardNaming') or plan.get('standardNaming')
+            if standard:
+                if action=='replace' and previous is None:
+                    raise ImageManagerError('没有唯一替换目标，请另存或保留。')
+                pool=manifest['items']+candidate['matches']+[row['incoming'] for row in plan['candidates']]
+                if previous is not None and action=='replace':
+                    pool=[item for item in pool if (item.get('space','root'),item['path'])!=(existing.get('space','root'),existing['path'])]
+                relative=self._standard_path(incoming,pool)
+                target=_inside(target_root,relative)
+                key=str(target).casefold()
+                if key in reserved or (target.exists() and target!=previous):
+                    raise ImageManagerError('标准目标已有文件，未覆盖；请核对方案或用途。',status=409)
+                reserved.add(key)
+                if incoming.get('space','root')=='root':
+                    value=manifest['annotations'][incoming['sha256']]
+                    code=incoming.get('standardType') or incoming.get('suggestedStandardType')
+                    value.update(groupTitle=code,groupId=_group_id(code))
+            elif action == 'replace':
                 if previous is None:
                     raise ImageManagerError('没有唯一替换目标，请另存或保留。')
                 if device_context is None and not incoming.get('variantExplicit') and existing['sha256'] in manifest['annotations']:
@@ -931,6 +1499,7 @@ class ImageManagerService:
                     raise ImageManagerError('新格式的目标文件已经存在，请选择另存或分批处理。', status=409)
             else:
                 target = self._available(target_root, incoming['canonicalName'], reserved)
+            if action=='add':
                 for matching in manifest['items'] + candidate['matches']:
                     if matching['sha256'] != incoming['sha256'] and _same(incoming, matching):
                         retained.add(self._pair(incoming, matching))
@@ -943,7 +1512,8 @@ class ImageManagerService:
                                'candidate': candidate})
         transaction = _inside(root, META + '/history/' + plan_id, private=True)
         transaction.mkdir(parents=True, exist_ok=True)
-        journal = {'planId': plan_id, 'startedAt': _now(), 'status': 'prepared', 'files': []}
+        journal = {'planId': plan_id, 'startedAt': _now(), 'status': 'prepared', 'files': [],
+                   'namingEpoch':manifest.get('namingEpoch','')}
         _atomic_json(transaction / 'catalogue-before.json', original_manifest)
         if device_context is not None:
             _atomic_json(transaction / 'device-catalogue-before.json', original_device_manifest)
@@ -1003,11 +1573,16 @@ class ImageManagerService:
                 source, target = operation['source'], operation['target']
                 candidate = operation['candidate']
                 # Verify source and target again at the actual write boundary.
+                self._roots(str(root))
                 self._fresh(candidate['incoming'], roots)
                 if operation['action'] == 'replace':
                     self._fresh(candidate['existing'], roots)
                 elif target.exists():
                     raise ImageManagerError('目标出现新文件，请重新检查。', status=409)
+                target_root=roots[candidate['targetSpace']]
+                _inside(target_root,target.relative_to(target_root).as_posix())
+                target.parent.mkdir(parents=True,exist_ok=True)
+                _inside(target_root,target.relative_to(target_root).as_posix())
                 temporary = target.with_name('.image-import-' + uuid.uuid4().hex + target.suffix)
                 try:
                     shutil.copy2(backups[source][0], temporary)
@@ -1053,15 +1628,20 @@ class ImageManagerService:
                     device_write_attempted = True
                     _atomic_json(_inside(device, META + '/library.json', private=True), target_manifest)
                     device_written_version = self._saved_manifest_version(device, target_manifest)
-            self._enrich(current, manifest['annotations'])
+            self._enrich(current, manifest['annotations'], standard=manifest.get('standardNaming', False))
             manifest['items'] = current
             manifest['retainedPairs'] = sorted(retained)
             manifest['lastSync'] = {'at': _now(), 'direction': plan['direction'], 'applied': len(completed), 'planId': plan_id}
             if device_context is not None:
                 self._device_guard(root, device, [device_versions[0]])
                 root_write_attempted = True
+            elif plan.get('standardNaming'):
+                self._roots(str(root))
+                if self._manifest_version(root)!=standard_root_version:
+                    raise ImageManagerError('采用期间用途信息已有后续修改，请重新核对。',status=409)
+                root_write_attempted=True
             _atomic_json(_inside(root, META + '/library.json', private=True), manifest)
-            if device_context is not None:
+            if device_context is not None or plan.get('standardNaming'):
                 root_written_version = self._saved_manifest_version(root, manifest)
             receipt = {'ok': True, 'planId': plan_id, 'applied': len(completed), 'kept': len(operations) - len(completed),
                        'results': completed, 'historyPath': str(transaction), 'completedAt': _now(), 'errors': errors}
@@ -1079,6 +1659,13 @@ class ImageManagerService:
             return {**receipt, 'state': final_state}
         except Exception:
             failures = []
+            preserve_standard_paths=False
+            if device_context is None and plan.get('standardNaming'):
+                actual=self._naming_recovery_version(root,plan,transaction)
+                preserve_standard_paths=(actual!=standard_root_version
+                    and (root_written_version is None or actual!=root_written_version))
+                if preserve_standard_paths:
+                    failures.append('catalogue: foreign version; current paths preserved')
             if device_write_attempted:
                 try:
                     actual = self._manifest_version(device)
@@ -1095,6 +1682,8 @@ class ImageManagerService:
                 except (OSError, ImageManagerError):
                     failures.append('device catalogue')
             for original, last_written in reversed(list(mutated.items())):
+                if preserve_standard_paths:
+                    break
                 backup, existed = backups[original]
                 try:
                     if ((last_written is None and original.exists()) or (last_written is not None and (
@@ -1111,16 +1700,20 @@ class ImageManagerService:
             journal['failedPaths'] = failures
             _atomic_json(transaction / 'recovery.json', journal)
             try:
-                if device_context is None:
+                if device_context is None and not plan.get('standardNaming'):
                     _atomic_json(_inside(root, META + '/library.json', private=True), original_manifest)
                 else:
                     actual = self._manifest_version(root)
-                    if actual == device_context['rootVersion']:
+                    original_version=device_context['rootVersion'] if device_context is not None else standard_root_version
+                    if actual == original_version:
                         pass  # No root catalogue mutation needs undoing.
                     elif not root_write_attempted or root_written_version is None or actual != root_written_version:
                         raise ImageManagerError('本地方案已有后续修改，回滚不会覆盖。', status=409)
                     else:
-                        self._device_guard(root, device, [(root, actual, plan['rootIdentity'])])
+                        if device_context is not None:
+                            self._device_guard(root, device, [(root, actual, plan['rootIdentity'])])
+                        else:
+                            self._roots(str(root))
                         _atomic_json(_inside(root, META + '/library.json', private=True), original_manifest)
             except (OSError, ImageManagerError):
                 journal['status'] = 'recovery_required'
@@ -1152,6 +1745,8 @@ class ImageManagerService:
     def _restore_locked(self, root, device, plan_id):
         plan_path = _inside(root, META + '/plans/' + plan_id + '.json', private=True)
         plan = _json(plan_path, {})
+        if plan.get('namingEpoch','')!=self._manifest(root).get('namingEpoch',''):
+            raise ImageManagerError('正式命名已变化，旧撤回路径不可直接使用；原备份与记录均保留。',status=409)
         if (plan.get('root') != str(root) or plan.get('rootIdentity') != _identity(root)
                 or plan.get('deviceRoot') != (str(device) if device else '')
                 or plan.get('deviceIdentity') != (_identity(device) if device else None)):
@@ -1195,13 +1790,13 @@ class ImageManagerService:
         before_manifest = _json(directory / 'catalogue-before.json', {'items': [], 'retainedPairs': []})
         before_manifest['annotations'] = {**before_manifest.get('annotations', {}), **current_annotations}
         before_manifest['items'], errors = self._files(root)
-        self._enrich(before_manifest['items'], before_manifest['annotations'])
+        self._enrich(before_manifest['items'], before_manifest['annotations'], standard=before_manifest.get('standardNaming', False))
         _atomic_json(_inside(root, META + '/library.json', private=True), before_manifest)
         if plan.get('deviceMetadata') is not None and plan['direction'] == 'to-device':
             version = self._manifest_version(device)
             device_manifest = self._manifest(device)
             device_manifest['items'], device_errors = self._files(device)
-            self._enrich(device_manifest['items'], device_manifest['annotations'])
+            self._enrich(device_manifest['items'], device_manifest['annotations'], standard=device_manifest.get('standardNaming', False))
             self._device_guard(root, device, [(device, version, plan['deviceIdentity'])])
             _atomic_json(_inside(device, META + '/library.json', private=True), device_manifest)
             errors += device_errors

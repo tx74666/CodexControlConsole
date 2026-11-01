@@ -29,7 +29,7 @@ def image_post(service, action, payload, notion=None):
         return {**service.configure(payload), **(notion.state() if notion is not None else {})}
     if not isinstance(payload.get('expectedRoot'), str) or not payload['expectedRoot']:
         raise ValueError('图片文件夹身份缺失，请重新读取。')
-    if action in {'apply', 'restore', 'metadata'} and notion is not None and notion.busy:
+    if action in {'apply', 'restore', 'metadata', 'naming-apply', 'naming-restore'} and notion is not None and notion.busy:
         raise ValueError('图片正在同步，请等本次结果返回后再修改本地图片或方案。')
     if action == 'scan' and not set(payload) - {'expectedRoot'}:
         return service.scan(payload)
@@ -39,6 +39,12 @@ def image_post(service, action, payload, notion=None):
         return service.restore(payload)
     if action == 'metadata' and not set(payload) - {'expectedRoot', 'path', 'sha256', 'space', 'groupTitle', 'variantLabel', 'derivedFromId'}:
         return service.annotate(payload)
+    if action == 'naming-plan' and not set(payload) - {'expectedRoot', 'entries'}:
+        return service.naming_plan(payload)
+    if action == 'naming-apply' and not set(payload) - {'expectedRoot', 'planId'}:
+        return service.naming_apply(payload)
+    if action == 'naming-restore' and not set(payload) - {'expectedRoot', 'planId'}:
+        return service.naming_restore(payload)
     if action == 'sync' and not set(payload) - {'expectedRoot', 'source', 'target', 'requestId'}:
         source, target = payload.get('source'), payload.get('target')
         if source not in {'local', 'console', 'device', 'notion'} or target not in {'console', 'local', 'device', 'notion', 'all'}:

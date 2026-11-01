@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.1.41";
+const consoleUiVersion = "1.1.42";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -92,7 +92,7 @@ function steamworkImageHasDraft() {
   try {
     const content = frame.contentDocument;
     if (!content) return true;
-    return Boolean(content.getElementById("metadataDialog")?.open || content.getElementById("locations")?.open
+    return Boolean(content.getElementById("metadataDialog")?.open || content.getElementById("namingDialog")?.open || content.getElementById("locations")?.open
       || content.getElementById("imageGrid")?.getAttribute("aria-busy") === "true");
   } catch { return true; }
 }

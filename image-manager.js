@@ -20,6 +20,7 @@
   let busy = false;
   let generation = 0;
   let plan = null;
+  let reviewNeedsScan = false;
   let decisions = new Map();
   let previewFocus = null;
   let pendingOperation = null;
@@ -28,6 +29,10 @@
   let metadataFocus = null;
   let metadataBaseline = "";
   let metadataJob = null;
+  let namingPlan = null;
+  let namingScope = null;
+  let namingDrafts = new Map();
+  let namingFocus = null;
   const groupSelections = new Map();
   const candidateSelections = new Map();
   const handledPasteEvents = new WeakSet();
@@ -55,11 +60,48 @@
     return match ? match[0].replace(/-/g, "").toLowerCase() : "";
   }
   const configuredPageId = () => pageId(state?.notionPage) || pageId(state?.notion?.pageId);
-  const metadataValues = () => JSON.stringify([byId("metadataGroupTitle").value.trim(), byId("metadataVariantLabel").value.trim(), byId("metadataDerivedFrom").value]);
+  const standardTypes = () => (Array.isArray(state?.standardTypes) ? state.standardTypes : []).filter(type => type && typeof type.code === "string" && type.code.length <= 140);
+  const standardNaming = () => state?.standardNaming === true;
+  const validStandardType = code => standardTypes().some(type => type.code === code);
+  const metadataPurpose = () => standardNaming() ? byId("metadataStandardType").value : byId("metadataGroupTitle").value.trim();
+  const metadataValues = () => JSON.stringify([metadataPurpose(), byId("metadataVariantLabel").value.trim(), byId("metadataDerivedFrom").value]);
   const metadataDirty = () => Boolean(metadataTarget) && metadataValues() !== metadataBaseline;
   const metadataJobKey = item => `console-image-metadata-sync:${item.root || item.expectedRoot}:${item.path}:${item.sha256}`;
   const metadataPlanKey = id => `console-image-metadata-plan:${root}:${id}`;
   const annotationFingerprint = item => JSON.stringify([groupTitle(item), str(item.variantLabel), str(item.derivedFromId), str(item.pendingDerivedFromId)]);
+  function standardName(item, code = str(item?.standardType)) {
+    if (!validStandardType(code)) return "";
+    const extension = str(item?.canonicalName || item?.standardName).match(/\.[a-z0-9]+$/i)?.[0];
+    return extension && Number.isInteger(item?.width) && item.width > 0 && Number.isInteger(item?.height) && item.height > 0 ? `${code}_${item.width}x${item.height}${extension.toLowerCase()}` : "";
+  }
+  function fillStandardTypes(select, value) {
+    select.replaceChildren();
+    const placeholder = node("option", "", "选择标准用途"); placeholder.value = ""; select.append(placeholder);
+    for (const type of standardTypes()) {
+      const option = node("option", "", type.label && type.label !== type.code ? `${str(type.label)} · ${type.code}` : type.code);
+      option.value = type.code; select.append(option);
+    }
+    select.value = validStandardType(value) ? value : "";
+  }
+  function needsStandardPurpose(candidate) {
+    const incoming = metadata(candidate.incoming) || metadata(candidate.source);
+    const confirmed = validStandardType(str(incoming?.standardType)) && incoming?.namingNeedsReview !== true;
+    const inboxSuggestion = incoming?.space !== "device" && /^inbox[\\/]/i.test(str(incoming?.path)) && validStandardType(str(incoming?.suggestedStandardType));
+    return standardNaming() && !confirmed && !inboxSuggestion;
+  }
+  const canAutomaticallyAdd = candidate => candidate.status === "new" && !candidate.previousCandidateId && (!standardNaming() || validStandardType(str(candidate.incoming?.standardType)) && candidate.incoming?.namingNeedsReview === false);
+  const safeImagePath = value => typeof value === "string" && Boolean(value) && !/^[\\/]|^[a-z]:|[\x00-\x1f]/i.test(value) && !value.split(/[\\/]/).some(part => !part || part === "." || part === "..");
+  function updateMetadataName() {
+    const enabled = standardNaming();
+    byId("metadataGroupTitle").hidden = enabled;
+    byId("metadataGroupTitle").required = !enabled;
+    byId("metadataStandardType").hidden = !enabled;
+    byId("metadataStandardType").required = enabled;
+    byId("metadataPurposeLabel").textContent = enabled ? "标准用途" : "用途 / 标题";
+    byId("metadataStandardName").hidden = !enabled;
+    byId("metadataStandardName").textContent = enabled ? standardName(metadataTarget, metadataPurpose()) ? `采用后：${standardName(metadataTarget, metadataPurpose())}` : "先选择标准用途；名称中的尺寸保持图片的真实尺寸。" : "";
+    byId("metadataNamingHint").textContent = enabled ? metadataTarget?.indexed ? "标准用途变更会按预览名称整理文件名；图片内容、方案与派生关系保持。" : "先保存标准用途，确认入库时采用标准文件名。" : "整理用途、方案与来源关系，保留原文件名和图片内容。";
+  }
   function rememberMetadataJob(job) {
     metadataJob = job;
     try { sessionStorage.setItem(metadataJobKey(job), JSON.stringify(job)); } catch (_) { /* Keep the saved result in memory. */ }
@@ -92,6 +134,7 @@
     byId("locations").open = true;
     byId("configStatus").textContent = "位置有未保存的修改，请先保存位置。";
     if (byId("metadataDialog").open) byId("metadataStatus").textContent = "位置有未保存的修改，请关闭此框并先保存位置，再同步。";
+    if (byId("namingDialog").open) byId("namingStatus").textContent = "位置有未保存的修改，请关闭此框并先保存位置，再整理名称。";
     notice("位置有未保存的修改，请先保存位置，再同步。", true);
     return false;
   }
@@ -103,6 +146,7 @@
       && !["completed", "local", "inbox", "stale"].includes(metadataJob.status);
     byId("metadataSaveOnly").disabled = busy || Boolean(pendingOperation) || !dirty;
     byId("metadataSave").disabled = busy || Boolean(pendingOperation) && !ownPending || !dirty && !retryable;
+    if (standardNaming() && !validStandardType(metadataPurpose())) { byId("metadataSave").disabled = true; byId("metadataSaveOnly").disabled = true; }
     byId("metadataSave").textContent = dirty ? "保存并同步" : ownPending ? "继续核对" : retryable ? metadataJob.planId ? "查看待确认同步" : "同步已保存修改" : "保存并同步";
   }
   function canRecheckOperation(operation) {
@@ -205,6 +249,7 @@
     return Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0 ? `${width} × ${height}` : "尺寸待读取";
   }
   function title(item) {
+    if (standardNaming() && validStandardType(str(item?.standardType))) return str(item.standardType);
     return str(item?.displayTitle || item?.title || item?.name || item?.path?.split(/[\\/]/).at(-1)) || "未命名图片";
   }
   const originalName = item => str(item?.name || item?.path?.split(/[\\/]/).at(-1));
@@ -280,9 +325,11 @@
     if (pendingOperation) byId("syncImages").disabled = true;
     byId("restoreImages").hidden = !lastApplied || lastApplied.root !== root;
     byId("restoreImages").disabled = busy || Boolean(pendingOperation);
-    for (const id of ["metadataGroupTitle", "metadataVariantLabel", "metadataDerivedFrom"]) byId(id).disabled = busy || Boolean(pendingOperation);
+    for (const id of ["metadataGroupTitle", "metadataStandardType", "metadataVariantLabel", "metadataDerivedFrom"]) byId(id).disabled = busy || Boolean(pendingOperation);
+    byId("metadataGroupTitle").disabled ||= standardNaming();
     byId("metadataClose").disabled = busy;
     updateMetadataControls();
+    updateNamingControls();
     for (const button of document.querySelectorAll?.("button") || []) if (button.dataset.metadataPath) button.disabled = busy || Boolean(pendingOperation);
     for (const container of [byId("imageGrid"), byId("candidateList")]) {
       for (const button of container.querySelectorAll("button")) if (button.dataset.variantNavigate) button.disabled = busy || Boolean(pendingOperation);
@@ -291,9 +338,15 @@
     for (const fieldset of byId("candidateList").querySelectorAll("fieldset")) fieldset.disabled = busy;
     const selected = plan?.candidates?.filter(candidate => actions.has(decisions.get(str(candidate.id)))) || [];
     const unresolved = (plan?.candidates?.length || 0) - selected.length;
-    byId("reviewApply").disabled = busy || Boolean(pendingOperation) || selected.length === 0 || unresolved !== 0;
-    byId("reviewApply").textContent = unresolved ? `还有 ${unresolved} 项待选择` : selected.length ? `确认所选 ${selected.length} 项` : "先选择处理方式";
-    byId("decisionSummary").textContent = selected.length ? `已选择 ${selected.length} 项${unresolved ? `，还有 ${unresolved} 项待选择` : ""}` : "重复和替换候选需要你选择处理方式。";
+    const untyped = selected.filter(candidate => decisions.get(str(candidate.id)) !== "keep" && needsStandardPurpose(candidate)).length;
+    byId("reviewApply").disabled = busy || Boolean(pendingOperation) || selected.length === 0 || unresolved !== 0 || untyped !== 0;
+    byId("reviewApply").textContent = unresolved ? `还有 ${unresolved} 项待选择` : untyped ? `还有 ${untyped} 项待明确用途` : selected.length ? `确认所选 ${selected.length} 项` : "先选择处理方式";
+    byId("decisionSummary").textContent = selected.length ? `已选择 ${selected.length} 项${unresolved ? `，还有 ${unresolved} 项待选择` : ""}${untyped ? `；${untyped} 项请先在方案信息中选择标准用途` : ""}` : "重复和替换候选需要你选择处理方式。";
+    if (reviewNeedsScan && plan) {
+      byId("reviewApply").disabled = true;
+      byId("reviewApply").textContent = "重新检查图片后确认";
+      byId("decisionSummary").textContent = "名称已变化，请重新检查图片；原选择已保留。";
+    }
   }
   async function call(action, { payload, form, params } = {}) {
     const headers = {};
@@ -404,10 +457,13 @@
     if (value.root && value.root !== root) throw new Error(errors.root_changed);
     const previousId = planId(plan);
     plan = value;
+    reviewNeedsScan = false;
     if (previousId !== planId(plan)) decisions = new Map();
+    const currentIds = new Set(plan.candidates.map(candidate => str(candidate.id)));
+    decisions = new Map([...decisions].filter(([id]) => currentIds.has(id)));
     for (const candidate of plan.candidates) {
       const id = str(candidate.id);
-      if (!decisions.has(id) && candidate.status === "new") decisions.set(id, "add");
+      if (!decisions.has(id) && candidate.status === "new" && !candidate.previousCandidateId) decisions.set(id, "add");
     }
     restoreDecisions();
     rememberDecisions();
@@ -435,7 +491,7 @@
     button.type = "button";
     button.dataset.metadataPath = str(item?.path);
     button.disabled = busy || Boolean(pendingOperation) || !item?.path || !item?.sha256;
-    button.setAttribute("aria-label", `编辑${title(item)}的方案信息，保留原文件名`);
+    button.setAttribute("aria-label", standardNaming() ? `编辑${title(item)}的标准用途和方案信息` : `编辑${title(item)}的方案信息，保留原文件名`);
     button.addEventListener("click", () => openMetadata(item, button));
     return button;
   }
@@ -549,6 +605,7 @@
         choices.append(choice);
       }
       card.append(heading, purpose, comparison);
+      if (standardNaming()) card.append(node("p", "candidate-standard-name", incoming?.standardName && !needsStandardPurpose(candidate) ? `${incoming.standardType ? "采用后" : `建议用途 ${str(incoming.suggestedStandardType)} · 确认采用后`}：${str(incoming.standardName)}` : "采用前请在「方案信息」中选择标准用途。"));
       const navigation = variantNavigation({ key: selectionKey, count: groupCandidates.length, index: groupCandidates.indexOf(candidate),
         label: `${currentPurpose}，${dimensions(incoming)}`, container: "candidateList", select: index => {
           candidateSelections.set(selectionKey, str(groupCandidates[index].id));
@@ -644,12 +701,13 @@
     byId("previewDialog").showModal();
   }
   function openMetadata(item, trigger) {
-    if (busy || pendingOperation || !item?.path || !item?.sha256 || item.space === "device") return;
+    if (busy || pendingOperation || byId("namingDialog").open || !item?.path || !item?.sha256 || item.space === "device") return;
     metadataTarget = { ...item, expectedRoot: root, expectedPageId: configuredPageId(), expectedDeviceRoot: str(state?.deviceRoot),
       indexed: (state?.items || []).some(current => current.path === item.path && current.sha256 === item.sha256 && current.space !== "device") };
     metadataFocus = trigger;
     byId("metadataOriginal").textContent = `原文件：${str(item.path)} · ${dimensions(item)}`;
     byId("metadataGroupTitle").value = groupTitle(item);
+    fillStandardTypes(byId("metadataStandardType"), str(item.standardType || item.suggestedStandardType));
     byId("metadataVariantLabel").value = str(item.variantLabel);
     const sources = byId("metadataDerivedFrom");
     sources.replaceChildren();
@@ -676,27 +734,31 @@
       sources.append(pending);
     }
     sources.value = !item.derivedFromId && item.pendingDerivedFromId ? "__pending_source__" : str(item.derivedFromId);
-    metadataBaseline = metadataValues();
+    metadataBaseline = standardNaming() ? JSON.stringify([str(item.standardType), byId("metadataVariantLabel").value.trim(), sources.value]) : metadataValues();
+    updateMetadataName();
     metadataJob = null;
     try {
       const saved = JSON.parse(sessionStorage.getItem(metadataJobKey(metadataTarget)) || "null");
       if (saved?.root === root && saved.path === item.path && saved.sha256 === item.sha256) metadataJob = saved;
     } catch (_) { /* Optional saved sync status. */ }
-    byId("metadataStatus").textContent = metadataJob?.message || "尚无未保存的修改。";
+    byId("metadataStatus").textContent = metadataDirty() ? "标准用途建议尚未保存，确认后才会采用。" : metadataJob?.message || "尚无未保存的修改。";
     byId("metadataStatus").dataset.error = "false";
     byId("metadataDialog").showModal();
     updateMetadataControls();
     byId("metadataGroupTitle").focus();
   }
-  function updatePlanMetadata(item) {
+  function updatePlanMetadata(item, previous = item) {
     if (!plan || !item) return;
-    const patch = current => current && current.path === item.path && current.sha256 === item.sha256 && (current.space || "root") === (item.space || "root") ? { ...current, ...item } : current;
+    const patch = current => current && current.path === previous.path && current.sha256 === item.sha256 && (current.space || "root") === (item.space || "root") ? { ...current, ...item } : current;
     for (const candidate of plan.candidates) {
       candidate.incoming = patch(candidate.incoming);
       candidate.existing = patch(candidate.existing);
       if (Array.isArray(candidate.matches)) candidate.matches = candidate.matches.map(patch);
     }
     renderPlan();
+  }
+  function invalidateReviewAfterNaming(value) {
+    if (plan && value && Object.prototype.hasOwnProperty.call(value, "plan") && value.plan === null) reviewNeedsScan = true;
   }
   async function saveMetadata(event, synchronize = true) {
     event.preventDefault();
@@ -716,9 +778,10 @@
     }
     const snapshot = { root, path: metadataTarget.path, sha256: metadataTarget.sha256, pageId: metadataTarget.expectedPageId,
       deviceRoot: metadataTarget.expectedDeviceRoot, indexed: metadataTarget.indexed };
-    const payload = { expectedRoot: root, path: metadataTarget.path, sha256: metadataTarget.sha256, space: "root", groupTitle: byId("metadataGroupTitle").value.trim(), variantLabel: byId("metadataVariantLabel").value.trim() };
+    const payload = { expectedRoot: root, path: metadataTarget.path, sha256: metadataTarget.sha256, space: "root", groupTitle: metadataPurpose(), variantLabel: byId("metadataVariantLabel").value.trim() };
     if (byId("metadataDerivedFrom").value !== "__pending_source__") payload.derivedFromId = byId("metadataDerivedFrom").value;
     if (!payload.groupTitle || !payload.variantLabel) return;
+    if (standardNaming() && !validStandardType(payload.groupTitle)) return;
     await run(dirty ? "正在保存方案信息…" : "正在同步已保存修改…", async (token, expectedRoot) => {
       byId("metadataStatus").textContent = dirty ? "正在保存…" : "正在同步已保存修改…";
       byId("metadataStatus").dataset.error = "false";
@@ -726,13 +789,27 @@
         requireMetadataScope(snapshot, token, expectedRoot);
         if (dirty) {
           const value = await call("metadata", { payload });
-          requireMetadataScope(snapshot, token, expectedRoot, value.state || state);
-          if (value.item && (value.item.path !== snapshot.path || value.item.sha256 !== snapshot.sha256)) throw new Error("保存回执对应的原图已改变，已停止同步，填写内容已保留。");
+          const item = metadata(value.item);
+          const renamed = metadata(value.renamed);
+          let savedPath = snapshot.path;
+          if (renamed && Object.keys(renamed).length) {
+            if (!snapshot.indexed || renamed.from !== snapshot.path || renamed.to !== item?.path || renamed.sha256 !== snapshot.sha256 || !safeImagePath(renamed.to)) throw new Error("改名回执与本次原图不一致，已停止同步，填写内容已保留。");
+            savedPath = renamed.to;
+          }
+          if (item && (item.path !== savedPath || item.sha256 !== snapshot.sha256)) throw new Error("保存回执对应的原图已改变，已停止同步，填写内容已保留。");
+          const savedSnapshot = { ...snapshot, path: savedPath };
+          requireMetadataScope(savedSnapshot, token, expectedRoot, value.state || state);
           if (!acceptResponse(value, token, expectedRoot)) return;
-          if (value.item) { updatePlanMetadata(value.item); metadataTarget = { ...metadataTarget, ...value.item }; }
+          if (snapshot.indexed && savedPath !== snapshot.path) invalidateReviewAfterNaming(value.state);
+          if (item) { updatePlanMetadata(item, snapshot); metadataTarget = { ...metadataTarget, ...item }; }
+          if (savedPath !== snapshot.path) {
+            try { sessionStorage.removeItem(metadataJobKey(snapshot)); } catch (_) { /* Optional saved-sync status. */ }
+            byId("metadataOriginal").textContent = `当前文件：${savedPath} · ${dimensions(item)}`;
+          }
+          updateMetadataName();
           metadataBaseline = metadataValues();
           const targets = [...(configuredPageId() ? ["notion"] : []), ...(state?.deviceRoot ? ["device"] : [])];
-          rememberMetadataJob({ ...snapshot, annotationFingerprint: annotationFingerprint(value.item || metadataTarget), targets, completed: [], status: !snapshot.indexed ? "inbox" : targets.length ? "saved" : "local",
+          rememberMetadataJob({ ...savedSnapshot, annotationFingerprint: annotationFingerprint(value.item || metadataTarget), targets, completed: [], status: !snapshot.indexed ? "inbox" : targets.length ? "saved" : "local",
             message: !snapshot.indexed ? "已保存到 Inbox，确认入库后再同步；尚未发布这张图片。" : targets.length ? "已保存到本地，待同步。" : "已保存到本地；尚未配置外部同步位置。" });
         }
       } catch (error) {
@@ -783,7 +860,7 @@
     if (count) {
       acceptPlan(syncPlan);
       rememberMetadataJob({ ...job, status: "review", planId: planId(syncPlan), message: "已保存到本地；设备同步有待确认的图片，请查看后确认。" });
-      if (!syncPlan.errors?.length && syncPlan.candidates.every(candidate => candidate.status === "new")) {
+      if (!syncPlan.errors?.length && syncPlan.candidates.every(canAutomaticallyAdd)) {
         await commitBatch({ planId: planId(syncPlan), expectedRoot, decisions: syncPlan.candidates.map(candidate => ({ id: str(candidate.id), action: "add" })) }, token, expectedRoot);
         return;
       }
@@ -793,6 +870,155 @@
     }
     if (value.metadataSync?.status !== "completed" || Number(value.metadataSync?.unresolved) > 0 || syncPlan?.errors?.length) throw new Error(str(value.message) || "设备方案信息尚未完整同步，请重新核对。");
     await completeMetadataTarget(job, "device", token, expectedRoot);
+  }
+  const namingDraftKey = () => `console-image-naming-draft:${root}`;
+  const libraryIdentity = value => JSON.stringify((Array.isArray(value?.items) ? value.items : []).map(item => [imageKey(item), annotationFingerprint(item)]).sort((left, right) => left[0].localeCompare(right[0])));
+  function namingSnapshot() {
+    return { root, deviceRoot: str(state?.deviceRoot), pageId: configuredPageId(), standardNaming: standardNaming(), identity: libraryIdentity(state), items: (state?.items || []).map(item => ({ ...item })),
+      fields: [byId("libraryRoot").value, byId("deviceRoot").value, byId("notionPage").value] };
+  }
+  function namingScopeMatches(scope, value = state, after = false) {
+    return scope && root === scope.root && value?.root === scope.root && str(value.deviceRoot) === scope.deviceRoot
+      && (pageId(value.notionPage) || pageId(value.notion?.pageId)) === scope.pageId
+      && [byId("libraryRoot").value, byId("deviceRoot").value, byId("notionPage").value].every((field, index) => field === scope.fields[index])
+      && (after || (value.standardNaming === true) === scope.standardNaming && libraryIdentity(value) === scope.identity);
+  }
+  function namingChoices() {
+    return (state?.items || []).map(item => ({ path: item.path, sha256: item.sha256, assetType: namingDrafts.get(imageKey(item)) || "" }));
+  }
+  function namingChoicesMatch() {
+    const choices = namingChoices();
+    return namingPlan?.candidates?.length === choices.length && namingPlan.candidates.every(candidate => choices.some(choice => choice.path === candidate.fromPath && choice.sha256 === candidate.sha256 && choice.assetType === candidate.assetType));
+  }
+  function updateNamingControls() {
+    const available = standardTypes().length > 0;
+    byId("organizeNames").hidden = !available;
+    byId("organizeNames").disabled = busy || Boolean(pendingOperation) || !state?.items?.length;
+    for (const select of byId("namingList").querySelectorAll("select")) select.disabled = busy || Boolean(pendingOperation);
+    byId("namingClose").disabled = busy;
+    const entries = namingChoices();
+    byId("namingPreview").disabled = busy || Boolean(pendingOperation) || !entries.length || entries.some(entry => !validStandardType(entry.assetType));
+    byId("namingApply").disabled = busy || Boolean(pendingOperation) || namingPlan?.canApply !== true || Boolean(namingPlan?.errors?.length)
+      || entries.some(entry => !validStandardType(entry.assetType)) || !namingScopeMatches(namingScope) || !namingChoicesMatch();
+    byId("namingRestore").hidden = !planId(state?.lastNaming) || state.lastNaming?.restored === true || state.lastNaming?.status === "restored";
+    byId("namingRestore").disabled = busy || Boolean(pendingOperation);
+  }
+  function rememberNamingDraft() {
+    try { sessionStorage.setItem(namingDraftKey(), JSON.stringify([...namingDrafts])); } catch (_) { /* Keep draft choices in memory. */ }
+  }
+  function renderNamingList() {
+    const list = byId("namingList");
+    const focusKey = document.activeElement?.dataset?.namingKey;
+    list.replaceChildren();
+    for (const item of state?.items || []) {
+      const key = imageKey(item);
+      const candidate = namingPlan?.candidates?.find(candidate => candidate.fromPath === item.path && candidate.sha256 === item.sha256);
+      const row = node("div", "naming-row"); row.dataset.namingPath = str(item.path);
+      const content = node("div", "naming-row-content");
+      content.append(node("p", "naming-original", str(item.path)), node("span", "image-dimensions", `${dimensions(item)} · ${variantTitle(item)}`));
+      const select = node("select"); select.dataset.namingKey = key;
+      select.setAttribute("aria-label", `${originalName(item)}的标准用途`);
+      fillStandardTypes(select, namingDrafts.get(key));
+      const target = node("p", "naming-target", candidate ? `→ ${str(candidate.targetPath || candidate.target)}` : standardName(item, select.value) ? `→ ${standardName(item, select.value)}` : "请选择标准用途");
+      if (candidate?.error) { target.textContent = str(candidate.error); target.dataset.error = "true"; }
+      select.addEventListener("change", () => {
+        if (busy || pendingOperation) return;
+        namingDrafts.set(key, select.value); rememberNamingDraft(); namingPlan = null; namingScope = null;
+        byId("namingStatus").textContent = "用途选择尚未应用，请先预览标准名称。";
+        renderNamingList(); updateNamingControls();
+      });
+      row.append(createThumbnail(item), content, select, target); list.append(row);
+    }
+    if (focusKey) [...list.querySelectorAll("select")].find(select => select.dataset.namingKey === focusKey)?.focus({ preventScroll: true });
+  }
+  function openNaming(event) {
+    if (busy || pendingOperation || !root || byId("metadataDialog").open || byId("previewDialog").open || !standardTypes().length) return;
+    if (!requireSavedLocations()) return;
+    namingFocus = event?.target;
+    let saved;
+    try { saved = JSON.parse(sessionStorage.getItem(namingDraftKey()) || "null"); } catch (_) { /* Optional draft storage. */ }
+    namingDrafts = new Map(Array.isArray(saved) ? saved.filter(entry => Array.isArray(entry) && entry.length === 2 && validStandardType(entry[1])) : []);
+    const savedKeys = new Set(namingDrafts.keys());
+    for (const item of state?.items || []) if (!namingDrafts.has(imageKey(item))) namingDrafts.set(imageKey(item), validStandardType(str(item.standardType || item.suggestedStandardType)) ? item.standardType || item.suggestedStandardType : "");
+    const restored = state?.namingPlan;
+    namingPlan = restored?.kind === "naming" && restored.status === "review" && Array.isArray(restored.candidates) ? restored : null;
+    if (namingPlan) for (const candidate of namingPlan.candidates) {
+      const item = (state.items || []).find(item => item.path === candidate.fromPath && item.sha256 === candidate.sha256);
+      if (item && !savedKeys.has(imageKey(item))) namingDrafts.set(imageKey(item), candidate.assetType);
+    }
+    namingScope = namingPlan ? namingSnapshot() : null;
+    if (namingPlan && !namingChoicesMatch()) { namingPlan = null; namingScope = null; }
+    byId("namingStatus").textContent = namingPlan ? "已恢复名称预览，确认后才会整理文件。" : "先明确标准用途，再预览旧名称与新名称。";
+    byId("namingStatus").dataset.error = "false";
+    renderNamingList(); updateNamingControls(); byId("namingDialog").showModal();
+    (byId("namingList").querySelector("select") || byId("namingClose")).focus();
+  }
+  async function previewNaming() {
+    if (busy || pendingOperation || !requireSavedLocations()) return;
+    const entries = namingChoices();
+    if (!entries.length || entries.some(entry => !validStandardType(entry.assetType))) return;
+    const snapshot = namingSnapshot();
+    await run("正在预览标准名称…", async (token, expectedRoot) => {
+      try {
+        const value = await call("naming-plan", { payload: { expectedRoot, entries } });
+        if (!assertCurrent(token, expectedRoot) || !namingScopeMatches(snapshot, value.state || state)) throw new Error("图库、同步位置或原图已改变，名称预览已停止，请重新读取。");
+        if (value.kind !== "naming" || !planId(value) || !Array.isArray(value.candidates)
+            || value.candidates.length !== entries.length || !entries.every(entry => value.candidates.filter(candidate => candidate.fromPath === entry.path && candidate.sha256 === entry.sha256 && candidate.assetType === entry.assetType).length === 1)
+            || value.canApply === true && value.candidates.some(candidate => !["rename", "unchanged"].includes(candidate.status) || !safeImagePath(candidate.targetPath))) throw new Error("名称预览与本次图片不一致，尚未应用更改。");
+        if (value.state) acceptState(value.state);
+        namingPlan = value; namingScope = snapshot; rememberNamingDraft(); renderNamingList();
+        const message = value.canApply === true ? "请核对旧名称 → 新名称，确认后才会整理文件。" : "部分名称存在冲突，尚未应用；请检查下方记录并重新预览。";
+        byId("namingStatus").textContent = message; byId("namingStatus").dataset.error = String(value.canApply !== true);
+        notice(message, value.canApply !== true);
+      } catch (error) { byId("namingStatus").textContent = error.message; byId("namingStatus").dataset.error = "true"; throw error; }
+    });
+  }
+  function validateNamingReceipt(value, snapshot, expectedId, expectedCandidates = null) {
+    if (planId(value) !== expectedId || !Array.isArray(value.results) || !namingScopeMatches(snapshot, value.state, true)) throw new Error("名称整理回执与本次图库或计划不一致，请保留原计划并核对。");
+    const results = value.results;
+    for (const result of results) {
+      const source = snapshot.items.find(item => item.path === result.from && item.sha256 === result.sha256);
+      const target = value.state.items?.find(item => item.path === result.to && item.sha256 === result.sha256);
+      const expected = expectedCandidates?.find(candidate => candidate.fromPath === result.from && candidate.targetPath === result.to && candidate.sha256 === result.sha256);
+      if (!source || !target || !safeImagePath(result.to)
+          || source.variantId && source.variantId !== target.variantId || source.derivedFromId && source.derivedFromId !== target.derivedFromId
+          || expectedCandidates && (!expected || target.standardType !== expected.assetType || target.standardName !== expected.standardName)) throw new Error("改名结果与预览的原图不一致，未采用这份迟到回执。");
+    }
+    if (expectedCandidates?.some(candidate => candidate.status === "rename" && !results.some(result => result.from === candidate.fromPath && result.to === candidate.targetPath && result.sha256 === candidate.sha256))) throw new Error("部分改名结果尚未核对完成，请保留原计划并继续核对。");
+  }
+  async function applyNaming() {
+    if (busy || pendingOperation || namingPlan?.canApply !== true || namingPlan.errors?.length) return;
+    if (!requireSavedLocations()) return;
+    if (namingChoices().some(entry => !validStandardType(entry.assetType)) || !namingScopeMatches(namingScope) || !namingChoicesMatch()) return;
+    const preview = namingPlan, snapshot = namingScope;
+    await run("正在整理已确认的文件名…", async (token, expectedRoot) => {
+      try {
+        const value = await call("naming-apply", { payload: { expectedRoot, planId: planId(preview) } });
+        if (!assertCurrent(token, expectedRoot)) return;
+        validateNamingReceipt(value, snapshot, planId(preview), preview.candidates);
+        invalidateReviewAfterNaming(value.state); acceptState(value.state); namingPlan = null; namingScope = null;
+        namingDrafts = new Map((state.items || []).map(item => [imageKey(item), str(item.standardType)])); rememberNamingDraft(); renderNamingList();
+        const message = `标准名称已确认，已整理 ${Number(value.renamed) || 0} 张图片。图片内容与已有方案保留。`;
+        byId("namingStatus").textContent = message; byId("namingStatus").dataset.error = "false"; notice(message, false, true);
+      } catch (error) { byId("namingStatus").textContent = error.message; byId("namingStatus").dataset.error = "true"; throw error; }
+    });
+  }
+  async function restoreNaming() {
+    const id = planId(state?.lastNaming);
+    if (busy || pendingOperation || !id) return;
+    if (!requireSavedLocations()) return;
+    const snapshot = namingSnapshot();
+    await run("正在撤回上次名称整理…", async (token, expectedRoot) => {
+      try {
+        const value = await call("naming-restore", { payload: { expectedRoot, planId: id } });
+        if (!assertCurrent(token, expectedRoot)) return;
+        validateNamingReceipt(value, snapshot, id);
+        if (value.restored !== true) throw new Error("撤回结果尚未确认，请保留记录并核对。");
+        invalidateReviewAfterNaming(value.state); acceptState(value.state); namingPlan = null; namingScope = null;
+        namingDrafts = new Map((state.items || []).map(item => [imageKey(item), str(item.standardType)])); rememberNamingDraft(); renderNamingList();
+        byId("namingStatus").textContent = "已撤回上次名称整理。"; byId("namingStatus").dataset.error = "false"; notice("已撤回上次名称整理。", false, true);
+      } catch (error) { byId("namingStatus").textContent = error.message; byId("namingStatus").dataset.error = "true"; throw error; }
+    });
   }
   async function loadState() {
     await run("正在读取图库…", async (token, expectedRoot) => {
@@ -827,7 +1053,7 @@
       const nextState = value.state || value;
       const actualRoot = str(nextState.root);
       if (!actualRoot) throw new Error("保存结果没有返回图库位置，请重新读取确认。");
-      if (actualRoot !== root) { root = ""; state = null; plan = null; pendingOperation = null; lastApplied = null; decisions = new Map(); renderPlan(); }
+      if (actualRoot !== root) { root = ""; state = null; plan = null; reviewNeedsScan = false; pendingOperation = null; lastApplied = null; decisions = new Map(); renderPlan(); }
       acceptState(nextState, { refill: true });
       const savedPlan = extractPlan(value) || extractPlan(nextState);
       if (savedPlan) acceptPlan(savedPlan);
@@ -887,7 +1113,7 @@
   function imagePasteScope(event) {
     const target = event?.target && event.target !== document && event.target !== document.body ? event.target : document.activeElement;
     if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
-    if (busy || pendingOperation || !root || byId("metadataDialog").open || byId("previewDialog").open
+    if (busy || pendingOperation || !root || byId("metadataDialog").open || byId("previewDialog").open || byId("namingDialog").open
         || textPasteTarget(target)) return false;
     const shell = document.querySelector(".image-shell");
     const focusedBody = target === document.body && typeof document.hasFocus === "function" && document.hasFocus();
@@ -1039,7 +1265,7 @@
     if (syncPlan) acceptPlan(syncPlan);
     const count = syncPlan?.candidates?.length || 0;
     const errorCount = Array.isArray(syncPlan?.errors) ? syncPlan.errors.length : 0;
-    if (autoApply && count && !errorCount && syncPlan.candidates.every(candidate => candidate.status === "new")) {
+    if (autoApply && count && !errorCount && syncPlan.candidates.every(canAutomaticallyAdd)) {
       notice(`正在同步 ${count} 张新图片…`);
       await commitBatch({ planId: planId(syncPlan), expectedRoot, decisions: syncPlan.candidates.map(candidate => ({ id: str(candidate.id), action: "add" })) }, token, expectedRoot);
       return;
@@ -1147,8 +1373,10 @@
   }
   function reviewApply() {
     if (busy || !plan) return;
+    if (reviewNeedsScan) { notice("名称已变化，请重新检查图片；原选择已保留。", true); return; }
     const selected = plan.candidates.filter(candidate => actions.has(decisions.get(str(candidate.id)))).map(candidate => ({ id: str(candidate.id), action: decisions.get(str(candidate.id)) }));
     if (!selected.length || selected.length !== plan.candidates.length) return;
+    if (plan.candidates.some(candidate => decisions.get(str(candidate.id)) !== "keep" && needsStandardPurpose(candidate))) { notice("采用前请先在方案信息中明确标准用途。", true); return; }
     void applyBatch({ planId: planId(plan), expectedRoot: root, decisions: selected });
   }
   async function applyBatch(payload) {
@@ -1215,8 +1443,9 @@
   byId("restoreImages").addEventListener("click", restoreImages);
   byId("metadataForm").addEventListener("submit", saveMetadata);
   byId("metadataSaveOnly").addEventListener("click", event => saveMetadata(event, false));
-  for (const id of ["metadataGroupTitle", "metadataVariantLabel", "metadataDerivedFrom"]) {
-    byId(id).addEventListener(id === "metadataDerivedFrom" ? "change" : "input", () => {
+  for (const id of ["metadataGroupTitle", "metadataStandardType", "metadataVariantLabel", "metadataDerivedFrom"]) {
+    byId(id).addEventListener(["metadataDerivedFrom", "metadataStandardType"].includes(id) ? "change" : "input", () => {
+      updateMetadataName();
       byId("metadataStatus").textContent = metadataDirty() ? "未保存。保存并同步会从 Console 推送本次修改。" : metadataJob?.message || "尚无未保存的修改。";
       byId("metadataStatus").dataset.error = "false";
       updateMetadataControls();
@@ -1232,6 +1461,13 @@
       (current || metadataFocus)?.focus({ preventScroll: true });
     }, 0);
   });
+  byId("organizeNames").addEventListener("click", openNaming);
+  byId("namingPreview").addEventListener("click", previewNaming);
+  byId("namingApply").addEventListener("click", applyNaming);
+  byId("namingRestore").addEventListener("click", restoreNaming);
+  byId("namingClose").addEventListener("click", () => { if (!busy) byId("namingDialog").close(); });
+  byId("namingDialog").addEventListener("cancel", event => { if (busy) event.preventDefault(); });
+  byId("namingDialog").addEventListener("close", () => { namingFocus?.focus({ preventScroll: true }); });
   byId("imageSearch").addEventListener("input", renderCollection);
   byId("imageFiles").addEventListener("change", event => uploadFiles(event.target.files));
   byId("reviewApply").addEventListener("click", reviewApply);

@@ -227,6 +227,152 @@ class Checks(unittest.TestCase):
         self.assertEqual(len([ref for ref in self.provider._refs(entity) if _catalog_identity(_reference_name(ref))]), 2)
         self.assertTrue(self.remote.page_text.endswith('\n\nUser notes after'))
 
+    def enable_standard_names(self, asset_type):
+        entries = [{'path':item['path'],'sha256':item['sha256'],'assetType':asset_type}
+                   for item in self.service.state()['items']]
+        plan = self.service.naming_plan({'expectedRoot':str(self.root),'entries':entries})
+        self.service.naming_apply({'expectedRoot':str(self.root),'planId':plan['planId']})
+        state = self.service.state()
+        self.assertTrue(state['standardNaming'])
+        return state
+
+    def test_standard_core_names_allow_same_basename_options_without_legacy_upload_markers(self):
+        (self.root / 'Sample.png').rename(self.root / 'HeaderCapsule_v9_Final.png')
+        blue = png('blue')
+        (self.root / 'Temporary_story_Final.png').write_bytes(blue)
+        self.service.scan({'expectedRoot':str(self.root)})
+        for item in self.service.state()['items']:
+            label = 'Option A' if item['sha256'] == hashlib.sha256(self.data).hexdigest() else 'Option B'
+            self.service.annotate({'expectedRoot':str(self.root),'path':item['path'],'sha256':item['sha256'],
+                'groupTitle':'HeaderCapsule','variantLabel':label})
+        state = self.enable_standard_names('HeaderCapsule')
+        self.assertEqual(len({item['path'] for item in state['items']}), 2)
+        for item in state['items']:
+            self.assertEqual(Path(item['path']).name, 'HeaderCapsule_7x5.png')
+            self.assertEqual((item['canonicalName'],item['syncName']), ('HeaderCapsule_7x5.png','HeaderCapsule_7x5.png'))
+        self.remote = FakeRemote(page_mode=True)
+        result = self.sync(request='standard-options')
+        self.assertEqual(result['operation']['status'], 'completed', result['operation'])
+        images = [item for item in self.remote.uploads.values() if not item['name'].endswith('.json')]
+        self.assertEqual([item['name'] for item in images], ['HeaderCapsule_7x5.png']*2)
+        active = notion_module._image_refs(self.remote.call('fetch',{'id':PAGE}))
+        self.assertEqual(len(active), 2)
+        self.assertEqual(len({notion_module._source_id(reference) for reference in active}), 2)
+        self.assertEqual({hashlib.sha256(self.remote.originals[reference]).hexdigest() for reference in active},
+                         {hashlib.sha256(self.data).hexdigest(),hashlib.sha256(blue).hexdigest()})
+        catalog = self.remote.latest_catalog()
+        self.assertEqual(catalog['schemaVersion'],1)
+        self.assertEqual({row['variantLabel'] for row in catalog['entries'].values()}, {'Option A','Option B'})
+        for row in catalog['entries'].values():
+            self.assertEqual(set(row), {'groupTitle','variantLabel','derivedFromId'})
+            self.assertEqual(row['groupTitle'],'HeaderCapsule')
+        counts = (self.remote.posts,self.remote.catalog_posts,self.remote.page_writes)
+        self.sync(request='standard-options-repeat')
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), counts)
+        self.assertEqual({(self.root/item['path']).read_bytes() for item in self.service.state()['items']}, {self.data,blue})
+
+    def test_standard_adoption_keeps_verified_legacy_attachment_name_and_skips_original_reupload(self):
+        self.annotate('Sample.png','Option A',group='HeaderCapsule')
+        first = self.sync(request='legacy-before-standard')['operation']
+        historical = notion_module._image_refs(self.remote.call('fetch',{'id':PAGE}))[0]
+        historical_name = _reference_name(historical)
+        self.assertEqual(historical_name, 'HeaderCapsule [方案 Option A] - 7x5.png')
+        original_uploads = [key for key,value in self.remote.uploads.items() if not value['name'].endswith('.json')]
+        state = self.enable_standard_names('HeaderCapsule')
+        self.assertEqual(state['items'][0]['syncName'],'HeaderCapsule_7x5.png')
+        completed = self.sync(request='standardize-existing')['operation']
+        self.assertEqual(completed['status'],'completed',completed)
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts),(1,1),
+                         'A filename-only migration must not republish an unchanged semantic catalogue')
+        self.assertEqual(_reference_name(historical),historical_name)
+        self.assertEqual([key for key,value in self.remote.uploads.items() if not value['name'].endswith('.json')],original_uploads)
+        digest = hashlib.sha256(self.data).hexdigest()
+        self.assertEqual(self.remote.latest_catalog()['entries'][digest]['groupTitle'],'HeaderCapsule')
+        self.assertEqual(self.remote.originals[historical],self.data)
+        before = (len(self.remote.calls),self.remote.posts,self.remote.catalog_posts)
+        replay = self.provider.sync({'source':'local','target':'notion','expectedRoot':str(self.root),
+                                     'requestId':'legacy-before-standard'})['operation']
+        self.assertEqual(replay,first)
+        self.assertEqual((len(self.remote.calls),self.remote.posts,self.remote.catalog_posts),before)
+
+    def test_standard_page_caption_uses_canonical_purpose_without_claiming_old_file_was_renamed(self):
+        self.remote = FakeRemote(page_mode=True)
+        (self.root/'Sample.png').rename(self.root/'Mira_story_Final.png')
+        self.service.scan({'expectedRoot':str(self.root)})
+        self.sync(request='page-legacy-name')
+        old_refs = notion_module._image_refs(self.remote.call('fetch',{'id':PAGE}))
+        old_names = {_reference_name(reference) for reference in old_refs}
+        upload_ids = {notion_module._source_id(reference) for reference in old_refs}
+        self.enable_standard_names('LibraryHeader')
+        result = self.sync(request='page-canonical-purpose')['operation']
+        self.assertEqual(result['status'],'completed',result)
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts),(1,2))
+        entity = self.remote.call('fetch',{'id':PAGE})
+        refs = notion_module._image_refs(entity)
+        self.assertEqual({_reference_name(reference) for reference in refs},old_names)
+        self.assertEqual({notion_module._source_id(reference) for reference in refs},upload_ids)
+        captions = [html.unescape(caption).strip() for _,caption in notion_module.PAGE_IMAGE_RE.findall(notion_module._managed_text(entity))]
+        self.assertEqual(captions,['LibraryHeader · 方案1 · 7×5'])
+        self.assertNotIn('Final',captions[0])
+        self.assertEqual(self.remote.latest_catalog()['entries'][hashlib.sha256(self.data).hexdigest()]['groupTitle'],'LibraryHeader')
+
+    def test_standard_same_name_catalog_roundtrip_preserves_options_without_admitting_inbox(self):
+        (self.root/'Other_Final.png').write_bytes(png('blue'))
+        self.service.scan({'expectedRoot':str(self.root)})
+        for index,item in enumerate(self.service.state()['items']):
+            self.service.annotate({'expectedRoot':str(self.root),'path':item['path'],'sha256':item['sha256'],
+                'groupTitle':'HeaderCapsule','variantLabel':'Option '+str(index+1)})
+        self.enable_standard_names('HeaderCapsule')
+        self.sync(request='standard-roundtrip-push')
+        sink_root = self.directory/'standard-sink'
+        sink_root.mkdir()
+        sink = ImageManagerService(self.directory/'standard-sink-config.json')
+        sink.configure({'root':str(sink_root),'notionPage':PAGE})
+        provider = ImageManagerNotion(sink,self.directory/'standard-sink-private',
+            rpc_factory=lambda root,page:self.remote,transfer_factory=lambda:self.remote)
+        provider.sync({'source':'notion','target':'console','expectedRoot':str(sink_root),'requestId':'standard-roundtrip-pull'})
+        result = provider.wait(5)
+        self.assertEqual(result['operation']['status'],'needs_review',result['operation'])
+        state = sink.state()
+        self.assertEqual(state['items'],[])
+        self.assertEqual(state['inboxCount'],2)
+        candidates = state['plan']['candidates']
+        self.assertEqual(len(candidates),2)
+        expected = self.remote.latest_catalog()['entries']
+        for candidate in candidates:
+            incoming = candidate['incoming']
+            self.assertEqual(incoming['groupTitle'],'HeaderCapsule')
+            self.assertEqual(incoming['variantLabel'],expected[incoming['sha256']]['variantLabel'])
+            self.assertEqual(hashlib.sha256((sink_root/incoming['path']).read_bytes()).hexdigest(),incoming['sha256'])
+        self.assertEqual(self.remote.posts,2)
+
+    def test_standard_library_unknown_external_item_blocks_entire_push_but_inbox_does_not(self):
+        self.enable_standard_names('HeaderCapsule')
+        unknown = self.root/'Clipboard_story_Final.png'
+        # Even a uniquely suggested Steam size is not an explicit purpose.
+        stream = io.BytesIO()
+        with Image.new('RGB',(800,450),'blue') as picture:
+            picture.save(stream,format='PNG')
+        blue = stream.getvalue()
+        unknown.write_bytes(blue)
+        self.service.scan({'expectedRoot':str(self.root)})
+        item = next(item for item in self.service.state()['items'] if item['path']==unknown.name)
+        self.assertTrue(item['namingNeedsReview'])
+        self.assertFalse(item.get('standardType'))
+        operation = self.sync(request='standard-unknown-root')['operation']
+        self.assertEqual((operation['status'],operation['code']),('failed','standard_naming_required'))
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts),(0,0))
+        self.assertFalse(any(action in {'prepare','attach','page'} for action,_ in self.remote.calls))
+        self.assertEqual(unknown.read_bytes(),blue)
+        # Unconfirmed Inbox pictures are not indexed root originals and remain
+        # outside this outward push, even if their purpose is not chosen yet.
+        unknown.rename(self.root/'inbox'/unknown.name)
+        self.service.scan({'expectedRoot':str(self.root)})
+        completed = self.sync(request='standard-known-root-only')['operation']
+        self.assertEqual(completed['status'],'completed',completed)
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts),(1,1))
+        self.assertEqual((self.root/'inbox'/unknown.name).read_bytes(),blue)
+
     def test_native_page_unknown_before_or_after_write_never_reposts_same_request(self):
         for after in (False, True):
             with self.subTest(after=after):
