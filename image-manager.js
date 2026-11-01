@@ -30,6 +30,12 @@
   let metadataJob = null;
   const groupSelections = new Map();
   const candidateSelections = new Map();
+  const handledPasteEvents = new WeakSet();
+  const clipboardImageTypes = new Map([
+    ["image/png", "png"], ["image/jpeg", "jpg"], ["image/webp", "webp"], ["image/gif", "gif"],
+    ["image/bmp", "bmp"], ["image/x-ms-bmp", "bmp"], ["image/tiff", "tiff"],
+    ["image/x-icon", "ico"], ["image/vnd.microsoft.icon", "ico"]
+  ]);
   const continuations = new Map();
   const pendingStatuses = new Set(["pending", "queued", "running", "in_progress", "starting"]);
   const completeStatuses = new Set(["completed", "succeeded", "success", "done", "needs_review"]);
@@ -150,6 +156,7 @@
       const value = event.data;
       if (event.source !== window.parent || event.origin !== window.location.origin || !value
           || typeof value !== "object" || Array.isArray(value) || value.channel !== "console-image-embed-v1" || value.type !== "context") return;
+      closePasteMenu();
       if (["dark", "light"].includes(value.theme)) document.documentElement.dataset.theme = value.theme;
       if (["en", "zh-CN"].includes(value.language)) document.documentElement.dataset.hostLanguage = value.language;
       if (Number.isFinite(value.visibleTop) && value.visibleTop >= 0 && value.visibleTop <= 2000000)
@@ -262,7 +269,8 @@
   }
   function updateControls() {
     for (const id of ["libraryRoot", "deviceRoot", "notionPage", "saveConfig", "syncSource", "syncTarget"]) byId(id).disabled = busy;
-    for (const id of ["scanImages", "syncImages", "imageFiles"]) byId(id).disabled = busy || !root || Boolean(pendingOperation);
+    for (const id of ["scanImages", "syncImages", "imageFiles", "pasteImages", "imagePasteCommand"]) byId(id).disabled = busy || !root || Boolean(pendingOperation);
+    if (busy || pendingOperation || !root) closePasteMenu();
     byId("dropZone").setAttribute("aria-disabled", String(busy || !root || Boolean(pendingOperation)));
     byId("dropZone").tabIndex = busy || !root || pendingOperation ? -1 : 0;
     byId("imageGrid").setAttribute("aria-busy", String(busy));
@@ -840,22 +848,130 @@
   async function uploadFiles(fileList) {
     const files = [...(fileList || [])];
     if (busy || pendingOperation || !root || !files.length) return;
-    const byteLimit = Number(state?.limits?.maxFileBytes);
-    if (Number.isFinite(byteLimit) && byteLimit > 0 && files.some(file => file.size > byteLimit)) {
-      notice(`有图片超过单张 ${Math.floor(byteLimit / 1024 / 1024)} MiB 限制，请分开检查后再加入。`, true);
+    try { validateUploadSize(files); }
+    catch (error) {
+      notice(error.message, true);
       byId("imageFiles").value = "";
       return;
     }
-    const form = new FormData();
-    form.append("expectedRoot", root);
-    for (const file of files) form.append("files", file, file.name);
-    await run(`正在把 ${files.length} 张图片放进 inbox…`, async (token, expectedRoot) => {
-      const value = await call("upload", { form });
-      if (!acceptResponse(value, token, expectedRoot)) return;
-      notice("图片已放进 inbox。比较新旧图片并确认处理方式后，再应用更改。", false, true);
-      if (plan?.candidates?.length) { setReviewExpanded(true); byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" }); }
-    });
+    await run(`正在把 ${files.length} 张图片放进 inbox…`, (token, expectedRoot) => stageUpload(files, token, expectedRoot));
     byId("imageFiles").value = "";
+  }
+  function validateUploadSize(files) {
+    if (files.length > 50) throw new Error("每批最多加入 50 张图片，请分批放入 Inbox。");
+    const configuredLimit = Number(state?.limits?.maxFileBytes);
+    const byteLimit = Math.min(64 * 1024 * 1024, Number.isFinite(configuredLimit) && configuredLimit > 0 ? configuredLimit : Infinity);
+    if (files.some(file => file.size > byteLimit)) throw new Error(`有图片超过单张 ${Math.floor(byteLimit / 1024 / 1024)} MiB 限制，请分开检查后再加入。`);
+    if (files.reduce((total, file) => total + (Number(file.size) || 0), 0) > 96 * 1024 * 1024) throw new Error("本次图片超过 96 MiB，请分批加入 Inbox。");
+  }
+  async function stageUpload(files, token, expectedRoot) {
+    if (!assertCurrent(token, expectedRoot)) return;
+    validateUploadSize(files);
+    const form = new FormData();
+    form.append("expectedRoot", expectedRoot);
+    for (const file of files) form.append("files", file, file.name);
+    const value = await call("upload", { form });
+    if (!acceptResponse(value, token, expectedRoot)) return;
+    notice("图片已放进 inbox。比较新旧图片并确认处理方式后，再应用更改。", false, true);
+    if (plan?.candidates?.length) { setReviewExpanded(true); byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" }); }
+  }
+  function textPasteTarget(target) {
+    if (target?.isContentEditable) return true;
+    for (let current = target; current; current = current.parentElement) {
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(str(current.tagName).toUpperCase())) return true;
+      const editable = current.getAttribute?.("contenteditable");
+      if (editable === "" || editable === "true" || editable === "plaintext-only") return true;
+    }
+    return false;
+  }
+  function imagePasteScope(event) {
+    const target = event?.target && event.target !== document && event.target !== document.body ? event.target : document.activeElement;
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+    if (busy || pendingOperation || !root || byId("metadataDialog").open || byId("previewDialog").open
+        || textPasteTarget(target)) return false;
+    const shell = document.querySelector(".image-shell");
+    const focusedBody = target === document.body && typeof document.hasFocus === "function" && document.hasFocus();
+    return Boolean(shell && (shell.contains(target) || focusedBody));
+  }
+  function closePasteMenu(restoreFocus = false) {
+    const menu = byId("imagePasteMenu");
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    byId("dropZone").setAttribute("aria-expanded", "false");
+    if (restoreFocus) byId("dropZone").focus({ preventScroll: true });
+  }
+  function showPasteMenu(event) {
+    if (!imagePasteScope(event)) return;
+    event.preventDefault();
+    const menu = byId("imagePasteMenu");
+    menu.style.setProperty("--image-paste-x", `${Number.isFinite(event.clientX) ? event.clientX : 8}px`);
+    menu.style.setProperty("--image-paste-y", `${Number.isFinite(event.clientY) ? event.clientY : 8}px`);
+    menu.hidden = false;
+    byId("dropZone").setAttribute("aria-expanded", "true");
+    byId("imagePasteCommand").focus({ preventScroll: true });
+  }
+  function clipboardFiles(blobs) {
+    const stamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 17);
+    const images = blobs.filter(blob => str(blob?.type).toLowerCase().startsWith("image/"));
+    if (!images.length) throw new Error("剪贴板里没有可用图片。请先复制图片，或把图片拖到这里。");
+    if (images.some(blob => !clipboardImageTypes.has(str(blob.type).toLowerCase()))) throw new Error("这种剪贴板图片格式暂不支持，请使用 PNG、JPEG、WebP、GIF、BMP、TIFF 或 ICO。");
+    if (images.some(blob => !Number.isFinite(blob.size) || blob.size <= 0)) throw new Error("剪贴板图片为空，尚未加入 Inbox。请重新复制图片或拖入文件。");
+    validateUploadSize(images);
+    return images.map((blob, index) => {
+      const type = str(blob.type).toLowerCase();
+      return new File([blob], `Clipboard-${stamp}-${index + 1}.${clipboardImageTypes.get(type)}`, { type });
+    });
+  }
+  async function readClipboardImages() {
+    if (typeof navigator === "undefined" || typeof navigator.clipboard?.read !== "function") throw new Error("此处暂时不能直接读取剪贴板。请聚焦图片区域后按 Ctrl+V，或拖入图片。");
+    let items;
+    try { items = await navigator.clipboard.read(); }
+    catch (_) { throw new Error("未能读取剪贴板图片。请允许浏览器粘贴，或聚焦图片区域后按 Ctrl+V、拖入图片。"); }
+    const blobs = [];
+    for (const item of items || []) {
+      const type = [...(item.types || [])].find(type => clipboardImageTypes.has(str(type).toLowerCase()));
+      if (!type) {
+        if ((item.types || []).some(type => str(type).toLowerCase().startsWith("image/"))) throw new Error("这种剪贴板图片格式暂不支持，请复制 PNG 或 JPEG 图片。");
+        continue;
+      }
+      let blob;
+      try { blob = await item.getType(type); }
+      catch (_) { throw new Error("未能读取剪贴板图片。请聚焦图片区域后按 Ctrl+V，或拖入图片。"); }
+      if (str(blob?.type).toLowerCase() !== str(type).toLowerCase()) throw new Error("剪贴板图片格式未能确认，请重新复制或拖入文件。");
+      blobs.push(blob);
+    }
+    return clipboardFiles(blobs);
+  }
+  async function pasteImageFiles(event, providedFiles = null) {
+    if (!imagePasteScope(event) || handledPasteEvents.has(event)) return;
+    if (!requireSavedLocations()) return;
+    handledPasteEvents.add(event);
+    closePasteMenu(true);
+    const snapshot = { root, deviceRoot: str(state?.deviceRoot), pageId: configuredPageId(), planId: planId(plan),
+      fields: [byId("libraryRoot").value, byId("deviceRoot").value, byId("notionPage").value] };
+    await run("正在读取剪贴板图片…", async (token, expectedRoot) => {
+      const files = providedFiles ? clipboardFiles(providedFiles) : await readClipboardImages();
+      const current = (value, server = false) => assertCurrent(token, expectedRoot) && !pendingOperation && root === snapshot.root
+        && str(value?.root) === snapshot.root && str(value?.deviceRoot) === snapshot.deviceRoot
+        && (pageId(value?.notionPage) || pageId(value?.notion?.pageId)) === snapshot.pageId
+        && (!server || planId(extractPlan(value)) === snapshot.planId) && planId(plan) === snapshot.planId
+        && (!server || ![value?.operation, value?.notion?.operation].some(operation => pendingStatuses.has(operation?.status) || operation?.status === "unknown" || canRecheckOperation(operation)))
+        && [byId("libraryRoot").value, byId("deviceRoot").value, byId("notionPage").value].every((field, index) => field === snapshot.fields[index]);
+      if (!current(state)) throw new Error("图库或同步位置已改变，已取消粘贴；请重新确认位置后再粘贴。");
+      const latest = await call("state");
+      if (!current(latest.state || latest, true)) throw new Error("图库、同步位置或待确认状态已改变，已取消粘贴，请重新读取后再试。");
+      await stageUpload(files, token, expectedRoot);
+    });
+  }
+  async function receiveImagePaste(event) {
+    if (!imagePasteScope(event) || handledPasteEvents.has(event)) return;
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+    let files = [...(clipboard.files || [])].filter(file => str(file?.type).toLowerCase().startsWith("image/"));
+    if (!files.length) files = [...(clipboard.items || [])].filter(item => item.kind === "file" && str(item.type).toLowerCase().startsWith("image/")).map(item => item.getAsFile()).filter(Boolean);
+    if (!files.length) return;
+    event.preventDefault();
+    await pasteImageFiles(event, files);
   }
   async function syncImages() {
     if (!requireSavedLocations()) return;
@@ -1125,6 +1241,21 @@
   const dropZone = byId("dropZone");
     const openPicker = () => { if (!busy && !pendingOperation && root) byId("imageFiles").click(); };
   dropZone.addEventListener("click", openPicker);
+  dropZone.addEventListener("contextmenu", showPasteMenu);
+  byId("pasteImages").addEventListener("click", pasteImageFiles);
+  byId("imagePasteCommand").addEventListener("click", pasteImageFiles);
+  document.addEventListener("paste", receiveImagePaste);
+  document.addEventListener("pointerdown", event => { if (!byId("imagePasteMenu").contains(event.target)) closePasteMenu(); });
+  document.addEventListener("keydown", event => {
+    if (!byId("imagePasteMenu").hidden && ["Escape", "Tab"].includes(event.key)) {
+      if (event.key === "Escape") event.preventDefault();
+      closePasteMenu(event.key === "Escape");
+    }
+  });
+  if (typeof window !== "undefined") {
+    window.addEventListener("blur", () => closePasteMenu());
+    window.addEventListener("resize", () => closePasteMenu());
+  }
   dropZone.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openPicker(); } });
   dropZone.addEventListener("dragover", event => { event.preventDefault(); if (!busy && root) dropZone.classList.add("drag-over"); });
   dropZone.addEventListener("dragleave", event => { if (!dropZone.contains(event.relatedTarget)) dropZone.classList.remove("drag-over"); });

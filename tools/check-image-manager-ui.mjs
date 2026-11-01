@@ -2,16 +2,18 @@ import fs from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import { Blob, File } from 'node:buffer';
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 const source = fs.readFileSync(resolve(projectRoot, 'image-manager.js'), 'utf8');
 const html = fs.readFileSync(resolve(projectRoot, 'image-manager.html'), 'utf8');
 class Element {
-  constructor(tag, doc) { this.tagName = tag; this.doc = doc; this.children = []; this.dataset = {}; this.attributes = {}; this.events = {}; this.value = ''; this.className = ''; this._classes = new Set(); this.classList = { add: (...v) => v.forEach(x => this._classes.add(x)), remove: (...v) => v.forEach(x => this._classes.delete(x)) }; }
-  append(...children) { this.children.push(...children); }
-  replaceChildren(...children) { this.children = children; }
+  constructor(tag, doc) { this.tagName = tag; this.doc = doc; this.children = []; this.dataset = {}; this.attributes = {}; this.events = {}; this.value = ''; this.className = ''; this.style = { setProperty: (key, value) => { this.style[key] = value; } }; this._classes = new Set(); this.classList = { add: (...v) => v.forEach(x => this._classes.add(x)), remove: (...v) => v.forEach(x => this._classes.delete(x)) }; }
+  append(...children) { for (const child of children) child.parentElement = this; this.children.push(...children); }
+  replaceChildren(...children) { for (const child of this.children) child.parentElement = null; this.children = []; this.append(...children); }
   setAttribute(k, v) { this.attributes[k] = v; }
+  getAttribute(k) { return this.attributes[k] ?? null; }
   addEventListener(name, listener) { (this.events[name] ||= []).push(listener); }
   querySelectorAll(selector) {
     const items = this.children.flatMap(child => [child, ...(child.querySelectorAll?.('*') || [])]);
@@ -37,40 +39,54 @@ const initialState = { root: originalRoot, deviceRoot: '', notionPage: '', items
 function makeStorage(existing = new Map()) { return { getItem: key => existing.get(key) || null, setItem: (key, value) => existing.set(key, value), removeItem: key => existing.delete(key), existing }; }
 function boot(initial, storage = makeStorage(), embedOptions = null) {
   const elements = {};
-  const doc = { getElementById: id => elements[id], createElement: tag => new Element(tag, doc), documentElement: { dataset: {} }, addEventListener() {}, activeElement: null };
-  for (const id of html.matchAll(/id="([^"]+)"/g)) { const element = new Element('div', doc); element.id = id[1]; elements[id[1]] = element; }
+  const docEvents = {}, windowEvents = {};
+  let documentFocused = true;
+  const doc = { getElementById: id => elements[id], createElement: tag => new Element(tag, doc), documentElement: { dataset: {} }, addEventListener: (type, listener) => { (docEvents[type] ||= []).push(listener); }, activeElement: null,
+    emit: async (name, event) => { for (const listener of docEvents[name] || []) await listener(event); }, hasFocus: () => documentFocused };
+  for (const match of html.matchAll(/<(\w+)([^>]*\bid="([^"]+)"[^>]*)>/g)) { const element = new Element(match[1], doc); element.id = match[3]; element.hidden = /\shidden(?:\s|$)/.test(match[2]); elements[match[3]] = element; }
+  const shell = new Element('main', doc);
+  shell.getBoundingClientRect = () => ({ height: embedOptions?.height || 600 });
+  shell.append(...Object.values(elements));
+  elements.imagePasteMenu.append(elements.imagePasteCommand);
+  elements.imagePasteMenu.hidden = true;
+  doc.body = new Element('body', doc); doc.body.append(shell);
+  doc.querySelector = selector => selector === '.image-shell' ? shell : null;
   for (const id of ['syncSource', 'syncTarget']) { const option = new Element('option', doc); option.value = 'notion'; elements[id].append(option); }
   elements.syncSource.value = 'local'; elements.syncTarget.value = 'console';
   elements.emptyState.append(new Element('h3', doc), new Element('p', doc));
   let current = structuredClone(initial);
   const requests = [];
   const replies = new Map();
+  let clipboardRead = async () => { throw new Error('Clipboard fixture has no image'); }, clipboardReads = 0;
   class FormData { constructor() { this.fields = []; } append(...field) { this.fields.push(field); } }
-  const context = { document: doc, sessionStorage: storage, localStorage: storage.localStorage ||= makeStorage(), URLSearchParams, FormData, crypto: crypto, setTimeout: callback => setImmediate(callback), console, fetch: async (url, options) => {
+  const context = { document: doc, navigator: { clipboard: { read: () => { clipboardReads++; return clipboardRead(); }, readText() { throw new Error('Text clipboard reads are forbidden'); } } }, Blob, File, sessionStorage: storage, localStorage: storage.localStorage ||= makeStorage(), URLSearchParams, FormData, crypto: crypto, setTimeout: callback => setImmediate(callback), console, fetch: async (url, options) => {
     const action = url.split('/').at(-1).split('?')[0];
     requests.push({ action, url, options, body: typeof options.body === 'string' ? JSON.parse(options.body) : options.body });
     const reply = replies.get(action);
     const result = typeof reply === 'function' ? await reply(requests.at(-1)) : reply || (action === 'state' ? { body: current } : { body: { state: current } });
     return { ok: result.ok !== false, status: result.status || 200, json: async () => structuredClone(result.body) };
   }};
-  const embedMessages = [], embedListeners = {}, embedStyles = {};
+  const embedMessages = [], embedListeners = windowEvents, embedStyles = {};
+  context.window = { location: { search: '', origin: 'http://fixture' }, addEventListener: (type, listener) => { (windowEvents[type] ||= []).push(listener); } };
+  context.window.parent = context.window;
   let observedResize = () => {};
   if (embedOptions) {
-    const shell = new Element('main', doc);
-    shell.getBoundingClientRect = () => ({ height: embedOptions.height || 600 });
-    doc.querySelector = selector => selector === '.image-shell' ? shell : null;
     doc.documentElement.style = { setProperty: (name, value) => { embedStyles[name] = value; } };
     context.window = { parent: { postMessage: (message, origin) => embedMessages.push({ message, origin }) },
       location: { search: '?embed=steamwork', origin: 'http://fixture' },
-      addEventListener: (type, listener) => { embedListeners[type] = listener; },
+      addEventListener: (type, listener) => { (windowEvents[type] ||= []).push(listener); },
       requestAnimationFrame: callback => setImmediate(callback) };
     context.ResizeObserver = class { constructor(callback) { observedResize = callback; } observe() {} };
     context.MutationObserver = class { observe() {} };
   }
   vm.runInNewContext(source, context);
   return { elements, requests, replies, storage, doc, embedMessages, embedStyles,
-    sendContext: (value, { origin = 'http://fixture', source = context.window?.parent } = {}) => embedListeners.message?.({ data: value, origin, source }),
+    sendContext: (value, { origin = 'http://fixture', source = context.window?.parent } = {}) => { for (const listener of embedListeners.message || []) listener({ data: value, origin, source }); },
     resizeEmbed: height => { embedOptions.height = height; observedResize(); },
+    emitWindow: (name, event = {}) => { for (const listener of windowEvents[name] || []) listener(event); },
+    setClipboardRead: value => { clipboardRead = value; }, clipboardReadCount: () => clipboardReads,
+    disableClipboardRead: () => { context.navigator.clipboard.read = undefined; },
+    setDocumentFocus: value => { documentFocused = value; },
     setState: value => { current = structuredClone(value); } };
 }
 (async () => {
@@ -604,6 +620,168 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
     assert.equal(unproven.elements.checkOperation.hidden, true, 'Generic failed receipts must not gain a replay path without exact positive public evidence');
     assert.equal(unproven.requests.filter(request => request.action === 'sync').length, 0);
   }
+  const clipboardState = { ...groupedState, plan: null, inboxCount: 0, notionPage: `https://www.notion.so/${pageA}`, deviceRoot: 'E:\\Clipboard Fixture', limits: { maxFileBytes: 64 * 1024 * 1024 } };
+  const pngBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0X0AAAAASUVORK5CYII=', 'base64');
+  const clipboardPng = new Blob([pngBytes], { type: 'image/png' });
+  const pngItem = { types: ['text/html','image/png','image/jpeg'], getType: async type => { assert.equal(type, 'image/png', 'Only one supported image representation is read per ClipboardItem'); return clipboardPng; } };
+  const clipboardPlan = { id: 'clipboard-inbox-plan', candidates: [{ ...addPlan.candidates[0], id: 'pasted-image', incoming: { ...image, path: 'inbox/Clipboard.png' } }] };
+  const postActions = view => view.requests.filter(request => request.options.method === 'POST').map(request => request.action);
+  const nativePasteEvent = (target, files = [], items = []) => ({ target, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, clipboardData: { files, items, getData() { throw new Error('Plain text, HTML and URLs must not be read'); } } });
+  const uploadedFile = view => view.requests.findLast(request => request.action === 'upload').body.fields.find(field => field[0] === 'files')[1];
+  const installPasteUpload = view => view.replies.set('upload', () => { const next = { ...clipboardState, plan: clipboardPlan, inboxCount: 1 }; view.setState(next); return { body: { ...clipboardPlan, state: next } }; });
+  const apiPaste = boot(clipboardState); await flush();
+  assert.equal(apiPaste.clipboardReadCount(), 0, 'Loading Image must never read the OS clipboard');
+  let typeReads = 0;
+  apiPaste.setClipboardRead(async () => [{ ...pngItem, getType: async type => { typeReads++; return pngItem.getType(type); } }]);
+  installPasteUpload(apiPaste);
+  await apiPaste.elements.pasteImages.click();
+  assert.equal(apiPaste.clipboardReadCount(), 1); assert.equal(typeReads, 1);
+  assert.deepEqual(postActions(apiPaste), ['upload'], 'A paste command only stages an Inbox upload, without scan/apply/sync');
+  assert.equal(apiPaste.requests.find(request => request.action === 'upload').body.fields.find(field => field[0] === 'expectedRoot')[1], originalRoot);
+  assert.equal(uploadedFile(apiPaste).type, 'image/png');
+  assert.match(uploadedFile(apiPaste).name, /^Clipboard-\d+-1\.png$/, 'Clipboard names are generated from the returned MIME rather than untrusted text or filenames');
+  assert.deepEqual(Buffer.from(await uploadedFile(apiPaste).arrayBuffer()), pngBytes, 'The returned clipboard Blob is uploaded without canvas conversion');
+  assert.equal(apiPaste.elements.reviewSection.hidden, false);
+  assert.equal(apiPaste.elements.libraryCount.textContent, `${clipboardState.items.length} 张`, 'Staging a paste must not add it to the indexed library');
+  const nativePaste = boot(clipboardState); await flush(); installPasteUpload(nativePaste);
+  let asFileReads = 0;
+  const copiedFile = new File([clipboardPng], '../untrusted:name.png', { type: 'image/png' });
+  const sharedPaste = nativePasteEvent(nativePaste.elements.dropZone, [copiedFile], [{ kind: 'file', type: 'image/png', getAsFile() { asFileReads++; return copiedFile; } }]);
+  await nativePaste.doc.emit('paste', sharedPaste);
+  assert.equal(sharedPaste.defaultPrevented, true);
+  assert.equal(asFileReads, 0, 'The files and items lists of the same paste event must not duplicate its image');
+  assert.equal(nativePaste.clipboardReadCount(), 0, 'Native image paste does not invoke Clipboard API permissions');
+  assert.deepEqual(postActions(nativePaste), ['upload']);
+  assert.match(uploadedFile(nativePaste).name, /^Clipboard-\d+-1\.png$/);
+  await nativePaste.doc.emit('paste', sharedPaste);
+  assert.deepEqual(postActions(nativePaste), ['upload'], 'Re-dispatching the same handled paste event must not send it again');
+  const itemPaste = boot(clipboardState); await flush(); installPasteUpload(itemPaste);
+  const itemEvent = nativePasteEvent(itemPaste.elements.dropZone, [], [{ kind: 'file', type: 'image/png', getAsFile: () => copiedFile }, { kind: 'string', type: 'text/html', getAsString() { throw new Error('HTML must not be read'); } }]);
+  await itemPaste.doc.emit('paste', itemEvent);
+  assert.deepEqual(postActions(itemPaste), ['upload']); assert.equal(itemEvent.defaultPrevented, true);
+  const focusedBodyPaste = boot(clipboardState); await flush(); installPasteUpload(focusedBodyPaste);
+  focusedBodyPaste.doc.body.focus();
+  const bodyImageEvent = nativePasteEvent(focusedBodyPaste.doc.body, [copiedFile]);
+  await focusedBodyPaste.doc.emit('paste', bodyImageEvent);
+  assert.deepEqual(postActions(focusedBodyPaste), ['upload'], 'Ctrl+V after clicking Image blank space must work when its own document is focused');
+  const noFocusPaste = boot(clipboardState); await flush(); noFocusPaste.doc.body.focus(); noFocusPaste.setDocumentFocus(false);
+  const noFocusEvent = nativePasteEvent(noFocusPaste.doc.body, [copiedFile]);
+  await noFocusPaste.doc.emit('paste', noFocusEvent);
+  await noFocusPaste.elements.pasteImages.click();
+  assert.equal(noFocusEvent.defaultPrevented, false); assert.deepEqual(postActions(noFocusPaste), []); assert.equal(noFocusPaste.clipboardReadCount(), 0);
+  const textPaste = boot(clipboardState); await flush();
+  const textEvent = nativePasteEvent(textPaste.elements.dropZone, [], [{ kind: 'string', type: 'text/plain', getAsString() { throw new Error('Text must not be read'); } }]);
+  await textPaste.doc.emit('paste', textEvent);
+  assert.equal(textEvent.defaultPrevented, false); assert.deepEqual(postActions(textPaste), []);
+  const textTargets = [textPaste.elements.libraryRoot, textPaste.elements.imageSearch, textPaste.doc.createElement('textarea'), textPaste.doc.createElement('select')];
+  const editable = textPaste.doc.createElement('div'), editableChild = textPaste.doc.createElement('span');
+  editable.setAttribute('contenteditable', 'true'); editable.append(editableChild); textTargets.push(editableChild);
+  textPaste.doc.querySelector('.image-shell').append(...textTargets.filter(target => !target.parentElement), editable);
+  for (const target of textTargets) {
+    target.focus(); const fieldEvent = nativePasteEvent(target, [copiedFile]);
+    await textPaste.doc.emit('paste', fieldEvent);
+    assert.equal(fieldEvent.defaultPrevented, false, 'Inputs, textareas, selects and inherited contenteditable retain their normal paste');
+  }
+  for (const dialog of ['metadataDialog','previewDialog']) {
+    textPaste.elements[dialog].open = true; textPaste.elements.dropZone.focus();
+    const modalEvent = nativePasteEvent(textPaste.elements.dropZone, [copiedFile]);
+    await textPaste.doc.emit('paste', modalEvent); await textPaste.elements.pasteImages.click();
+    assert.equal(modalEvent.defaultPrevented, false); textPaste.elements[dialog].open = false;
+  }
+  assert.equal(textPaste.clipboardReadCount(), 0); assert.deepEqual(postActions(textPaste), []);
+  const menuPaste = boot(clipboardState, makeStorage(), { height: 1200 }); await flush();
+  const contextEvent = { target: menuPaste.elements.dropZone, clientX: 990, clientY: 1190, prevented: false, preventDefault() { this.prevented = true; } };
+  await menuPaste.elements.dropZone.emit('contextmenu', contextEvent);
+  assert.equal(menuPaste.elements.imagePasteMenu.hidden, false); assert.equal(menuPaste.clipboardReadCount(), 0);
+  assert.equal(menuPaste.doc.activeElement, menuPaste.elements.imagePasteCommand);
+  assert.equal(menuPaste.elements.imagePasteMenu.style['--image-paste-y'], '1190px');
+  await menuPaste.doc.emit('keydown', { key: 'Escape', preventDefault() {} });
+  assert.equal(menuPaste.elements.imagePasteMenu.hidden, true); assert.equal(menuPaste.doc.activeElement, menuPaste.elements.dropZone);
+  await menuPaste.elements.dropZone.emit('contextmenu', contextEvent);
+  await menuPaste.doc.emit('pointerdown', { target: menuPaste.elements.imageGrid });
+  assert.equal(menuPaste.elements.imagePasteMenu.hidden, true);
+  await menuPaste.elements.dropZone.emit('contextmenu', contextEvent); menuPaste.emitWindow('blur');
+  assert.equal(menuPaste.elements.imagePasteMenu.hidden, true);
+  await menuPaste.elements.dropZone.emit('contextmenu', contextEvent);
+  menuPaste.sendContext({ channel: 'console-image-embed-v1', type: 'context', visibleTop: 900, visibleHeight: 280 });
+  assert.equal(menuPaste.elements.imagePasteMenu.hidden, true, 'A host visible-window change closes an open paste menu');
+  assert.equal(menuPaste.embedStyles['--image-embed-visible-top'], '900px');
+  await menuPaste.elements.dropZone.emit('contextmenu', contextEvent);
+  menuPaste.setClipboardRead(async () => { assert.equal(menuPaste.doc.hasFocus(), true); assert.equal(menuPaste.doc.activeElement, menuPaste.elements.dropZone, 'Closing the menu keeps focus in the Image document before clipboard.read'); return [pngItem]; });
+  installPasteUpload(menuPaste); await menuPaste.elements.imagePasteCommand.click();
+  assert.equal(menuPaste.elements.imagePasteMenu.hidden, true); assert.deepEqual(postActions(menuPaste), ['upload']);
+  const cssSource = fs.readFileSync(resolve(projectRoot, 'image-manager.css'), 'utf8');
+  assert(cssSource.includes('.image-paste-menu { position: fixed;') && cssSource.includes('top: clamp(calc(var(--image-embed-visible-top') && cssSource.includes('var(--image-embed-visible-height, 100vh)'), 'Paste menu must clamp to the host-visible iframe area rather than its full document height');
+  for (const [items, message] of [
+    [[{ types: ['text/plain','text/html'], getType() { throw new Error('Nonimage data must not be read'); } }], /没有可用图片/],
+    [[{ types: ['image/svg+xml'], getType() { throw new Error('Unsupported image must not be read'); } }], /格式暂不支持/],
+    [[{ types: ['image/png'], getType: async () => new Blob([], { type: 'image/png' }) }], /图片为空/],
+    [[{ types: ['image/png'], getType: async () => ({ type: 'image/png', size: 64 * 1024 * 1024 + 1 }) }], /64 MiB/],
+    [[{ types: ['image/png'], getType: async () => ({ type: 'image/png', size: 50 * 1024 * 1024 }) }, { types: ['image/png'], getType: async () => ({ type: 'image/png', size: 50 * 1024 * 1024 }) }], /96 MiB/],
+    [Array.from({ length: 51 }, () => pngItem), /最多加入 50 张/],
+    [[{ types: ['image/png'], getType: async () => new Blob(['wrong'], { type: 'text/html' }) }], /格式未能确认/]
+  ]) {
+    const rejectedPaste = boot(clipboardState); await flush(); rejectedPaste.setClipboardRead(async () => items);
+    await rejectedPaste.elements.pasteImages.click();
+    assert.deepEqual(postActions(rejectedPaste), []); assert.match(rejectedPaste.elements.operationStatus.textContent, message);
+    assert.equal(rejectedPaste.elements.pasteImages.disabled, false);
+  }
+  const deniedPaste = boot(clipboardState); await flush(); deniedPaste.setClipboardRead(async () => { throw new Error('NotAllowedError'); });
+  await deniedPaste.elements.pasteImages.click();
+  assert.match(deniedPaste.elements.operationStatus.textContent, /Ctrl\+V.*拖入/); assert.deepEqual(postActions(deniedPaste), []);
+  installPasteUpload(deniedPaste);
+  await deniedPaste.doc.emit('paste', nativePasteEvent(deniedPaste.elements.dropZone, [copiedFile]));
+  assert.deepEqual(postActions(deniedPaste), ['upload'], 'Native Ctrl+V remains available after a direct clipboard permission failure');
+  const unsupportedClipboard = boot(clipboardState); await flush(); unsupportedClipboard.disableClipboardRead();
+  await unsupportedClipboard.elements.pasteImages.click();
+  assert.match(unsupportedClipboard.elements.operationStatus.textContent, /Ctrl\+V.*拖入/); assert.equal(unsupportedClipboard.clipboardReadCount(), 0); assert.deepEqual(postActions(unsupportedClipboard), []);
+  const pendingPasteEvent = nativePasteEvent(pendingBrowse.elements.dropZone, [copiedFile]);
+  await pendingBrowse.doc.emit('paste', pendingPasteEvent); await pendingBrowse.elements.pasteImages.click();
+  assert.equal(pendingPasteEvent.defaultPrevented, false); assert.equal(pendingBrowse.clipboardReadCount(), 0);
+  assert.deepEqual(postActions(pendingBrowse), ['sync'], 'An existing unknown request keeps paste disabled without reading or uploading');
+  const draftLocationPaste = boot(clipboardState); await flush(); draftLocationPaste.elements.deviceRoot.value = 'E:\\Unsaved Paste Target';
+  await draftLocationPaste.elements.pasteImages.click();
+  assert.equal(draftLocationPaste.clipboardReadCount(), 0); assert.deepEqual(postActions(draftLocationPaste), []); assert.match(draftLocationPaste.elements.operationStatus.textContent, /先保存位置/);
+  for (const change of [{ root: 'D:\\Other Paste Root' }, { deviceRoot: 'E:\\Other Device' }, { notionPage: `https://www.notion.so/${pageB}` }, { plan: { id: 'other-review', candidates: [] } }, { operation: { status: 'running', requestId: 'other-request' } }, { operation: { status: 'unknown', requestId: 'unknown-request' } }]) {
+    const lateRead = boot(clipboardState); await flush(); let releaseRead;
+    lateRead.setClipboardRead(() => new Promise(resolve => { releaseRead = resolve; }));
+    const reading = lateRead.elements.pasteImages.click(); await flush();
+    assert.equal(lateRead.elements.imageGrid.attributes['aria-busy'], 'true', 'The clipboard permission/read wait must protect automatic reload');
+    lateRead.setState({ ...clipboardState, ...change }); releaseRead([pngItem]); await reading;
+    assert.deepEqual(postActions(lateRead), [], 'Changed root/device/page/plan or a newly pending operation rejects a delayed clipboard image');
+    assert.match(lateRead.elements.operationStatus.textContent, /已改变.*取消粘贴/);
+  }
+  const localDraftDuringRead = boot(clipboardState); await flush(); let finishLocalRead;
+  localDraftDuringRead.setClipboardRead(() => new Promise(resolve => { finishLocalRead = resolve; }));
+  const delayedLocalRead = localDraftDuringRead.elements.pasteImages.click(); await flush();
+  localDraftDuringRead.elements.libraryRoot.value = 'D:\\Changed Input During Permission'; finishLocalRead([pngItem]); await delayedLocalRead;
+  assert.deepEqual(postActions(localDraftDuringRead), []);
+  const delayedBlobPaste = boot(clipboardState); await flush(); let finishBlob;
+  delayedBlobPaste.setClipboardRead(async () => [{ types: ['image/png'], getType: () => new Promise(resolve => { finishBlob = resolve; }) }]);
+  const delayedBlobRead = delayedBlobPaste.elements.pasteImages.click(); await flush();
+  delayedBlobPaste.setState({ ...clipboardState, deviceRoot: 'E:\\Changed During Blob Read' }); finishBlob(clipboardPng); await delayedBlobRead;
+  assert.deepEqual(postActions(delayedBlobPaste), [], 'A delayed ClipboardItem.getType result receives the same configuration checks as clipboard.read');
+  const racePaste = boot(clipboardState); await flush(); installPasteUpload(racePaste); let finishApiRead;
+  racePaste.setClipboardRead(() => new Promise(resolve => { finishApiRead = resolve; }));
+  const apiRead = racePaste.elements.pasteImages.click(); await flush();
+  assert.equal(racePaste.elements.pasteImages.disabled, true);
+  const overlappingEvent = nativePasteEvent(racePaste.elements.dropZone, [copiedFile]);
+  await racePaste.doc.emit('paste', overlappingEvent); await racePaste.elements.pasteImages.click();
+  assert.equal(overlappingEvent.defaultPrevented, false, 'Busy paste handling must not intercept another native event');
+  assert.equal(racePaste.clipboardReadCount(), 1); finishApiRead([pngItem]); await apiRead;
+  assert.deepEqual(postActions(racePaste), ['upload'], 'Clipboard API and paste-event overlap must not double-stage an image');
+  const failedPaste = boot(clipboardState); await flush(); failedPaste.setClipboardRead(async () => [pngItem]);
+  failedPaste.replies.set('upload', { ok: false, status: 409, body: { error: 'root_changed' } });
+  await failedPaste.elements.pasteImages.click();
+  assert.equal(failedPaste.elements.libraryRoot.value, originalRoot); assert.equal(failedPaste.elements.pasteImages.disabled, false);
+  assert.deepEqual(postActions(failedPaste), ['upload']);
+  const lateUpload = boot(clipboardState); await flush(); lateUpload.setClipboardRead(async () => [pngItem]); let finishUpload;
+  lateUpload.replies.set('upload', () => new Promise(resolve => { finishUpload = resolve; }));
+  const uploadInFlight = lateUpload.elements.pasteImages.click(); await flush();
+  finishUpload({ body: { ...clipboardPlan, state: { ...clipboardState, root: 'D:\\Different Receipt Root', inboxCount: 9, plan: clipboardPlan } } }); await uploadInFlight;
+  assert.equal(lateUpload.elements.libraryRoot.value, originalRoot);
+  assert.equal(lateUpload.elements.reviewSection.hidden, true, 'A late upload receipt for another root cannot replace the current Inbox');
+  assert.equal(lateUpload.elements.inboxCount.textContent, 'inbox 0');
   const indexSource = fs.readFileSync(resolve(projectRoot, 'index.html'), 'utf8');
   const hostSource = fs.readFileSync(resolve(projectRoot, 'app.js'), 'utf8');
   assert(indexSource.includes('id="steamworkImageTitle">Image</h3>'));
@@ -697,4 +875,5 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   console.log('PASS: Explicit same-request catalog resume only after GET; ordinary unknown/load stay GET-only; root/page/source/target/request changes refuse; footer uses only completed operations without remaining targets.');
   console.log('PASS save-and-sync: dirty/no-op gating, save-only/reopen/reload, fixed Console authority, no Inbox import/publish, failed-save draft, unsaved-location guard, root/page/device/asset/annotation late-result refusal, same-request unknown verification, partial-target retry, and device metadata-only/new/review completion.');
   console.log('PASS option arrows: three real originals cycle with pointer and scoped keyboard/focus, no single-image arrows or thumbnail duplication, explicit size/lineage and main/Playtest grouping retained, Inbox choices persist per candidate through browsing/reload/full-plan confirmation, unsafe buckets stay separate, and busy browsing is zero-write.');
+  console.log('PASS paste images: explicit-only image ClipboardItem/native files/items, one MIME per item and event/API de-duplication, safe MIME filenames and unchanged returned Blob bytes, Inbox-only upload, body-focus and text/modal boundaries, menu dismissal/iframe-visible clamp, no text/HTML/URL reads, permission fallback, size/empty/format guards, and late root/device/page/plan/pending-operation rejection. No OS clipboard is accessed by fixtures.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#111a27">
   <title>Console · Image manager</title>
   <link rel="icon" href="favicon.ico">
-  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.40-20261101">
-  <script src="image-manager.js?v=images-variants-1.1.40-20261101" defer></script>
+  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.41-20261101">
+  <script src="image-manager.js?v=images-variants-1.1.41-20261101" defer></script>
 </head>
 <body>
   <main class="image-shell">
@@ -32,12 +32,12 @@
           <div class="form-footer full-width"><button id="saveConfig" class="secondary-button" type="submit">保存位置</button><span id="configStatus" class="muted" role="status"></span></div>
         </form>
       </details>
-      <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="选择图片放入 inbox，也可把图片拖到这里" aria-describedby="dropHelp">
-        <span class="drop-symbol" aria-hidden="true">＋</span><div><strong>把图片拖到这里</strong><span id="dropHelp">或点击选择图片 · 先放进 inbox，确认后再替换</span></div><span id="inboxCount" class="inbox-badge">inbox 0</span>
+      <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="选择、拖入或粘贴图片到 Inbox" aria-describedby="dropHelp" aria-haspopup="menu" aria-controls="imagePasteMenu">
+        <span class="drop-symbol" aria-hidden="true">＋</span><div><strong>把图片拖到这里</strong><span id="dropHelp">或点击选择、右键粘贴图片（Ctrl+V）· 先进入 Inbox，确认后入库</span></div><span id="inboxCount" class="inbox-badge">inbox 0</span>
       </div>
       <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,image/x-icon,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.ico" multiple hidden>
       <div class="action-bar">
-        <button id="scanImages" class="secondary-button" type="button">检查图片</button>
+        <div class="image-import-actions"><button id="scanImages" class="secondary-button" type="button">检查图片</button><button id="pasteImages" class="secondary-button paste-images-button" type="button">粘贴图片 / Paste image</button></div>
         <div class="sync-controls"><label class="compact-field"><span>从</span><select id="syncSource" aria-label="同步来源"><option value="local">本地图库</option><option value="console">Console</option><option value="notion" disabled>Notion · 连接待就绪</option></select></label><span class="sync-arrow" aria-hidden="true">→</span><label class="compact-field"><span>到</span><select id="syncTarget" aria-label="同步目标"><option value="console">Console</option><option value="device">设备文件夹</option><option value="notion" disabled>Notion · 连接待就绪</option><option value="all">全部已连接位置</option></select></label><button id="syncImages" class="primary-button" type="button">同步</button></div>
       </div>
       <p id="operationStatus" class="operation-status" role="status" aria-live="polite">正在读取图库…</p>
@@ -60,6 +60,7 @@
       <div id="emptyState" class="empty-state" hidden><span aria-hidden="true">▧</span><h3>你的图片，从这里开始</h3><p>保存图库位置，放入图片，再点「检查图片」。</p></div>
     </section>
     <footer class="page-footer"><span id="lastSync">尚无同步记录</span><span>保留原图 · 确认替换 · 按需同步</span></footer>
+    <div id="imagePasteMenu" class="image-paste-menu" role="menu" aria-label="图片操作" hidden><button id="imagePasteCommand" type="button" role="menuitem">粘贴图片 / Paste image</button></div>
   </main>
 
   <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle"><div class="dialog-heading"><h2 id="previewTitle">图片预览</h2><button id="closePreview" class="icon-button" type="button" aria-label="关闭图片预览">×</button></div><div id="previewImageWrap"></div><p id="previewMeta" class="muted"></p></dialog>
