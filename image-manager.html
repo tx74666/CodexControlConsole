@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#111a27">
   <title>Console · Image manager</title>
   <link rel="icon" href="favicon.ico">
-  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.38-20261101">
-  <script src="image-manager.js?v=images-variants-1.1.38-20261101" defer></script>
+  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.39-20261101">
+  <script src="image-manager.js?v=images-variants-1.1.39-20261101" defer></script>
 </head>
 <body>
   <main class="image-shell">
@@ -74,7 +74,7 @@
         <label class="field"><span>派生来源 <small>可选</small></span><select id="metadataDerivedFrom"><option value="">原始素材 / 未关联来源</option></select><small>明确指定来源后，可按方案查看对应的派生尺寸。</small></label>
       </div>
       <p id="metadataStatus" class="operation-status" role="status" aria-live="polite"></p>
-      <div class="metadata-actions"><button id="metadataSave" class="primary-button" type="submit">保存方案信息</button></div>
+      <div class="metadata-actions"><button id="metadataSaveOnly" class="secondary-button" type="button" disabled>仅保存</button><button id="metadataSave" class="primary-button" type="submit" disabled>保存并同步</button></div>
     </form>
   </dialog>
 </body>

@@ -312,6 +312,76 @@ class ImageManagerService:
         return result
 
     @staticmethod
+    def _manifest_version(root):
+        path = _inside(root, META + '/library.json', private=True)
+        if not path.exists():
+            return None
+        information = path.stat()
+        if not stat.S_ISREG(information.st_mode) or information.st_nlink != 1:
+            raise ImageManagerError('设备方案记录不能经过链接或共享文件。', status=409)
+        digest = _sha(path)
+        after = path.stat()
+        fingerprint = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_nlink)
+        if fingerprint(information) != fingerprint(after):
+            raise ImageManagerError('设备方案记录正在改变，请重新检查。', status=409)
+        return [str(information.st_dev), str(information.st_ino), str(information.st_size), str(information.st_mtime_ns), digest]
+
+    def _saved_manifest_version(self, root, expected):
+        version = self._manifest_version(root)
+        if self._manifest(root) != expected or self._manifest_version(root) != version:
+            raise ImageManagerError('设备方案记录保存后又被修改，请重新检查。', status=409)
+        return version
+
+    def _device_guard(self, root, device, versions, files=()):
+        _, actual_root, actual_device = self._roots(str(root))
+        if actual_root != root or actual_device != device:
+            raise ImageManagerError('设备同步目标已改变，请重新检查。', status=409)
+        for directory, version, identity in versions:
+            if _identity(directory) != identity or self._manifest_version(directory) != version:
+                raise ImageManagerError('设备同步期间方案信息已改变，请重新检查。', status=409)
+        for item, directory in files:
+            path = self._fresh(item, {'root':directory, 'device':directory})
+            if path.stat().st_nlink != 1:
+                raise ImageManagerError('设备图片不能使用共享文件链接。', status=409)
+        _, actual_root, actual_device = self._roots(str(root))
+        if actual_root != root or actual_device != device or any(_identity(directory) != identity for directory, _, identity in versions):
+            raise ImageManagerError('设备同步目标已改变，请重新检查。', status=409)
+
+    @staticmethod
+    def _device_entry(item):
+        parent = item.get('derivedFromId') or item.get('pendingDerivedFromId') or ''
+        if not isinstance(parent, str) or (parent and not re.fullmatch(r'[0-9a-f]{64}', parent)):
+            raise ImageManagerError('设备图片的派生来源身份无效。', status=409)
+        return {'sha256':item['sha256'],
+                'groupTitle':_annotation_text(item['groupTitle'], '图片组名称', 140),
+                'variantLabel':_annotation_text(item['variantLabel'], '方案名称', 100),
+                'variantExplicit':item.get('variantExplicit') is True, 'derivedFromId':parent}
+
+    def _merge_device_annotations(self, manifest, catalogue, entries):
+        annotations = json.loads(json.dumps(manifest['annotations']))
+        self._enrich(catalogue, annotations)
+        available = {item['sha256'] for item in catalogue}
+        changed, unresolved = [], []
+        for entry in entries:
+            digest, parent = entry['sha256'], entry['derivedFromId']
+            if digest not in available:
+                raise ImageManagerError('设备目标原图尚未确认，未保存方案信息。', status=409)
+            value = annotations[digest]
+            before = self._device_entry(dict(value, sha256=digest))
+            value.update(groupTitle=entry['groupTitle'], groupId=_group_id(entry['groupTitle']),
+                         variantLabel=entry['variantLabel'], variantExplicit=entry['variantExplicit'],
+                         derivedFromId=parent if parent in available else '',
+                         pendingDerivedFromId=parent if parent and parent not in available else '')
+            if before != entry:
+                changed.append(digest)
+            if parent and parent not in available:
+                unresolved.append({'sha256':digest, 'derivedFromId':parent, 'reason':'source_not_local'})
+        self._validate_annotation_graph(annotations)
+        self._enrich(catalogue, annotations)
+        manifest.update(annotations=annotations, items=catalogue)
+        return {'applied':len(changed), 'unresolved':len(unresolved), 'unresolvedEntries':unresolved}
+
+    @staticmethod
     def _plan_items(plan):
         result = []
         for candidate in (plan or {}).get('candidates', []):
@@ -325,7 +395,7 @@ class ImageManagerService:
         identifier = latest.get('planId', '')
         if isinstance(identifier, str) and re.fullmatch(r'[0-9a-f]{32}', identifier):
             plan = _json(_inside(root, META + '/plans/' + identifier + '.json', private=True), {})
-            items.extend(self._plan_items(plan))
+            items.extend(item for item in self._plan_items(plan) if item.get('space', 'root') == 'root')
         # The current catalogue wins over an older plan's pre-replacement view.
         items.extend(manifest['items'])
         return items
@@ -549,7 +619,8 @@ class ImageManagerService:
                 if saved.get('status') == 'review':
                     plan = saved
             annotations = json.loads(json.dumps(manifest['annotations']))
-            self._enrich(manifest['items'] + self._plan_items(plan), annotations)
+            self._enrich(manifest['items'] + [item for item in self._plan_items(plan)
+                         if item.get('space', 'root') == 'root'], annotations)
             return {'configured': True, 'root': str(root), 'deviceRoot': str(device) if device else '',
                     'notionPage': config.get('notionPage', ''), 'items': manifest['items'],
                     'inboxCount': count, 'lastSync': manifest.get('lastSync'), 'plan': plan,
@@ -576,7 +647,7 @@ class ImageManagerService:
                     errors.append({'path': target.relative_to(root).as_posix(), 'error': str(error)})
         return result, errors
 
-    def _save_plan(self, root, device, candidates, errors, *, direction='inbox'):
+    def _save_plan(self, root, device, candidates, errors, *, direction='inbox', device_metadata=None):
         if len(candidates) > 1000:
             raise ImageManagerError('待确认图片超过 1000 张，请分批处理。')
         plan_id = uuid.uuid4().hex
@@ -585,6 +656,8 @@ class ImageManagerService:
                 'createdAt': _now(), 'direction': direction, 'candidates': candidates, 'errors': errors,
                 'status': 'review', 'counts': {value: sum(c['status'] == value for c in candidates)
                                             for value in ('new', 'duplicate', 'conflict', 'ambiguous')}}
+        if device_metadata is not None:
+            plan['deviceMetadata'] = device_metadata
         _atomic_json(_inside(root, META + '/plans/' + plan_id + '.json', private=True), plan)
         _atomic_json(_inside(root, META + '/latest-plan.json', private=True), {'planId': plan_id})
         return plan
@@ -712,22 +785,57 @@ class ImageManagerService:
         if direction not in {'to-device', 'from-device'}:
             raise ImageManagerError('设备同步方向无效。')
         with self._locked(root), self._locked(device):
+            versions = [(directory, self._manifest_version(directory), _identity(directory)) for directory in (root, device)]
             manifest = self._manifest(root)
+            device_manifest = self._manifest(device)
             local, local_errors = self._files(root)
-            remote, remote_errors = self._files(device, space='device')
-            self._inherit_path_annotations(local + remote, self._previous_annotation_items(root, manifest), manifest['annotations'])
-            self._enrich(local + remote, manifest['annotations'])
-            for entry in remote:
+            remote, remote_errors = self._files(device)
+            for directory, current, catalogue in ((root, manifest, local), (device, device_manifest, remote)):
+                self._inherit_path_annotations(catalogue, self._previous_annotation_items(directory, current), current['annotations'])
+                self._enrich(catalogue, current['annotations'])
+            remote_view = json.loads(json.dumps(remote))
+            for entry in remote_view:
+                entry['space'] = 'device'
+                entry['id'] = hashlib.sha256(('device:' + entry['path']).encode()).hexdigest()[:24]
                 entry['previewUrl'] = '/api/images/preview?' + urlencode({'path': entry['path'], 'expectedRoot': str(root), 'space': 'device'})
-            source, destination = (local, remote) if direction == 'to-device' else (remote, local)
+            source, destination = (local, remote_view) if direction == 'to-device' else (remote_view, local)
+            target_manifest, target_catalogue = (device_manifest, remote) if direction == 'to-device' else (manifest, local)
+            destination_hashes = {item['sha256'] for item in destination}
+            entries = [self._device_entry(item) for item in source]
+            entries = list({entry['sha256']:entry for entry in entries}.values())
+            matching = [entry for entry in entries if entry['sha256'] in destination_hashes]
+            summary = self._merge_device_annotations(target_manifest, target_catalogue, matching)
             candidates = []
             for entry in source:
                 candidate = self._candidate(entry, destination, target_space='device' if direction == 'to-device' else 'root')
-                if candidate['status'] != 'duplicate':
+                # Only identical originals can receive metadata without a file
+                # decision. Equal pixels in another format still have a distinct
+                # asset SHA and must not silently borrow the other's annotations.
+                if entry['sha256'] not in destination_hashes:
                     candidates.append(candidate)
+            self._device_guard(root, device, versions,
+                [(item, root) for item in local] + [(item, device) for item in remote])
             manifest['items'] = local
             _atomic_json(_inside(root, META + '/library.json', private=True), manifest)
-            return self._save_plan(root, device, candidates, local_errors + remote_errors, direction=direction)
+            versions[0] = (root, self._saved_manifest_version(root, manifest), versions[0][2])
+            if direction == 'to-device' and matching:
+                self._device_guard(root, device, versions,
+                    [(item, root) for item in local] + [(item, device) for item in remote])
+                _atomic_json(_inside(device, META + '/library.json', private=True), device_manifest)
+                versions[1] = (device, self._saved_manifest_version(device, device_manifest), versions[1][2])
+            self._device_guard(root, device, versions)
+            context = {'rootVersion':versions[0][1], 'deviceVersion':versions[1][1],
+                       'entries':entries}
+            result = self._save_plan(root, device, candidates, local_errors + remote_errors,
+                                     direction=direction, device_metadata=context)
+            result['metadataSync'] = {**summary, 'notSynced':len(entries) - len(matching),
+                                     'target':'device' if direction == 'to-device' else 'console',
+                                     'status':'needs_review' if candidates or local_errors or remote_errors or summary['unresolved'] else 'completed'}
+            result['message'] = (f"已同步 {summary['applied']} 项既有原图的方案信息。"
+                                 + ('新图或差异仍待确认。' if candidates else '')
+                                 + ('部分派生来源尚未同步，已保留待关联关系。' if summary['unresolved'] else '')
+                                 + ('部分图片未能读取，同步尚未完整完成。' if local_errors or remote_errors else ''))
+            return result
 
     def _fresh(self, metadata, roots):
         directory = roots.get(metadata.get('space', 'root'))
@@ -782,7 +890,19 @@ class ImageManagerService:
             raise ImageManagerError('请确认全部候选图片后再应用。')
         manifest = self._manifest(root)
         original_manifest = json.loads(json.dumps(manifest))
-        self._enrich(manifest['items'] + self._plan_items(plan), manifest['annotations'])
+        device_context = plan.get('deviceMetadata')
+        device_versions = []
+        original_device_manifest = device_written_version = None
+        device_write_attempted = False
+        root_write_attempted = False
+        root_written_version = None
+        if device_context is not None:
+            device_versions = [(root, device_context['rootVersion'], plan['rootIdentity']),
+                               (device, device_context['deviceVersion'], plan['deviceIdentity'])]
+            self._device_guard(root, device, device_versions)
+            original_device_manifest = self._manifest(device)
+        self._enrich(manifest['items'] + [item for item in self._plan_items(plan)
+                     if item.get('space', 'root') == 'root'], manifest['annotations'])
         retained = set(manifest.get('retainedPairs', []))
         operations, touched, reserved = [], set(), set()
         for candidate in plan['candidates']:
@@ -804,7 +924,7 @@ class ImageManagerService:
             if action == 'replace':
                 if previous is None:
                     raise ImageManagerError('没有唯一替换目标，请另存或保留。')
-                if not incoming.get('variantExplicit') and existing['sha256'] in manifest['annotations']:
+                if device_context is None and not incoming.get('variantExplicit') and existing['sha256'] in manifest['annotations']:
                     manifest['annotations'][incoming['sha256']] = self._inherit_annotation(manifest['annotations'][existing['sha256']])
                 target = previous.with_suffix(Path(incoming['canonicalName']).suffix)
                 if target != previous and target != source and target.exists():
@@ -825,6 +945,8 @@ class ImageManagerService:
         transaction.mkdir(parents=True, exist_ok=True)
         journal = {'planId': plan_id, 'startedAt': _now(), 'status': 'prepared', 'files': []}
         _atomic_json(transaction / 'catalogue-before.json', original_manifest)
+        if device_context is not None:
+            _atomic_json(transaction / 'device-catalogue-before.json', original_device_manifest)
         # Snapshot all write targets and sources before the first mutation.
         backups = {}
         expected = {}
@@ -909,13 +1031,42 @@ class ImageManagerService:
                 completed.append({'id': candidate['id'], 'action': operation['action'],
                                   'target': str(target), 'sha256': candidate['incoming']['sha256']})
             current, errors = self._files(root)
+            metadata_summary = None
+            if device_context is not None:
+                self._device_guard(root, device, device_versions)
+                if plan['direction'] == 'to-device':
+                    target_items, target_errors = self._files(device)
+                    target_manifest = json.loads(json.dumps(original_device_manifest))
+                else:
+                    target_items, target_errors, target_manifest = current, errors, manifest
+                if target_errors:
+                    raise ImageManagerError('设备同步后的原图无法完整核验，未完成方案同步。', status=409)
+                present = {item['sha256'] for item in target_items}
+                entries = [entry for entry in device_context['entries'] if entry['sha256'] in present]
+                metadata_summary = self._merge_device_annotations(target_manifest, target_items, entries)
+                metadata_summary['notSynced'] = len(device_context['entries']) - len(entries)
+                metadata_summary.update(target='device' if plan['direction'] == 'to-device' else 'console',
+                    status='needs_review' if metadata_summary['unresolved'] or metadata_summary['notSynced'] or plan.get('errors') else 'completed')
+                self._device_guard(root, device, device_versions,
+                    [(item, device if plan['direction'] == 'to-device' else root) for item in target_items])
+                if plan['direction'] == 'to-device' and entries:
+                    device_write_attempted = True
+                    _atomic_json(_inside(device, META + '/library.json', private=True), target_manifest)
+                    device_written_version = self._saved_manifest_version(device, target_manifest)
             self._enrich(current, manifest['annotations'])
             manifest['items'] = current
             manifest['retainedPairs'] = sorted(retained)
             manifest['lastSync'] = {'at': _now(), 'direction': plan['direction'], 'applied': len(completed), 'planId': plan_id}
+            if device_context is not None:
+                self._device_guard(root, device, [device_versions[0]])
+                root_write_attempted = True
             _atomic_json(_inside(root, META + '/library.json', private=True), manifest)
+            if device_context is not None:
+                root_written_version = self._saved_manifest_version(root, manifest)
             receipt = {'ok': True, 'planId': plan_id, 'applied': len(completed), 'kept': len(operations) - len(completed),
                        'results': completed, 'historyPath': str(transaction), 'completedAt': _now(), 'errors': errors}
+            if metadata_summary is not None:
+                receipt['metadataSync'] = metadata_summary
             journal['status'] = 'completed'
             _atomic_json(transaction / 'recovery.json', journal)
             final_state = self.state()
@@ -928,6 +1079,21 @@ class ImageManagerService:
             return {**receipt, 'state': final_state}
         except Exception:
             failures = []
+            if device_write_attempted:
+                try:
+                    actual = self._manifest_version(device)
+                    if device_written_version is None and actual == device_context['deviceVersion']:
+                        pass  # The attempted atomic write did not change the target.
+                    elif device_written_version is None or actual != device_written_version:
+                        raise ImageManagerError('设备方案信息已有后续更改。', status=409)
+                    else:
+                        self._device_guard(root, device, [(device, actual, plan['deviceIdentity'])])
+                        if device_context['deviceVersion'] is None:
+                            _inside(device, META + '/library.json', private=True).unlink()
+                        else:
+                            _atomic_json(_inside(device, META + '/library.json', private=True), original_device_manifest)
+                except (OSError, ImageManagerError):
+                    failures.append('device catalogue')
             for original, last_written in reversed(list(mutated.items())):
                 backup, existed = backups[original]
                 try:
@@ -945,8 +1111,18 @@ class ImageManagerService:
             journal['failedPaths'] = failures
             _atomic_json(transaction / 'recovery.json', journal)
             try:
-                _atomic_json(_inside(root, META + '/library.json', private=True), original_manifest)
-            except OSError:
+                if device_context is None:
+                    _atomic_json(_inside(root, META + '/library.json', private=True), original_manifest)
+                else:
+                    actual = self._manifest_version(root)
+                    if actual == device_context['rootVersion']:
+                        pass  # No root catalogue mutation needs undoing.
+                    elif not root_write_attempted or root_written_version is None or actual != root_written_version:
+                        raise ImageManagerError('本地方案已有后续修改，回滚不会覆盖。', status=409)
+                    else:
+                        self._device_guard(root, device, [(root, actual, plan['rootIdentity'])])
+                        _atomic_json(_inside(root, META + '/library.json', private=True), original_manifest)
+            except (OSError, ImageManagerError):
                 journal['status'] = 'recovery_required'
                 _atomic_json(transaction / 'recovery.json', journal)
                 failures.append('catalogue')
@@ -1021,6 +1197,14 @@ class ImageManagerService:
         before_manifest['items'], errors = self._files(root)
         self._enrich(before_manifest['items'], before_manifest['annotations'])
         _atomic_json(_inside(root, META + '/library.json', private=True), before_manifest)
+        if plan.get('deviceMetadata') is not None and plan['direction'] == 'to-device':
+            version = self._manifest_version(device)
+            device_manifest = self._manifest(device)
+            device_manifest['items'], device_errors = self._files(device)
+            self._enrich(device_manifest['items'], device_manifest['annotations'])
+            self._device_guard(root, device, [(device, version, plan['deviceIdentity'])])
+            _atomic_json(_inside(device, META + '/library.json', private=True), device_manifest)
+            errors += device_errors
         journal['status'] = 'restored'
         journal['restoredAt'] = _now()
         _atomic_json(directory / 'recovery.json', journal)

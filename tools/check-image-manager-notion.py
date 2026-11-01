@@ -1,10 +1,12 @@
 """Isolated synchronization checks. No account, network, or user library used."""
 import hashlib
+import html
 import io
 import json
 from pathlib import Path
 import sys
 import tempfile
+import re
 import unittest
 from unittest.mock import patch
 import uuid
@@ -31,7 +33,7 @@ def png(color):
 
 
 class FakeRemote:
-    def __init__(self):
+    def __init__(self, page_mode=False):
         self.originals, self.uploads, self.calls = {}, {}, []
         self.fail_upload = False
         self.before_upload = None
@@ -40,6 +42,11 @@ class FakeRemote:
         self.fail_catalog_upload = False
         self.normalize_filenames = False
         self.exit_error = None
+        self.page_mode = page_mode
+        self.page_writes = 0
+        self.fail_page_before_write = self.fail_page_after_write = False
+        self.page_text = ('User notes before\n\n<synced-block url="https://app.notion.com/p/' + PAGE.replace('-','') + '#' + OTHER.replace('-','')
+            + '">\n## Image\n\n<toggle>\n同步记录\n\n' + notion_module.GALLERY_MARKER + '\n</toggle>\n</synced-block>\n\nUser notes after')
 
     def __enter__(self):
         return self
@@ -51,8 +58,8 @@ class FakeRemote:
     def call(self, action, arguments):
         self.calls.append((action, arguments))
         if action == 'fetch':
-            return {'id': PAGE, 'metadata': {'type': 'folder'},
-                'text': '\n'.join('<image source="' + ref + '" />' for ref in self.originals)}
+            return {'id': PAGE, 'metadata': {'type': 'page' if self.page_mode else 'folder'},
+                'text': self.page_text if self.page_mode else '\n'.join('<image source="' + ref + '" />' for ref in self.originals)}
         if action == 'prepare':
             identifier = str(uuid.uuid4())
             self.uploads[identifier] = {'name': arguments['filename']}
@@ -69,7 +76,38 @@ class FakeRemote:
             return {'ok': True}
         if action == 'download':
             return {'files': [{'url': reference} for reference in arguments['references']]}
+        if action == 'page':
+            self.page_writes += 1
+            if self.fail_page_before_write:
+                raise NotionSyncError('test_page_unknown', '页面写入回执未知。', unknown=True)
+            assert arguments['page_id'] == PAGE and arguments['command'] == 'update_content'
+            update = arguments['content_updates'][0]
+            assert self.page_text.count(update['old_str']) == 1
+            def save_source(match):
+                source = html.unescape(match[2])
+                if source.startswith('file-upload://'):
+                    identifier = notion_module._source_id(source)
+                    item = self.uploads[identifier]
+                    name, data = item['name'], item['data']
+                else:
+                    identifier = notion_module._source_id(source)
+                    name, data = _reference_name(source), self.originals[source]
+                if self.normalize_filenames:
+                    name = name.replace(' ', '_')
+                # Notion copies an existing file into a new block. Its upload
+                # identity is stable even though the first block UUID changes.
+                reference = 'notion-file-block://' + str(uuid.uuid4()) + '/' + identifier + '?name=' + quote(name)
+                self.originals[reference] = data
+                return match[1] + reference + match[3]
+            replacement = re.sub(r'(<(?:image|file)\s+source=")([^"<>]+)(")', save_source, update['new_str'])
+            self.page_text = self.page_text.replace(update['old_str'], replacement, 1)
+            if self.fail_page_after_write:
+                raise NotionSyncError('test_page_unknown', '页面写入回执未知。', unknown=True)
+            return {'ok': True}
         raise AssertionError(action)
+
+    def authorize_upload(self, uploaded):
+        return notion_module._upload_source(uploaded)
 
     def upload(self, request, path):
         is_catalog = request['filename'].startswith(CATALOG_PREFIX)
@@ -81,7 +119,7 @@ class FakeRemote:
             raise NotionSyncError('test_network_unknown', '传输回执未知。', unknown=True)
         identifier = request['file_upload_id']
         self.uploads[identifier]['data'] = Path(path).read_bytes()
-        return {'id': identifier, 'status': 'uploaded'}
+        return {'id': identifier, 'status': 'uploaded', 'markdown_source':'file-upload://' + identifier}
 
     def download(self, reference):
         return self.originals[reference]
@@ -94,15 +132,19 @@ class FakeRemote:
         name = name.replace(' ', '_') if self.normalize_filenames else name
         reference = 'notion-file-block://' + PAGE + '/' + str(uuid.uuid4()) + '?name=' + quote(name)
         self.originals[reference] = data
+        if self.page_mode:
+            self.page_text = self.page_text.replace('</toggle>', '<file source="' + reference + '">\n方案目录\n</file>\n</toggle>', 1)
         return reference
 
     def latest_catalog(self):
         refs = [reference for reference in self.originals if _catalog_identity(_reference_name(reference))]
         return json.loads(self.originals[max(refs, key=lambda ref:_catalog_identity(_reference_name(ref)))])
 
-    def add_image(self, name, data):
+    def add_image(self, name, data, caption='Existing image'):
         reference = 'notion-file-block://' + PAGE + '/' + str(uuid.uuid4()) + '?name=' + quote(name)
         self.originals[reference] = data
+        if self.page_mode:
+            self.page_text = self.page_text.replace('<toggle>', '<image source="' + reference + '">\n' + caption + '\n</image>\n\n<toggle>', 1)
         return reference
 
 
@@ -147,6 +189,199 @@ class Checks(unittest.TestCase):
             self.assertNotIn('SECRET_SHOULD_NEVER_BE_SAVED', text)
             self.assertNotIn('upload_headers', text)
         self.assertEqual(self.provider.operation('second')['operation']['requestId'], 'second')
+
+    def test_native_page_upload_and_repeat_preserve_outside_content_and_original_bytes(self):
+        self.remote = FakeRemote(page_mode=True)
+        before = self.remote.page_text
+        result = self.sync()
+        self.assertEqual(result['operation']['status'], 'completed', result['operation'])
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), (1,1,2))
+        entity = self.remote.call('fetch', {'id':PAGE})
+        images = notion_module._image_refs(entity)
+        self.assertEqual(len(images), 1)
+        self.assertEqual(self.remote.originals[images[0]], self.data)
+        self.assertIn('Sample · 方案1 · 7×5', self.remote.page_text)
+        self.assertTrue(self.remote.page_text.startswith('User notes before\n\n'))
+        self.assertTrue(self.remote.page_text.endswith('\n\nUser notes after'))
+        self.assertNotEqual(before, self.remote.page_text)
+        writes = self.remote.page_writes
+        result = self.sync(request='page-repeat')
+        self.assertEqual(result['operation']['status'], 'completed')
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), (1,1,writes))
+
+    def test_native_page_metadata_only_refreshes_caption_and_keeps_catalog_history(self):
+        self.remote = FakeRemote(page_mode=True)
+        item = self.service.state()['items'][0]
+        self.remote.add_image('Sample - 7x5.png', self.data, 'Sample · 方案1 · 7×5')
+        self.remote.add_catalog({item['sha256']:_entry(item)})
+        self.assertEqual(self.sync()['operation']['status'], 'completed')
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), (0,0,0))
+        self.service.annotate({'expectedRoot':str(self.root), 'path':item['path'], 'sha256':item['sha256'],
+            'groupTitle':'主游戏 · 图标', 'variantLabel':'第二方案'})
+        result = self.sync(request='page-label-update')
+        self.assertEqual(result['operation']['status'], 'completed', result['operation'])
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), (0,1,1))
+        self.assertIn('主游戏 · 图标 · 第二方案 · 7×5', self.remote.page_text)
+        entity = self.remote.call('fetch', {'id':PAGE})
+        self.assertEqual(len(notion_module._image_refs(entity)), 1)
+        self.assertEqual(len([ref for ref in self.provider._refs(entity) if _catalog_identity(_reference_name(ref))]), 2)
+        self.assertTrue(self.remote.page_text.endswith('\n\nUser notes after'))
+
+    def test_native_page_unknown_before_or_after_write_never_reposts_same_request(self):
+        for after in (False, True):
+            with self.subTest(after=after):
+                self.remote = FakeRemote(page_mode=True)
+                self.remote.fail_page_after_write = after
+                self.remote.fail_page_before_write = not after
+                # Use a separate page receipt ledger for each isolated scenario.
+                self.provider = ImageManagerNotion(self.service, self.directory / ('page-private-'+str(after)),
+                    rpc_factory=lambda root,page:self.remote, transfer_factory=lambda:self.remote)
+                result = self.sync(request='page-unknown')
+                self.assertEqual(result['operation']['status'], 'unknown')
+                writes = (self.remote.posts,self.remote.catalog_posts,self.remote.page_writes)
+                self.sync(request='page-unknown')
+                self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), writes)
+                self.assertEqual(writes, (1,0,1))
+                if not after:
+                    self.sync(request='page-new-intent')
+                    self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), writes)
+                self.assertTrue(self.remote.page_text.endswith('\n\nUser notes after'))
+
+    def test_native_page_owned_region_change_stops_before_update(self):
+        self.remote = FakeRemote(page_mode=True)
+        original = self.provider._page_rows
+        def concurrent_edit(*args):
+            result = original(*args)
+            self.remote.page_text = self.remote.page_text.replace('## Image', '## User gallery edit')
+            return result
+        with patch.object(self.provider, '_page_rows', side_effect=concurrent_edit):
+            result = self.sync()
+        self.assertEqual(result['operation']['status'], 'failed')
+        self.assertEqual(result['operation']['code'], 'notion_gallery_changed')
+        self.assertEqual(self.remote.page_writes, 0)
+        self.assertIn('## User gallery edit', self.remote.page_text)
+
+    def test_native_page_read_only_completion_rechecks_new_blocks_without_new_upload_or_page_write(self):
+        self.remote = FakeRemote(page_mode=True)
+        original_write = notion_module._atomic_json
+        denied = False
+        def fail_final_once(path, value):
+            nonlocal denied
+            if path.parent == self.provider.directory and value.get('operation',{}).get('status') == 'completed' and not denied:
+                denied = True
+                raise PermissionError('fixture final receipt denial')
+            return original_write(path, value)
+        with patch.object(notion_module, '_atomic_json', side_effect=fail_final_once):
+            pending = self.sync(request='page-final-save')['operation']
+        self.assertEqual((pending['status'],pending['code']), ('unknown','verified_completion_unrecorded'))
+        self.assertTrue(pending['recheckable'])
+        observed = set(notion_module._image_refs(self.remote.call('fetch', {'id':PAGE})))
+        self.assertTrue(any(item.get('reference') not in observed for item in pending['items']))
+        writes = (self.remote.posts,self.remote.catalog_posts,self.remote.page_writes)
+        completed = self.sync(request='page-final-save')['operation']
+        self.assertEqual(completed['status'], 'completed', completed)
+        self.assertEqual(completed['id'], pending['id'])
+        self.assertEqual(completed['items'], pending['items'])
+        self.assertEqual(completed['verifiedOriginals'][0]['sha256'], hashlib.sha256(self.data).hexdigest())
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), writes)
+
+    def test_native_page_unchanged_catalogue_does_not_claim_stale_caption_is_synchronized(self):
+        self.remote = FakeRemote(page_mode=True)
+        self.assertEqual(self.sync()['operation']['status'], 'completed')
+        self.remote.page_text = self.remote.page_text.replace('Sample · 方案1 · 7×5', 'Manually changed caption')
+        writes = (self.remote.posts,self.remote.catalog_posts,self.remote.page_writes)
+        operation = self.sync(request='page-stale-caption')['operation']
+        self.assertEqual((operation['status'],operation['code']), ('failed','notion_gallery_unverified'))
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), writes)
+
+    def test_native_page_pull_reads_only_owned_gallery_and_restores_metadata_without_apply(self):
+        self.remote = FakeRemote(page_mode=True)
+        incoming = png('blue')
+        digest = hashlib.sha256(incoming).hexdigest()
+        self.remote.add_image('Incoming - 7x5.png', incoming)
+        self.remote.add_catalog({digest:{'groupTitle':'Playtest · 图标','variantLabel':'设备方案','derivedFromId':''}})
+        outside = self.remote.add_image('Outside - 7x5.png', png('green'))
+        own = notion_module._page_region(self.remote.call('fetch', {'id':PAGE}))['text']
+        self.remote.page_text = self.remote.page_text.replace('<image source="'+outside+'">\nExisting image\n</image>\n\n', '')
+        self.remote.page_text += '\n<image source="'+outside+'">\nUnrelated user image\n</image>'
+        result = self.sync(source='notion', target='console')
+        self.assertEqual(result['operation']['status'], 'needs_review', result['operation'])
+        plan = self.service.state()['plan']
+        self.assertEqual(len(plan['candidates']), 1)
+        item = plan['candidates'][0]['incoming']
+        self.assertEqual((item['groupTitle'],item['variantLabel']), ('Playtest · 图标','设备方案'))
+        self.assertEqual((self.root / item['path']).read_bytes(), incoming)
+        self.assertEqual((self.root / 'Sample.png').read_bytes(), self.data)
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), (0,0,0))
+
+    def test_rpc_page_scope_requires_unique_region_same_page_and_observed_sources(self):
+        remote = FakeRemote(page_mode=True)
+        rpc = CodexNotionRPC('unused', self.root, PAGE)
+        entity = remote.call('fetch', {'id':PAGE})
+        with patch.object(rpc, '_call', return_value=entity):
+            rpc.call('fetch', {'id':PAGE})
+        old = notion_module._page_region(entity)['text']
+        valid = {'page_id':PAGE, 'command':'update_content', 'content_updates':[{'old_str':old,'new_str':old.replace('## Image','## Image gallery')}]}
+        with patch.object(rpc, '_call', return_value={'ok':True}) as call:
+            rpc.call('page', valid)
+            self.assertEqual(call.call_count, 1)
+            bad_updates = [dict(valid, page_id=OTHER), dict(valid,command='replace_content'),
+                dict(valid,content_updates=[{'old_str':old,'new_str':old+'\nOutside text'}]),
+                dict(valid,content_updates=[{'old_str':old,'new_str':old.replace('</toggle>', '<image source="notion-file-block://'+OTHER+'/'+OTHER+'?name=foreign.png">x</image>\n</toggle>')}])]
+            for arguments in bad_updates:
+                with self.assertRaises(NotionSyncError):
+                    rpc.call('page', arguments)
+            self.assertEqual(call.call_count, 1)
+        for text in (remote.page_text.replace(notion_module.GALLERY_MARKER, 'missing'), remote.page_text+'\n'+old):
+            with patch.object(rpc, '_call', return_value=dict(entity,text=text)):
+                with self.assertRaises(NotionSyncError):
+                    rpc.call('fetch', {'id':PAGE})
+        invalid = [dict(entity,truncated=True), dict(entity,unknown_block_count=1), dict(entity,unknown_block_ids=[OTHER]),
+            dict(entity,text=entity['text'].replace('/p/'+PAGE.replace('-',''), '/p/'+OTHER.replace('-',''))),
+            dict(entity,text=entity['text'].replace('https://app.notion.com', 'https://foreign.example')),
+            dict(entity,text=entity['text'].replace('#'+OTHER.replace('-',''), '#not-a-block'))]
+        for result in invalid:
+            with patch.object(rpc, '_call', return_value=result):
+                with self.assertRaises(NotionSyncError):
+                    rpc.call('fetch', {'id':PAGE})
+
+    def test_native_page_caption_and_outside_uris_never_grant_attachment_scope(self):
+        remote = FakeRemote(page_mode=True)
+        image = remote.add_image('Visible.png', self.data)
+        catalogue = remote.add_catalog({})
+        foreign = 'notion-file-block://'+OTHER+'/'+OTHER+'?name=private.png'
+        historical = 'notion-file-block://'+OTHER+'/'+PAGE+'?name=historical.png'
+        remote.page_text = remote.page_text.replace(notion_module.GALLERY_MARKER,
+            notion_module.GALLERY_MARKER+'\n\nCaption text '+foreign+'\n<file source="'+historical+'">\n历史原件\n</file>')
+        remote.page_text += '\nOutside text '+foreign
+        entity = remote.call('fetch', {'id':PAGE})
+        self.assertEqual(notion_module._image_refs(entity), [image])
+        self.assertEqual(set(notion_module._stable_refs(entity)), {image,catalogue,historical})
+        rpc = CodexNotionRPC('unused', self.root, PAGE)
+        with patch.object(rpc, '_call', return_value=entity):
+            rpc.call('fetch', {'id':PAGE})
+        self.assertNotIn(foreign, rpc.allowed_refs)
+        with self.assertRaises(NotionSyncError):
+            rpc.call('download', {'references':[foreign]})
+        region = notion_module._page_region(entity)
+        new = region['text'].replace('</toggle>', '<image source="'+foreign+'">\nFake image\n</image>\n</toggle>')
+        with self.assertRaises(NotionSyncError):
+            rpc.call('page', {'page_id':PAGE,'command':'update_content',
+                'content_updates':[{'old_str':region['text'],'new_str':new}]})
+        # Native media without captions and reordered attributes are still media.
+        changed = dict(entity,text=entity['text'].replace('<image source="'+image+'">\nExisting image\n</image>',
+            '<image color="gray" source="'+image+'" />'))
+        self.assertEqual(notion_module._image_refs(changed), [image])
+
+    def test_native_page_unsupported_external_source_stops_without_deleting_it(self):
+        self.remote = FakeRemote(page_mode=True)
+        self.remote.page_text = self.remote.page_text.replace('</toggle>',
+            '<image source="https://example.invalid/existing.png">\nUser image\n</image>\n</toggle>')
+        protected = self.remote.page_text
+        operation = self.sync()['operation']
+        self.assertEqual((operation['status'],operation['code']), ('failed','notion_gallery_source_unsupported'))
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), (0,0,0))
+        self.assertEqual(self.remote.page_text, protected)
 
     def test_pending_inbox_is_not_uploaded(self):
         (self.root / 'inbox' / 'Unconfirmed.png').write_bytes(png('blue'))

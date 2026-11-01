@@ -139,7 +139,7 @@ h3 { margin: 0; font-size: 14px; font-weight: 600; }
 .metadata-dialog { width: 520px; }
 .metadata-fields { display: grid; gap: 17px; margin-top: 22px; }
 .original-file { margin: 17px 0 5px; color: var(--muted); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
-.metadata-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+.metadata-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
 .metadata-dialog .operation-status[data-error="true"] { color: var(--error); }
 .hash-details { margin-top: 9px; font-size: 9px; color: var(--muted); }
 .hash-details summary { display: inline; cursor: pointer; }

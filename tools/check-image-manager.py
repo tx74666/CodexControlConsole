@@ -112,6 +112,231 @@ class ImageManagerChecks(unittest.TestCase):
         self.assertTrue((self.root / 'Image_24x16.png').exists())
         self.assertEqual(self.service.sync_device({'expectedRoot': str(self.root), 'direction': 'from-device'})['candidates'], [])
 
+    def device_service(self):
+        service = ImageManagerService(self.directory / 'device-config.json')
+        service.configure({'root':str(self.device)})
+        self.service.configure({'root':str(self.root), 'deviceRoot':str(self.device)})
+        return service
+
+    @staticmethod
+    def label(service, root, item, group, variant, parent=''):
+        return service.annotate({'expectedRoot':str(root), 'path':item['path'], 'sha256':item['sha256'],
+            'groupTitle':group, 'variantLabel':variant, 'derivedFromId':parent})['item']
+
+    def test_device_same_sha_metadata_only_updates_persist_without_touching_originals(self):
+        other = self.device_service()
+        for directory in (self.root, self.device):
+            (directory / 'Source.png').write_bytes(picture('red'))
+            (directory / 'Output.png').write_bytes(picture('blue'))
+        items = {item['title']:item for item in self.scan()['state']['items']}
+        other.scan({'expectedRoot':str(self.device)})
+        self.label(self.service, self.root, items['Source'], '主游戏 · 图标', '正式版')
+        self.label(self.service, self.root, items['Output'], '主游戏 · 图标', '派生尺寸', items['Source']['sha256'])
+        before = {str(path):path.read_bytes() for directory in (self.root, self.device) for path in directory.glob('*.png')}
+        result = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        self.assertEqual(result['candidates'], [])
+        self.assertEqual((result['metadataSync']['applied'],result['metadataSync']['status']), (2,'completed'))
+        received = {item['title']:item for item in other.state()['items']}
+        self.assertEqual((received['Source']['groupTitle'],received['Source']['variantLabel']), ('主游戏 · 图标','正式版'))
+        self.assertEqual(received['Output']['derivedFromId'], items['Source']['sha256'])
+        self.assertEqual({path:Path(path).read_bytes() for path in before}, before)
+        repeat = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        self.assertEqual(repeat['metadataSync']['applied'], 0)
+
+    def test_device_reverse_direction_uses_device_annotations_not_console_projection(self):
+        other = self.device_service()
+        for directory in (self.root, self.device):
+            (directory / 'Icon.png').write_bytes(picture('red'))
+        local = self.scan()['state']['items'][0]
+        remote = other.scan({'expectedRoot':str(self.device)})['state']['items'][0]
+        self.label(self.service, self.root, local, 'Console旧用途', '旧方案')
+        self.label(other, self.device, remote, 'Playtest · 图标', '设备新方案')
+        device_before = (self.device / '.image-manager/library.json').read_bytes()
+        result = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'from-device'})
+        received = self.service.state()['items'][0]
+        self.assertEqual((received['groupTitle'],received['variantLabel']), ('Playtest · 图标','设备新方案'))
+        self.assertEqual(result['metadataSync']['target'], 'console')
+        self.assertEqual((self.device / '.image-manager/library.json').read_bytes(), device_before)
+        (self.device / 'New.png').write_bytes(picture('blue'))
+        incoming = next(item for item in other.scan({'expectedRoot':str(self.device)})['state']['items'] if item['title']=='New')
+        self.label(other, self.device, incoming, '设备新增用途', '新增方案')
+        plan = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'from-device'})
+        self.assertEqual(plan['candidates'][0]['incoming']['groupTitle'], '设备新增用途')
+        self.assertEqual(self.service.state()['plan']['candidates'][0]['incoming']['groupTitle'], '设备新增用途')
+        self.assertFalse((self.root / 'New - 24x16.png').exists())
+        self.apply(plan, 'add')
+        received = next(item for item in self.service.state()['items'] if item['title']=='New')
+        self.assertEqual((received['groupTitle'],received['variantLabel']), ('设备新增用途','新增方案'))
+
+    def test_device_new_and_conflict_metadata_waits_for_confirmed_apply_and_excludes_inbox(self):
+        other = self.device_service()
+        (self.root / 'Icon.png').write_bytes(picture('red'))
+        (self.root / 'New.png').write_bytes(picture('green'))
+        (self.device / 'Icon.png').write_bytes(picture('blue'))
+        pending = self.root / 'inbox/Pending.png'
+        pending.write_bytes(picture('purple'))
+        local = {item['title']:item for item in self.scan()['state']['items']}
+        for item in local.values():
+            self.label(self.service, self.root, item, '主游戏用途', '已保存方案')
+        other.scan({'expectedRoot':str(self.device)})
+        device_before = (self.device / '.image-manager/library.json').read_bytes()
+        plan = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        self.assertEqual({item['status'] for item in plan['candidates']}, {'new','conflict'})
+        self.assertEqual(plan['metadataSync']['status'], 'needs_review')
+        self.assertEqual((self.device / '.image-manager/library.json').read_bytes(), device_before)
+        self.assertEqual((self.device / 'Icon.png').read_bytes(), picture('blue'))
+        self.assertEqual(len(list(self.device.glob('*.png'))), 1)
+        receipt = self.service.apply({'expectedRoot':str(self.root), 'planId':plan['id'],
+            'decisions':[{'id':item['id'], 'action':'replace' if item['status']=='conflict' else 'add'} for item in plan['candidates']]})
+        self.assertEqual(receipt['metadataSync']['status'], 'completed')
+        self.assertEqual({(item['groupTitle'],item['variantLabel']) for item in other.state()['items']}, {('主游戏用途','已保存方案')})
+        self.assertEqual(pending.read_bytes(), picture('purple'))
+        self.assertEqual(len(list(self.device.glob('*.png'))), 2)
+        self.service.restore({'expectedRoot':str(self.root), 'planId':plan['id']})
+        self.assertEqual((self.device / 'Icon.png').read_bytes(), picture('blue'))
+        self.assertEqual(len(other.state()['items']), 1)
+        self.assertEqual(other.state()['items'][0]['sha256'], image_manager._sha(self.device / 'Icon.png'))
+
+    def test_device_metadata_cas_and_source_change_reject_stale_confirmation(self):
+        other = self.device_service()
+        (self.root / 'Icon.png').write_bytes(picture('red'))
+        (self.device / 'Icon.png').write_bytes(picture('blue'))
+        self.scan()
+        remote = other.scan({'expectedRoot':str(self.device)})['state']['items'][0]
+        plan = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        self.label(other, self.device, remote, '用户随后修改', '必须保留')
+        protected = (self.device / '.image-manager/library.json').read_bytes()
+        with self.assertRaises(ImageManagerError):
+            self.apply(plan, 'replace')
+        self.assertEqual((self.device / '.image-manager/library.json').read_bytes(), protected)
+        self.assertEqual((self.device / 'Icon.png').read_bytes(), picture('blue'))
+        plan = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        local = self.service.state()['items'][0]
+        self.label(self.service, self.root, local, '源随后修改', '重新核对')
+        with self.assertRaises(ImageManagerError):
+            self.apply(plan, 'replace')
+        self.assertEqual((self.device / 'Icon.png').read_bytes(), picture('blue'))
+        plan = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        previous_device = self.directory / 'previous-device'
+        self.device.rename(previous_device)
+        self.device.mkdir()
+        with self.assertRaises(ImageManagerError):
+            self.apply(plan, 'replace')
+        self.assertEqual(list(self.device.iterdir()), [])
+        self.assertEqual((previous_device / 'Icon.png').read_bytes(), picture('blue'))
+
+    def test_device_byte_change_and_linked_manifest_reject_metadata_only_write(self):
+        other = self.device_service()
+        for directory in (self.root, self.device):
+            (directory / 'Icon.png').write_bytes(picture('red'))
+        local = self.scan()['state']['items'][0]
+        other.scan({'expectedRoot':str(self.device)})
+        self.label(self.service, self.root, local, '本地已改用途', '新版')
+        target = self.device / '.image-manager/library.json'
+        protected = target.read_bytes()
+        merge = self.service._merge_device_annotations
+        def change_during_merge(*args):
+            result = merge(*args)
+            (self.device / 'Icon.png').write_bytes(picture('blue'))
+            return result
+        with patch.object(self.service, '_merge_device_annotations', side_effect=change_during_merge):
+            with self.assertRaises(ImageManagerError):
+                self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        self.assertEqual(target.read_bytes(), protected)
+        os.link(target, self.directory / 'external-metadata.json')
+        with self.assertRaises(ImageManagerError):
+            self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        self.assertEqual(target.read_bytes(), protected)
+
+    def test_device_apply_metadata_failure_rolls_back_bytes_and_target_annotations(self):
+        other = self.device_service()
+        (self.root / 'Icon.png').write_bytes(picture('red'))
+        (self.device / 'Icon.png').write_bytes(picture('blue'))
+        local = self.scan()['state']['items'][0]
+        self.label(self.service, self.root, local, '主游戏', '确认方案')
+        other.scan({'expectedRoot':str(self.device)})
+        plan = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        protected = (self.device / '.image-manager/library.json').read_bytes()
+        original_write = image_manager._atomic_json
+        failed = False
+        def fail_after_device_save(path, value):
+            nonlocal failed
+            if path == self.root / '.image-manager/library.json' and not failed:
+                failed = True
+                raise PermissionError('fixture final root metadata failure')
+            return original_write(path, value)
+        with patch.object(image_manager, '_atomic_json', side_effect=fail_after_device_save):
+            with self.assertRaises(PermissionError):
+                self.apply(plan, 'replace')
+        self.assertEqual((self.device / 'Icon.png').read_bytes(), picture('blue'))
+        self.assertEqual((self.device / '.image-manager/library.json').read_bytes(), protected)
+        saved = json.loads((self.root / '.image-manager/plans' / (plan['id']+'.json')).read_text(encoding='utf-8'))
+        self.assertNotEqual(saved['status'], 'completed')
+
+    def test_device_distinct_original_duplicate_and_keep_do_not_claim_metadata_synchronized(self):
+        other = self.device_service()
+        (self.root / 'Source.png').write_bytes(picture('red'))
+        (self.device / 'Existing.bmp').write_bytes(picture('red', 'BMP'))
+        local = self.scan()['state']['items'][0]
+        self.label(self.service, self.root, local, '主游戏用途', '独立原件')
+        other.scan({'expectedRoot':str(self.device)})
+        plan = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        self.assertEqual(plan['candidates'][0]['status'], 'duplicate')
+        self.assertEqual(plan['metadataSync']['status'], 'needs_review')
+        protected = (self.device / 'Existing.bmp').read_bytes()
+        receipt = self.apply(plan, 'keep')
+        self.assertEqual((receipt['metadataSync']['status'], receipt['metadataSync']['notSynced']), ('needs_review', 1))
+        self.assertEqual((self.device / 'Existing.bmp').read_bytes(), protected)
+        self.assertNotEqual(other.state()['items'][0]['groupTitle'], '主游戏用途')
+        plan = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+        receipt = self.apply(plan, 'add')
+        self.assertEqual(receipt['metadataSync']['status'], 'completed')
+        received = next(item for item in other.state()['items'] if item['sha256']==local['sha256'])
+        self.assertEqual((received['groupTitle'],received['variantLabel']), ('主游戏用途','独立原件'))
+
+    def test_device_apply_preserves_root_metadata_changed_during_transfer_or_target_save(self):
+        other = self.device_service()
+        (self.root / 'Icon.png').write_bytes(picture('red'))
+        (self.device / 'Icon.png').write_bytes(picture('blue'))
+        self.scan()
+        other.scan({'expectedRoot':str(self.device)})
+        original_write = image_manager._atomic_json
+        original_guard = self.service._device_guard
+        root_record = self.root / '.image-manager/library.json'
+        device_record = self.device / '.image-manager/library.json'
+        for phase in ('after-copy', 'after-device-metadata'):
+            with self.subTest(phase=phase):
+                plan = self.service.sync_device({'expectedRoot':str(self.root), 'direction':'to-device'})
+                device_before = device_record.read_bytes()
+                protected, guard_calls = [], 0
+                def concurrent_edit():
+                    value = json.loads(root_record.read_text(encoding='utf-8'))
+                    for annotation in value['annotations'].values():
+                        annotation.update(groupTitle='并行保存用途 '+phase, variantLabel='保留用户修改')
+                    original_write(root_record, value)
+                    protected.append(root_record.read_bytes())
+                def guard(*args, **kwargs):
+                    nonlocal guard_calls
+                    guard_calls += 1
+                    if phase == 'after-copy' and guard_calls == 2:
+                        concurrent_edit()
+                    return original_guard(*args, **kwargs)
+                def write(path, value):
+                    result = original_write(path, value)
+                    if phase == 'after-device-metadata' and path == device_record and not protected:
+                        concurrent_edit()
+                    return result
+                with patch.object(self.service, '_device_guard', side_effect=guard):
+                    with patch.object(image_manager, '_atomic_json', side_effect=write):
+                        with self.assertRaises(ImageManagerError):
+                            self.apply(plan, 'replace')
+                self.assertEqual(len(protected), 1)
+                self.assertEqual(root_record.read_bytes(), protected[0])
+                self.assertEqual((self.device / 'Icon.png').read_bytes(), picture('blue'))
+                self.assertEqual(device_record.read_bytes(), device_before)
+                saved = json.loads((self.root / '.image-manager/plans' / (plan['id']+'.json')).read_text(encoding='utf-8'))
+                self.assertEqual(saved['status'], 'recovery_required')
+
     def test_ambiguous_match_cannot_replace_multiple_existing_images(self):
         (self.root / 'A.png').write_bytes(picture('red'))
         (self.root / 'B.png').write_bytes(picture('red'))

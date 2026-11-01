@@ -1,13 +1,15 @@
 """On-demand original-file synchronization through the signed-in Codex app server.
 
 No model turn, credential extraction, browser automation, scheduler, or watcher is
-used. The generated public app-server protocol is used only for four fixed Notion
+used. The generated public app-server protocol is used only for fixed Notion
 tools. Downloaded files always enter the core import review workflow.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 import hashlib
+import html
+import io
 import json
 import os
 from pathlib import Path
@@ -21,7 +23,9 @@ import tomllib
 from urllib.parse import parse_qs, urlsplit
 import uuid
 
-from image_manager import ImageManagerError, _atomic_json, _json, _link, EXTENSIONS
+from PIL import Image
+
+from image_manager import ImageManagerError, _atomic_json, _json, _link, _title, _filename_annotation, EXTENSIONS
 
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
@@ -40,8 +44,100 @@ RPC_TOOLS = {
     'prepare': 'notion.notion-create-file-upload',
     'attach': 'notion.notion-update-folder',
     'download': 'notion.notion-get-file-download-urls',
+    'page': 'notion.notion-update-page',
 }
 REF_RE = re.compile(r'notion-file-block://[^\s"<>]+')
+GALLERY_MARKER = 'image-manager-gallery-v1'
+SYNCED_RE = re.compile(r'<synced-block\s+url="([^"<>\r\n]+)"\s*>.*?</synced-block>', re.S)
+SOURCE_RE = re.compile(r'<(?:image|file)\b[^>]*\bsource="([^"<>]+)"[^>]*>', re.S)
+FILE_SOURCE_RE = re.compile(r'<file\b[^>]*\bsource="([^"<>]+)"[^>]*>', re.S)
+PAGE_IMAGE_RE = re.compile(r'<image\b[^>]*\bsource="([^"<>]+)"[^>]*?(?:/\s*>|>(.*?)</image>)', re.S)
+
+
+def _page_region(page):
+    text = page.get('text', '')
+    if not isinstance(text, str) or len(text) > 1024 * 1024:
+        raise NotionSyncError('notion_page_incomplete', 'Notion 图片页面未能完整读取；没有写入。')
+    marker = re.compile(r'(?m)^[ \t]*' + GALLERY_MARKER + r'[ \t]*$')
+    regions = [match for match in SYNCED_RE.finditer(text) if marker.search(match[0])]
+    if len(regions) != 1 or len(marker.findall(text)) != 1:
+        raise NotionSyncError('notion_gallery_unconfigured', '此页面需要唯一的 Image 图片区；未更改页面说明。')
+    region = regions[0]
+    value = region[0]
+    parsed = urlsplit(region[1])
+    owner = _identifier(page.get('id'))
+    if (parsed.scheme != 'https' or parsed.hostname not in {'notion.so','www.notion.so','notion.com','www.notion.com','app.notion.com'}
+            or parsed.username or parsed.password or parsed.port not in (None, 443) or parsed.query
+            or not _identifier(parsed.fragment) or not _identifier(region[1])
+            or owner and _identifier(region[1]) != owner):
+        raise NotionSyncError('notion_gallery_foreign', '图片区必须是当前页面所属的原始区块，未更改其他页面。')
+    if (value.count('<synced-block') != 1 or '<synced-block-reference' in value
+            or re.search(r'<(?:page|database|folder)\b', value)
+            or not re.search(r'<toggle(?:\s[^>]*)?>.*?' + GALLERY_MARKER + r'.*?</toggle>', value, re.S)):
+        raise NotionSyncError('notion_gallery_invalid', '图片区结构无法安全核对，未更改页面。')
+    return {'text':value, 'url':region[1], 'start':region.start(), 'end':region.end()}
+
+
+def _managed_text(entity):
+    return _page_region(entity)['text'] if entity.get('metadata', {}).get('type') == 'page' else entity.get('text', '')
+
+
+def _stable_refs(entity, *, pending=()):
+    text = _managed_text(entity)
+    if entity.get('metadata', {}).get('type') == 'page':
+        values = [html.unescape(value) for value in SOURCE_RE.findall(text)]
+        if any(not REF_RE.fullmatch(value) and value not in pending for value in values):
+            raise NotionSyncError('notion_gallery_source_unsupported', '图片区含尚未支持的附件来源，保留原页面，未删除或替换图片。')
+        return list(dict.fromkeys(value for value in values if REF_RE.fullmatch(value)))
+    return list(dict.fromkeys(html.unescape(value) for value in REF_RE.findall(text)))
+
+
+def _source_id(source):
+    matches = re.findall(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', source.split('?', 1)[0])
+    return _identifier(matches[-1]) if matches else ''
+
+
+def _upload_source(uploaded):
+    source = uploaded.get('markdown_source')
+    if not isinstance(source, str):
+        suggested = uploaded.get('suggested_markdown', '')
+        match = re.fullmatch(r'\s*<(?:image|file) source="([^"<>]+)"[^>]*>.*?</(?:image|file)>\s*', suggested, re.S) if isinstance(suggested, str) else None
+        if not match and isinstance(suggested, str):
+            match = re.fullmatch(r'!?\[[^\]\r\n]*\]\(([^\s()]+)\)\s*', suggested)
+        source = html.unescape(match[1]) if match else None
+    upload_id = _identifier(uploaded.get('id', uploaded.get('file_upload_id')))
+    if (not isinstance(source, str) or not 1 <= len(source) <= 4096
+            or any(ord(char) < 32 or char in '<>"' for char in source)
+            or not re.match(r'[a-z][a-z0-9+._-]*:', source)
+            or source.split(':',1)[0].lower() in {'http', 'https', 'file', 'data', 'javascript'}
+            or not upload_id or _source_id(source) != upload_id):
+        raise NotionSyncError('upload_markdown_unverified', '上传已保存，但原生附件引用尚未核实；不会猜测地址或重传。', unknown=True)
+    return source
+
+
+def _caption(value):
+    return f"{value['groupTitle']} · {value['variantLabel']} · {value['width']}×{value['height']}"
+
+
+def _render_gallery(region, rows, files):
+    blocks = ['<synced-block url="' + html.escape(region['url'], quote=True) + '">', '## Image', '']
+    for offset in range(0, len(rows), 3):
+        group = rows[offset:offset + 3]
+        blocks.append('<columns>')
+        for index, row in enumerate(group):
+            ratio = (34 if index == 0 else 33) if len(group) == 3 else 50 if len(group) == 2 else 100
+            caption = html.escape(row['caption'])
+            # A catalogue label is text, never Markdown instructions or links.
+            caption = re.sub(r'([\\`*_\[\]{}])', r'\\\1', caption)
+            blocks.extend([f'<column ratio="{ratio}">', '<image source="' + html.escape(row['source'], quote=True) + '">',
+                           caption, '</image>', '</column>'])
+        blocks.extend(['</columns>', ''])
+    blocks.extend(['<toggle>', '同步记录', '', GALLERY_MARKER, ''])
+    for source, name in files:
+        label = '方案目录' if _catalog_identity(name) else name
+        blocks.extend(['<file source="' + html.escape(source, quote=True) + '">', html.escape(label), '</file>', ''])
+    blocks.extend(['</toggle>', '</synced-block>'])
+    return '\n'.join(blocks)
 
 
 def _now():
@@ -100,7 +196,12 @@ def _same_catalog_name(left, right):
 
 
 def _image_refs(folder):
-    return [ref for ref in dict.fromkeys(REF_RE.findall(folder.get('text', '')))
+    if folder.get('metadata', {}).get('type') == 'page':
+        _stable_refs(folder)
+        values = [html.unescape(source) for source, _ in PAGE_IMAGE_RE.findall(_managed_text(folder))]
+        return list(dict.fromkeys(value for value in values
+            if REF_RE.fullmatch(value) and Path(_reference_name(value)).suffix.lower() in EXTENSIONS))
+    return [ref for ref in _stable_refs(folder)
         if Path(_reference_name(ref)).suffix.lower() in EXTENSIONS]
 
 
@@ -288,6 +389,15 @@ class CodexNotionRPC:
         self.incoming, self.sequence = queue.Queue(), 0
         self.thread_id = None
         self.allowed_refs = set()
+        self.prepared_ids, self.allowed_upload_sources = set(), set()
+        self.latest_region, self.target_type = None, None
+
+    def authorize_upload(self, uploaded):
+        source = _upload_source(uploaded)
+        if _identifier(uploaded.get('id', uploaded.get('file_upload_id'))) not in self.prepared_ids:
+            raise NotionSyncError('notion_scope_invalid', '只能附加本次已核对的上传原件。')
+        self.allowed_upload_sources.add(source)
+        return source
 
     def __enter__(self):
         command = [self.executable, 'app-server', '--listen', 'stdio://']
@@ -403,14 +513,41 @@ class CodexNotionRPC:
                 or not 1 <= len(arguments['references']) <= 25
                 or not set(arguments['references']) <= self.allowed_refs):
             raise NotionSyncError('notion_scope_invalid', '只能下载所选图库中已回读的原件。')
+        if action == 'page':
+            updates = arguments.get('content_updates')
+            if (set(arguments) != {'page_id', 'command', 'content_updates'}
+                    or arguments.get('page_id') != self.target_id or arguments.get('command') != 'update_content'
+                    or self.target_type != 'page' or not self.latest_region
+                    or not isinstance(updates, list) or len(updates) != 1
+                    or not isinstance(updates[0], dict) or set(updates[0]) != {'old_str', 'new_str'}
+                    or updates[0].get('old_str') != self.latest_region['text']):
+                raise NotionSyncError('notion_scope_invalid', '只可更新已回读的同一页面图片区。')
+            new = _page_region({'id':self.target_id, 'text':updates[0]['new_str']})
+            old_refs = set(_stable_refs({'id':self.target_id, 'metadata':{'type':'page'}, 'text':self.latest_region['text']}))
+            new_refs = set(_stable_refs({'id':self.target_id, 'metadata':{'type':'page'}, 'text':new['text']},
+                                       pending=self.allowed_upload_sources))
+            sources = set(html.unescape(value) for value in SOURCE_RE.findall(new['text']))
+            if (new['text'] != updates[0]['new_str'] or new['url'] != self.latest_region['url']
+                    or not old_refs <= new_refs or not new_refs <= self.allowed_refs
+                    or not sources <= self.allowed_refs | self.allowed_upload_sources):
+                raise NotionSyncError('notion_scope_invalid', '图片区不能删除原件、引入未知附件或改写区外内容。')
         result = _unwrap(self._call('mcpServer/tool/call', {'threadId': self.thread_id,
             'server': 'codex_apps', 'tool': RPC_TOOLS[action], 'arguments': arguments}))
         if action == 'fetch':
             if (result.get('truncated') or result.get('unknown_block_count')
                     or result.get('unknown_block_ids') or _identifier(result.get('id')) != self.target_id
-                    or result.get('metadata', {}).get('type') != 'folder'):
+                    or result.get('metadata', {}).get('type') not in {'folder', 'page'}
+                    or self.target_type not in {None, result.get('metadata', {}).get('type')}):
                 raise NotionSyncError('notion_folder_incomplete', 'Notion 图库未能完整读取；没有写入。')
-            self.allowed_refs.update(REF_RE.findall(result.get('text', '')))
+            self.target_type = result['metadata']['type']
+            self.latest_region = _page_region(result) if self.target_type == 'page' else None
+            self.allowed_refs.update(_stable_refs(result))
+        if action == 'prepare':
+            identifier = _identifier(result.get('file_upload_id'))
+            if identifier:
+                self.prepared_ids.add(identifier)
+        if action == 'page' and result.get('warnings'):
+            raise NotionSyncError('notion_page_update_warning', 'Notion 页面更新需要核对；没有重复发送。', unknown=True)
         return result
 
     def __exit__(self, *_):
@@ -725,7 +862,7 @@ class ImageManagerNotion:
 
     @staticmethod
     def _refs(folder):
-        return list(dict.fromkeys(REF_RE.findall(folder.get('text', ''))))
+        return _stable_refs(folder)
 
     def _download(self, rpc, transport, reference, *, maximum=MAX_FILE_BYTES):
         response = rpc.call('download', {'references': [reference]})
@@ -740,6 +877,77 @@ class ImageManagerNotion:
         if not data or len(data) > maximum:
             raise NotionSyncError('notion_original_too_large', 'Notion 原件超过单张 20 MiB 同步限制。')
         return data
+
+    def _page_rows(self, rpc, transport, entity, entries):
+        rows, total = [], 0
+        references = _image_refs(entity)
+        if len(references) > MAX_BATCH:
+            raise NotionSyncError('notion_batch_limit', '页面原图超过单批限制，未更改图片区。')
+        for reference in references:
+            data = self._download(rpc, transport, reference)
+            total += len(data)
+            if total > 96 * 1024 * 1024:
+                raise NotionSyncError('notion_batch_too_large', '页面原图超过本批读取限制，未更改图片区。')
+            digest = hashlib.sha256(data).hexdigest()
+            try:
+                with Image.open(io.BytesIO(data)) as image:
+                    width, height = image.size
+                    if min(width, height) < 1 or width * height > 40_000_000:
+                        raise ValueError('image dimensions')
+                    image.verify()
+            except (OSError, ValueError, Image.DecompressionBombError):
+                raise NotionSyncError('notion_image_invalid', '页面原图无法核对实际尺寸，未更改图片区。') from None
+            title, label = _filename_annotation(_title(_reference_name(reference)))
+            entry = entries.get(digest, {'groupTitle':title, 'variantLabel':label or '方案1'})
+            row = dict(entry, source=reference, sha256=digest, width=width, height=height)
+            row['caption'] = _caption(row)
+            rows.append(row)
+        return rows
+
+    def _attach_asset(self, payload, record, rpc, transport, entity, receipt, uploaded, entries):
+        if entity.get('metadata', {}).get('type') != 'page':
+            self._check_root(payload)
+            rpc.call('attach', {'folder_id':record['pageId'], 'command':'add_files', 'file_upload_ids':[receipt['uploadId']]})
+            return None
+        region = _page_region(entity)
+        source = rpc.authorize_upload(uploaded) if hasattr(rpc, 'authorize_upload') else _upload_source(uploaded)
+        rows = self._page_rows(rpc, transport, entity, entries)
+        files = [(html.unescape(reference), _reference_name(html.unescape(reference)))
+                 for reference in FILE_SOURCE_RE.findall(region['text'])]
+        if receipt['direction'] == 'catalog':
+            files.append((source, receipt['filename']))
+        else:
+            row = dict(receipt['metadata'], source=source, sha256=receipt['sha256'],
+                       width=receipt['width'], height=receipt['height'])
+            row['caption'] = _caption(row)
+            rows.append(row)
+        replacement = _render_gallery(region, rows, files)
+        latest = rpc.call('fetch', {'id':record['pageId']})
+        if latest.get('metadata', {}).get('type') != 'page' or _page_region(latest)['text'] != region['text']:
+            raise NotionSyncError('notion_gallery_changed', 'Notion 图片区刚有更改，未覆盖这些修改。')
+        self._check_root(payload)
+        rpc.call('page', {'page_id':record['pageId'], 'command':'update_content',
+            'content_updates':[{'old_str':region['text'], 'new_str':replacement}]})
+        return rows
+
+    def _verify_page_rows(self, rpc, transport, entity, expected, *, uncertain=True):
+        if expected is None:
+            return
+        observed = {}
+        for source, caption in PAGE_IMAGE_RE.findall(_page_region(entity)['text']):
+            source = html.unescape(source)
+            caption = re.sub(r'\\([\\`*_{}\[\]()#+\-.!|>])', r'\1', html.unescape(caption)).strip()
+            observed.setdefault(_source_id(source), []).append((source, caption))
+        total = 0
+        for row in expected:
+            match = next((source for source, caption in observed.get(_source_id(row['source']), [])
+                          if caption == row['caption']), None)
+            if match is None:
+                raise NotionSyncError('notion_gallery_unverified', '页面图片与方案显示尚未核实；保留原请求，不重新发送。', unknown=uncertain)
+            data = self._download(rpc, transport, match)
+            total += len(data)
+            if total > 96 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != row['sha256']:
+                raise NotionSyncError('notion_gallery_unverified', '页面原图回读未能匹配，保留原请求，不重新发送。', unknown=uncertain)
 
     def _read_catalog(self, rpc, transport, folder):
         versions = []
@@ -836,6 +1044,9 @@ class ImageManagerNotion:
         previous = [row for row in record['receipts']
             if row.get('direction') == 'catalog' and row.get('sha256') == digest]
         if latest['sha256'] == digest:
+            if latest_folder.get('metadata', {}).get('type') == 'page':
+                rows = self._page_rows(rpc, transport, latest_folder, merged)
+                self._verify_page_rows(rpc, transport, latest_folder, rows, uncertain=False)
             for receipt in previous:
                 receipt.update(status='verified', reference=latest['reference'], verifiedAt=_now())
             self._save(path, record, catalog={'status': 'unchanged', 'sha256': digest,
@@ -896,10 +1107,11 @@ class ImageManagerNotion:
             receipt['status'] = 'attach_unknown'
             self._save(path, record)
             self._check_root(payload)
-            rpc.call('attach', {'folder_id': record['pageId'], 'command': 'add_files', 'file_upload_ids': [receipt['uploadId']]})
+            page_rows = self._attach_asset(payload, record, rpc, transport, before_folder, receipt, uploaded, merged)
             receipt['status'] = 'attached_unverified'
             self._save(path, record, phase='verifying', message='正在回读核对方案目录。')
             after = rpc.call('fetch', {'id': record['pageId']})
+            self._verify_page_rows(rpc, transport, after, page_rows)
             candidates = [ref for ref in self._refs(after) if ref not in before and _same_catalog_name(_reference_name(ref), name)]
             for reference in candidates:
                 returned = self._download(rpc, transport, reference, maximum=MAX_CATALOG_BYTES)
@@ -956,6 +1168,9 @@ class ImageManagerNotion:
             entries = _parse_catalog(data, receipt['sha256'])
             if len(data) != receipt['size'] or not expected <= set(entries):
                 raise NotionSyncError('catalog_receipt_identity_unverified', '回读目录与原请求不匹配；未发送任何新上传。', unknown=True)
+            if folder.get('metadata', {}).get('type') == 'page':
+                rows = self._page_rows(rpc, transport, folder, entries)
+                self._verify_page_rows(rpc, transport, folder, rows)
             originals = self._verify_attached_originals(record, rpc, transport, folder) if payload.get('_verifyOriginals') else None
             self._check_root(payload)
             receipt.update(status='verified', reference=reference, verifiedAt=_now())
@@ -972,6 +1187,7 @@ class ImageManagerNotion:
     def _verify_attached_originals(self, record, rpc, transport, folder):
         present = set(_image_refs(folder))
         verified = {}
+        page_originals = None
         for item in record['operation']['items']:
             digest = item['sha256']
             if digest in verified:
@@ -980,6 +1196,13 @@ class ImageManagerNotion:
             candidates.extend(row['reference'] for row in record['receipts']
                 if row.get('direction') in {'upload','download'} and row.get('status') == 'verified'
                 and row.get('sha256') == digest and row.get('reference') in present)
+            if not candidates and folder.get('metadata', {}).get('type') == 'page':
+                # Native page edits can copy the same uploaded file into a new
+                # block UUID. Reconcile its real bytes, never infer from a label.
+                if page_originals is None:
+                    page_originals = self._remote_hashes(rpc, transport, folder, record)
+                if digest in page_originals:
+                    candidates.append(page_originals[digest])
             if not candidates:
                 raise NotionSyncError('verified_original_missing', '原请求的原件引用尚未核实；没有发送新上传。', unknown=True)
             reference = candidates[0]
@@ -1095,14 +1318,16 @@ class ImageManagerNotion:
                 self._check_root(payload)
                 # Re-read immediately before appending; this never removes or
                 # replaces existing files and keeps another writer's additions.
-                before = self._refs(rpc.call('fetch', {'id': record['pageId']}))
+                before_entity = rpc.call('fetch', {'id': record['pageId']})
+                before = self._refs(before_entity)
                 receipt['status'] = 'attach_unknown'
                 self._save(path, record)
                 self._check_root(payload)
-                rpc.call('attach', {'folder_id': record['pageId'], 'command': 'add_files', 'file_upload_ids': [receipt['uploadId']]})
+                page_rows = self._attach_asset(payload, record, rpc, transport, before_entity, receipt, uploaded, planned_entries)
                 receipt['status'] = 'attached_unverified'
                 self._save(path, record, phase='verifying', message='正在回读核对原图。')
                 folder = rpc.call('fetch', {'id': record['pageId']})
+                self._verify_page_rows(rpc, transport, folder, page_rows)
                 additions = [ref for ref in self._refs(folder) if ref not in before]
                 matched = None
                 for reference in additions:

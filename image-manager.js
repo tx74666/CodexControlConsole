@@ -26,6 +26,8 @@
   let lastApplied = null;
   let metadataTarget = null;
   let metadataFocus = null;
+  let metadataBaseline = "";
+  let metadataJob = null;
   const groupSelections = new Map();
   const continuations = new Map();
   const pendingStatuses = new Set(["pending", "queued", "running", "in_progress", "starting"]);
@@ -46,6 +48,56 @@
     return match ? match[0].replace(/-/g, "").toLowerCase() : "";
   }
   const configuredPageId = () => pageId(state?.notionPage) || pageId(state?.notion?.pageId);
+  const metadataValues = () => JSON.stringify([byId("metadataGroupTitle").value.trim(), byId("metadataVariantLabel").value.trim(), byId("metadataDerivedFrom").value]);
+  const metadataDirty = () => Boolean(metadataTarget) && metadataValues() !== metadataBaseline;
+  const metadataJobKey = item => `console-image-metadata-sync:${item.root || item.expectedRoot}:${item.path}:${item.sha256}`;
+  const metadataPlanKey = id => `console-image-metadata-plan:${root}:${id}`;
+  const annotationFingerprint = item => JSON.stringify([groupTitle(item), str(item.variantLabel), str(item.derivedFromId), str(item.pendingDerivedFromId)]);
+  function rememberMetadataJob(job) {
+    metadataJob = job;
+    try { sessionStorage.setItem(metadataJobKey(job), JSON.stringify(job)); } catch (_) { /* Keep the saved result in memory. */ }
+    if (job.planId) try { sessionStorage.setItem(metadataPlanKey(job.planId), JSON.stringify(job)); } catch (_) { /* Optional storage. */ }
+    if (metadataTarget && metadataTarget.path === job.path && metadataTarget.sha256 === job.sha256) {
+      byId("metadataStatus").textContent = job.message;
+      byId("metadataStatus").dataset.error = String(["failed", "unknown", "stale"].includes(job.status));
+    }
+  }
+  function metadataScopeMatches(job, value = state) {
+    if (!job || job.root !== root || str(value?.root) !== job.root
+        || (pageId(value?.notionPage) || pageId(value?.notion?.pageId)) !== job.pageId
+        || str(value?.deviceRoot) !== job.deviceRoot) return false;
+    const items = Array.isArray(value?.items) ? value.items : [];
+    if (job.indexed) return items.some(item => item.path === job.path && item.sha256 === job.sha256 && item.space !== "device"
+      && (!job.annotationFingerprint || annotationFingerprint(item) === job.annotationFingerprint));
+    const candidates = (extractPlan(value) || plan)?.candidates || [];
+    return candidates.some(candidate => candidate.incoming?.path === job.path && candidate.incoming.sha256 === job.sha256);
+  }
+  function requireMetadataScope(job, token, expectedRoot, value = state) {
+    if (!assertCurrent(token, expectedRoot) || !metadataScopeMatches(job, value)) throw new Error("图库、同步位置或原图已改变，已停止本次同步；保存内容与原请求已保留，请重新核对。");
+  }
+  function configurationDirty() {
+    return Boolean(state) && (byId("libraryRoot").value.trim() !== root
+      || byId("deviceRoot").value.trim() !== str(state.deviceRoot)
+      || byId("notionPage").value.trim() !== str(state.notionPage));
+  }
+  function requireSavedLocations() {
+    if (!configurationDirty()) return true;
+    byId("locations").open = true;
+    byId("configStatus").textContent = "位置有未保存的修改，请先保存位置。";
+    if (byId("metadataDialog").open) byId("metadataStatus").textContent = "位置有未保存的修改，请关闭此框并先保存位置，再同步。";
+    notice("位置有未保存的修改，请先保存位置，再同步。", true);
+    return false;
+  }
+  function updateMetadataControls() {
+    const dirty = metadataDirty();
+    const ownPending = Boolean(pendingOperation?.metadataJob && metadataTarget
+      && pendingOperation.metadataJob.path === metadataTarget.path && pendingOperation.metadataJob.sha256 === metadataTarget.sha256);
+    const retryable = metadataJob && metadataTarget && metadataJob.path === metadataTarget.path && metadataJob.sha256 === metadataTarget.sha256
+      && !["completed", "local", "inbox", "stale"].includes(metadataJob.status);
+    byId("metadataSaveOnly").disabled = busy || Boolean(pendingOperation) || !dirty;
+    byId("metadataSave").disabled = busy || Boolean(pendingOperation) && !ownPending || !dirty && !retryable;
+    byId("metadataSave").textContent = dirty ? "保存并同步" : ownPending ? "继续核对" : retryable ? metadataJob.planId ? "查看待确认同步" : "同步已保存修改" : "保存并同步";
+  }
   function canRecheckOperation(operation) {
     return operation?.status === "unknown" && operation.code === "catalog_attached_unverified"
       || operation?.recheckable === true && operation.recheckKind === "verified_completion"
@@ -182,7 +234,9 @@
     if (pendingOperation) byId("syncImages").disabled = true;
     byId("restoreImages").hidden = !lastApplied || lastApplied.root !== root;
     byId("restoreImages").disabled = busy || Boolean(pendingOperation);
-    for (const id of ["metadataGroupTitle", "metadataVariantLabel", "metadataDerivedFrom", "metadataSave", "metadataClose"]) byId(id).disabled = busy;
+    for (const id of ["metadataGroupTitle", "metadataVariantLabel", "metadataDerivedFrom"]) byId(id).disabled = busy || Boolean(pendingOperation);
+    byId("metadataClose").disabled = busy;
+    updateMetadataControls();
     for (const button of document.querySelectorAll?.("button") || []) if (button.dataset.metadataPath) button.disabled = busy || Boolean(pendingOperation);
     for (const fieldset of byId("candidateList").querySelectorAll("fieldset")) fieldset.disabled = busy;
     const selected = plan?.candidates?.filter(candidate => actions.has(decisions.get(str(candidate.id)))) || [];
@@ -221,7 +275,14 @@
     notice(message);
     updateControls();
     try { await task(token, expectedRoot); }
-    catch (error) { if (assertCurrent(token, expectedRoot)) notice(error.message || "这次操作未完成，当前选择已保留。", true); }
+    catch (error) {
+      if (assertCurrent(token, expectedRoot)) {
+        if (pendingOperation?.metadataJob) {
+          rememberMetadataJob({ ...pendingOperation.metadataJob, status: "unknown", message: `已保存到本地；同步未完成。${error.message || "请继续核对原请求。"}` });
+          notice(metadataJob.message, true);
+        } else notice(error.message || "这次操作未完成，当前选择已保留。", true);
+      }
+    }
     finally { if (token === generation) { busy = false; updateControls(); } }
   }
   function rememberDecisions() {
@@ -525,7 +586,8 @@
   }
   function openMetadata(item, trigger) {
     if (busy || pendingOperation || !item?.path || !item?.sha256 || item.space === "device") return;
-    metadataTarget = { ...item, expectedRoot: root };
+    metadataTarget = { ...item, expectedRoot: root, expectedPageId: configuredPageId(), expectedDeviceRoot: str(state?.deviceRoot),
+      indexed: (state?.items || []).some(current => current.path === item.path && current.sha256 === item.sha256 && current.space !== "device") };
     metadataFocus = trigger;
     byId("metadataOriginal").textContent = `原文件：${str(item.path)} · ${dimensions(item)}`;
     byId("metadataGroupTitle").value = groupTitle(item);
@@ -555,9 +617,16 @@
       sources.append(pending);
     }
     sources.value = !item.derivedFromId && item.pendingDerivedFromId ? "__pending_source__" : str(item.derivedFromId);
-    byId("metadataStatus").textContent = "";
+    metadataBaseline = metadataValues();
+    metadataJob = null;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(metadataJobKey(metadataTarget)) || "null");
+      if (saved?.root === root && saved.path === item.path && saved.sha256 === item.sha256) metadataJob = saved;
+    } catch (_) { /* Optional saved sync status. */ }
+    byId("metadataStatus").textContent = metadataJob?.message || "尚无未保存的修改。";
     byId("metadataStatus").dataset.error = "false";
     byId("metadataDialog").showModal();
+    updateMetadataControls();
     byId("metadataGroupTitle").focus();
   }
   function updatePlanMetadata(item) {
@@ -570,27 +639,101 @@
     }
     renderPlan();
   }
-  async function saveMetadata(event) {
+  async function saveMetadata(event, synchronize = true) {
     event.preventDefault();
-    if (!metadataTarget || metadataTarget.expectedRoot !== root || busy || pendingOperation) return;
+    if (!metadataTarget || metadataTarget.expectedRoot !== root || busy) return;
+    if (pendingOperation) {
+      if (synchronize && pendingOperation.metadataJob && pendingOperation.metadataJob.path === metadataTarget.path && pendingOperation.metadataJob.sha256 === metadataTarget.sha256) await resumeOperation();
+      return;
+    }
+    if (synchronize && !requireSavedLocations()) return;
+    const dirty = metadataDirty();
+    if (!dirty && (!synchronize || !metadataJob || ["completed", "local", "inbox", "stale"].includes(metadataJob.status))) return;
+    if (!dirty && metadataJob.planId && planId(plan) === metadataJob.planId) {
+      byId("metadataDialog").close();
+      setReviewExpanded(true);
+      byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const snapshot = { root, path: metadataTarget.path, sha256: metadataTarget.sha256, pageId: metadataTarget.expectedPageId,
+      deviceRoot: metadataTarget.expectedDeviceRoot, indexed: metadataTarget.indexed };
     const payload = { expectedRoot: root, path: metadataTarget.path, sha256: metadataTarget.sha256, space: "root", groupTitle: byId("metadataGroupTitle").value.trim(), variantLabel: byId("metadataVariantLabel").value.trim() };
     if (byId("metadataDerivedFrom").value !== "__pending_source__") payload.derivedFromId = byId("metadataDerivedFrom").value;
     if (!payload.groupTitle || !payload.variantLabel) return;
-    await run("正在保存方案信息…", async (token, expectedRoot) => {
-      byId("metadataStatus").textContent = "正在保存…";
+    await run(dirty ? "正在保存方案信息…" : "正在同步已保存修改…", async (token, expectedRoot) => {
+      byId("metadataStatus").textContent = dirty ? "正在保存…" : "正在同步已保存修改…";
       byId("metadataStatus").dataset.error = "false";
       try {
-        const value = await call("metadata", { payload });
-        if (!acceptResponse(value, token, expectedRoot)) return;
-        if (value.item) updatePlanMetadata(value.item);
-        byId("metadataDialog").close();
-        notice("方案信息已保存，原文件名与图片内容保持不变。", false, true);
+        requireMetadataScope(snapshot, token, expectedRoot);
+        if (dirty) {
+          const value = await call("metadata", { payload });
+          requireMetadataScope(snapshot, token, expectedRoot, value.state || state);
+          if (value.item && (value.item.path !== snapshot.path || value.item.sha256 !== snapshot.sha256)) throw new Error("保存回执对应的原图已改变，已停止同步，填写内容已保留。");
+          if (!acceptResponse(value, token, expectedRoot)) return;
+          if (value.item) { updatePlanMetadata(value.item); metadataTarget = { ...metadataTarget, ...value.item }; }
+          metadataBaseline = metadataValues();
+          const targets = [...(configuredPageId() ? ["notion"] : []), ...(state?.deviceRoot ? ["device"] : [])];
+          rememberMetadataJob({ ...snapshot, annotationFingerprint: annotationFingerprint(value.item || metadataTarget), targets, completed: [], status: !snapshot.indexed ? "inbox" : targets.length ? "saved" : "local",
+            message: !snapshot.indexed ? "已保存到 Inbox，确认入库后再同步；尚未发布这张图片。" : targets.length ? "已保存到本地，待同步。" : "已保存到本地；尚未配置外部同步位置。" });
+        }
       } catch (error) {
         byId("metadataStatus").textContent = error.message || "保存未完成，填写内容已保留。";
         byId("metadataStatus").dataset.error = "true";
         throw error;
       }
+      if (!synchronize || ["local", "inbox"].includes(metadataJob.status)) { notice(metadataJob.message, false, true); return; }
+      await syncMetadataTargets(metadataJob, token, expectedRoot);
     });
+  }
+  async function syncMetadataTargets(job, token, expectedRoot) {
+    try {
+      requireMetadataScope(job, token, expectedRoot);
+      const target = job.targets.find(value => !job.completed.includes(value));
+      if (!target) {
+        rememberMetadataJob({ ...job, status: "completed", planId: "", message: "已保存，并同步到全部已配置位置。" });
+        notice(metadataJob.message, false, true);
+        return;
+      }
+      if (target === "notion" && state?.notionAvailable !== true && state?.notion?.canAttempt !== true && state?.notion?.available !== true) throw new Error("Notion 连接尚未就绪，可在连接恢复后同步已保存修改。");
+      byId("syncSource").value = "console";
+      byId("syncTarget").value = job.targets.length > 1 ? "all" : target;
+      rememberMetadataJob({ ...job, status: "syncing", planId: "", message: `已保存到本地，正在同步${target === "notion" ? "到 Notion" : "到设备文件夹"}…` });
+      await dispatchSync("console", target, token, expectedRoot, null, metadataJob);
+    } catch (error) {
+      const current = metadataJob || job;
+      const uncertain = Boolean(pendingOperation?.metadataJob);
+      rememberMetadataJob({ ...current, status: error.code === "metadata_scope_changed" ? "stale" : uncertain ? "unknown" : "failed", message: `已保存到本地；${current.completed.length ? "部分位置已同步，" : ""}同步未完成。${error.message || "请重试。"}${uncertain ? "请继续核对原请求。" : ""}` });
+      notice(metadataJob.message, true);
+    }
+  }
+  async function completeMetadataTarget(job, target, token, expectedRoot) {
+    requireMetadataScope(job, token, expectedRoot);
+    rememberMetadataJob({ ...job, completed: [...new Set([...job.completed, target])], status: "saved", planId: "", message: "已保存到本地，正在完成后续同步…" });
+    await syncMetadataTargets(metadataJob, token, expectedRoot);
+  }
+  async function acceptMetadataDeviceResult(value, job, token, expectedRoot) {
+    requireMetadataScope(job, token, expectedRoot, value.state || state);
+    const syncPlan = extractPlan(value);
+    if (!syncPlan || syncPlan.root !== job.root || syncPlan.deviceRoot !== job.deviceRoot || syncPlan.direction !== "to-device") {
+      const error = new Error("设备同步计划的图库、目标位置或方向与本次保存不一致，已停止应用，请重新核对位置。");
+      error.code = "metadata_scope_changed";
+      throw error;
+    }
+    if (value.state) acceptState(value.state);
+    const count = syncPlan?.candidates?.length || 0;
+    if (count) {
+      acceptPlan(syncPlan);
+      rememberMetadataJob({ ...job, status: "review", planId: planId(syncPlan), message: "已保存到本地；设备同步有待确认的图片，请查看后确认。" });
+      if (!syncPlan.errors?.length && syncPlan.candidates.every(candidate => candidate.status === "new")) {
+        await commitBatch({ planId: planId(syncPlan), expectedRoot, decisions: syncPlan.candidates.map(candidate => ({ id: str(candidate.id), action: "add" })) }, token, expectedRoot);
+        return;
+      }
+      setReviewExpanded(true);
+      notice(metadataJob.message);
+      return;
+    }
+    if (value.metadataSync?.status !== "completed" || Number(value.metadataSync?.unresolved) > 0 || syncPlan?.errors?.length) throw new Error(str(value.message) || "设备方案信息尚未完整同步，请重新核对。");
+    await completeMetadataTarget(job, "device", token, expectedRoot);
   }
   async function loadState() {
     await run("正在读取图库…", async (token, expectedRoot) => {
@@ -605,6 +748,7 @@
       try { saved = JSON.parse(localStorage.getItem(operationKey()) || "null"); } catch (_) { /* The server can also restore its operation. */ }
       if (saved?.requestId || (active?.requestId && (pendingStatuses.has(active.status) || active.status === "unknown" || canRecheckOperation(active)))) {
         pendingOperation = saved?.requestId ? saved : { requestId: active.requestId, autoApply: true };
+        if (pendingOperation.metadataJob) metadataJob = pendingOperation.metadataJob;
         const restoreSource = pendingOperation.uiSource || active?.source;
         const restoreTarget = pendingOperation.uiTarget || active?.target;
         if (["local", "console", "notion"].includes(restoreSource)) byId("syncSource").value = restoreSource;
@@ -663,6 +807,7 @@
     byId("imageFiles").value = "";
   }
   async function syncImages() {
+    if (!requireSavedLocations()) return;
     const source = byId("syncSource").value, target = byId("syncTarget").value;
     if ((source === "notion" || target === "notion" || target === "all") && state?.notionAvailable !== true && state?.notion?.canAttempt !== true && state?.notion?.available !== true) { notice(errors.notion_unavailable, true); return; }
     await run("正在检查同步内容…", async (token, expectedRoot) => {
@@ -676,12 +821,17 @@
       await dispatchSync(source, actualTarget, token, expectedRoot, afterDevice);
     });
   }
-  async function dispatchSync(source, target, token, expectedRoot, after = null) {
+  async function dispatchSync(source, target, token, expectedRoot, after = null, savedMetadata = null) {
     if (!assertCurrent(token, expectedRoot)) return;
-    const requestId = crypto.randomUUID();
+    if (savedMetadata) requireMetadataScope(savedMetadata, token, expectedRoot);
+    const requestId = savedMetadata?.deviceRequestId && target === "device" ? savedMetadata.deviceRequestId : crypto.randomUUID();
+    if (savedMetadata && target === "device") {
+      savedMetadata = { ...savedMetadata, deviceRequestId: requestId };
+      rememberMetadataJob(savedMetadata);
+    }
     const isNotion = source === "notion" || target === "notion";
     if (isNotion) {
-      pendingOperation = { requestId, autoApply: true, after, root: expectedRoot, source, target,
+      pendingOperation = { requestId, autoApply: !savedMetadata, after, ...(savedMetadata ? { metadataJob: savedMetadata } : {}), root: expectedRoot, source, target,
         pageId: configuredPageId(), uiSource: byId("syncSource").value, uiTarget: byId("syncTarget").value };
       try { localStorage.setItem(operationKey(), JSON.stringify(pendingOperation)); } catch (_) { /* The server persists its own operation. */ }
       notice(source === "notion" ? "正在从 Notion 同步图片…" : "正在同步到 Notion…");
@@ -690,12 +840,18 @@
     try { value = await call("sync", { payload: { source, target, expectedRoot, requestId } }); }
     catch (error) { if (isNotion && [400, 422].includes(error.httpStatus)) clearOperation(); throw error; }
     if (!assertCurrent(token, expectedRoot)) return;
+    if (savedMetadata) requireMetadataScope(savedMetadata, token, expectedRoot, value.state || state);
     if (value.operation) {
       if (value.state) acceptState(value.state);
       await pollOperation(value.operation, token, expectedRoot);
       return;
     }
     if (isNotion) clearOperation();
+    if (savedMetadata) {
+      if (target !== "device") throw new Error("Notion 未返回可核对的同步回执，已保留本地修改。");
+      await acceptMetadataDeviceResult(value, savedMetadata, token, expectedRoot);
+      return;
+    }
     await finishSync(value, token, expectedRoot, true, after);
   }
   async function continueSync(instruction, token, expectedRoot) {
@@ -748,12 +904,26 @@
     let operation = initial;
     while (assertCurrent(token, expectedRoot)) {
       if (operation.root && operation.root !== expectedRoot) throw new Error("同步回执对应另一个图库，原请求已保留，请继续核对。");
+      const savedMetadata = pendingOperation.metadataJob;
+      if (savedMetadata) {
+        requireMetadataScope(savedMetadata, token, expectedRoot);
+        if (operation.root !== expectedRoot || operation.source !== "console" || operation.target !== "notion"
+            || pageId(operation.pageId) !== savedMetadata.pageId) throw new Error("同步回执的图库、页面或方向已改变，已保留本地修改与原请求。");
+      }
       if (completeStatuses.has(operation.status)) {
         const autoApply = pendingOperation.autoApply;
         const after = pendingOperation.after;
         const latest = await call("state");
         if (!assertCurrent(token, expectedRoot)) return;
         const nextState = latest.state || latest;
+        if (savedMetadata) {
+          requireMetadataScope(savedMetadata, token, expectedRoot, nextState);
+          if (operation.status !== "completed" || Array.isArray(operation.remainingTargets) && operation.remainingTargets.length) throw new Error("Notion 尚未完整确认同步结果，请继续核对原请求。");
+          acceptState(nextState);
+          clearOperation();
+          await completeMetadataTarget(savedMetadata, "notion", token, expectedRoot);
+          return;
+        }
         const savedPlan = extractPlan(latest) || extractPlan(nextState);
         const resultPlan = extractPlan(operation.result);
         if (operation.planId && planId(resultPlan || savedPlan) !== operation.planId) throw new Error("同步的图片比较记录尚未对应，原请求已保留，请继续核对。");
@@ -779,22 +949,33 @@
   }
   async function resumeOperation() {
     if (!pendingOperation) return;
+    const savedMetadata = pendingOperation.metadataJob;
     await run("正在核对上次同步…", async (token, expectedRoot) => {
-      const value = await call("operation", { params: { requestId: pendingOperation.requestId } });
-      const operation = value.operation || value;
-      if (canRecheckOperation(operation)) {
-        const latest = await call("state");
-        if (!assertCurrent(token, expectedRoot)) return;
-        acceptState(latest.state || latest);
-        if (!recoveryScopeMatches(operation, expectedRoot)) throw new Error("原同步的图库、页面或方向已改变，已保留原请求，不会向其他位置恢复。");
-        const recovered = await call("sync", { payload: { expectedRoot, requestId: operation.requestId, source: operation.source, target: operation.target } });
-        if (!assertCurrent(token, expectedRoot)) return;
-        const recoveredOperation = recovered.operation || recovered;
-        if (!recoveryScopeMatches(recoveredOperation, expectedRoot)) throw new Error("恢复回执与原同步范围不一致，原请求已保留，请继续核对。");
-        await pollOperation(recoveredOperation, token, expectedRoot);
-        return;
+      try {
+        if (savedMetadata) requireMetadataScope(savedMetadata, token, expectedRoot);
+        const value = await call("operation", { params: { requestId: pendingOperation.requestId } });
+        const operation = value.operation || value;
+        if (canRecheckOperation(operation)) {
+          const latest = await call("state");
+          if (!assertCurrent(token, expectedRoot)) return;
+          if (savedMetadata) requireMetadataScope(savedMetadata, token, expectedRoot, latest.state || latest);
+          acceptState(latest.state || latest);
+          if (!recoveryScopeMatches(operation, expectedRoot)) throw new Error("原同步的图库、页面或方向已改变，已保留原请求，不会向其他位置恢复。");
+          const recovered = await call("sync", { payload: { expectedRoot, requestId: operation.requestId, source: operation.source, target: operation.target } });
+          if (!assertCurrent(token, expectedRoot)) return;
+          const recoveredOperation = recovered.operation || recovered;
+          if (!recoveryScopeMatches(recoveredOperation, expectedRoot)) throw new Error("恢复回执与原同步范围不一致，原请求已保留，请继续核对。");
+          await pollOperation(recoveredOperation, token, expectedRoot);
+          return;
+        }
+        await pollOperation(operation, token, expectedRoot);
+      } catch (error) {
+        if (savedMetadata) {
+          rememberMetadataJob({ ...(metadataJob || savedMetadata), status: pendingOperation ? "unknown" : "failed", message: `已保存到本地；同步未完成。${error.message || "请继续核对原请求。"}` });
+          throw new Error(metadataJob.message);
+        }
+        throw error;
       }
-      await pollOperation(operation, token, expectedRoot);
     });
   }
   function reviewApply() {
@@ -810,8 +991,12 @@
     });
   }
   async function commitBatch(payload, token, expectedRoot) {
+    let savedMetadata = metadataJob?.planId === payload.planId ? metadataJob : null;
+    if (!savedMetadata) try { savedMetadata = JSON.parse(sessionStorage.getItem(metadataPlanKey(payload.planId)) || "null"); } catch (_) { /* Optional storage. */ }
+    if (savedMetadata) requireMetadataScope(savedMetadata, token, expectedRoot);
     const value = await call("apply", { payload });
     if (!assertCurrent(token, expectedRoot)) return;
+    if (savedMetadata) requireMetadataScope(savedMetadata, token, expectedRoot, value.state || state);
     const after = readContinuation(payload.planId);
     if (str(value.planId)) lastApplied = { root: expectedRoot, planId: str(value.planId) };
     try { sessionStorage.removeItem(decisionKey()); } catch (_) { /* Optional storage. */ }
@@ -828,6 +1013,14 @@
       }
     }
     notice(str(value.message) || "已应用所选操作。", false, true);
+    if (savedMetadata?.planId === payload.planId && savedMetadata.root === expectedRoot) {
+      try { sessionStorage.removeItem(metadataPlanKey(payload.planId)); } catch (_) { /* Optional storage. */ }
+      if (value.metadataSync?.status === "completed" && !Number(value.metadataSync?.unresolved)) await completeMetadataTarget(savedMetadata, "device", token, expectedRoot);
+      else {
+        rememberMetadataJob({ ...savedMetadata, status: "failed", planId: "", message: "已保存到本地；设备图片操作已确认，但方案信息尚未完整同步，请重新核对。" });
+        notice(metadataJob.message, true);
+      }
+    }
     if (after && assertCurrent(token, expectedRoot)) {
       clearContinuation(payload.planId);
       await continueSync(after, token, expectedRoot);
@@ -854,6 +1047,14 @@
   byId("checkOperation").addEventListener("click", resumeOperation);
   byId("restoreImages").addEventListener("click", restoreImages);
   byId("metadataForm").addEventListener("submit", saveMetadata);
+  byId("metadataSaveOnly").addEventListener("click", event => saveMetadata(event, false));
+  for (const id of ["metadataGroupTitle", "metadataVariantLabel", "metadataDerivedFrom"]) {
+    byId(id).addEventListener(id === "metadataDerivedFrom" ? "change" : "input", () => {
+      byId("metadataStatus").textContent = metadataDirty() ? "未保存。保存并同步会从 Console 推送本次修改。" : metadataJob?.message || "尚无未保存的修改。";
+      byId("metadataStatus").dataset.error = "false";
+      updateMetadataControls();
+    });
+  }
   byId("metadataClose").addEventListener("click", () => { if (!busy) byId("metadataDialog").close(); });
   byId("metadataDialog").addEventListener("cancel", event => { if (busy) event.preventDefault(); });
   byId("metadataDialog").addEventListener("close", () => {
