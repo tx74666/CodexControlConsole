@@ -199,7 +199,13 @@
     window.addEventListener("message", event => {
       const value = event.data;
       if (event.source !== window.parent || event.origin !== window.location.origin || !value
-          || typeof value !== "object" || Array.isArray(value) || value.channel !== "console-image-embed-v1" || value.type !== "context") return;
+          || typeof value !== "object" || Array.isArray(value) || value.channel !== "console-image-embed-v1") return;
+      if (value.type === "dismiss-preview") {
+        if (byId("previewDialog").open) byId("previewDialog").close();
+        else publishPreviewState(false);
+        return;
+      }
+      if (value.type !== "context") return;
       closePasteMenu();
       if (["dark", "light"].includes(value.theme)) document.documentElement.dataset.theme = value.theme;
       if (["en", "zh-CN"].includes(value.language)) document.documentElement.dataset.hostLanguage = value.language;
@@ -690,6 +696,9 @@
     card.append(header, sizeField, preview, footer);
     return card;
   }
+  function publishPreviewState(open) {
+    if (embedded) window.parent.postMessage({ channel: "console-image-embed-v1", type: "preview", open }, window.location.origin);
+  }
   function showPreview(item, trigger) {
     previewFocus = trigger;
     const image = node("img");
@@ -699,6 +708,7 @@
     byId("previewMeta").textContent = `${dimensions(item)}${item.path ? ` · ${str(item.path)}` : ""}`;
     byId("previewImageWrap").replaceChildren(image);
     byId("previewDialog").showModal();
+    publishPreviewState(true);
   }
   function openMetadata(item, trigger) {
     if (busy || pendingOperation || byId("namingDialog").open || !item?.path || !item?.sha256 || item.space === "device") return;
@@ -1473,7 +1483,26 @@
   byId("reviewApply").addEventListener("click", reviewApply);
   byId("reviewToggle").addEventListener("click", () => setReviewExpanded(!reviewExpanded));
   byId("closePreview").addEventListener("click", () => byId("previewDialog").close());
-  byId("previewDialog").addEventListener("close", () => { byId("previewImageWrap").replaceChildren(); previewFocus?.focus({ preventScroll: true }); });
+  const previewDialog = byId("previewDialog");
+  let previewBackdropPressed = false;
+  const outsidePreview = event => {
+    const bounds = previewDialog.getBoundingClientRect();
+    return previewDialog.open && event.target === previewDialog
+      && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom);
+  };
+  previewDialog.addEventListener("pointerdown", event => { previewBackdropPressed = event.button === 0 && outsidePreview(event); });
+  previewDialog.addEventListener("pointercancel", () => { previewBackdropPressed = false; });
+  previewDialog.addEventListener("click", event => {
+    const pressedOutside = previewBackdropPressed;
+    previewBackdropPressed = false;
+    if (pressedOutside && outsidePreview(event)) previewDialog.close();
+  });
+  previewDialog.addEventListener("close", () => {
+    previewBackdropPressed = false;
+    byId("previewImageWrap").replaceChildren();
+    publishPreviewState(false);
+    previewFocus?.focus({ preventScroll: true });
+  });
   const dropZone = byId("dropZone");
     const openPicker = () => { if (!busy && !pendingOperation && root) byId("imageFiles").click(); };
   dropZone.addEventListener("click", openPicker);

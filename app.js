@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.1.43";
+const consoleUiVersion = "1.1.44";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -4251,6 +4251,7 @@ function setCollaborationPanelCollapsed(panel, collapsed) {
   panel.classList.toggle("collaboration-panel-collapsed", nextCollapsed);
   if (toggle) toggle.setAttribute("aria-expanded", String(!nextCollapsed));
   if (body) body.hidden = nextCollapsed;
+  if (panel.id === "steamworkImagePanel") scheduleSteamworkImageContext();
   if (panel === els.feedbackPanel) {
     if (feedbackInboxPollingAllowed()) {
       if (!feedbackInboxBusy) void loadFeedbackInbox({ quiet: true });
@@ -20454,14 +20455,30 @@ function receiveSteamworkImageMessage(event) {
     if (els.steamworkImageStatus) els.steamworkImageStatus.hidden = true;
     window.clearTimeout(frame.imageReadyTimer);
     scheduleSteamworkImageContext();
-  } else if (value.type === "ready" || value.type === "viewport") syncSteamworkImageFrame();
+  } else if (value.type === "preview" && typeof value.open === "boolean") {
+    frame.imagePreviewOpen = value.open;
+  } else if (value.type === "ready" || value.type === "viewport") {
+    if (value.type === "ready") frame.imagePreviewOpen = false;
+    syncSteamworkImageFrame();
+  }
+}
+
+function dismissSteamworkPreviewFromParent(event) {
+  const frame = els.steamworkImageFrame;
+  if (!frame?.contentWindow || frame.imagePreviewOpen !== true
+      || event.target === frame || event.composedPath?.()?.includes(frame)) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  // Keep the open state until the child's trusted close acknowledgement. A
+  // pointerdown only blocks focus; the matching click is consumed as well.
+  if (event.type === "click") frame.contentWindow.postMessage({ channel: "console-image-embed-v1", type: "dismiss-preview" }, window.location.origin);
 }
 
 function openSteamworkImagePanel() {
   const frame = els.steamworkImageFrame;
   if (!frame) return;
   if (!frame.getAttribute("src")) {
-    frame.addEventListener("load", syncSteamworkImageFrame);
+    frame.addEventListener("load", () => { frame.imagePreviewOpen = false; syncSteamworkImageFrame(); });
     frame.src = new URL("image-manager.html?embed=steamwork", window.location.href).href;
     frame.imageReadyTimer = window.setTimeout(() => {
       if (frame.dataset.ready === "true" || !els.steamworkImageStatus) return;
@@ -21747,6 +21764,8 @@ if (els.steamworkImageFrame) {
   window.addEventListener("resize", scheduleSteamworkImageContext);
   window.addEventListener("scroll", scheduleSteamworkImageContext, { passive: true });
   document.querySelector(".steamwork-tips")?.addEventListener("toggle", scheduleSteamworkImageContext);
+  window.addEventListener("pointerdown", dismissSteamworkPreviewFromParent, { capture: true });
+  window.addEventListener("click", dismissSteamworkPreviewFromParent, { capture: true });
 }
 if (hasSteamwork && els.openSteamworkDashboard) {
   els.openSteamworkDashboard.addEventListener("click", () => openSteamworksWebLink(steamworksAppUrl, "steamworkDashboard"));
