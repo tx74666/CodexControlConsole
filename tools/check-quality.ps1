@@ -258,6 +258,7 @@ try {
     "reader.html",
     "image-manager.html",
     "image-manager.js",
+    "image-manager-i18n.js",
     "image-manager.css",
     "tools/check-image-manager-ui.mjs",
     "document-reader.js",
@@ -402,6 +403,7 @@ finally:
   Invoke-QualityStep "Resource library UI behavior" { & $Node tools/check-resource-ui.mjs }
   Invoke-QualityStep "Image manager imports and replacement recovery" { & $Python tools/check-image-manager.py }
   Invoke-QualityStep "Image manager JavaScript syntax" { & $Node --check image-manager.js }
+  Invoke-QualityStep "Image manager language JavaScript syntax" { & $Node --check image-manager-i18n.js }
   Invoke-QualityStep "Image manager synchronization and review UI" { & $Node tools/check-image-manager-ui.mjs }
   Invoke-QualityStep "Image manager desktop HTTP boundaries" { & $Python tools/check-image-manager-http.py }
   Invoke-QualityStep "Image manager Notion original synchronization" { & $Python tools/check-image-manager-notion.py }

@@ -275,6 +275,7 @@ if ($BuildApplication) {
   @{ Source = "resources.css"; Destination = "." },
   @{ Source = "image-manager.html"; Destination = "." },
   @{ Source = "image-manager.js"; Destination = "." },
+  @{ Source = "image-manager-i18n.js"; Destination = "." },
   @{ Source = "image-manager.css"; Destination = "." },
   @{ Source = "document-reader.js"; Destination = "." },
   @{ Source = "document-reader.css"; Destination = "." },

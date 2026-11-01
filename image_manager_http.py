@@ -11,6 +11,8 @@ def image_get(service, action, query, notion=None):
         return {**service.state(), **(notion.state() if notion is not None else {})}
     if action == 'operation' and not set(values) - {'requestId'} and notion is not None:
         return notion.operation(values.get('requestId'))
+    if action == 'delete-operation' and set(values) == {'expectedRoot', 'requestId'} and values.get('expectedRoot'):
+        return service.delete_operation(values)
     if action == 'preview' and not set(values) - {'path', 'expectedRoot', 'space'}:
         if not values.get('expectedRoot'):
             raise ValueError('请先选择图片文件夹。')
@@ -29,7 +31,7 @@ def image_post(service, action, payload, notion=None):
         return {**service.configure(payload), **(notion.state() if notion is not None else {})}
     if not isinstance(payload.get('expectedRoot'), str) or not payload['expectedRoot']:
         raise ValueError('图片文件夹身份缺失，请重新读取。')
-    if action in {'apply', 'restore', 'metadata', 'naming-apply', 'naming-restore'} and notion is not None and notion.busy:
+    if action in {'apply', 'restore', 'metadata', 'naming-apply', 'naming-restore', 'delete', 'delete-restore'} and notion is not None and notion.busy:
         raise ValueError('图片正在同步，请等本次结果返回后再修改本地图片或方案。')
     if action == 'scan' and not set(payload) - {'expectedRoot'}:
         return service.scan(payload)
@@ -45,6 +47,10 @@ def image_post(service, action, payload, notion=None):
         return service.naming_apply(payload)
     if action == 'naming-restore' and not set(payload) - {'expectedRoot', 'planId'}:
         return service.naming_restore(payload)
+    if action == 'delete' and set(payload) == {'expectedRoot', 'path', 'sha256', 'requestId'}:
+        return service.delete(payload)
+    if action == 'delete-restore' and set(payload) == {'expectedRoot', 'requestId'}:
+        return service.delete_restore(payload)
     if action == 'sync' and not set(payload) - {'expectedRoot', 'source', 'target', 'requestId'}:
         source, target = payload.get('source'), payload.get('target')
         if source not in {'local', 'console', 'device', 'notion'} or target not in {'console', 'local', 'device', 'notion', 'all'}:

@@ -6,47 +6,49 @@
   <meta name="theme-color" content="#111a27">
   <title>Console · Image manager</title>
   <link rel="icon" href="favicon.ico">
-  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.44-20261101">
-  <script src="image-manager.js?v=images-variants-1.1.44-20261101" defer></script>
+  <link rel="stylesheet" href="image-manager.css?v=images-variants-1.1.45-20261101">
+  <script src="image-manager-i18n.js?v=images-1.1.45-20261101" defer></script>
+  <script src="image-manager.js?v=images-variants-1.1.45-20261101" defer></script>
 </head>
 <body>
   <main class="image-shell">
     <header class="page-header">
-      <a class="back-link" href="/steamwork.html"><span aria-hidden="true">←</span> 返回 Steamwork</a>
+      <a class="back-link" href="/steamwork.html"><span aria-hidden="true">←</span> <span data-image-en="Back to Steamwork">返回 Steamwork</span></a>
       <div class="heading-row"><div><p class="eyebrow">CONSOLE · YOUR IMAGE LIBRARY</p><h1>Image manager<span class="title-dot" aria-hidden="true">.</span></h1></div><span class="header-mark" aria-hidden="true">▧</span></div>
-      <p class="page-intro">放进文件夹，检查新旧图片，选好再同步。标题与实际尺寸一起保留。</p>
+      <p class="page-intro" data-image-en="Save images to the folder, review them, then sync your choices. Titles and actual dimensions stay together.">放进文件夹，检查新旧图片，选好再同步。标题与实际尺寸一起保留。</p>
     </header>
 
     <section class="library-panel" aria-labelledby="libraryTitle">
-      <div class="section-heading"><div><p class="eyebrow">LIBRARY & CONNECTIONS</p><h2 id="libraryTitle">我的图库</h2></div><span id="libraryCount" class="count-badge">—</span></div>
+      <div class="section-heading"><div><p class="eyebrow">LIBRARY & CONNECTIONS</p><h2 id="libraryTitle" data-image-en="My library">我的图库</h2></div><span id="libraryCount" class="count-badge">—</span></div>
       <div class="connection-grid">
-        <div class="connection"><span class="connection-label">本地图库 · Console</span><strong id="rootSummary">正在读取…</strong></div>
-        <div class="connection"><span class="connection-label">本地设备</span><strong id="deviceSummary">使用本地图库</strong></div>
+        <div class="connection"><span class="connection-label" data-image-en="Local library · Console">本地图库 · Console</span><strong id="rootSummary">正在读取…</strong></div>
+        <div class="connection"><span class="connection-label" data-image-en="Local device">本地设备</span><strong id="deviceSummary">使用本地图库</strong></div>
         <div class="connection"><span class="connection-label">Notion</span><strong id="notionSummary">正在读取连接状态…</strong></div>
       </div>
-      <details id="locations" class="locations"><summary>图库与同步位置 <span aria-hidden="true">＋</span></summary>
+      <details id="locations" class="locations"><summary><span data-image-en="Library and sync locations">图库与同步位置</span> <span aria-hidden="true">＋</span></summary>
         <form id="configForm" autocomplete="off">
-          <label class="field full-width"><span>本地图库文件夹</span><input id="libraryRoot" type="text" maxlength="1024" placeholder="填写图片文件夹的完整路径" required><small>把新图片放进这个文件夹或其中的 inbox，再点「检查图片」。</small></label>
-          <label class="field"><span>额外设备文件夹 <small>可选</small></span><input id="deviceRoot" type="text" maxlength="1024" placeholder="另一个本地、移动硬盘或已挂载设备的文件夹"><small>留空时，本地同步使用上面的图库文件夹。</small></label>
-          <label class="field"><span>Notion 图片页面 <small>可选</small></span><input id="notionPage" type="text" inputmode="url" maxlength="2048" placeholder="https://www.notion.so/… 或页面 ID"><small id="notionConfigNote">保存页面地址后，还需可用的同步连接。</small></label>
-          <div class="form-footer full-width"><button id="saveConfig" class="secondary-button" type="submit">保存位置</button><span id="configStatus" class="muted" role="status"></span></div>
+          <label class="field full-width"><span data-image-en="Local library folder">本地图库文件夹</span><input id="libraryRoot" type="text" maxlength="1024" placeholder="填写图片文件夹的完整路径" data-image-en-placeholder="Full path to your image folder" required><small data-image-en="Put new images in this folder or its Inbox, then choose Check images.">把新图片放进这个文件夹或其中的 inbox，再点「检查图片」。</small></label>
+          <label class="field"><span><span data-image-en="Additional device folder">额外设备文件夹</span> <small data-image-en="Optional">可选</small></span><input id="deviceRoot" type="text" maxlength="1024" placeholder="另一个本地、移动硬盘或已挂载设备的文件夹" data-image-en-placeholder="A folder on another local drive, external drive, or mounted device"><small data-image-en="Leave blank to use the library folder above for local sync.">留空时，本地同步使用上面的图库文件夹。</small></label>
+          <label class="field"><span><span data-image-en="Notion image page">Notion 图片页面</span> <small data-image-en="Optional">可选</small></span><input id="notionPage" type="text" inputmode="url" maxlength="2048" placeholder="https://www.notion.so/… 或页面 ID" data-image-en-placeholder="https://www.notion.so/… or page ID"><small id="notionConfigNote">保存页面地址后，还需可用的同步连接。</small></label>
+          <div class="form-footer full-width"><button id="saveConfig" class="secondary-button" type="submit" data-image-en="Save locations">保存位置</button><span id="configStatus" class="muted" role="status"></span></div>
         </form>
       </details>
-      <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="选择、拖入或粘贴图片到 Inbox" aria-describedby="dropHelp" aria-haspopup="menu" aria-controls="imagePasteMenu">
-        <span class="drop-symbol" aria-hidden="true">＋</span><div><strong>把图片拖到这里</strong><span id="dropHelp">或点击选择、右键粘贴图片（Ctrl+V）· 先进入 Inbox，确认后入库</span></div><span id="inboxCount" class="inbox-badge">inbox 0</span>
+      <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="选择、拖入或粘贴图片到 Inbox" data-image-en-aria-label="Choose, drop, or paste images into Inbox" aria-describedby="dropHelp" aria-haspopup="menu" aria-controls="imagePasteMenu">
+        <span class="drop-symbol" aria-hidden="true">＋</span><div><strong data-image-en="Drop images here">把图片拖到这里</strong><span id="dropHelp" data-image-en="Or choose files, right-click to paste, or press Ctrl+V · Review in Inbox before adding to the library">或点击选择、右键粘贴图片（Ctrl+V）· 先进入 Inbox，确认后入库</span></div><span id="inboxCount" class="inbox-badge">inbox 0</span>
       </div>
       <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff,image/x-icon,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.ico" multiple hidden>
       <div class="action-bar">
-        <div class="image-import-actions"><button id="scanImages" class="secondary-button" type="button">检查图片</button><button id="pasteImages" class="secondary-button paste-images-button" type="button">粘贴图片 / Paste image</button></div>
-        <div class="sync-controls"><label class="compact-field"><span>从</span><select id="syncSource" aria-label="同步来源"><option value="local">本地图库</option><option value="console">Console</option><option value="notion" disabled>Notion · 连接待就绪</option></select></label><span class="sync-arrow" aria-hidden="true">→</span><label class="compact-field"><span>到</span><select id="syncTarget" aria-label="同步目标"><option value="console">Console</option><option value="device">设备文件夹</option><option value="notion" disabled>Notion · 连接待就绪</option><option value="all">全部已连接位置</option></select></label><button id="syncImages" class="primary-button" type="button">同步</button></div>
+        <div class="image-import-actions"><button id="scanImages" class="secondary-button" type="button" data-image-en="Check images">检查图片</button><button id="pasteImages" class="secondary-button paste-images-button" type="button" data-image-en="Paste image">粘贴图片</button></div>
+        <div class="sync-controls"><label class="compact-field"><span data-image-en="From">从</span><select id="syncSource" aria-label="同步来源" data-image-en-aria-label="Sync source"><option value="local" data-image-en="Local library">本地图库</option><option value="console">Console</option><option value="notion" disabled>Notion · 连接待就绪</option></select></label><span class="sync-arrow" aria-hidden="true">→</span><label class="compact-field"><span data-image-en="To">到</span><select id="syncTarget" aria-label="同步目标" data-image-en-aria-label="Sync destination"><option value="console">Console</option><option value="device" data-image-en="Device folder">设备文件夹</option><option value="notion" disabled>Notion · 连接待就绪</option><option value="all" data-image-en="All connected locations">全部已连接位置</option></select></label><button id="syncImages" class="primary-button" type="button" data-image-en="Sync">同步</button></div>
       </div>
       <p id="operationStatus" class="operation-status" role="status" aria-live="polite">正在读取图库…</p>
-      <button id="checkOperation" class="secondary-button resume-button" type="button" hidden>继续核对上次同步</button>
-      <button id="restoreImages" class="secondary-button resume-button" type="button" hidden>撤回上次本地操作</button>
+      <button id="checkOperation" class="secondary-button resume-button" type="button" data-image-en="Continue checking the last sync" hidden>继续核对上次同步</button>
+      <button id="restoreImages" class="secondary-button resume-button" type="button" data-image-en="Undo last local operation" hidden>撤回上次本地操作</button>
+      <button id="undoDelete" class="secondary-button resume-button" type="button" data-image-en="Undo delete" hidden>撤回删除</button>
     </section>
 
     <section id="reviewSection" class="review-section" aria-labelledby="reviewTitle" hidden>
-      <div class="section-heading"><div><p class="eyebrow">REVIEW BEFORE REPLACING</p><h2 id="reviewTitle">确认图片</h2></div><span id="reviewCount" class="count-badge"></span><button id="reviewToggle" class="secondary-button" type="button" aria-expanded="false" aria-controls="candidateList" hidden>查看 / 确认</button></div>
+      <div class="section-heading"><div><p class="eyebrow">REVIEW BEFORE REPLACING</p><h2 id="reviewTitle" data-image-en="Review images">确认图片</h2></div><span id="reviewCount" class="count-badge"></span><button id="reviewToggle" class="secondary-button" type="button" aria-expanded="false" aria-controls="candidateList" hidden>查看 / 确认</button></div>
       <p id="reviewNote" class="section-note">新图在左，已有图片在右。重复与替换候选由你选择；同尺寸不代表同一张图。</p>
       <p id="planWarnings" class="plan-warnings" role="status" hidden></p>
       <div id="candidateList" class="candidate-list"></div>
@@ -54,36 +56,37 @@
     </section>
 
     <section class="collection-section" aria-labelledby="collectionTitle">
-      <div class="section-heading"><div><p class="eyebrow">BROWSE YOUR COLLECTION</p><h2 id="collectionTitle">图片</h2></div><button id="organizeNames" class="metadata-button" type="button" hidden>整理名称</button><label class="search-field"><span class="visually-hidden">按标题或尺寸查找图片</span><input id="imageSearch" type="search" placeholder="查找标题或尺寸" maxlength="160"></label></div>
+      <div class="section-heading"><div><p class="eyebrow">BROWSE YOUR COLLECTION</p><h2 id="collectionTitle">图片</h2></div><button id="organizeNames" class="metadata-button" type="button" data-image-en="Organize names" hidden>整理名称</button><label class="search-field"><span class="visually-hidden" data-image-en="Find images by title or dimensions">按标题或尺寸查找图片</span><input id="imageSearch" type="search" placeholder="查找标题或尺寸" data-image-en-placeholder="Search titles or dimensions" maxlength="160"></label></div>
       <p id="collectionNote" class="section-note">按用途与标题分组，选择尺寸和方案查看原图。</p>
       <div id="imageGrid" class="image-grid" aria-busy="true"></div>
-      <div id="emptyState" class="empty-state" hidden><span aria-hidden="true">▧</span><h3>你的图片，从这里开始</h3><p>保存图库位置，放入图片，再点「检查图片」。</p></div>
+      <div id="emptyState" class="empty-state" hidden><span aria-hidden="true">▧</span><h3 data-image-en="Your images start here">你的图片，从这里开始</h3><p data-image-en="Save a library location, add images, then choose Check images.">保存图库位置，放入图片，再点「检查图片」。</p></div>
     </section>
-    <footer class="page-footer"><span id="lastSync">尚无同步记录</span><span>保留原图 · 确认替换 · 按需同步</span></footer>
-    <div id="imagePasteMenu" class="image-paste-menu" role="menu" aria-label="图片操作" hidden><button id="imagePasteCommand" type="button" role="menuitem">粘贴图片 / Paste image</button></div>
+    <footer class="page-footer"><span id="lastSync">尚无同步记录</span><span data-image-en="Keep originals · Review replacements · Sync when needed">保留原图 · 确认替换 · 按需同步</span></footer>
+    <div id="imagePasteMenu" class="image-paste-menu" role="menu" aria-label="图片操作" data-image-en-aria-label="Image actions" hidden><button id="imagePasteCommand" type="button" role="menuitem" data-image-en="Paste image">粘贴图片</button></div>
+    <div id="imageContextMenu" class="image-paste-menu" role="menu" aria-label="图片操作" data-image-en-aria-label="Image actions" hidden><button id="imageDeleteCommand" type="button" role="menuitem" data-image-en="Delete image" hidden>删除图片</button></div>
   </main>
 
-  <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle"><div class="dialog-heading"><h2 id="previewTitle">图片预览</h2><button id="closePreview" class="icon-button" type="button" aria-label="关闭图片预览">×</button></div><div id="previewImageWrap"></div><p id="previewMeta" class="muted"></p></dialog>
+  <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle"><div class="dialog-heading"><h2 id="previewTitle">图片预览</h2><button id="closePreview" class="icon-button" type="button" aria-label="关闭图片预览" data-image-en-aria-label="Close image preview">×</button></div><div id="previewImageWrap"></div><p id="previewMeta" class="muted"></p></dialog>
   <dialog id="metadataDialog" class="metadata-dialog" aria-labelledby="metadataTitle" aria-describedby="metadataOriginal">
     <form id="metadataForm" autocomplete="off">
-      <div class="dialog-heading"><h2 id="metadataTitle">方案信息</h2><button id="metadataClose" class="icon-button" type="button" aria-label="关闭方案信息">×</button></div>
+      <div class="dialog-heading"><h2 id="metadataTitle" data-image-en="Variant details">方案信息</h2><button id="metadataClose" class="icon-button" type="button" aria-label="关闭方案信息" data-image-en-aria-label="Close variant details">×</button></div>
       <p id="metadataOriginal" class="original-file"></p>
       <p id="metadataNamingHint" class="muted">整理用途、方案与来源关系，保留图片内容。</p>
       <div class="metadata-fields">
-        <label class="field"><span id="metadataPurposeLabel">用途 / 标题</span><input id="metadataGroupTitle" maxlength="140" required placeholder="例如：透明Logo、商店主图"><select id="metadataStandardType" aria-label="标准用途" hidden></select><small id="metadataStandardName" hidden></small></label>
-        <label class="field"><span>方案名称</span><input id="metadataVariantLabel" maxlength="80" required placeholder="为这张已有图片标注方案"></label>
-        <label class="field"><span>派生来源 <small>可选</small></span><select id="metadataDerivedFrom"><option value="">原始素材 / 未关联来源</option></select><small>明确指定来源后，可按方案查看对应的派生尺寸。</small></label>
+        <label class="field"><span id="metadataPurposeLabel">用途 / 标题</span><input id="metadataGroupTitle" maxlength="140" required placeholder="例如：透明Logo、商店主图" data-image-en-placeholder="For example: transparent logo or store capsule"><select id="metadataStandardType" aria-label="标准用途" data-image-en-aria-label="Standard purpose" hidden></select><small id="metadataStandardName" hidden></small></label>
+        <label class="field"><span data-image-en="Variant name">方案名称</span><input id="metadataVariantLabel" maxlength="80" required placeholder="为这张已有图片标注方案" data-image-en-placeholder="Name this image variant"></label>
+        <label class="field"><span><span data-image-en="Derived from">派生来源</span> <small data-image-en="Optional">可选</small></span><select id="metadataDerivedFrom"><option value="" data-image-en="Original asset / no source linked">原始素材 / 未关联来源</option></select><small data-image-en="Choose an explicit source to view related derivative sizes by variant.">明确指定来源后，可按方案查看对应的派生尺寸。</small></label>
       </div>
       <p id="metadataStatus" class="operation-status" role="status" aria-live="polite"></p>
-      <div class="metadata-actions"><button id="metadataSaveOnly" class="secondary-button" type="button" disabled>仅保存</button><button id="metadataSave" class="primary-button" type="submit" disabled>保存并同步</button></div>
+      <div class="metadata-actions"><button id="metadataSaveOnly" class="secondary-button" type="button" data-image-en="Save only" disabled>仅保存</button><button id="metadataSave" class="primary-button" type="submit" data-image-en="Save and sync" disabled>保存并同步</button></div>
     </form>
   </dialog>
   <dialog id="namingDialog" class="naming-dialog" aria-labelledby="namingTitle">
-    <div class="dialog-heading"><h2 id="namingTitle">整理名称</h2><button id="namingClose" class="icon-button" type="button" aria-label="关闭名称整理">×</button></div>
-    <p class="muted">选择标准用途，预览后确认。文件名使用「用途_宽x高.格式」，多个方案分别保留。</p>
+    <div class="dialog-heading"><h2 id="namingTitle" data-image-en="Organize names">整理名称</h2><button id="namingClose" class="icon-button" type="button" aria-label="关闭名称整理" data-image-en-aria-label="Close name organizer">×</button></div>
+    <p class="muted" data-image-en="Choose a standard purpose, preview, then confirm. Names use Type_WidthxHeight.ext; each variant is kept separately.">选择标准用途，预览后确认。文件名使用「用途_宽x高.格式」，多个方案分别保留。</p>
     <div id="namingList" class="naming-list"></div>
     <p id="namingStatus" class="operation-status" role="status" aria-live="polite"></p>
-    <div class="naming-actions"><button id="namingRestore" class="secondary-button" type="button" hidden>撤回上次整理</button><button id="namingPreview" class="secondary-button" type="button">预览标准名称</button><button id="namingApply" class="primary-button" type="button" disabled>确认整理名称</button></div>
+    <div class="naming-actions"><button id="namingRestore" class="secondary-button" type="button" data-image-en="Undo last name change" hidden>撤回上次整理</button><button id="namingPreview" class="secondary-button" type="button" data-image-en="Preview standard names">预览标准名称</button><button id="namingApply" class="primary-button" type="button" data-image-en="Confirm name changes" disabled>确认整理名称</button></div>
   </dialog>
 </body>
 </html>

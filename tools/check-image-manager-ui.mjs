@@ -99,7 +99,19 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   await flush();
   const { elements: e } = app;
   assert.equal(e.libraryRoot.value, originalRoot);
-  assert.equal(e.reviewApply.disabled, true, 'Conflict must have no default choice');
+  assert.equal(e.reviewApply.disabled, false, 'A unique matching replacement defaults to the new image but still waits for confirmation');
+  assert(e.candidateList.querySelectorAll('input').find(input => input.value === 'replace').checked);
+  assert.equal(app.requests.filter(request => request.action === 'apply').length, 0, 'Default replacement must never apply by itself');
+  const keptChoice = boot(initialState); await flush();
+  await keptChoice.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').emit('change');
+  const keptReload = boot(initialState, keptChoice.storage); await flush();
+  assert(keptReload.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').checked, 'A saved manual choice overrides the replacement default');
+  for (const changed of [{ status: 'ambiguous', matches: [candidate.existing, image] },
+      { previousCandidateId: 'previous-match' }, { incoming: { ...candidate.incoming, width: 65 } }]) {
+    const unresolvedDefault = boot({ ...initialState, plan: { ...review, candidates: [{ ...candidate, ...changed }] } }); await flush();
+    assert.equal(unresolvedDefault.elements.reviewApply.disabled, true, 'Ambiguous, rematched and dimension-mismatched candidates still require a choice');
+    assert(!unresolvedDefault.elements.candidateList.querySelectorAll('input').some(input => input.checked));
+  }
   assert.match(e.deviceSummary.textContent, /本地图库/);
   assert(e.syncSource.querySelector('option[value="notion"]').disabled);
   const previews = e.candidateList.querySelectorAll('img');
@@ -136,7 +148,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   const countBefore = app.requests.filter(request => request.action === 'apply').length;
   await e.syncImages.click();
   assert.equal(app.requests.filter(request => request.action === 'apply').length, countBefore, 'Conflict sync must wait for confirmation');
-  assert.equal(e.reviewApply.disabled, true);
+  assert.equal(e.reviewApply.disabled, false, 'The matching replacement is selected while its explicit confirmation remains available');
   app.replies.set('scan', { body: { id: 'errors-plan', candidates: [], errors: [{ path: 'bad.png', error: '无法读取' }], state: initialState } });
   await e.scanImages.click();
   assert.equal(e.reviewSection.hidden, false, 'Skipped images must remain visible');

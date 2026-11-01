@@ -1109,12 +1109,311 @@ class ImageManagerService:
                 _atomic_json(path,plan)
                 raise
 
+    def _deletion_paths(self,root,request_id):
+        directory=_inside(root,META+'/history/trash-'+request_id,private=True)
+        return directory,directory/'operation.json'
+
+    @staticmethod
+    def _deletion_id(payload,keys):
+        if (not isinstance(payload,dict) or set(payload)!=keys
+                or not isinstance(payload.get('requestId'),str)
+                or not re.fullmatch('[0-9a-f]{32}',payload['requestId'])):
+            raise ImageManagerError('删除请求参数无效。')
+        return payload['requestId']
+
+    def _private_version(self,root,path):
+        return self._naming_file(root,path.relative_to(root).as_posix()) if path.exists() else None
+
+    def _deletion_guard(self,root,record,version,pointer_version):
+        self._naming_guard(root,record,version)
+        directory,_=self._deletion_paths(root,record['requestId'])
+        if _identity(directory)!=record['trashParentIdentity']:
+            raise ImageManagerError('回收记录目录身份已变化，未移动图片。',status=409)
+        pointer=_inside(root,META+'/latest-plan.json',private=True)
+        if self._private_version(root,pointer)!=pointer_version:
+            raise ImageManagerError('待确认计划已有新变化，请重新核对。',status=409)
+
+    def _deletion_remaining_plan(self,root,manifest,old_plan,deleted_path):
+        if (deleted_path.split('/')[0].casefold()!='inbox' or old_plan.get('status')!='review'
+                or old_plan.get('direction')!='inbox'):
+            return None
+        rows=old_plan['candidates']
+        pending=[row['incoming'] for row in rows if row['incoming']['path'].split('/')[0].casefold()=='inbox'
+                 and row['incoming']['path']!=deleted_path]
+        try:
+            for item in pending:
+                self._fresh(item,{'root':root})
+        except (OSError,ImageManagerError):
+            return None  # A separate changed source requires a fresh user review.
+        candidates=[row for row in rows if row['incoming']['path'].split('/')[0].casefold()!='inbox']
+        before={(row['incoming']['path'],row['incoming']['sha256']):row for row in rows}
+        pool=list(manifest['items'])
+        retained=set(manifest.get('retainedPairs',[]))
+        for item in pending:
+            candidate=self._candidate(item,pool)
+            if any(other['path'].split('/')[0].casefold()=='inbox' for other in candidate['matches']):
+                candidate['actions']=['keep','add']
+            if not candidate['matches'] or not all(self._pair(item,other) in retained for other in candidate['matches']):
+                candidates.append(candidate)
+            pool.append(item)
+        plan=json.loads(json.dumps(old_plan))
+        identifier=uuid.uuid4().hex
+        plan.update(id=identifier,planId=identifier,createdAt=_now(),candidates=candidates,
+                    namingEpoch=manifest['namingEpoch'],replacesPlanId=old_plan['id'])
+        if plan.get('standardNaming'):
+            plan['namingManifestVersion']=self._manifest_version(root)
+            self._standard_plan_targets(plan,manifest)
+        def fingerprint(row):
+            return (row['status'],row['target'],row['targetSpace'],row.get('standardTargets'),
+                    [(item['path'],item['sha256']) for item in row['matches']],row['incoming'].get('standardType'))
+        for candidate in candidates:
+            previous=before.get((candidate['incoming']['path'],candidate['incoming']['sha256']))
+            if previous and fingerprint(previous)==fingerprint(candidate):
+                candidate['id']=previous['id']
+            elif previous:
+                candidate['previousCandidateId']=previous['id']
+        plan['counts']={key:sum(row['status']==key for row in candidates) for key in ('new','duplicate','conflict','ambiguous')}
+        return plan
+
+    def _last_deletion(self,root,manifest):
+        value=manifest.get('lastDeletion')
+        if not isinstance(value,dict) or not re.fullmatch('[0-9a-f]{32}',str(value.get('requestId',''))):
+            return None
+        _,path=self._deletion_paths(root,value['requestId'])
+        record=_json(path,{})
+        can_restore=(record.get('status')=='completed' and record.get('rootIdentity')==_identity(root)
+            and record.get('afterManifestVersion')==self._manifest_version(root)
+            and not _inside(root,value['path']).exists())
+        return {key:value[key] for key in ('requestId','path','sha256','deletedAt')} | {'canRestore':can_restore}
+
+    def delete_operation(self,payload):
+        identifier=self._deletion_id(payload,{'expectedRoot','requestId'})
+        _,root,_=self._roots(payload['expectedRoot'])
+        # The same in-process mutex guards every writer; a status read never
+        # creates a missing filesystem lock or request directory.
+        with self._mutex:
+            return self._delete_operation_locked(root,identifier)
+
+    def _delete_operation_locked(self,root,identifier):
+        directory,path=self._deletion_paths(root,identifier)
+        token=self._private_version(root,path)
+        record=_json(path,None)
+        if self._private_version(root,path)!=token:
+            raise ImageManagerError('删除回执正在变化，请只读重新核对。',status=409)
+        if record is None:
+            return {'ok':True,'requestId':identifier,'status':'recovery_required' if directory.exists() else 'not_found','state':self.state()}
+        if record.get('rootIdentity')!=_identity(root) or record.get('requestId')!=identifier:
+            raise ImageManagerError('删除请求与图库身份不符。',status=409)
+        status=record.get('status')
+        if status not in {'completed','restored','failed','recovery_required'}:
+            status='recovery_required'
+        if status in {'completed','restored'}:
+            try:
+                visible=record['trashPath'] if status=='completed' else record['path']
+                absent=record['path'] if status=='completed' else record['trashPath']
+                if (_inside(root,absent,private=absent.startswith(META+'/')).exists()
+                        or self._naming_file(root,visible)!=record['sourceToken']):
+                    status='recovery_required'
+            except (OSError,ImageManagerError):
+                status='recovery_required'
+        return {'ok':True,'requestId':identifier,'status':status,'path':record['path'],'sha256':record['sha256'],
+                'deleted':status=='completed','restored':status=='restored','state':self.state()}
+
+    def delete(self,payload):
+        identifier=self._deletion_id(payload,{'expectedRoot','path','sha256','requestId'})
+        if not isinstance(payload['sha256'],str) or not re.fullmatch('[0-9a-f]{64}',payload['sha256']):
+            raise ImageManagerError('原图指纹无效。')
+        _,root,_=self._roots(payload['expectedRoot'])
+        with self._locked(root):
+            source=_inside(root,payload['path'])
+            directory,record_path=self._deletion_paths(root,identifier)
+            if directory.exists():
+                old=_json(record_path,{})
+                if (old.get('path')!=payload['path'] or old.get('sha256')!=payload['sha256']
+                        or old.get('rootIdentity')!=_identity(root)):
+                    raise ImageManagerError('此请求编号已有其他记录，未再次删除。',status=409)
+                operation=self._delete_operation_locked(root,identifier)
+                if operation['status']!='completed':
+                    raise ImageManagerError('此删除请求已有结果或恢复事项；请只读核对，未重试删除。',status=409)
+                return {**operation,'replayed':True}
+            if source.suffix.lower() not in EXTENSIONS or not source.is_file():
+                raise ImageManagerError('只可删除图库或 Inbox 中的一张图片。',status=409)
+            token=self._naming_file(root,payload['path'])
+            if token[-1]!=payload['sha256']:
+                raise ImageManagerError('图片在选择后已变化，未删除。',status=409)
+            self.image(payload['path'],str(root))  # Verify supported image content too.
+            version=self._manifest_version(root)
+            original=self._manifest(root)
+            pointer=_inside(root,META+'/latest-plan.json',private=True)
+            pointer_before=self._private_version(root,pointer)
+            pointer_value=_json(pointer,{})
+            old_plan={}
+            old_id=pointer_value.get('planId','')
+            if re.fullmatch('[0-9a-f]{32}',str(old_id)):
+                old_plan=_json(_inside(root,META+'/plans/'+old_id+'.json',private=True),{})
+                if old_plan.get('namingEpoch','')!=original.get('namingEpoch',''):
+                    old_plan={}
+            parent=source.parent.relative_to(root).as_posix()
+            directory.mkdir(parents=True,exist_ok=False)
+            trash=(directory/('original'+source.suffix)).relative_to(root).as_posix()
+            record={'requestId':identifier,'rootIdentity':_identity(root),'path':payload['path'],'sha256':payload['sha256'],
+                    'sourceToken':token,'trashPath':trash,'trashParentIdentity':_identity(directory),
+                    'parentIdentities':[[parent,_identity(source.parent)]] if parent!='.' else [],
+                    'beforeManifestVersion':version,'beforePointerVersion':pointer_before,
+                    'startedAt':_now(),'status':'prepared','currentPath':payload['path']}
+            _atomic_json(directory/'catalogue-before.json',original)
+            _atomic_json(directory/'pointer-before.json',pointer_value)
+            record['beforeCatalogueToken']=self._private_version(root,directory/'catalogue-before.json')
+            _atomic_json(record_path,record)
+            own=pointer_own=None
+            moved=False
+            try:
+                self._deletion_guard(root,record,version,pointer_before)
+                if self._naming_file(root,payload['path'])!=token:
+                    raise ImageManagerError('删除边界原图已变化。',status=409)
+                self._move_name(root,payload['path'],trash)
+                moved=True
+                record['currentPath']=trash
+                _atomic_json(record_path,record)
+                self._deletion_guard(root,record,version,pointer_before)
+                if self._naming_file(root,trash)!=token:
+                    raise ImageManagerError('回收原件校验失败。',status=409)
+                after=json.loads(json.dumps(original))
+                after['items']=[item for item in after['items'] if item['path']!=payload['path']]
+                after['namingEpoch']=uuid.uuid4().hex
+                receipt={key:record[key] for key in ('requestId','path','sha256')}
+                after['lastDeletion']={**receipt,'deletedAt':_now()}
+                _atomic_json(_inside(root,META+'/library.json',private=True),after)
+                own=self._saved_manifest_version(root,after)
+                record.update(afterManifestVersion=own,afterEpoch=after['namingEpoch'])
+                plan=self._deletion_remaining_plan(root,after,old_plan,payload['path'])
+                if plan is not None:
+                    self._deletion_guard(root,record,own,pointer_before)
+                    _atomic_json(_inside(root,META+'/plans/'+plan['id']+'.json',private=True),plan)
+                    _atomic_json(pointer,{'planId':plan['id']})
+                    pointer_own=self._private_version(root,pointer)
+                    if _json(pointer,{})!={'planId':plan['id']}:
+                        pointer_own=None
+                        raise ImageManagerError('新的待确认计划已有外部更改。',status=409)
+                self._deletion_guard(root,record,own,pointer_own if pointer_own is not None else pointer_before)
+                state=self.state()
+                state['lastDeletion']={**after['lastDeletion'],'canRestore':True}
+                self._deletion_guard(root,record,own,pointer_own if pointer_own is not None else pointer_before)
+                if self._naming_file(root,trash)!=token:
+                    raise ImageManagerError('完成前回收原件已有新变化。',status=409)
+                record.update(status='completed',completedAt=_now(),afterPointerVersion=pointer_own if pointer_own is not None else pointer_before)
+                _atomic_json(record_path,record)  # Final durable receipt; no later fallible work.
+                return {'ok':True,'deleted':True,**receipt,'state':state}
+            except Exception:
+                actual=self._naming_recovery_version(root,record,directory)
+                try:actual_pointer=self._private_version(root,pointer)
+                except (OSError,ImageManagerError):actual_pointer='unknown'
+                owned=(actual==version or own is not None and actual==own)
+                pointer_owned=(actual_pointer==pointer_before or pointer_own is not None and actual_pointer==pointer_own)
+                failures=[]
+                if not owned or not pointer_owned:
+                    failures.append('foreign metadata; current paths preserved')
+                else:
+                    try:
+                        if moved:
+                            if self._naming_file(root,trash)!=token:
+                                raise ImageManagerError('回收原件已有外部更改。',status=409)
+                            self._move_name(root,trash,payload['path'])
+                            record['currentPath']=payload['path']
+                        if actual!=version:
+                            if self._manifest_version(root)!=own:
+                                raise ImageManagerError('方案已有后续更改。',status=409)
+                            if version is None:_inside(root,META+'/library.json',private=True).unlink()
+                            else:_atomic_json(_inside(root,META+'/library.json',private=True),original)
+                        if actual_pointer!=pointer_before:
+                            if self._private_version(root,pointer)!=pointer_own:
+                                raise ImageManagerError('计划已有后续更改。',status=409)
+                            if pointer_before is None:pointer.unlink()
+                            else:_atomic_json(pointer,pointer_value)
+                    except (OSError,ImageManagerError):
+                        failures.append('rollback requires review')
+                record.update(status='recovery_required' if failures else 'failed',failedPaths=failures)
+                _atomic_json(record_path,record)
+                raise
+
+    def delete_restore(self,payload):
+        identifier=self._deletion_id(payload,{'expectedRoot','requestId'})
+        _,root,_=self._roots(payload['expectedRoot'])
+        with self._locked(root):
+            directory,path=self._deletion_paths(root,identifier)
+            record=_json(path,{})
+            if record.get('rootIdentity')!=_identity(root) or record.get('requestId')!=identifier:
+                raise ImageManagerError('删除记录或图库身份不符。',status=409)
+            if record.get('status')=='restored':
+                if (self._manifest(root).get('namingEpoch')!=record.get('restoredEpoch')
+                        or self._naming_file(root,record['path'])!=record['sourceToken']):
+                    raise ImageManagerError('撤回后原图已有新变化。',status=409)
+                return {'ok':True,'requestId':identifier,'restored':True,'replayed':True,'path':record['path'],'sha256':record['sha256'],'state':self.state()}
+            if record.get('status')!='completed':
+                raise ImageManagerError('此删除请求不能直接撤回，请先核对恢复记录。',status=409)
+            pointer=_inside(root,META+'/latest-plan.json',private=True)
+            self._deletion_guard(root,record,record['afterManifestVersion'],record['afterPointerVersion'])
+            if _inside(root,record['path']).exists() or self._naming_file(root,record['trashPath'])!=record['sourceToken']:
+                raise ImageManagerError('原位置已有文件或回收原件已改变，撤回不会覆盖。',status=409)
+            original=self._manifest(root)
+            if self._private_version(root,directory/'catalogue-before.json')!=record.get('beforeCatalogueToken'):
+                raise ImageManagerError('删除恢复索引已有外部更改，未撤回。',status=409)
+            before=_json(directory/'catalogue-before.json',None)
+            if not isinstance(before,dict):raise ImageManagerError('删除恢复索引缺失。',status=409)
+            if self._private_version(root,directory/'catalogue-before.json')!=record['beforeCatalogueToken']:
+                raise ImageManagerError('删除恢复索引正在变化。',status=409)
+            own=None
+            moved=False
+            try:
+                self._deletion_guard(root,record,record['afterManifestVersion'],record['afterPointerVersion'])
+                self._move_name(root,record['trashPath'],record['path'])
+                moved=True
+                record['currentPath']=record['path']
+                _atomic_json(path,record)
+                if self._naming_file(root,record['path'])!=record['sourceToken']:
+                    raise ImageManagerError('撤回原图身份校验失败。',status=409)
+                self._deletion_guard(root,record,record['afterManifestVersion'],record['afterPointerVersion'])
+                if self._private_version(root,directory/'catalogue-before.json')!=record['beforeCatalogueToken']:
+                    raise ImageManagerError('撤回边界恢复索引已有变化。',status=409)
+                restored=json.loads(json.dumps(before))
+                restored['namingEpoch']=uuid.uuid4().hex
+                _atomic_json(_inside(root,META+'/library.json',private=True),restored)
+                own=self._saved_manifest_version(root,restored)
+                state=self.state()
+                self._deletion_guard(root,record,own,record['afterPointerVersion'])
+                if self._naming_file(root,record['path'])!=record['sourceToken']:
+                    raise ImageManagerError('撤回完成前原图已有新变化。',status=409)
+                record.update(status='restored',restoredEpoch=restored['namingEpoch'],restoredAt=_now())
+                _atomic_json(path,record)
+                return {'ok':True,'requestId':identifier,'restored':True,'path':record['path'],'sha256':record['sha256'],'state':state}
+            except Exception:
+                actual=self._naming_recovery_version(root,record,directory)
+                owned=(actual==record['afterManifestVersion'] or own is not None and actual==own)
+                try:owned=owned and self._private_version(root,pointer)==record['afterPointerVersion']
+                except (OSError,ImageManagerError):owned=False
+                failures=[]
+                if not owned:failures.append('foreign metadata; current paths preserved')
+                else:
+                    try:
+                        if moved:
+                            if self._naming_file(root,record['path'])!=record['sourceToken']:
+                                raise ImageManagerError('撤回的原图已有新修改。',status=409)
+                            self._move_name(root,record['path'],record['trashPath'])
+                            record['currentPath']=record['trashPath']
+                        if actual!=record['afterManifestVersion']:
+                            if self._manifest_version(root)!=own:raise ImageManagerError('方案已变化。',status=409)
+                            _atomic_json(_inside(root,META+'/library.json',private=True),original)
+                    except (OSError,ImageManagerError):failures.append('rollback requires review')
+                record.update(status='recovery_required',failedPaths=failures)
+                _atomic_json(path,record)
+                raise
+
     def state(self):
         config = self._config()
         if not config.get('root'):
             return {'configured': False, 'root': '', 'deviceRoot': '', 'notionPage': '',
                     'items': [], 'inboxCount': 0, 'lastSync': None, 'plan': None, 'standardNaming':False,
-                    'standardTypes':STANDARD_TYPES,'namingPlan':None,'lastNaming':None,'limits': {'maxFileBytes': MAX_IMAGE_BYTES}}
+                    'standardTypes':STANDARD_TYPES,'namingPlan':None,'lastNaming':None,'lastDeletion':None,'limits': {'maxFileBytes': MAX_IMAGE_BYTES}}
         config, root, device = self._roots()
         with self._mutex:
             manifest = self._manifest(root)
@@ -1145,6 +1444,7 @@ class ImageManagerService:
                     'standardNaming':manifest.get('standardNaming',False),'standardTypes':STANDARD_TYPES,
                     'namingEpoch':manifest.get('namingEpoch',''),
                     'namingPlan':naming,'lastNaming':manifest.get('lastNaming'),
+                    'lastDeletion':self._last_deletion(root,manifest),
                     'notionPage': config.get('notionPage', ''), 'items': manifest['items'],
                     'inboxCount': count, 'lastSync': manifest.get('lastSync'), 'plan': plan,
                     'limits': {'maxFileBytes': MAX_IMAGE_BYTES, 'maxPixels': MAX_PIXELS, 'maxFiles': MAX_FILES}}

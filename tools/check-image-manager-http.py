@@ -159,6 +159,59 @@ class ImageHTTPChecks(unittest.TestCase):
         self.assertEqual(original.read_bytes(),before)
         self.assertFalse(standard.exists())
 
+    def test_delete_routes_are_explicit_scoped_and_receipts_are_read_only(self):
+        from image_manager_http import image_get, image_post
+        service = SimpleNamespace(delete=lambda payload: {'received': payload},
+            delete_restore=lambda payload: {'received': payload},
+            delete_operation=lambda payload: {'received': payload})
+        deletion = {'expectedRoot': str(self.root), 'path': 'inbox/new.png', 'sha256': 'a'*64, 'requestId': 'b'*32}
+        restore = {'expectedRoot': str(self.root), 'requestId': deletion['requestId']}
+        for action, payload in [('delete', deletion), ('delete-restore', restore)]:
+            self.assertEqual(image_post(service, action, payload, SimpleNamespace(busy=False)), {'received': payload})
+            for invalid in [dict(payload, space='device'), {key: value for key, value in payload.items() if key != 'requestId'}]:
+                with self.assertRaises(ValueError): image_post(service, action, invalid)
+            with self.assertRaisesRegex(ValueError, '正在同步'):
+                image_post(service, action, payload, SimpleNamespace(busy=True))
+            self.assertGreaterEqual(self.request('GET', '/api/images/'+action)[0], 400)
+            self.assertEqual(self.request('POST', '/api/images/'+action, payload, {'Origin': 'https://attacker.example'})[0], 403)
+        self.assertEqual(image_get(service, 'delete-operation', urlencode(restore)), {'received': restore})
+        for query in [urlencode({'requestId': deletion['requestId']}), urlencode(dict(restore, path='new.png')),
+                      urlencode(restore)+'&requestId='+deletion['requestId']]:
+            with self.assertRaises(ValueError): image_get(service, 'delete-operation', query)
+        with self.assertRaises(ValueError): image_post(service, 'delete-operation', restore)
+        self.assertEqual(self.request('GET', '/api/images/delete-operation?'+urlencode(restore), headers={'Origin':'https://attacker.example'})[0],403)
+
+    def test_delete_and_undo_over_http_preserve_inbox_and_original_bytes(self):
+        original = self.root/'A.png'; inbox = self.root/'inbox'; inbox.mkdir(exist_ok=True)
+        Image.new('RGB', (12, 8), 'teal').save(original)
+        pending = inbox/'Pending.png'; Image.new('RGB', (12, 8), 'purple').save(pending)
+        before, pending_bytes = original.read_bytes(), pending.read_bytes()
+        self.service.scan({'expectedRoot': str(self.root)})
+        item = next(item for item in self.service.state()['items'] if item['path']=='A.png')
+        payload = {'expectedRoot': str(self.root), 'path': item['path'], 'sha256': item['sha256'], 'requestId': 'd'*32}
+        status, deleted = self.request('POST', '/api/images/delete', payload)
+        self.assertEqual(status, 200, deleted); self.assertTrue(deleted['deleted']); self.assertFalse(original.exists())
+        self.assertEqual(pending.read_bytes(), pending_bytes)
+        self.assertTrue(deleted['state']['lastDeletion']['canRestore'])
+        manifest = self.root/'.image-manager/library.json'; manifest_bytes = manifest.read_bytes()
+        query = urlencode({'expectedRoot': str(self.root), 'requestId': payload['requestId']})
+        status, receipt = self.request('GET', '/api/images/delete-operation?'+query)
+        self.assertEqual(status, 200, receipt); self.assertEqual(receipt['status'], 'completed')
+        self.assertEqual(manifest.read_bytes(), manifest_bytes, 'Checking a deletion result must not rewrite metadata')
+        status, repeated = self.request('POST', '/api/images/delete', payload)
+        self.assertEqual(status, 200, repeated); self.assertTrue(repeated['replayed'])
+        status, restored = self.request('POST', '/api/images/delete-restore', {'expectedRoot':str(self.root),'requestId':payload['requestId']})
+        self.assertEqual(status, 200, restored); self.assertTrue(restored['restored'])
+        self.assertEqual(original.read_bytes(), before); self.assertEqual(pending.read_bytes(), pending_bytes)
+        status, receipt = self.request('GET', '/api/images/delete-operation?'+query)
+        self.assertEqual(status, 200, receipt); self.assertEqual(receipt['status'], 'restored')
+
+    def test_language_helper_is_a_normal_javascript_resource(self):
+        status, source, headers = self.request('GET', '/image-manager-i18n.js', response_headers=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b'ImageManagerI18n', source)
+        self.assertIn('javascript', headers.get('content-type', ''))
+
     def test_upload_review_and_preview_use_bound_root_and_reject_escape(self):
         stream = io.BytesIO()
         Image.new('RGB', (32, 24), 'purple').save(stream, format='PNG')

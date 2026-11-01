@@ -119,7 +119,7 @@ def main():
     for name in ("subscription.html", "subscription.css", "subscription.js", "mobile-dialogue.js", "mobile-dialogue.css",
                  "console-developer-update.js", "console-developer-update.css", "console-repository-publish.js",
                  "console-repository-publish.css", "dev-room-editor.js", "dev-room-translations.json", "lyrics-sentence-timeline.js",
-                 "image-manager.html", "image-manager.js", "image-manager.css"):
+                 "image-manager.html", "image-manager.js", "image-manager-i18n.js", "image-manager.css"):
         require((app_dir / "_internal" / name).is_file(), f"packaged UI entry is missing: {name}")
     for name in ('DevRoomConsoleBridge.cs', 'DevRoomConsoleBridge.contract.json'):
         require((app_dir / '_internal' / 'unity' / 'Editor' / name).is_file(),

@@ -1088,5 +1088,324 @@ class StandardNamingChecks(unittest.TestCase):
                 self.assertEqual((stored['status'],journal['status']),('recovery_required','recovery_required'))
 
 
+class ImageDeletionChecks(unittest.TestCase):
+    """145 reversible local deletion; user libraries and remote services are never used."""
+    setUp = ImageManagerChecks.setUp
+    tearDown = ImageManagerChecks.tearDown
+    scan = ImageManagerChecks.scan
+    apply = ImageManagerChecks.apply
+    annotate = ImageManagerChecks.annotate
+    visible_bytes = StandardNamingChecks.visible_bytes
+
+    def indexed(self,name='Image.png',color='red'):
+        (self.root / name).write_bytes(picture(color))
+        return next(item for item in self.scan()['state']['items'] if item['path']==name)
+
+    def deletion(self,item,character='a'):
+        return {'expectedRoot':str(self.root),'path':item['path'],'sha256':item['sha256'],'requestId':character*32}
+
+    def undo_payload(self,request):
+        return {'expectedRoot':request['expectedRoot'],'requestId':request['requestId']}
+
+    def file_snapshot(self):
+        return {path.relative_to(self.root).as_posix():path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+
+    def backup(self,request):
+        return self.root / image_manager.META / 'history' / ('trash-'+request['requestId']) / ('original'+Path(request['path']).suffix)
+
+    def test_root_delete_and_undo_keep_original_bytes_and_persist_at_most_once_receipts(self):
+        item = self.annotate(self.indexed(),group='TransparentLogo',label='Blue option')['item']
+        request = self.deletion(item)
+        source = self.root / item['path']
+        original = source.read_bytes()
+        result = self.service.delete(request)
+        self.assertTrue(result['deleted'])
+        self.assertEqual((result['requestId'],result['path'],result['sha256']),
+                         (request['requestId'],item['path'],item['sha256']))
+        self.assertFalse(source.exists())
+        self.assertEqual(self.backup(request).read_bytes(),original)
+        self.assertEqual(result['state']['items'],[])
+        self.assertEqual(result['state']['lastDeletion']['requestId'],request['requestId'])
+        self.assertTrue(result['state']['lastDeletion']['canRestore'])
+        before = self.file_snapshot()
+        operation = self.service.delete_operation(self.undo_payload(request))
+        self.assertEqual(operation['status'],'completed')
+        self.assertEqual((operation['path'],operation['sha256']),(item['path'],item['sha256']))
+        self.assertEqual(self.file_snapshot(),before,'A receipt lookup must remain read-only')
+        reopened = ImageManagerService(self.directory / 'config.json')
+        replay = reopened.delete(request)
+        self.assertTrue(replay['deleted'])
+        self.assertEqual(self.file_snapshot(),before,'A repeated request must not start another deletion')
+        restored = reopened.delete_restore(self.undo_payload(request))
+        self.assertTrue(restored['restored'])
+        self.assertEqual(source.read_bytes(),original)
+        self.assertEqual((restored['state']['items'][0]['variantId'],restored['state']['items'][0]['variantLabel']),
+                         (item['variantId'],'Blue option'))
+        self.assertEqual(reopened.delete_operation(self.undo_payload(request))['status'],'restored')
+        after = self.file_snapshot()
+        reopened.delete_restore(self.undo_payload(request))
+        try:
+            reopened.delete(request)
+        except ImageManagerError:
+            pass  # A restored ID may report its terminal result or reject a new delete intent.
+        self.assertEqual(self.file_snapshot(),after,'Old delete IDs must not delete a restored original again')
+
+    def test_same_sha_copies_and_explicit_derivative_metadata_are_not_deleted_by_asset_identity(self):
+        first = self.indexed('First.png')
+        (self.root / 'Second.png').write_bytes(picture('red'))
+        derived = self.indexed('Derived.png','blue')
+        first = next(item for item in self.service.state()['items'] if item['path']=='First.png')
+        self.annotate(first,group='Logo',label='Original')
+        self.annotate(derived,group='Logo',label='Smaller',derivedFromId=first['sha256'])
+        annotations = json.loads(json.dumps(self.service._manifest(self.root)['annotations']))
+        request = self.deletion(first)
+        result = self.service.delete(request)
+        self.assertEqual((self.root / 'Second.png').read_bytes(),picture('red'))
+        self.assertEqual((self.root / 'Derived.png').read_bytes(),picture('blue'))
+        self.assertEqual(sum(item['sha256']==first['sha256'] for item in result['state']['items']),1)
+        self.assertEqual(self.service._manifest(self.root)['annotations'],annotations)
+        child = next(item for item in result['state']['items'] if item['path']=='Derived.png')
+        self.assertEqual(child['derivedFromId'],first['sha256'])
+        self.service.delete_restore(self.undo_payload(request))
+        self.assertEqual((self.root / 'First.png').read_bytes(),picture('red'))
+        self.assertEqual(self.service._manifest(self.root)['annotations'],annotations)
+
+    def test_inbox_deletion_removes_only_selected_candidate_and_keeps_other_choices_addressable(self):
+        plan = self.service.import_files([('One.png',picture('red')),('Two.png',picture('blue'))],
+                                         {'expectedRoot':str(self.root)})
+        selected,other = plan['candidates']
+        request = self.deletion(selected['incoming'])
+        original = (self.root / selected['incoming']['path']).read_bytes()
+        result = self.service.delete(request)
+        self.assertEqual(result['state']['inboxCount'],1)
+        current = result['state']['plan']
+        self.assertNotEqual(current['planId'],plan['planId'])
+        self.assertEqual(len(current['candidates']),1)
+        self.assertEqual(current['candidates'][0]['id'],other['id'])
+        self.assertEqual((self.root / other['incoming']['path']).read_bytes(),picture('blue'))
+        self.assertEqual(result['state']['items'],[],'Deleting an Inbox item must not adopt any other item')
+        with self.assertRaises(ImageManagerError):
+            self.apply(plan,'add')
+        self.assertEqual(self.backup(request).read_bytes(),original)
+        restored = self.service.delete_restore(self.undo_payload(request))
+        self.assertEqual(restored['state']['inboxCount'],2)
+        self.assertEqual((self.root / selected['incoming']['path']).read_bytes(),original)
+
+    def test_invalid_scope_sha_path_device_payload_and_reused_request_cannot_delete_another_file(self):
+        item = self.indexed()
+        request = self.deletion(item)
+        malformed = [dict(request,sha256='0'*64),dict(request,expectedRoot=str(self.device)),
+                     dict(request,path='../outside.png'),dict(request,path=str(self.root / item['path'])),
+                     dict(request,path=image_manager.META+'/library.json'),dict(request,space='device'),
+                     dict(request,requestId='invalid')]
+        for payload in malformed:
+            with self.subTest(payloadKeys=sorted(payload),path=payload['path']):
+                with self.assertRaises(ImageManagerError):
+                    self.service.delete(payload)
+                self.assertEqual((self.root / item['path']).read_bytes(),picture('red'))
+        self.service.delete(request)
+        (self.root / 'Other.png').write_bytes(picture('blue'))
+        other = next(item for item in self.scan()['state']['items'] if item['path']=='Other.png')
+        with self.assertRaises(ImageManagerError):
+            self.service.delete(dict(self.deletion(other),requestId=request['requestId']))
+        self.assertEqual((self.root / 'Other.png').read_bytes(),picture('blue'))
+
+    def test_changed_original_hardlink_and_root_identity_reject_before_moving_any_file(self):
+        item = self.indexed()
+        request = self.deletion(item)
+        source = self.root / item['path']
+        source.write_bytes(picture('blue'))
+        with self.assertRaises(ImageManagerError):
+            self.service.delete(request)
+        self.assertEqual(source.read_bytes(),picture('blue'))
+        item = self.scan()['state']['items'][0]
+        request = self.deletion(item,'b')
+        external = self.directory / 'hardlink.png'
+        os.link(source,external)
+        with self.assertRaises(ImageManagerError):
+            self.service.delete(request)
+        self.assertEqual(source.read_bytes(),external.read_bytes())
+        external.unlink()
+        old_root = self.directory / 'preserved-root'
+        self.root.rename(old_root)
+        self.root.mkdir()
+        with self.assertRaises(ImageManagerError):
+            self.service.delete(dict(request,requestId='c'*32))
+        self.assertEqual((old_root / item['path']).read_bytes(),picture('blue'))
+        self.assertEqual(list(self.root.iterdir()),[])
+
+    def test_undo_refuses_occupied_path_and_foreign_metadata_without_overwriting_either(self):
+        item = self.indexed()
+        request = self.deletion(item)
+        self.service.delete(request)
+        source = self.root / item['path']
+        source.write_bytes(picture('blue'))
+        with self.assertRaises(ImageManagerError):
+            self.service.delete_restore(self.undo_payload(request))
+        self.assertEqual(source.read_bytes(),picture('blue'))
+        self.assertEqual(self.backup(request).read_bytes(),picture('red'))
+        source.unlink()
+        manifest_path = self.root / image_manager.META / 'library.json'
+        foreign = json.loads(manifest_path.read_text(encoding='utf-8'))
+        foreign['foreignMetadata'] = 'preserve'
+        image_manager._atomic_json(manifest_path,foreign)
+        snapshot = manifest_path.read_bytes()
+        with self.assertRaises(ImageManagerError):
+            self.service.delete_restore(self.undo_payload(request))
+        self.assertEqual(manifest_path.read_bytes(),snapshot)
+        self.assertFalse(source.exists())
+        self.assertEqual(self.backup(request).read_bytes(),picture('red'))
+        self.assertNotEqual(self.service.delete_operation(self.undo_payload(request))['status'],'restored')
+
+    def test_delete_and_undo_epochs_reject_old_image_apply_and_restore_without_reviving_them(self):
+        for completed in (False,True):
+            with self.subTest(completedImagePlan=completed):
+                root = self.directory / ('delete-completed' if completed else 'delete-pending')
+                root.mkdir()
+                service = ImageManagerService(self.directory / (root.name+'.json'))
+                service.configure({'root':str(root)})
+                if completed:
+                    old = service.import_files([('Image.png',picture('red'))],{'expectedRoot':str(root)})
+                    choices = [{'id':row['id'],'action':'add'} for row in old['candidates']]
+                    service.apply({'expectedRoot':str(root),'planId':old['planId'],'decisions':choices})
+                else:
+                    (root / 'Image.png').write_bytes(picture('red'))
+                    service.scan({'expectedRoot':str(root)})
+                    old = service.import_files([('Pending.png',picture('blue'))],{'expectedRoot':str(root)})
+                    choices = [{'id':row['id'],'action':'add'} for row in old['candidates']]
+                item = service.state()['items'][0]
+                epochs = [service.state()['namingEpoch']]
+                request = {'expectedRoot':str(root),'requestId':'a'*32,'path':item['path'],'sha256':item['sha256']}
+                service.delete(request)
+                for phase in ('deleted','undone'):
+                    if phase=='undone':
+                        service.delete_restore({'expectedRoot':str(root),'requestId':request['requestId']})
+                    epochs.append(service.state()['namingEpoch'])
+                    before = {path.relative_to(root).as_posix():path.read_bytes() for path in root.rglob('*') if path.is_file()}
+                    with self.assertRaises(ImageManagerError):
+                        if completed:
+                            service.restore({'expectedRoot':str(root),'planId':old['planId']})
+                        else:
+                            service.apply({'expectedRoot':str(root),'planId':old['planId'],'decisions':choices})
+                    self.assertEqual({path.relative_to(root).as_posix():path.read_bytes() for path in root.rglob('*') if path.is_file()},before)
+                self.assertEqual(len(set(epochs)),3)
+
+    def test_unknown_operation_lookup_is_read_only_and_corrupt_trash_cannot_restore(self):
+        item = self.indexed()
+        before = self.file_snapshot()
+        missing = self.service.delete_operation({'expectedRoot':str(self.root),'requestId':'f'*32})
+        self.assertEqual(missing['status'],'not_found')
+        self.assertEqual(self.file_snapshot(),before)
+        request = self.deletion(item)
+        self.service.delete(request)
+        self.backup(request).write_bytes(picture('blue'))
+        with self.assertRaises(ImageManagerError):
+            self.service.delete_restore(self.undo_payload(request))
+        self.assertFalse((self.root / item['path']).exists())
+        self.assertEqual(self.backup(request).read_bytes(),picture('blue'))
+
+    def test_delete_and_undo_final_receipt_failure_roll_back_owned_state_but_preserve_foreign_state(self):
+        for mode in ('delete','undo'):
+            for foreign in (False,True):
+                with self.subTest(mode=mode,foreign=foreign):
+                    root = self.directory / (mode+('-foreign' if foreign else '-own'))
+                    root.mkdir()
+                    service = ImageManagerService(self.directory / (root.name+'.json'))
+                    service.configure({'root':str(root)})
+                    original = picture('red')
+                    source = root / 'Image.png'
+                    source.write_bytes(original)
+                    item = service.scan({'expectedRoot':str(root)})['state']['items'][0]
+                    request = {'expectedRoot':str(root),'path':item['path'],'sha256':item['sha256'],'requestId':'a'*32}
+                    undo = {'expectedRoot':str(root),'requestId':request['requestId']}
+                    if mode=='undo':
+                        service.delete(request)
+                    meta = root / image_manager.META
+                    manifest_path = meta / 'library.json'
+                    record_path = meta / 'history' / ('trash-'+request['requestId']) / 'operation.json'
+                    before = manifest_path.read_bytes()
+                    real_atomic = image_manager._atomic_json
+                    injected,foreign_bytes = [],[]
+
+                    def write(path,value):
+                        if (Path(path)==record_path and value.get('status')==('completed' if mode=='delete' else 'restored')
+                                and not injected):
+                            injected.append(True)
+                            if foreign:
+                                changed = json.loads(manifest_path.read_text(encoding='utf-8'))
+                                changed['foreignEdit'] = mode
+                                real_atomic(manifest_path,changed)
+                                foreign_bytes.append(manifest_path.read_bytes())
+                            raise PermissionError('fixture durable deletion receipt failure')
+                        return real_atomic(path,value)
+
+                    with patch.object(image_manager,'_atomic_json',side_effect=write):
+                        with self.assertRaises((ImageManagerError,PermissionError)):
+                            (service.delete(request) if mode=='delete' else service.delete_restore(undo))
+                    self.assertTrue(injected,'Fixture must reach the final durable operation record')
+                    self.assertEqual(manifest_path.read_bytes(),foreign_bytes[0] if foreign else before)
+                    should_exist = mode=='undo' if foreign else mode=='delete'
+                    self.assertEqual(source.exists(),should_exist)
+                    history_images = [path for path in record_path.parent.glob('original.*') if path.is_file()]
+                    self.assertTrue(source.exists() and source.read_bytes()==original or
+                                    any(path.read_bytes()==original for path in history_images))
+                    operation = service.delete_operation(undo)
+                    self.assertNotEqual(operation['status'],'completed' if mode=='delete' else 'restored')
+                    snapshot = {path.relative_to(root).as_posix():path.read_bytes() for path in root.rglob('*') if path.is_file()}
+                    try:
+                        service.delete(request)
+                    except ImageManagerError:
+                        pass
+                    self.assertEqual({path.relative_to(root).as_posix():path.read_bytes() for path in root.rglob('*') if path.is_file()},snapshot,
+                                     'A failed or uncertain known request must never start deletion again')
+
+    def test_delete_prepared_record_cannot_bypass_source_or_manifest_change_before_move(self):
+        for change in ('source','manifest','pointer'):
+            with self.subTest(change=change):
+                root = self.directory / ('prepared-'+change)
+                root.mkdir()
+                service = ImageManagerService(self.directory / (root.name+'.json'))
+                service.configure({'root':str(root)})
+                source = root / 'Image.png'
+                source.write_bytes(picture('red'))
+                item = service.scan({'expectedRoot':str(root)})['state']['items'][0]
+                request = {'expectedRoot':str(root),'path':item['path'],'sha256':item['sha256'],'requestId':'a'*32}
+                meta = root / image_manager.META
+                record_path = meta / 'history' / ('trash-'+request['requestId']) / 'operation.json'
+                manifest_path = meta / 'library.json'
+                real_atomic = image_manager._atomic_json
+                injected,foreign_bytes = [],[]
+                pointer_path = meta / 'latest-plan.json'
+
+                def write(path,value):
+                    result = real_atomic(path,value)
+                    if Path(path)==record_path and value.get('status')=='prepared' and not injected:
+                        injected.append(True)
+                        if change=='source':
+                            source.write_bytes(picture('blue'))
+                        elif change=='manifest':
+                            foreign = json.loads(manifest_path.read_text(encoding='utf-8'))
+                            foreign['foreignEdit'] = change
+                            real_atomic(manifest_path,foreign)
+                            foreign_bytes.append(manifest_path.read_bytes())
+                        else:
+                            real_atomic(pointer_path,{'planId':'f'*32,'foreignEdit':change})
+                            foreign_bytes.append(pointer_path.read_bytes())
+                    return result
+
+                with patch.object(image_manager,'_atomic_json',side_effect=write):
+                    with self.assertRaises(ImageManagerError):
+                        service.delete(request)
+                self.assertTrue(injected)
+                self.assertEqual(source.read_bytes(),picture('blue' if change=='source' else 'red'))
+                self.assertFalse((record_path.parent / 'original.png').exists())
+                if change=='manifest':
+                    self.assertEqual(manifest_path.read_bytes(),foreign_bytes[0])
+                elif change=='pointer':
+                    self.assertEqual(pointer_path.read_bytes(),foreign_bytes[0])
+                operation = service.delete_operation({'expectedRoot':str(root),'requestId':request['requestId']})
+                self.assertIn(operation['status'],('failed','recovery_required'))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
