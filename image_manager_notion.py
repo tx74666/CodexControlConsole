@@ -6,6 +6,7 @@ tools. Downloaded files always enter the core import review workflow.
 """
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 import hashlib
 import html
@@ -38,7 +39,8 @@ CATALOG_RE = re.compile(r'^(?:Image manager catalog - |Image_manager_catalog_-_)
 SHA_RE = re.compile(r'[0-9a-f]{64}\Z')
 OPERATION_FIELDS = ('id', 'requestId', 'source', 'target', 'root', 'pageId', 'status', 'phase',
     'code', 'message', 'startedAt', 'finishedAt', 'resumedAt', 'priorVerificationFailure',
-    'items', 'catalog', 'annotations', 'planId', 'completedTargets', 'remainingTargets', 'verifiedOriginals')
+    'items', 'catalog', 'annotations', 'planId', 'completedTargets', 'remainingTargets', 'verifiedOriginals',
+    'exportSnapshot', 'exportCatalogSha256')
 RPC_TOOLS = {
     'fetch': 'notion.fetch',
     'prepare': 'notion.notion-create-file-upload',
@@ -235,6 +237,49 @@ def _entry(metadata):
         'derivedFromId': metadata.get('derivedFromId') or metadata.get('pendingDerivedFromId') or ''}
 
 
+def _export_rows(snapshot):
+    """Validate our private, versioned local export evidence, never legacy guesses."""
+    if (not isinstance(snapshot, dict) or set(snapshot) != {'version','entries','fingerprint'}
+            or type(snapshot['version']) is not int or snapshot['version'] != 1
+            or not isinstance(snapshot['entries'], list) or len(snapshot['entries']) > MAX_BATCH):
+        return None
+    entries = snapshot['entries']
+    metadata = {}
+    for row in entries:
+        if not isinstance(row, dict) or set(row) != {'filename','syncName','sha256','metadata'}:
+            return None
+        for field in ('filename','syncName'):
+            value = row[field]
+            if (not isinstance(value, str) or not 1 <= len(value) <= 255 or '/' in value or '\\' in value
+                    or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+                return None
+        digest = row['sha256']
+        if not isinstance(digest, str) or not SHA_RE.fullmatch(digest):
+            return None
+        if digest in metadata and metadata[digest] != row['metadata']:
+            return None
+        metadata[digest] = row['metadata']
+    try:
+        _validate_entries(metadata)
+    except ImageManagerError:
+        return None
+    canonical = sorted(entries, key=lambda row: json.dumps(row, ensure_ascii=False, sort_keys=True))
+    encoded = json.dumps({'version':1,'entries':canonical}, ensure_ascii=False, sort_keys=True,
+                         separators=(',', ':')).encode('utf-8')
+    if hashlib.sha256(encoded).hexdigest() != snapshot['fingerprint']:
+        return None
+    return canonical
+
+
+def _snapshot_matches_catalog(snapshot, catalog):
+    rows = _export_rows(snapshot)
+    return rows is not None and all(catalog.get(row['sha256']) == row['metadata'] for row in rows)
+
+
+def _export_scope(root, page_id):
+    return hashlib.sha256((os.path.normcase(root) + ':' + page_id).encode()).hexdigest()
+
+
 def _validate_entries(entries, *, known=None):
     if not isinstance(entries, dict) or len(entries) > MAX_CATALOG_ENTRIES:
         raise NotionSyncError('catalog_invalid', '方案目录格式无效，未更改图片或注释。')
@@ -327,6 +372,8 @@ def _operation_view(operation):
     if not isinstance(operation, dict):
         return operation
     view = json.loads(json.dumps(operation))
+    view.pop('exportSnapshot', None)
+    view.pop('exportCatalogSha256', None)
     kind = _recheck_kind(operation)
     view.update(recheckable=bool(kind), recheckKind=kind)
     return view
@@ -344,12 +391,12 @@ def _executable(value=None):
     return str(max(found, key=lambda p: p.stat().st_mtime_ns)) if found else None
 
 
-def _acquire_file_lock(path):
+def _acquire_file_lock(path, *, initialize=True):
     if path.exists() and _link(path):
         raise NotionSyncError('sync_lock_invalid', '同步锁位置无效。')
-    handle = path.open('a+b')
+    handle = path.open('a+b' if initialize else 'r+b')
     try:
-        if path.stat().st_size == 0:
+        if initialize and path.stat().st_size == 0:
             handle.write(b'0')
             handle.flush()
         handle.seek(0)
@@ -674,8 +721,8 @@ class ImageManagerNotion:
             history[request_id] = json.loads(json.dumps({key:operation[key] for key in OPERATION_FIELDS if key in operation}))
         return history
 
-    def _context(self, payload=None):
-        current = self.service.state()
+    def _context(self, payload=None, local_state=None):
+        current = self.service.state() if local_state is None else local_state
         expected = (payload or {}).get('expectedRoot')
         if not current.get('configured') or not isinstance(expected or current.get('root'), str):
             raise NotionSyncError('library_unconfigured', '请先选择图片文件夹。')
@@ -713,11 +760,125 @@ class ImageManagerNotion:
         self._remember_operation(record)
         return current, path, record
 
-    def state(self):
+    def _export_items(self, current):
+        items = [item for item in current.get('items', []) if item.get('space','root') == 'root'
+                 and item.get('path','').split('/')[0].casefold() not in {'inbox','.image-manager'}]
+        items = json.loads(json.dumps(items))
+        annotations = {item['sha256']:{key:item[key] for key in (
+            'groupTitle','groupId','variantId','variantLabel','variantExplicit','derivedFromId','pendingDerivedFromId')
+            if key in item} for item in items}
+        # Core state also projects pending Inbox variants. Export names must be
+        # projected from adopted originals alone, without mutating that state.
+        self.service._enrich(items, annotations, standard=bool(current.get('standardNaming')))
+        return items
+
+    def _export_snapshot(self, current):
+        items = self._export_items(current)
+        if len(items) > MAX_BATCH:
+            raise NotionSyncError('local_batch_limit', '已入库图片超过本批同步范围。')
+        rows = []
+        for item in items:
+            image = self.service.image(item['path'], current['root'], space='root')
+            path = Path(image['path'])
+            before = path.stat()
+            digest = hashlib.sha256()
+            if before.st_nlink != 1:
+                raise NotionSyncError('local_original_changed', '原图身份已变化。')
+            with path.open('rb') as source:
+                for part in iter(lambda: source.read(1024 * 1024), b''):
+                    digest.update(part)
+            after = path.stat()
+            token = lambda value:(value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_nlink)
+            if (token(before) != token(after) or digest.hexdigest() != item.get('sha256')
+                    or before.st_size != item.get('size')):
+                raise NotionSyncError('local_original_changed', '图片已改变，请更新本地图库。')
+            rows.append({'filename':path.name,'syncName':_sync_name(item, items),
+                         'sha256':item['sha256'],'metadata':_entry(item)})
+        rows.sort(key=lambda row:json.dumps(row, ensure_ascii=False, sort_keys=True))
+        encoded = json.dumps({'version':1,'entries':rows}, ensure_ascii=False, sort_keys=True,
+                             separators=(',', ':')).encode('utf-8')
+        snapshot = {'version':1,'entries':rows,'fingerprint':hashlib.sha256(encoded).hexdigest()}
+        if _export_rows(snapshot) is None:
+            raise NotionSyncError('local_export_invalid', '本地导出信息尚未核实。')
+        return snapshot
+
+    @staticmethod
+    def _mark_verified_export(record):
+        operation = record['operation']
+        snapshot = operation.get('exportSnapshot')
+        rows = _export_rows(snapshot)
+        catalog = operation.get('catalog') or {}
+        items = operation.get('items')
+        if (not rows or operation.get('status') != 'completed'
+                or operation.get('source') not in {'local','console'} or operation.get('target') not in {'notion','all'}
+                or operation.get('completedTargets') != ['notion'] or operation.get('remainingTargets') != []
+                or not isinstance(items, list) or len(items) != len(rows)
+                or any(item.get('status') not in {'verified','unchanged'} for item in items)
+                or sorted(item.get('sha256','') for item in items) != sorted(row['sha256'] for row in rows)
+                or catalog.get('status') not in {'verified','unchanged'}
+                or not isinstance(catalog.get('sha256'), str) or not SHA_RE.fullmatch(catalog['sha256'])
+                or operation.get('exportCatalogSha256') != catalog['sha256']):
+            return
+        reference, filename = catalog.get('reference'), catalog.get('filename')
+        identity = _catalog_identity(filename)
+        if (not isinstance(reference, str) or not REF_RE.fullmatch(reference) or not identity
+                or identity[1] != catalog['sha256'] or not _same_catalog_name(_reference_name(reference), filename)):
+            return
+        key = _export_scope(operation['root'], operation['pageId'])
+        # A successful export from another root may change this page's catalog.
+        # Keep its last acknowledgement only; older evidence remains in history.
+        record['verifiedExports'] = {key:{'root':operation['root'],'pageId':operation['pageId'],
+            'requestId':operation['requestId'],'operationId':operation['id'],
+            'snapshot':json.loads(json.dumps(snapshot)), 'verifiedAt':operation['finishedAt']}}
+
+    def _sync_status(self, current, record, operation, can_attempt):
+        root, page_id = current.get('root',''), _identifier(current.get('notionPage'))
+        result = {'root':root,'pageId':page_id,'status':'unavailable','localFingerprint':None,
+                  'syncedFingerprint':None,'lastSyncedAt':None,'pendingCount':None,'reason':'not_configured'}
+        if not current.get('configured') or not page_id or not can_attempt:
+            return result
+        markers = record.get('verifiedExports', {})
+        marker = markers.get(_export_scope(root, page_id), {}) if isinstance(markers, dict) else {}
+        if not isinstance(marker, dict):
+            marker = {}
+        previous = marker.get('snapshot')
+        old_rows = _export_rows(previous)
+        if marker.get('root') != root or marker.get('pageId') != page_id:
+            old_rows = None
+        if old_rows is not None:
+            result.update(syncedFingerprint=previous['fingerprint'],lastSyncedAt=marker.get('verifiedAt'))
         try:
-            _, _, record = self._context()
+            snapshot = self._export_snapshot(current)
+        except (ImageManagerError, OSError, ValueError):
+            result.update(status='pending',reason='local_changed')
+            return result
+        result['localFingerprint'] = snapshot['fingerprint']
+        if old_rows is not None:
+            encode = lambda row:json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',',':'))
+            now_count, old_count = Counter(map(encode,snapshot['entries'])), Counter(map(encode,old_rows))
+            result['pendingCount'] = max(sum((now_count-old_count).values()),sum((old_count-now_count).values()))
+        if not snapshot['entries']:
+            result.update(status='unverified',reason='empty_library')
+        elif operation and operation.get('status') == 'running':
+            result.update(status='syncing',reason='request_running')
+        elif old_rows is not None and result['localFingerprint'] != result['syncedFingerprint']:
+            result.update(status='pending',reason='local_changes')
+        elif operation and operation.get('status') == 'failed':
+            result.update(status='failed',reason='last_request_failed')
+        elif operation and (operation.get('status') in {'unknown','needs_review'} or operation.get('remainingTargets')):
+            result.update(status='unverified',reason='verification_pending')
+        elif old_rows is not None:
+            result.update(status='synced',reason='verified_snapshot')
+        else:
+            result.update(status='unverified',reason='no_verified_snapshot')
+        return result
+
+    def state(self, local_state=None):
+        current = self.service.state() if local_state is None else local_state
+        try:
+            _, _, record = self._context(local_state=current)
             operation = _operation_view(record.get('operation'))
-            if operation and os.path.normcase(operation.get('root', '')) != os.path.normcase(self.service.state().get('root', '')):
+            if operation and os.path.normcase(operation.get('root', '')) != os.path.normcase(current.get('root', '')):
                 operation = None
             if operation and operation.get('status') == 'running' and not self.busy:
                 operation = dict(operation, status='unknown', message='上次同步中断；请重新核对同一请求记录。')
@@ -731,7 +892,9 @@ class ImageManagerNotion:
             'lastVerifiedAt': record.get('bridgeVerifiedAt'), 'pageId': record.get('pageId'),
             'url': 'https://app.notion.com/p/' + record.get('pageId', '').replace('-', ''),
             'operation': operation, 'maxFileBytes': MAX_FILE_BYTES}
-        return {'notionAvailable': available, 'notion': notion, 'operation': operation}
+        summary = self._sync_status(current, record, operation or _operation_view(record.get('operation')), can_attempt)
+        notion['syncStatus'] = summary
+        return {'notionAvailable': available, 'notion': notion, 'operation': operation, 'notionSync':summary}
 
     @property
     def busy(self):
@@ -742,7 +905,7 @@ class ImageManagerNotion:
             path = self.directory / ('target-' + record['pageId'] + '.lock')
             if not path.exists():
                 return False
-            handle = _acquire_file_lock(path)
+            handle = _acquire_file_lock(path, initialize=False)
             _release_file_lock(handle)
             return False
         except NotionSyncError as error:
@@ -829,9 +992,15 @@ class ImageManagerNotion:
 
     def _save(self, path, record, **changes):
         with self.lock:
+            previous = json.loads(json.dumps(record.get('verifiedExports', {})))
             record['operation'].update(changes)
+            self._mark_verified_export(record)
             self._remember_operation(record)
-            _atomic_json(path, record)
+            try:
+                _atomic_json(path, record)
+            except Exception:
+                record['verifiedExports'] = previous
+                raise
 
     def _preserve_verified_completion(self, path, record):
         operation = record['operation']
@@ -1171,7 +1340,11 @@ class ImageManagerNotion:
             if folder.get('metadata', {}).get('type') == 'page':
                 rows = self._page_rows(rpc, transport, folder, entries)
                 self._verify_page_rows(rpc, transport, folder, rows)
-            originals = self._verify_attached_originals(record, rpc, transport, folder) if payload.get('_verifyOriginals') else None
+            snapshot = operation.get('exportSnapshot')
+            latest_catalog = self._read_catalog(rpc, transport, folder) if _export_rows(snapshot) is not None else None
+            proven_snapshot = (_snapshot_matches_catalog(snapshot, entries) and latest_catalog is not None
+                               and _snapshot_matches_catalog(snapshot, latest_catalog['entries']))
+            originals = self._verify_attached_originals(record, rpc, transport, folder) if payload.get('_verifyOriginals') or proven_snapshot else None
             self._check_root(payload)
             receipt.update(status='verified', reference=reference, verifiedAt=_now())
             operation.pop('code', None)
@@ -1180,6 +1353,7 @@ class ImageManagerNotion:
                 remainingTargets=remaining, catalog={'status':'verified','sha256':receipt['sha256'],
                     'reference':reference,'filename':_reference_name(reference)},
                 verifiedOriginals=originals,
+                exportCatalogSha256=receipt['sha256'] if proven_snapshot else None,
                 message='原件与方案目录已回读核实；沿用原请求，未重传原图或目录。' if originals is not None
                     else '原方案目录已回读核实；沿用原请求，未重传原图或目录。', finishedAt=_now())
             return
@@ -1196,7 +1370,7 @@ class ImageManagerNotion:
             candidates.extend(row['reference'] for row in record['receipts']
                 if row.get('direction') in {'upload','download'} and row.get('status') == 'verified'
                 and row.get('sha256') == digest and row.get('reference') in present)
-            if not candidates and folder.get('metadata', {}).get('type') == 'page':
+            if not candidates:
                 # Native page edits can copy the same uploaded file into a new
                 # block UUID. Reconcile its real bytes, never infer from a label.
                 if page_originals is None:
@@ -1242,7 +1416,7 @@ class ImageManagerNotion:
 
     def _push(self, payload, path, record, rpc, transport, folder):
         current = self._check_root(payload)
-        items = current.get('items', [])
+        items = self._export_items(current)
         if current.get('standardNaming') and any(
                 item.get('namingNeedsReview') or not item.get('standardType')
                 for item in items if item.get('space', 'root') == 'root'
@@ -1251,6 +1425,9 @@ class ImageManagerNotion:
                 '有图片尚未确认标准用途；请先选择用途并完成命名，再同步到 Notion。未上传任何新原图或方案目录。')
         if len(items) > MAX_BATCH:
             raise NotionSyncError('local_batch_limit', '单批最多同步 50 张已入库图片。')
+        # Freeze the bytes, actual basename and export semantics before the first
+        # upload. A later edit can never be credited to this earlier request.
+        self._save(path, record, exportSnapshot=self._export_snapshot(current))
         remote = self._remote_hashes(rpc, transport, folder, record)
         catalog = self._read_catalog(rpc, transport, folder)
         local_entries = {item['sha256']: _entry(item) for item in items
@@ -1353,6 +1530,7 @@ class ImageManagerNotion:
         extra_device = bool(current.get('deviceRoot') and payload.get('target') == 'all')
         self._save(path, record, status='completed', phase='finished', completedTargets=['notion'],
             remainingTargets=['device'] if extra_device else [],
+            exportCatalogSha256=(record['operation'].get('catalog') or {}).get('sha256'),
             message='Notion 原件与方案目录已保存并回读核对。' + ('设备文件夹仍需独立同步预览。' if extra_device else ''), finishedAt=_now())
 
     def _pull(self, payload, path, record, rpc, transport, folder):

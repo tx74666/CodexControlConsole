@@ -2,17 +2,28 @@
 from urllib.parse import parse_qs
 
 
+def _state_with_notion(state, notion):
+    provider_state = getattr(notion, 'state', None)
+    return {**state, **provider_state(local_state=state)} if callable(provider_state) else state
+
+
+def _with_notion_state(result, notion):
+    if isinstance(result, dict) and isinstance(result.get('state'), dict):
+        return {**result, 'state': _state_with_notion(result['state'], notion)}
+    return result
+
+
 def image_get(service, action, query, notion=None):
     values = parse_qs(query, keep_blank_values=True)
     if any(len(value) != 1 for value in values.values()):
         raise ValueError('图片查询参数不可重复。')
     values = {key: value[0] for key, value in values.items()}
     if action == 'state' and not values:
-        return {**service.state(), **(notion.state() if notion is not None else {})}
+        return _state_with_notion(service.state(), notion)
     if action == 'operation' and not set(values) - {'requestId'} and notion is not None:
         return notion.operation(values.get('requestId'))
     if action == 'delete-operation' and set(values) == {'expectedRoot', 'requestId'} and values.get('expectedRoot'):
-        return service.delete_operation(values)
+        return _with_notion_state(service.delete_operation(values), notion)
     if action == 'preview' and not set(values) - {'path', 'expectedRoot', 'space'}:
         if not values.get('expectedRoot'):
             raise ValueError('请先选择图片文件夹。')
@@ -21,6 +32,10 @@ def image_get(service, action, query, notion=None):
 
 
 def image_post(service, action, payload, notion=None):
+    return _with_notion_state(_image_post(service, action, payload, notion), notion)
+
+
+def _image_post(service, action, payload, notion=None):
     if not isinstance(payload, dict):
         raise ValueError('图片请求内容必须是对象。')
     if action == 'config':
@@ -28,10 +43,10 @@ def image_post(service, action, payload, notion=None):
             raise ValueError('图片正在同步，请等本次结果返回后再更换位置。')
         if set(payload) - {'root', 'deviceRoot', 'notionPage', 'expectedRoot'}:
             raise ValueError('图片文件夹设置无效。')
-        return {**service.configure(payload), **(notion.state() if notion is not None else {})}
+        return _state_with_notion(service.configure(payload), notion)
     if not isinstance(payload.get('expectedRoot'), str) or not payload['expectedRoot']:
         raise ValueError('图片文件夹身份缺失，请重新读取。')
-    if action in {'apply', 'restore', 'metadata', 'naming-apply', 'naming-restore', 'delete', 'delete-restore'} and notion is not None and notion.busy:
+    if action in {'scan', 'apply', 'restore', 'metadata', 'naming-apply', 'naming-restore', 'delete', 'delete-restore'} and notion is not None and notion.busy:
         raise ValueError('图片正在同步，请等本次结果返回后再修改本地图片或方案。')
     if action == 'scan' and not set(payload) - {'expectedRoot'}:
         return service.scan(payload)
@@ -59,6 +74,8 @@ def image_post(service, action, payload, notion=None):
             if notion is None:
                 raise ValueError('Notion 同步连接尚未就绪；本地图库与导入功能可以正常使用。')
             return notion.sync(payload)
+        if notion is not None and notion.busy:
+            raise ValueError('图片正在同步，请等本次结果返回后再更新本地或设备图库。')
         if source == 'local' and target == 'console':
             return service.scan({'expectedRoot': payload['expectedRoot']})
         if source in {'local', 'console'} and target == 'local':

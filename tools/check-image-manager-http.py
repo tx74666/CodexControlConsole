@@ -212,6 +212,68 @@ class ImageHTTPChecks(unittest.TestCase):
         self.assertIn(b'ImageManagerI18n', source)
         self.assertIn('javascript', headers.get('content-type', ''))
 
+    def test_notion_status_reuses_each_local_response_snapshot_without_extra_scan(self):
+        from image_manager_http import image_get, image_post
+        snapshots = []
+        def provider_state(*, local_state):
+            snapshots.append(local_state)
+            return {'notionSync': {'status': 'pending', 'localFingerprint': local_state['revision']}}
+        notion = SimpleNamespace(busy=False, state=provider_state)
+        calls = []
+        local = {'root': str(self.root), 'revision': 'changed'}
+        def read_state():
+            calls.append('state')
+            return local
+        service = SimpleNamespace(state=read_state, configure=lambda payload: local,
+            delete_operation=lambda payload: {'status': 'completed', 'state': local})
+        state = image_get(service, 'state', '', notion)
+        self.assertEqual(calls, ['state'])
+        self.assertIs(snapshots[-1], local)
+        self.assertEqual(state['notionSync']['localFingerprint'], 'changed')
+        self.assertNotIn('notionSync', local, 'Merging the provider must not modify the core snapshot')
+        configured = image_post(service, 'config', {'root': str(self.root)}, notion)
+        self.assertEqual(configured['notionSync']['status'], 'pending')
+        for action, method, fields in [
+            ('scan', 'scan', {}), ('apply', 'apply', {'planId': 'a'*32, 'decisions': []}),
+            ('restore', 'restore', {'planId': 'a'*32}),
+            ('metadata', 'annotate', {'path': 'A.png', 'sha256': 'b'*64}),
+            ('naming-plan', 'naming_plan', {'entries': []}),
+            ('naming-apply', 'naming_apply', {'planId': 'a'*32}),
+            ('naming-restore', 'naming_restore', {'planId': 'a'*32}),
+            ('delete', 'delete', {'path': 'A.png', 'sha256': 'b'*64, 'requestId': 'c'*32}),
+            ('delete-restore', 'delete_restore', {'requestId': 'c'*32}),
+            ('sync', 'scan', {'source': 'console', 'target': 'local'}),
+        ]:
+            with self.subTest(action=action):
+                original = {'state': local, 'ok': True}
+                setattr(service, method, lambda payload: original)
+                count = len(snapshots)
+                response = image_post(service, action, {'expectedRoot': str(self.root), **fields}, notion)
+                self.assertEqual(len(snapshots), count+1)
+                self.assertIs(snapshots[-1], local)
+                self.assertEqual(response['state']['notionSync']['status'], 'pending')
+                self.assertNotIn('notionSync', original['state'])
+        receipt = image_get(service, 'delete-operation', urlencode({
+            'expectedRoot': str(self.root), 'requestId': 'c'*32}), notion)
+        self.assertEqual(receipt['state']['notionSync']['status'], 'pending')
+        self.assertEqual(calls, ['state'], 'Local mutation receipts already carry the core state')
+
+    def test_busy_notion_push_blocks_local_scan_and_device_writes_but_retains_same_request_route(self):
+        from image_manager_http import image_post
+        def forbidden(payload):
+            self.fail('An in-flight Notion operation must protect its local export snapshot')
+        service = SimpleNamespace(scan=forbidden, sync_device=forbidden, state=lambda: {'deviceRoot': 'E:\\Device'})
+        notion = SimpleNamespace(busy=True, sync=lambda payload: {'requestId': payload['requestId']})
+        with self.assertRaisesRegex(ValueError, '正在同步'):
+            image_post(service, 'scan', {'expectedRoot': str(self.root)}, notion)
+        for source, target in [('local', 'console'), ('local', 'local'), ('console', 'console'),
+                               ('console', 'local'), ('local', 'device'), ('console', 'device'), ('device', 'console')]:
+            with self.subTest(source=source, target=target), self.assertRaisesRegex(ValueError, '正在同步'):
+                image_post(service, 'sync', {'expectedRoot': str(self.root), 'source': source, 'target': target}, notion)
+        original = {'expectedRoot': str(self.root), 'source': 'console', 'target': 'notion', 'requestId': 'same-request'}
+        self.assertEqual(image_post(service, 'sync', original, notion), {'requestId': original['requestId']},
+                         'The provider must retain authority over checking the same in-flight request')
+
     def test_upload_review_and_preview_use_bound_root_and_reject_escape(self):
         stream = io.BytesIO()
         Image.new('RGB', (32, 24), 'purple').save(stream, format='PNG')

@@ -38,7 +38,7 @@ const originalRoot = 'D:\\Fixture Images';
 const image = { path: 'sample 64x64.png', title: '<img src=x onerror=alert(1)>', width: 64, height: 64, sha256: 'a'.repeat(64), space: 'root' };
 const candidate = { id: 'candidate1', status: 'conflict', incoming: { ...image, path: 'inbox/sample.png' }, existing: { ...image, space: 'device', sha256: 'b'.repeat(64) }, actions: ['replace', 'keep', 'add'] };
 const review = { id: 'plan1', planId: 'plan1', candidates: [candidate], errors: [] };
-const initialState = { root: originalRoot, deviceRoot: '', notionPage: '', items: [image], inboxCount: 1, plan: review };
+const initialState = { root: originalRoot, deviceRoot: 'E:\\Fixture Export', notionPage: '', items: [image], inboxCount: 1, plan: review };
 function makeStorage(existing = new Map()) { return { getItem: key => existing.get(key) || null, setItem: (key, value) => existing.set(key, value), removeItem: key => existing.delete(key), existing }; }
 function boot(initial, storage = makeStorage(), embedOptions = null) {
   const elements = {};
@@ -55,7 +55,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   doc.body = new Element('body', doc); doc.body.append(shell);
   doc.querySelector = selector => selector === '.image-shell' ? shell : null;
   for (const id of ['syncSource', 'syncTarget']) { const option = new Element('option', doc); option.value = 'notion'; elements[id].append(option); }
-  elements.syncSource.value = 'local'; elements.syncTarget.value = 'console';
+  elements.syncSource.value = 'console'; elements.syncTarget.value = 'notion';
   elements.emptyState.append(new Element('h3', doc), new Element('p', doc));
   let current = structuredClone(initial);
   const requests = [];
@@ -112,7 +112,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
     assert.equal(unresolvedDefault.elements.reviewApply.disabled, true, 'Ambiguous, rematched and dimension-mismatched candidates still require a choice');
     assert(!unresolvedDefault.elements.candidateList.querySelectorAll('input').some(input => input.checked));
   }
-  assert.match(e.deviceSummary.textContent, /本地图库/);
+  assert.equal(e.deviceSummary.textContent, initialState.deviceRoot);
   assert(e.syncSource.querySelector('option[value="notion"]').disabled);
   const previews = e.candidateList.querySelectorAll('img');
   assert(previews.some(value => value.src.includes('space=device')), 'Device previews must bind device space');
@@ -139,14 +139,14 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   app.replies.set('sync', { body: addPlan });
   app.replies.set('apply', { body: { state: { ...initialState, plan: null, inboxCount: 0 }, message: '同步完成' } });
   e.syncSource.value = 'console'; e.syncTarget.value = 'device';
-  await e.syncImages.click();
+  await e.advancedSyncImages.click();
   assert.equal(app.requests.at(-1).action, 'apply', 'Conflict-free sync must complete in one click');
   assert.equal(app.requests.at(-1).body.decisions[0].action, 'add');
   assert.equal(e.reviewSection.hidden, true);
   assert.match(e.operationStatus.textContent, /同步完成/);
   app.replies.set('sync', { body: { ...review, id: 'conflict-plan2', planId: 'conflict-plan2' } });
   const countBefore = app.requests.filter(request => request.action === 'apply').length;
-  await e.syncImages.click();
+  await e.advancedSyncImages.click();
   assert.equal(app.requests.filter(request => request.action === 'apply').length, countBefore, 'Conflict sync must wait for confirmation');
   assert.equal(e.reviewApply.disabled, false, 'The matching replacement is selected while its explicit confirmation remains available');
   app.replies.set('scan', { body: { id: 'errors-plan', candidates: [], errors: [{ path: 'bad.png', error: '无法读取' }], state: initialState } });
@@ -154,10 +154,10 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   assert.equal(e.reviewSection.hidden, false, 'Skipped images must remain visible');
   assert.match(e.planWarnings.textContent, /bad.png/);
   assert.equal(e.reviewApply.disabled, true);
-  const asyncInitial = { ...initialState, plan: addPlan, notion: { canAttempt: true, available: false, verified: false }, notionAvailable: false };
+  const asyncInitial = { ...initialState, plan: addPlan, notionPage: '11111111111111111111111111111111', notion: { canAttempt: true, available: false, verified: false }, notionAvailable: false };
   const asyncApp = boot(asyncInitial); await flush();
   assert.equal(asyncApp.elements.syncSource.querySelector('option[value="notion"]').disabled, false, 'Can-attempt connection must be selectable before verification');
-  assert.match(asyncApp.elements.notionSummary.textContent, /首次将核验/);
+  assert.match(asyncApp.elements.notionSummary.textContent, /未核验/);
   const downloadPlan = { id: 'download-plan', planId: 'download-plan', candidates: [{ ...addPlan.candidates[0], id: 'download-new' }] };
   let requestId;
   asyncApp.replies.set('sync', request => { requestId = request.body.requestId; return { body: { operation: { requestId, status: 'running', phase: 'reading' } } }; });
@@ -165,34 +165,34 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   asyncApp.setState({ ...asyncInitial, plan: downloadPlan });
   asyncApp.replies.set('apply', { body: { state: { ...asyncInitial, plan: null, inboxCount: 0 }, message: '下载已加入图库' } });
   asyncApp.elements.syncSource.value = 'notion'; asyncApp.elements.syncTarget.value = 'console';
-  await asyncApp.elements.syncImages.click();
+  await asyncApp.elements.advancedSyncImages.click();
   assert.equal(asyncApp.requests.filter(request => request.action === 'apply').length, 1);
   assert.equal(asyncApp.requests.find(request => request.action === 'apply').body.planId, 'download-plan', 'Only the operation-matched plan may be auto-applied');
   assert.match(asyncApp.elements.operationStatus.textContent, /下载已加入图库/);
   const noPlanApp = boot(asyncInitial); await flush();
   noPlanApp.replies.set('sync', request => ({ body: { operation: { requestId: request.body.requestId, status: 'completed', message: 'Notion 附件已核对' } } }));
   noPlanApp.elements.syncSource.value = 'console'; noPlanApp.elements.syncTarget.value = 'notion';
-  await noPlanApp.elements.syncImages.click();
+  await noPlanApp.elements.advancedSyncImages.click();
   assert.equal(noPlanApp.requests.filter(request => request.action === 'apply').length, 0, 'Completed Notion upload must not apply an earlier scan plan');
   assert.match(noPlanApp.elements.operationStatus.textContent, /附件已核对/);
   const mismatchApp = boot(asyncInitial); await flush();
   mismatchApp.replies.set('sync', request => ({ body: { operation: { requestId: request.body.requestId, status: 'needs_review', planId: 'different-plan' } } }));
-  mismatchApp.elements.syncSource.value = 'notion';
-  await mismatchApp.elements.syncImages.click();
+  mismatchApp.elements.syncSource.value = 'notion'; mismatchApp.elements.syncTarget.value = 'console';
+  await mismatchApp.elements.advancedSyncImages.click();
   assert.equal(mismatchApp.requests.filter(request => request.action === 'apply').length, 0);
   assert.equal(mismatchApp.elements.checkOperation.hidden, false, 'Unmatched result must retain a read-only resume action');
   assert.equal(mismatchApp.elements.syncImages.disabled, true, 'Uncertain request must not be posted again');
   assert.match(mismatchApp.elements.operationStatus.textContent, /记录尚未对应/);
   const directApp = boot(asyncInitial); await flush();
   directApp.replies.set('sync', { body: { state: asyncInitial, message: '没有新计划' } });
-  await directApp.elements.syncImages.click();
+  await directApp.elements.advancedSyncImages.click();
   assert.equal(directApp.requests.filter(request => request.action === 'apply').length, 0, 'A sync response without its own plan must not auto-apply old state.plan');
   assert(asyncApp.elements.candidateList.children.length === 0);
   const compactApp = boot({ ...initialState, plan: addPlan }); await flush();
   assert(compactApp.elements.candidateList.children[0].className.includes('compact-new'));
   assert(!compactApp.elements.candidateList.querySelectorAll('*').some(element => element.className === 'empty-comparison'), 'New-only candidate must not render an empty comparison column');
   assert(!app.elements.candidateList.children.some(element => element.className?.includes('compact-new')), 'Conflicts retain comparison layout');
-  const chainState = { ...asyncInitial, plan: null, deviceRoot: 'E:\\Fixture Export', notionPage: 'fixture-page' };
+  const chainState = { ...asyncInitial, plan: null, deviceRoot: 'E:\\Fixture Export', notionPage: '11111111111111111111111111111111' };
   const chain = boot(chainState); await flush();
   const importPlan = { ...addPlan, id: 'import-plan', planId: 'import-plan' };
   const devicePlan = { ...addPlan, id: 'device-plan', planId: 'device-plan' };
@@ -200,7 +200,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   chain.replies.set('apply', request => { const next = { ...chainState, plan: null, inboxCount: 0 }; chain.setState(next); return { body: { ok: true, planId: request.body.planId, state: next } }; });
   chain.replies.set('sync', request => request.body.target === 'notion' ? { body: { operation: { requestId: request.body.requestId, status: 'completed', message: 'Notion 已验证' } } } : { body: devicePlan });
   chain.elements.syncSource.value = 'local'; chain.elements.syncTarget.value = 'all';
-  await chain.elements.syncImages.click();
+  await chain.elements.advancedSyncImages.click();
   assert.deepEqual(chain.requests.filter(request => ['scan','apply','sync'].includes(request.action)).map(request => [request.action, request.body.planId || request.body.target || '']), [['scan',''],['apply','import-plan'],['sync','notion'],['sync','device'],['apply','device-plan']], 'Local-to-all must include inbox before Notion and export only after Notion completes');
   assert.equal(chain.elements.restoreImages.hidden, false, 'Success receipt exposes local undo');
   chain.replies.set('restore', { ok: false, status: 409, body: { error: '图片已再次修改，不能覆盖' } });
@@ -214,7 +214,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   const pausedPlan = { ...review, id: 'pause-plan', planId: 'pause-plan' };
   pause.replies.set('scan', { body: pausedPlan });
   pause.elements.syncSource.value = 'local'; pause.elements.syncTarget.value = 'notion';
-  await pause.elements.syncImages.click();
+  await pause.elements.advancedSyncImages.click();
   assert.equal(pause.requests.filter(request => request.action === 'sync').length, 0, 'Inbox conflict must pause before any Notion upload');
   assert.match(pause.elements.reviewNote.textContent, /自动继续/);
   const resumed = boot({ ...chainState, deviceRoot: '', plan: pausedPlan }, pause.storage); await flush();
@@ -269,7 +269,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   grouped.replies.set('metadata', { body: { ok: true, item: updatedLogo, state: { ...groupedState, items: [updatedLogo, logoB, logoSmall, togo] } } });
   await grouped.elements.metadataForm.emit('submit');
   assert.equal(grouped.elements.metadataDialog.open, true, 'Keep the saved/sync outcome visible until the user closes it');
-  assert.match(grouped.elements.metadataStatus.textContent, /已保存到本地.*尚未配置/);
+  assert.match(grouped.elements.metadataStatus.textContent, /已更新本地.*尚未配置 Notion/);
   const metadataRequest = grouped.requests.findLast(request => request.action === 'metadata').body;
   assert.equal(metadataRequest.path, 'Logo.png'); assert.equal(metadataRequest.sha256, 'a');
   assert.equal(metadataRequest.groupTitle, '商店Logo');
@@ -414,10 +414,10 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   await runningScan;
   assert.equal(arrow(busyBrowse.elements.imageGrid.children[0], 'next').disabled, false);
   assert.deepEqual(busyBrowse.requests.filter(request => request.options.method === 'POST').map(request => request.action), ['scan'], 'Busy navigation must not enqueue a write or change the selected original');
-  const pendingBrowse = boot({ ...groupedState, items: [logoA,logoB,logoC], plan: inboxOptionsPlan, notion: { canAttempt: true } }); await flush();
+  const pendingBrowse = boot({ ...groupedState, notionPage: '11111111111111111111111111111111', items: [logoA,logoB,logoC], plan: inboxOptionsPlan, notion: { canAttempt: true } }); await flush();
   pendingBrowse.replies.set('sync', request => ({ body: { operation: { requestId: request.body.requestId, status: 'unknown', message: '原请求待核对' } } }));
   pendingBrowse.elements.syncSource.value = 'console'; pendingBrowse.elements.syncTarget.value = 'notion';
-  await pendingBrowse.elements.syncImages.click();
+  await pendingBrowse.elements.advancedSyncImages.click();
   assert.equal(arrow(pendingBrowse.elements.imageGrid.children[0], 'next').disabled, true);
   assert.equal(arrow(pendingBrowse.elements.candidateList.children[0], 'next').disabled, true);
   await arrow(pendingBrowse.elements.imageGrid.children[0], 'next').click();
@@ -445,9 +445,9 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   await fixedPush.elements.metadataForm.emit('submit');
   assert.deepEqual(fixedPush.requests.filter(request => ['metadata','sync','scan','apply'].includes(request.action)).map(request => request.action), ['metadata','sync']);
   assert.equal(fixedPush.requests.find(request => request.action === 'sync').body.source, 'console', 'Saved metadata must be pushed from Console, regardless of the old Notion source selection');
-  assert.equal(fixedPush.elements.syncSource.value, 'console');
-  assert.equal(fixedPush.elements.syncTarget.value, 'notion');
-  assert.match(fixedPush.elements.metadataStatus.textContent, /已保存，并同步/);
+  assert.equal(fixedPush.elements.syncSource.value, 'notion', 'A primary saved-edit push must not rewrite advanced controls');
+  assert.equal(fixedPush.elements.syncTarget.value, 'console');
+  assert.match(fixedPush.elements.metadataStatus.textContent, /已(?:保存，并|更新本地，并完成)同步/);
   assert.equal(fixedPush.elements.candidateList.children.length, 1, 'Pushing saved metadata must retain the unrelated Inbox review');
   const fixedCount = fixedPush.requests.length;
   await fixedPush.elements.metadataForm.emit('submit');
@@ -457,7 +457,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   await openAndEdit(onlySave); saveReply(onlySave);
   await onlySave.elements.metadataSaveOnly.click();
   assert.equal(onlySave.requests.filter(request => request.action === 'sync').length, 0);
-  assert.match(onlySave.elements.metadataStatus.textContent, /已保存到本地，待同步/);
+  assert.match(onlySave.elements.metadataStatus.textContent, /已更新本地，Notion 待同步/);
   assert.equal(onlySave.elements.metadataSave.textContent, '同步已保存修改');
   onlySave.elements.metadataDialog.close(); await flush();
   const pendingSaved = boot(metadataSavedState, onlySave.storage); await flush();
@@ -475,7 +475,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   assert.equal(saveRejected.elements.metadataSave.disabled, false);
   const configDraft = boot(metadataState); await flush();
   configDraft.elements.deviceRoot.value = 'E:\\Unsaved Destination';
-  await configDraft.elements.syncImages.click();
+  await configDraft.elements.advancedSyncImages.click();
   assert.equal(configDraft.requests.filter(request => ['sync','scan'].includes(request.action)).length, 0);
   assert.equal(configDraft.elements.locations.open, true);
   assert.match(configDraft.elements.configStatus.textContent, /先保存位置/);
@@ -497,22 +497,32 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
     assert.equal(lateSave.elements.metadataVariantLabel.value, editedLogo.variantLabel);
     assert.equal(lateSave.elements.metadataDialog.open, true);
   }
+  const prepareLegacyMetadataJob = async (view, targets) => {
+    await view.elements.metadataSaveOnly.click();
+    const key = `console-image-metadata-sync:${originalRoot}:${logoA.path}:${logoA.sha256}`;
+    const saved = JSON.parse(view.storage.getItem(key));
+    assert(saved, 'The saved edit must exist before restoring its old destination scope');
+    const { uiMode, ...legacy } = saved;
+    view.storage.setItem(key, JSON.stringify({ ...legacy, targets, completed: [], status: 'saved' }));
+    view.elements.metadataDialog.close(); await flush();
+    await view.elements.imageGrid.querySelectorAll('button').find(button => button.dataset.metadataPath === logoA.path).click();
+  };
   const deviceMetadata = { status: 'completed', applied: 1, unresolved: 0, target: 'device' };
   const deviceState = { ...metadataState, notionPage: '', notion: {}, deviceRoot: 'E:\\Fixture Export' };
   const deviceSavedState = { ...deviceState, items: metadataSavedState.items };
   const devicePlanScope = { root: originalRoot, deviceRoot: deviceState.deviceRoot, direction: 'to-device' };
-  const deviceOnly = boot(deviceState); await flush(); await openAndEdit(deviceOnly); saveReply(deviceOnly, deviceSavedState);
+  const deviceOnly = boot(deviceState); await flush(); await openAndEdit(deviceOnly); saveReply(deviceOnly, deviceSavedState); await prepareLegacyMetadataJob(deviceOnly, ['device']);
   deviceOnly.replies.set('sync', { body: { id: 'device-metadata-only', ...devicePlanScope, candidates: [], metadataSync: deviceMetadata } });
   await deviceOnly.elements.metadataForm.emit('submit');
   assert.equal(deviceOnly.requests.find(request => request.action === 'sync').body.target, 'device');
   assert.equal(deviceOnly.requests.filter(request => request.action === 'apply').length, 0, 'Same-byte metadata synchronization must not rewrite image files');
-  assert.match(deviceOnly.elements.metadataStatus.textContent, /已保存，并同步/);
-  const deviceNew = boot(deviceState); await flush(); await openAndEdit(deviceNew); saveReply(deviceNew, deviceSavedState);
+  assert.match(deviceOnly.elements.metadataStatus.textContent, /已(?:保存，并|更新本地，并完成)同步/);
+  const deviceNew = boot(deviceState); await flush(); await openAndEdit(deviceNew); saveReply(deviceNew, deviceSavedState); await prepareLegacyMetadataJob(deviceNew, ['device']);
   deviceNew.replies.set('sync', { body: { ...devicePlan, ...devicePlanScope, metadataSync: { ...deviceMetadata, status: 'needs_review' } } });
   deviceNew.replies.set('apply', { body: { ok: true, planId: devicePlan.id, state: deviceSavedState, metadataSync: deviceMetadata } });
   await deviceNew.elements.metadataForm.emit('submit');
   assert.deepEqual(deviceNew.requests.filter(request => request.action === 'apply').map(request => request.body.planId), [devicePlan.id], 'Only the freshly returned device plan may be auto-applied; never the earlier Inbox plan');
-  const deviceConflict = boot(deviceState); await flush(); await openAndEdit(deviceConflict); saveReply(deviceConflict, deviceSavedState);
+  const deviceConflict = boot(deviceState); await flush(); await openAndEdit(deviceConflict); saveReply(deviceConflict, deviceSavedState); await prepareLegacyMetadataJob(deviceConflict, ['device']);
   const metadataDeviceConflict = { ...review, ...devicePlanScope, id: 'device-review-metadata', planId: 'device-review-metadata' };
   deviceConflict.replies.set('sync', { body: { ...metadataDeviceConflict, metadataSync: { ...deviceMetadata, status: 'needs_review' } } });
   await deviceConflict.elements.metadataForm.emit('submit');
@@ -522,24 +532,24 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   deviceConflict.replies.set('apply', { body: { ok: true, planId: metadataDeviceConflict.id, state: deviceSavedState, metadataSync: deviceMetadata } });
   await deviceConflict.elements.candidateList.querySelectorAll('input').find(input => input.value === 'replace').emit('change');
   await deviceConflict.elements.reviewApply.click(); await flush();
-  assert.match(deviceConflict.elements.operationStatus.textContent, /已保存，并同步/);
+  assert.match(deviceConflict.elements.operationStatus.textContent, /已(?:保存，并|更新本地，并完成)同步/);
   const bothState = { ...metadataState, deviceRoot: deviceState.deviceRoot };
   const bothSavedState = { ...bothState, items: metadataSavedState.items };
-  const partial = boot(bothState); await flush(); await openAndEdit(partial); saveReply(partial, bothSavedState);
+  const partial = boot(bothState); await flush(); await openAndEdit(partial); saveReply(partial, bothSavedState); await prepareLegacyMetadataJob(partial, ['notion','device']);
   partial.replies.set('sync', request => request.body.target === 'notion' ? { body: { operation: completedPush(request) } } : { ok: false, status: 503, body: { message: '设备暂不可用' } });
   await partial.elements.metadataForm.emit('submit');
-  assert.match(partial.elements.metadataStatus.textContent, /已保存到本地.*部分位置已同步.*同步未完成/);
+  assert.match(partial.elements.metadataStatus.textContent, /已(?:保存到|更新)本地.*部分位置已同步.*同步未完成/);
   partial.replies.set('sync', { body: { id: 'device-retry-metadata', ...devicePlanScope, candidates: [], metadataSync: deviceMetadata } });
   await partial.elements.metadataForm.emit('submit');
   assert.deepEqual(partial.requests.filter(request => request.action === 'sync').map(request => request.body.target), ['notion','device','device'], 'Retry a partial result only at the unfinished location');
   assert.equal(partial.requests.filter(request => request.body?.target === 'device')[0].body.requestId, partial.requests.filter(request => request.body?.target === 'device')[1].body.requestId, 'An unfinished device check keeps its request identity on retry');
   assert.equal(partial.requests.filter(request => request.action === 'metadata').length, 1);
   for (const changed of [{ root: 'D:\\Other Actual Root' }, { deviceRoot: 'E:\\Other Actual Export' }, { direction: 'from-device' }, { deviceRoot: undefined }]) {
-    const mismatchedDevice = boot(deviceState); await flush(); await openAndEdit(mismatchedDevice); saveReply(mismatchedDevice, deviceSavedState);
+    const mismatchedDevice = boot(deviceState); await flush(); await openAndEdit(mismatchedDevice); saveReply(mismatchedDevice, deviceSavedState); await prepareLegacyMetadataJob(mismatchedDevice, ['device']);
     mismatchedDevice.replies.set('sync', { body: { ...devicePlan, ...devicePlanScope, ...changed, metadataSync: deviceMetadata } });
     await mismatchedDevice.elements.metadataForm.emit('submit');
     assert.equal(mismatchedDevice.requests.filter(request => request.action === 'apply').length, 0, 'A device plan for changed/missing root, target or direction must never auto-apply');
-    assert.match(mismatchedDevice.elements.metadataStatus.textContent, /已保存到本地.*计划.*不一致/);
+    assert.match(mismatchedDevice.elements.metadataStatus.textContent, /已(?:保存到|更新)本地.*计划.*不一致/);
     assert.equal(mismatchedDevice.elements.metadataSave.disabled, true, 'A stale device destination requires a fresh scope instead of retrying it');
   }
   const savedUnknown = boot(metadataState); await flush(); await openAndEdit(savedUnknown); saveReply(savedUnknown);
@@ -547,7 +557,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   const unknownReceipt = request => ({ ...completedPush(request), status: 'unknown', code: 'network_result_unknown' });
   savedUnknown.replies.set('sync', request => { savedUnknownRequest = request; return { body: { operation: unknownReceipt(request) } }; });
   await savedUnknown.elements.metadataForm.emit('submit');
-  assert.match(savedUnknown.elements.metadataStatus.textContent, /已保存到本地.*同步未完成/);
+  assert.match(savedUnknown.elements.metadataStatus.textContent, /已(?:保存到|更新)本地.*同步未完成/);
   assert.equal(savedUnknown.elements.metadataSave.textContent, '继续核对');
   savedUnknown.replies.set('operation', { body: unknownReceipt(savedUnknownRequest) });
   await savedUnknown.elements.metadataForm.emit('submit');
@@ -555,7 +565,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   const oldMetadataRequestId = savedUnknownRequest.body.requestId;
   const unknownReload = boot({ ...metadataSavedState, operation: unknownReceipt(savedUnknownRequest) }, savedUnknown.storage); await flush();
   assert.equal(unknownReload.requests.filter(request => request.action === 'sync').length, 0, 'Reload must restore saved-edit identity and never POST an unknown request');
-  assert.match(unknownReload.elements.operationStatus.textContent, /已保存到本地.*同步未完成/);
+  assert.match(unknownReload.elements.operationStatus.textContent, /已(?:保存到|更新)本地.*同步未完成/);
   unknownReload.replies.set('operation', { body: unknownReceipt(savedUnknownRequest) });
   await unknownReload.elements.checkOperation.click();
   assert(unknownReload.requests.findLast(request => request.action === 'operation').url.includes(oldMetadataRequestId));
@@ -570,8 +580,76 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
     latePush.replies.set('sync', request => { latePush.setState({ ...bothSavedState, ...changed }); return { body: { operation: completedPush(request) } }; });
     await latePush.elements.metadataForm.emit('submit');
     assert.equal(latePush.requests.filter(request => request.action === 'sync').length, 1, 'A changed page/device/asset completion receipt must not continue pushing to another target');
-    assert.match(latePush.elements.metadataStatus.textContent, /已保存到本地.*同步未完成/);
+    assert.match(latePush.elements.metadataStatus.textContent, /已(?:保存到|更新)本地.*同步未完成/);
   }
+  const syncFingerprint = 'd'.repeat(64);
+  const syncSummary = { root: originalRoot, pageId: pageA, status: 'synced', localFingerprint: syncFingerprint, syncedFingerprint: syncFingerprint, lastSyncedAt: '2026-11-01T03:00:00Z' };
+  const syncedLocalState = { ...metadataState, plan: review, notionSync: syncSummary };
+  for (const [summary, expected] of [
+    [syncSummary, 'synced'],
+    [{ ...syncSummary, localFingerprint: 'e'.repeat(64), status: 'pending' }, 'pending'],
+    [{ ...syncSummary, localFingerprint: 'e'.repeat(64) }, 'unverified'],
+    [{ ...syncSummary, localFingerprint: 'bad', syncedFingerprint: 'bad' }, 'unverified'],
+    [{ ...syncSummary, root: 'D:\\Different Library' }, 'unverified'],
+    [{ ...syncSummary, pageId: pageB }, 'unverified'],
+    [{ ...syncSummary, status: 'syncing' }, 'syncing'],
+    [{ ...syncSummary, status: 'failed' }, 'failed'],
+    [undefined, 'unverified'],
+  ]) {
+    const statusView = boot({ ...syncedLocalState, notionSync: summary }); await flush();
+    assert.equal(statusView.elements.notionSyncState.dataset.status, expected);
+    assert(statusView.elements.notionSyncState.textContent.includes('Notion'), 'Status needs visible text as well as color');
+    assert.equal(statusView.requests.filter(request => request.options.method === 'POST').length, 0);
+  }
+  const localUpdate = boot(syncedLocalState); await flush();
+  localUpdate.replies.set('scan', { body: { id: 'updated-folder', candidates: [], state: { ...syncedLocalState, notionSync: { ...syncSummary, status: 'pending', localFingerprint: 'f'.repeat(64) } } } });
+  await localUpdate.elements.scanImages.click();
+  assert.deepEqual(localUpdate.requests.filter(request => request.options.method === 'POST').map(request => request.action), ['scan'], 'Update local reviews the folder without publishing or adopting');
+  assert.equal(localUpdate.elements.notionSyncState.dataset.status, 'pending');
+  const primaryPush = boot(syncedLocalState); await flush();
+  primaryPush.elements.syncSource.value = 'notion'; primaryPush.elements.syncTarget.value = 'console';
+  primaryPush.replies.set('sync', request => ({ body: { operation: completedPush(request) } }));
+  await primaryPush.elements.syncImages.click();
+  const primaryPosts = primaryPush.requests.filter(request => request.options.method === 'POST');
+  assert.deepEqual(primaryPosts.map(request => request.action), ['sync']);
+  assert.equal(primaryPosts[0].body.source, 'console'); assert.equal(primaryPosts[0].body.target, 'notion');
+  assert.equal(primaryPush.elements.candidateList.children.length, 1, 'The primary push leaves the unadopted Inbox review intact');
+  for (const receiptMode of ['direct-plan', 'operation-plan']) {
+    const unexpectedPlan = { ...addPlan, id: 'unexpected-push-plan', planId: 'unexpected-push-plan' };
+    const unexpected = boot({ ...syncedLocalState, plan: unexpectedPlan }); await flush();
+    unexpected.replies.set('sync', request => ({ body: receiptMode === 'direct-plan' ? unexpectedPlan
+      : { operation: { ...completedPush(request), status: 'needs_review', planId: unexpectedPlan.id } } }));
+    await unexpected.elements.syncImages.click();
+    assert.equal(unexpected.requests.filter(request => request.action === 'apply').length, 0, 'A primary push never adopts even an unexpected matching review-plan receipt');
+  }
+  const oldMainStorage = makeStorage(); oldMainStorage.localStorage = makeStorage();
+  const oldMainOperation = { requestId: 'old-main-request', root: originalRoot, pageId: pageA, source: 'console', target: 'notion', status: 'needs_review', planId: addPlan.id };
+  oldMainStorage.localStorage.setItem(`console-image-operation:${originalRoot}`, JSON.stringify({ ...oldMainOperation, uiMode: 'notion', autoApply: true }));
+  const restoredMain = boot({ ...syncedLocalState, plan: addPlan, operation: oldMainOperation }, oldMainStorage); await flush();
+  assert.equal(restoredMain.requests.filter(request => request.options.method === 'POST').length, 0, 'Restoring a main push cannot inherit an older automatic Inbox-adoption flag');
+  const unconfiguredPush = boot(deviceState); await flush();
+  await unconfiguredPush.elements.syncImages.click();
+  assert.equal(unconfiguredPush.elements.notionSyncState.dataset.status, 'unavailable');
+  assert.equal(unconfiguredPush.requests.filter(request => request.options.method === 'POST').length, 0, 'No Notion page must never fall back to local/self/device sync');
+  await openAndEdit(unconfiguredPush); saveReply(unconfiguredPush, deviceSavedState);
+  await unconfiguredPush.elements.metadataForm.emit('submit');
+  assert.deepEqual(unconfiguredPush.requests.filter(request => request.options.method === 'POST').map(request => request.action), ['metadata'], 'A new save-and-sync job has only Notion as an external destination');
+  assert.match(unconfiguredPush.elements.metadataStatus.textContent, /尚未配置 Notion/);
+  const noFreshMarker = boot(syncedLocalState); await flush(); await openAndEdit(noFreshMarker);
+  noFreshMarker.replies.set('metadata', { body: { ok: true, item: editedLogo, state: metadataSavedState } });
+  await noFreshMarker.elements.metadataSaveOnly.click();
+  assert.notEqual(noFreshMarker.elements.notionSyncState.dataset.status, 'synced', 'A successful local change without fresh provider evidence cannot retain an old green marker');
+  const mainPending = boot(syncedLocalState); await flush(); let mainRequest;
+  mainPending.replies.set('sync', request => { mainRequest = request; return { body: { operation: unknownReceipt(request) } }; });
+  await mainPending.elements.syncImages.click();
+  assert.equal(mainPending.elements.notionSyncState.dataset.status, 'failed');
+  mainPending.elements.syncSource.value = 'notion'; mainPending.elements.syncTarget.value = 'console';
+  mainPending.replies.set('operation', { body: unknownReceipt(mainRequest) });
+  await mainPending.elements.checkOperation.click();
+  assert.equal(mainPending.requests.filter(request => request.action === 'sync').length, 1, 'An uncertain main push keeps its original request despite advanced-control changes');
+  assert(mainPending.requests.findLast(request => request.action === 'operation').url.includes(mainRequest.body.requestId));
+  assert.equal(mainPending.elements.advancedSync.open, undefined, 'Advanced directions start collapsed');
+  console.log('PASS local update and Notion sync: independent main direction, no self-sync fallback, Inbox excluded from publication, scoped verified fingerprints and text/color states, local-change invalidation, Notion-only new save jobs, and legacy device/multiple-target recovery.');
   const catalogUnknown = { id: 'existing-operation', requestId: 'existing-request-135', root: originalRoot, pageId: pageA, source: 'console', target: 'notion', status: 'unknown', code: 'catalog_attached_unverified', message: '目录已附页，待回读验证' };
   const recoveryState = { ...asyncInitial, plan: null, lastSync: null, notionPage: `https://www.notion.so/${pageA}`, notion: { canAttempt: true, pageId: pageA }, operation: catalogUnknown };
   const recovery = boot(recoveryState); await flush();
@@ -758,17 +836,21 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   assert.equal(unknownAdoption.requests.filter(request => request.action === 'apply').length, 0);
   await unknownAdoption.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').emit('change');
   assert.equal(unknownAdoption.elements.reviewApply.disabled, false, 'Keeping an untyped Inbox picture out does not require adopting a purpose');
-  const unknownAuto = boot(standardState); await flush(); unknownAuto.replies.set('sync', { body: unknownInboxPlan });
-  await unknownAuto.elements.syncImages.click(); assert.equal(unknownAuto.requests.filter(request => request.action === 'apply').length, 0, 'Standard-policy unknown files must never be auto-adopted');
+  const standardSyncState = { ...standardState, deviceRoot: initialState.deviceRoot };
+  const unknownAuto = boot(standardSyncState); await flush(); unknownAuto.replies.set('sync', { body: unknownInboxPlan });
+  unknownAuto.elements.syncTarget.value = 'device';
+  await unknownAuto.elements.advancedSyncImages.click(); assert.equal(unknownAuto.requests.filter(request => request.action === 'apply').length, 0, 'Standard-policy unknown files must never be auto-adopted');
   const knownSuggestion = { ...unknownInboxItem, width: 800, height: 450, standardType: 'EventCover', standardName: 'EventCover_800x450.png', canonicalName: 'EventCover_800x450.png', namingNeedsReview: false };
   const knownSuggestionPlan = { id: 'known-event-cover', candidates: [{ ...addPlan.candidates[0], incoming: knownSuggestion }] };
-  const suggestedAuto = boot(standardState); await flush(); suggestedAuto.replies.set('sync', { body: knownSuggestionPlan });
-  suggestedAuto.replies.set('apply', { body: { ok: true, state: standardState } }); await suggestedAuto.elements.syncImages.click();
+  const suggestedAuto = boot(standardSyncState); await flush(); suggestedAuto.replies.set('sync', { body: knownSuggestionPlan });
+  suggestedAuto.elements.syncTarget.value = 'device';
+  suggestedAuto.replies.set('apply', { body: { ok: true, state: standardState } }); await suggestedAuto.elements.advancedSyncImages.click();
   assert.equal(suggestedAuto.requests.filter(request => request.action === 'apply').length, 1, 'An already confirmed canonical type can retain the existing one-click synchronization behavior');
   const suggestionOnly = { ...knownSuggestion, standardType: '', suggestedStandardType: 'EventCover', namingNeedsReview: true };
   const suggestionOnlyPlan = { id: 'suggestion-needs-adoption', candidates: [{ ...addPlan.candidates[0], incoming: suggestionOnly }] };
-  const explicitSuggestion = boot(standardState); await flush(); explicitSuggestion.replies.set('sync', { body: suggestionOnlyPlan });
-  explicitSuggestion.replies.set('apply', { body: { ok: true, state: standardState } }); await explicitSuggestion.elements.syncImages.click();
+  const explicitSuggestion = boot(standardSyncState); await flush(); explicitSuggestion.replies.set('sync', { body: suggestionOnlyPlan });
+  explicitSuggestion.elements.syncTarget.value = 'device';
+  explicitSuggestion.replies.set('apply', { body: { ok: true, state: standardState } }); await explicitSuggestion.elements.advancedSyncImages.click();
   assert.equal(explicitSuggestion.requests.filter(request => request.action === 'apply').length, 0, 'A size-only suggestion must never be automatically adopted by synchronization');
   assert.equal(explicitSuggestion.elements.reviewApply.disabled, false, 'The displayed Inbox-only suggestion can be accepted at the explicit adoption boundary');
   assert(explicitSuggestion.elements.candidateList.querySelectorAll('p').some(element => /建议用途 EventCover.*确认采用后.*EventCover_800x450/.test(element.textContent)));
@@ -811,7 +893,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null) {
   metadataRename.elements.syncSource.value = 'notion'; metadataRename.elements.syncTarget.value = 'console';
   await metadataRename.elements.metadataForm.emit('submit');
   assert.match(metadataRename.elements.metadataOriginal.textContent, /PlaytestGameIcon_256x256\.png/);
-  assert.match(metadataRename.elements.metadataStatus.textContent, /已保存，并同步/);
+  assert.match(metadataRename.elements.metadataStatus.textContent, /已(?:保存，并|更新本地，并完成)同步/);
   assert.deepEqual(metadataRename.requests.filter(request => request.options.method === 'POST').map(request => request.action), ['metadata','sync'], 'An atomic purpose rename can save then push from the verified new path without applying Inbox work');
   assert.equal(metadataRename.requests.find(request => request.action === 'sync').body.source, 'console');
   assert.equal(metadataRename.elements.imageGrid.children.find(card => card.dataset.groupId === 'playtest-game-icon').dataset.currentPath, renamedMetadataItem.path, 'A canonical main-to-Playtest purpose change is reflected as its own group rather than another main-game option');

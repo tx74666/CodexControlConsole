@@ -924,9 +924,12 @@ class Checks(unittest.TestCase):
         self.assertTrue(operation['recheckable'])
         self.assertEqual(operation['recheckKind'],'verified_completion')
         self.assertEqual(operation['catalog']['status'],'verified')
+        self.assertNotEqual(pending['notionSync']['status'],'synced')
+        self.assertIsNone(pending['notionSync']['syncedFingerprint'])
         self.assertEqual((self.remote.posts,self.remote.catalog_posts),(1,1))
         calls = len(self.remote.calls)
         resumed = self.sync()
+        self.assertEqual(resumed['notionSync']['status'],'synced')
         self.assertEqual(resumed['operation']['status'],'completed')
         self.assertEqual(resumed['operation']['id'],operation['id'])
         self.assertEqual(resumed['operation']['items'],operation['items'])
@@ -992,6 +995,188 @@ class Checks(unittest.TestCase):
         self.assertEqual(result['operation']['catalog']['status'],'verified')
         self.assertFalse(result['operation']['recheckable'])
         self.assertEqual((self.remote.posts,self.remote.catalog_posts),(1,1))
+
+    def test_sync_status_is_local_read_only_and_connection_alone_is_not_export_verification(self):
+        path = self.directory/'private'/('page-'+PAGE+'.json')
+        self.assertEqual(self.provider.state()['notionSync']['status'],'unverified')
+        self.assertFalse(path.exists())
+        record = {'root':str(self.root),'pageId':PAGE,'receipts':[],'operation':None,'bridgeVerifiedAt':'2026-01-01T00:00:00Z'}
+        path.write_text(json.dumps(record),encoding='utf-8')
+        before,calls = path.read_bytes(),len(self.remote.calls)
+        current = self.service.state()
+        with patch.object(self.service,'state',side_effect=AssertionError('Reuse supplied core state')):
+            with patch.object(self.service,'scan',side_effect=AssertionError('State must not scan')):
+                summary = self.provider.state(local_state=current)
+        self.assertTrue(summary['notion']['verified'])
+        self.assertEqual(summary['notionSync']['status'],'unverified')
+        self.assertIsNone(summary['notionSync']['syncedFingerprint'])
+        self.assertEqual(path.read_bytes(),before)
+        self.assertEqual(len(self.remote.calls),calls)
+        self.sync(request='readonly-probe')
+        record = json.loads(path.read_text(encoding='utf-8'))
+        record['operation']['status'] = 'running'
+        path.write_text(json.dumps(record),encoding='utf-8')
+        lock = self.directory/'private'/('target-'+PAGE+'.lock')
+        lock.write_bytes(b'')
+        before,calls = path.read_bytes(),len(self.remote.calls)
+        self.assertNotEqual(self.provider.state()['notionSync']['status'],'synced')
+        self.assertEqual(path.read_bytes(),before)
+        self.assertEqual(lock.read_bytes(),b'','A read-only busy probe must not initialize an empty lock')
+        self.assertEqual(len(self.remote.calls),calls)
+
+    def test_verified_sync_ignores_same_bytes_volatile_changes_and_unadopted_inbox_variants(self):
+        first = self.sync()
+        summary = first['notionSync']
+        self.assertEqual(summary['status'],'synced')
+        self.assertEqual(summary['localFingerprint'],summary['syncedFingerprint'])
+        self.assertRegex(summary['localFingerprint'],r'^[0-9a-f]{64}$')
+        self.assertEqual((summary['root'],summary['pageId']),(str(self.root),PAGE))
+        self.assertEqual(summary['pendingCount'],0)
+        self.assertTrue(summary['lastSyncedAt'])
+        self.assertNotIn('exportSnapshot',first['operation'])
+        (self.root/'Sample.png').write_bytes(self.data)
+        self.service.scan({'expectedRoot':str(self.root)})
+        self.service.import_files([('Sample [方案 B] - 7x5.png',png('blue'))],{'expectedRoot':str(self.root)})
+        self.assertEqual(self.service.state()['inboxCount'],1)
+        unchanged = self.provider.state()['notionSync']
+        self.assertEqual(unchanged['status'],'synced')
+        self.assertEqual(unchanged['localFingerprint'],summary['localFingerprint'])
+        self.assertEqual(unchanged['pendingCount'],0)
+        repeated = self.sync(request='repeat-with-inbox')
+        self.assertEqual(repeated['notionSync']['status'],'synced')
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts),(1,1))
+
+    def test_export_dirty_status_tracks_metadata_add_content_delete_and_undo(self):
+        self.sync()
+        item = self.service.state()['items'][0]
+        self.service.annotate({'expectedRoot':str(self.root),'path':item['path'],'sha256':item['sha256'],
+            'groupTitle':'HeaderCapsule','variantLabel':'B'})
+        summary = self.provider.state()['notionSync']
+        self.assertEqual((summary['status'],summary['pendingCount']),('pending',1))
+        self.assertNotEqual(summary['localFingerprint'],summary['syncedFingerprint'])
+        self.assertEqual(self.sync(request='metadata')['notionSync']['status'],'synced')
+        (self.root/'Other.png').write_bytes(png('blue'))
+        self.service.scan({'expectedRoot':str(self.root)})
+        self.assertEqual(self.provider.state()['notionSync']['status'],'pending')
+        self.assertEqual(self.sync(request='added')['notionSync']['status'],'synced')
+        (self.root/'Sample.png').write_bytes(png('green'))
+        self.assertEqual(self.provider.state()['notionSync']['reason'],'local_changed')
+        self.service.scan({'expectedRoot':str(self.root)})
+        self.assertEqual(self.provider.state()['notionSync']['status'],'pending')
+        self.assertEqual(self.sync(request='content')['notionSync']['status'],'synced')
+        other = next(item for item in self.service.state()['items'] if item['path']=='Other.png')
+        request = {'expectedRoot':str(self.root),'path':other['path'],'sha256':other['sha256'],'requestId':'a'*32}
+        self.service.delete(request)
+        self.assertEqual(self.provider.state()['notionSync']['status'],'pending')
+        self.assertEqual(self.sync(request='deleted')['notionSync']['status'],'synced')
+        self.service.delete_restore({'expectedRoot':str(self.root),'requestId':request['requestId']})
+        self.assertEqual(self.provider.state()['notionSync']['status'],'pending')
+        self.assertEqual((self.root/'Other.png').read_bytes(),png('blue'))
+
+    def test_actual_basename_counts_but_same_basename_relative_path_does_not(self):
+        original = self.sync()['notionSync']['localFingerprint']
+        (self.root/'subfolder').mkdir()
+        (self.root/'Sample.png').rename(self.root/'subfolder/Sample.png')
+        self.service.scan({'expectedRoot':str(self.root)})
+        self.assertEqual(self.provider.state()['notionSync']['status'],'synced')
+        self.assertEqual(self.provider.state()['notionSync']['localFingerprint'],original)
+        (self.root/'subfolder/Sample.png').rename(self.root/'subfolder/Renamed.png')
+        self.service.scan({'expectedRoot':str(self.root)})
+        self.assertEqual(self.provider.state()['notionSync']['status'],'pending')
+
+    def test_verified_export_is_bound_to_root_and_page_and_missing_original_is_pending(self):
+        self.sync()
+        other = self.directory/'other-root'
+        other.mkdir()
+        (other/'Sample.png').write_bytes(self.data)
+        self.service.configure({'root':str(other),'notionPage':PAGE})
+        self.service.scan({'expectedRoot':str(other)})
+        summary = self.provider.state()['notionSync']
+        self.assertEqual(summary['status'],'unverified')
+        self.assertIsNone(summary['syncedFingerprint'])
+        self.service.configure({'root':str(self.root),'notionPage':OTHER})
+        self.assertEqual(self.provider.state()['notionSync']['status'],'unverified')
+        self.service.configure({'root':str(self.root),'notionPage':PAGE})
+        self.assertEqual(self.provider.state()['notionSync']['status'],'synced')
+        (self.root/'Sample.png').unlink()
+        summary = self.provider.state()['notionSync']
+        self.assertEqual((summary['status'],summary['reason']),('pending','local_changed'))
+        self.assertIsNone(summary['localFingerprint'])
+
+    def test_failed_unknown_and_partial_operations_never_create_a_green_marker(self):
+        first,path,record = self.fail_verified_completion_fixture()
+        self.assertEqual(self.provider.state()['notionSync']['status'],'failed')
+        self.assertEqual(self.provider.state()['notionSync']['syncedFingerprint'],first['notionSync']['syncedFingerprint'])
+        (self.root/'Sample.png').write_bytes(png('blue'))
+        self.service.scan({'expectedRoot':str(self.root)})
+        self.assertEqual(self.provider.state()['notionSync']['status'],'pending')
+        self.remote.fail_upload = True
+        self.sync(request='unknown-new-content')
+        self.assertEqual(self.provider.state()['notionSync']['status'],'pending')
+        current = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(current['verifiedExports'],record['verifiedExports'])
+        self.remote.fail_upload = False
+        device = self.directory/'device'
+        device.mkdir()
+        self.service.configure({'root':str(self.root),'deviceRoot':str(device)})
+        # A known partial Notion+device request cannot borrow an old green flag.
+        current['operation'].update(status='completed',remainingTargets=['device'])
+        current['verifiedExports'] = {}
+        path.write_text(json.dumps(current),encoding='utf-8')
+        self.assertNotEqual(self.provider.state()['notionSync']['status'],'synced')
+
+    def test_verified_marker_uses_start_snapshot_even_when_metadata_changes_during_upload(self):
+        original = self.provider.state()['notionSync']['localFingerprint']
+        def edit_once():
+            self.remote.before_upload = None
+            item = self.service.state()['items'][0]
+            self.service.annotate({'expectedRoot':str(self.root),'path':item['path'],'sha256':item['sha256'],
+                'groupTitle':'Later local purpose','variantLabel':'Later option'})
+        self.remote.before_upload = edit_once
+        completed = self.sync()
+        self.assertEqual(completed['operation']['status'],'completed')
+        self.assertEqual(completed['notionSync']['status'],'pending')
+        self.assertEqual(completed['notionSync']['syncedFingerprint'],original)
+        self.assertNotEqual(completed['notionSync']['localFingerprint'],original)
+        self.assertEqual(self.remote.latest_catalog()['entries'][hashlib.sha256(self.data).hexdigest()]['groupTitle'],'Sample')
+        self.assertEqual(self.sync(request='later-intent')['notionSync']['status'],'synced')
+        self.assertEqual(self.remote.posts,1)
+
+    def test_read_only_catalog_recovery_marks_only_proven_original_snapshot_and_never_legacy_guess(self):
+        first = self.sync()
+        path = self.directory/'private'/('page-'+PAGE+'.json')
+        record = json.loads(path.read_text(encoding='utf-8'))
+        record['verifiedExports'] = {}
+        record['operation'].update(status='unknown',code='catalog_attached_unverified')
+        receipt = next(row for row in record['receipts'] if row.get('direction')=='catalog')
+        receipt['status'] = 'attached_unverified'
+        path.write_text(json.dumps(record),encoding='utf-8')
+        calls = len(self.remote.calls)
+        resumed = self.sync()
+        self.assertEqual(resumed['notionSync']['status'],'synced')
+        self.assertEqual(resumed['notionSync']['syncedFingerprint'],first['notionSync']['syncedFingerprint'])
+        self.assertTrue(all(action in {'fetch','download'} for action,_ in self.remote.calls[calls:]))
+        record = json.loads(path.read_text(encoding='utf-8'))
+        record['verifiedExports'] = {}
+        record['operation'].pop('exportSnapshot',None)
+        record['operation'].pop('exportCatalogSha256',None)
+        record['operation'].update(status='unknown',code='catalog_attached_unverified')
+        path.write_text(json.dumps(record),encoding='utf-8')
+        legacy = self.sync()
+        self.assertEqual(legacy['operation']['status'],'completed')
+        self.assertEqual(legacy['notionSync']['status'],'unverified')
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts),(1,1))
+
+    def test_empty_root_never_claims_remote_history_was_deleted_or_verified_by_empty_subset(self):
+        first = self.sync()
+        item = self.service.state()['items'][0]
+        self.service.delete({'expectedRoot':str(self.root),'path':item['path'],'sha256':item['sha256'],'requestId':'a'*32})
+        result = self.sync(request='empty-root')
+        self.assertEqual(result['operation']['status'],'completed')
+        self.assertEqual((result['notionSync']['status'],result['notionSync']['reason']),('unverified','empty_library'))
+        self.assertEqual(result['notionSync']['syncedFingerprint'],first['notionSync']['syncedFingerprint'])
+        self.assertTrue(any(data==self.data for data in self.remote.originals.values()))
+        self.assertEqual(self.remote.posts,1)
 
 
 if __name__ == '__main__':

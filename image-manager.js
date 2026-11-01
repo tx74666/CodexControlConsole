@@ -85,6 +85,58 @@
     return match ? match[0].replace(/-/g, "").toLowerCase() : "";
   }
   const configuredPageId = () => pageId(state?.notionPage) || pageId(state?.notion?.pageId);
+  const notionReady = () => state?.notion?.sourceOnly !== true && (state?.notionAvailable === true || state?.notion?.canAttempt === true || state?.notion?.available === true);
+  const notionScopeMatches = value => value?.root === root && Boolean(configuredPageId()) && pageId(value.pageId) === configuredPageId();
+  function notionSyncStatus() {
+    if (!root || !configuredPageId() || !notionReady()) return "unavailable";
+    if (pendingOperation && notionScopeMatches(pendingOperation)) return ["unknown", "failed", "error", "needs_review"].includes(pendingOperation.uiStatus) ? "failed" : "syncing";
+    const operation = state?.notion?.operation || state?.operation;
+    if (notionScopeMatches(operation)) {
+      if (["unknown", "failed", "error", "needs_review"].includes(operation.status)) return "failed";
+      if (pendingStatuses.has(operation.status)) return "syncing";
+    }
+    const summary = state?.notionSync || state?.notion?.syncStatus;
+    if (!notionScopeMatches(summary)) return "unverified";
+    if (["syncing", "failed"].includes(summary.status)) return summary.status;
+    const local = str(summary.localFingerprint).toLowerCase(), synced = str(summary.syncedFingerprint).toLowerCase();
+    if (summary.status === "synced" && /^[a-f0-9]{64}$/.test(local) && local === synced) return "synced";
+    return summary.status === "pending" ? "pending" : "unverified";
+  }
+  function updateNotionStatus() {
+    const status = notionSyncStatus();
+    const labels = {
+      unavailable: !configuredPageId() ? text("Notion 未配置", "Notion not configured") : text("Notion 连接未就绪", "Notion connection not ready"),
+      unverified: text("Notion 待同步 · 未核验", "Notion pending · not verified"),
+      pending: text("Notion 待同步", "Notion pending sync"),
+      syncing: text("Notion 同步中", "Syncing to Notion"),
+      failed: text("Notion 同步失败 / 待核对", "Notion failed / needs checking"),
+      synced: text("本地内容已同步到 Notion", "Local content verified in Notion")
+    };
+    const badge = byId("notionSyncState");
+    if (badge) { badge.dataset.status = status; setText(badge, labels[status]); }
+    setText(byId("notionSummary"), labels[status]);
+    byId("notionSummary").dataset.connected = String(status === "synced");
+    const hint = !root ? text("先保存当前图片文件夹。", "Save the current image folder first.")
+      : !configuredPageId() ? text("在「图库与同步位置」保存 Notion 页面后，再同步。更新本地仍可使用。", "Save a Notion page under Library and sync locations before syncing. Update local is still available.")
+      : !notionReady() ? text("Notion 连接尚未就绪；可先更新本地，连接就绪后再同步。", "Notion is not ready. Update local first, then sync when the connection is available.")
+      : status === "synced" ? text("当前本地已采用内容已核验同步到 Notion；Inbox 仍需确认，Notion 历史附件保留。", "The adopted local content was verified in Notion. Inbox images still need confirmation; historical Notion attachments are retained.")
+      : status === "failed" ? text("同步未完整完成，请核对原请求；本地图片与未采用的 Inbox 保留。", "Sync has not fully completed. Check the original request; local images and unadopted Inbox images are retained.")
+      : status === "syncing" ? text("正在同步已采用图片，请等待原请求结果。", "Syncing adopted images. Wait for the original request result.")
+      : text("把当前文件夹已采用图片同步到 Notion；Inbox 不会自动入库，也不会自动删除云端附件。", "Sync adopted images from the current folder to Notion. Inbox images are not added automatically, and cloud attachments are not deleted automatically.");
+    setText(byId("notionSyncHint"), hint);
+    byId("syncImages").disabled ||= !root || !configuredPageId() || !notionReady();
+  }
+  function advancedSyncAllowed() {
+    const source = byId("syncSource").value, target = byId("syncTarget").value;
+    return source === "notion" ? ["console", "device", "all"].includes(target) : ["console", "local"].includes(source) && ["notion", "device", "all"].includes(target);
+  }
+  function advancedSyncIssue() {
+    if (!advancedSyncAllowed()) return text("请选择不同的来源与目标；当前文件夹无需同步给自己。", "Choose different source and destination locations. The current folder does not need to sync to itself.");
+    const source = byId("syncSource").value, target = byId("syncTarget").value;
+    if (target === "device" && !state?.deviceRoot) return text("先在「图库与同步位置」保存额外设备文件夹。", "Save an additional device folder under Library and sync locations first.");
+    if ((source === "notion" || ["notion", "all"].includes(target)) && (!configuredPageId() || !notionReady())) return text("先配置可用的 Notion 目标页面。", "Configure an available Notion destination page first.");
+    return "";
+  }
   const standardTypes = () => (Array.isArray(state?.standardTypes) ? state.standardTypes : []).filter(type => type && typeof type.code === "string" && type.code.length <= 140);
   const standardNaming = () => state?.standardNaming === true;
   const validStandardType = code => standardTypes().some(type => type.code === code);
@@ -199,7 +251,7 @@
     const source = byId("syncSource").value, target = byId("syncTarget").value;
     const actualSource = source === "local" && ["notion", "all"].includes(target) ? "console" : source;
     const actualTarget = target === "all" ? source === "notion" ? "console" : "notion" : target;
-    const selectionMatches = (!pending?.uiSource || pending.uiSource === source)
+    const selectionMatches = pending?.uiMode === "notion" ? operation.source === "console" && operation.target === "notion" : (!pending?.uiSource || pending.uiSource === source)
       && (!pending?.uiTarget || pending.uiTarget === target)
       && ((source === operation.source && target === operation.target)
           || (actualSource === operation.source && actualTarget === operation.target));
@@ -323,6 +375,7 @@
     setText(byId("operationStatus"), currentText(message));
     byId("operationStatus").dataset.error = String(error);
     byId("operationStatus").dataset.tone = success ? "success" : "normal";
+    updateNotionStatus();
   }
   function dimensions(item) {
     const width = Number(item?.width), height = Number(item?.height);
@@ -398,7 +451,11 @@
   }
   function updateControls() {
     for (const id of ["libraryRoot", "deviceRoot", "notionPage", "saveConfig", "syncSource", "syncTarget"]) byId(id).disabled = busy;
-    for (const id of ["scanImages", "syncImages", "imageFiles", "pasteImages", "imagePasteCommand"]) byId(id).disabled = busy || !root || Boolean(pendingOperation);
+    for (const id of ["scanImages", "syncImages", "advancedSyncImages", "imageFiles", "pasteImages", "imagePasteCommand"]) byId(id).disabled = busy || !root || Boolean(pendingOperation);
+    for (const id of ["syncSource", "syncTarget"]) byId(id).disabled = busy || Boolean(pendingOperation);
+    const advancedIssue = advancedSyncIssue();
+    byId("advancedSyncImages").disabled ||= Boolean(advancedIssue);
+    setText(byId("advancedSyncHint"), advancedIssue || text("用于设备同步或从 Notion 回读；上方主按钮始终同步到 Notion。", "For device sync or reading images back from Notion. The main button always syncs to Notion."));
     if (busy || pendingOperation || !root) closePasteMenu();
     byId("dropZone").setAttribute("aria-disabled", String(busy || !root || Boolean(pendingOperation)));
     byId("dropZone").tabIndex = busy || !root || pendingOperation ? -1 : 0;
@@ -408,7 +465,7 @@
     byId("checkOperation").disabled = busy;
     if (pendingOperation) byId("syncImages").disabled = true;
     if (deletionUncertain()) {
-      for (const id of ["libraryRoot", "deviceRoot", "notionPage", "saveConfig", "scanImages", "syncImages", "imageFiles", "pasteImages", "imagePasteCommand", "restoreImages", "reviewApply", "syncSource", "syncTarget"]) byId(id).disabled = true;
+      for (const id of ["libraryRoot", "deviceRoot", "notionPage", "saveConfig", "scanImages", "syncImages", "advancedSyncImages", "imageFiles", "pasteImages", "imagePasteCommand", "restoreImages", "reviewApply", "syncSource", "syncTarget"]) byId(id).disabled = true;
       byId("dropZone").setAttribute("aria-disabled", "true");
       byId("dropZone").tabIndex = -1;
       closePasteMenu();
@@ -454,6 +511,7 @@
       byId("namingApply").disabled = true;
       byId("namingRestore").disabled = true;
     }
+    updateNotionStatus();
   }
   async function call(action, { payload, form, params } = {}) {
     const headers = {};
@@ -487,6 +545,7 @@
     try { await task(token, expectedRoot); }
     catch (error) {
       if (assertCurrent(token, expectedRoot)) {
+        if (pendingOperation) pendingOperation.uiStatus = "unknown";
         if (pendingOperation?.metadataJob) {
           rememberMetadataJob({ ...pendingOperation.metadataJob, status: "unknown", message: text(`已保存到本地；同步未完成。${localized(error.message, "zh-CN") || "请继续核对原请求。"}`, `Saved locally; sync did not finish. ${localized(error.message, "en") || "Continue checking the original request."}`) });
           notice(metadataJob.message, true);
@@ -517,22 +576,25 @@
     const nextRoot = str(value.root);
     if (root && nextRoot && nextRoot !== root) throw new Error(currentText(errors.root_changed));
     if (nextRoot) root = nextRoot;
+    const changedWithoutProof = state && Array.isArray(value.items) && JSON.stringify(state.items) !== JSON.stringify(value.items)
+      && !Object.prototype.hasOwnProperty.call(value, "notionSync") && !value.notion?.syncStatus;
     state = { ...(state || {}), ...value };
+    if (changedWithoutProof) { state.notionSync = null; state.notion = { ...(state.notion || {}), syncStatus: null }; }
     setText(byId("rootSummary"), root || text("尚未选择图库", "No library selected"));
     byId("rootSummary").dataset.connected = String(Boolean(root));
     setText(byId("deviceSummary"), str(state.deviceRoot) || text("使用本地图库", "Use the local library"));
     byId("deviceSummary").dataset.connected = String(Boolean(state.deviceRoot || root));
     const connected = state.notionAvailable === true || state.notion?.canAttempt === true || state.notion?.available === true;
     const verified = state.notion?.verified === true || state.notionAvailable === true;
-    setText(byId("notionSummary"), verified ? text("已连接", "Connected") : connected ? text("可同步 · 首次将核验连接", "Ready to try · connection checked on first sync") : state.notionPage ? text("已保存目标 · 连接待就绪", "Destination saved · connection not ready") : text("未配置 · 连接待就绪", "Not configured · connection not ready"));
-    byId("notionSummary").dataset.connected = String(verified);
-    setText(byId("notionConfigNote"), verified ? text("已核验连接，可在下方选择同步方向。", "Connection verified. Choose a sync direction below.") : connected ? text("可选择同步；首次操作会核验页面与附件访问。", "You can try syncing. The first operation checks page and attachment access.") : text("目前可保存页面地址；Notion 同步连接尚未就绪。", "You can save the page address. The Notion sync connection is not ready yet."));
+    setText(byId("notionConfigNote"), verified ? text("连接已核验；是否已同步，以当前图片与核验快照是否一致为准。", "Connection verified. Sync status depends on whether the current images match the verified snapshot.") : connected ? text("首次同步会核验页面与附件访问。", "The first sync checks page and attachment access.") : text("目前可保存页面地址；Notion 同步连接尚未就绪。", "You can save the page address. The Notion sync connection is not ready yet."));
     for (const select of [byId("syncSource"), byId("syncTarget")]) {
       const option = select.querySelector('option[value="notion"]');
       option.disabled = !connected;
       setText(option, connected ? "Notion" : text("Notion · 连接待就绪", "Notion · connection not ready"));
-      if (select.value === "notion" && !connected) select.value = select.id === "syncSource" ? "local" : "console";
+      if (select.value === "notion" && !connected) select.value = "console";
     }
+    const deviceOption = byId("syncTarget").querySelector('option[value="device"]');
+    if (deviceOption) deviceOption.disabled = !state.deviceRoot;
     setText(byId("inboxCount"), `inbox ${Number.isInteger(state.inboxCount) ? state.inboxCount : 0}`);
     if (refill) {
       byId("libraryRoot").value = root;
@@ -551,6 +613,7 @@
     const date = dates.length ? new Date(Math.max(...dates.map(value => value.getTime()))) : null;
     setText(byId("lastSync"), date && !Number.isNaN(date.getTime()) ? text(`上次同步 ${date.toLocaleString("zh-CN", { hour12: false })}`, `Last sync ${date.toLocaleString("en", { hour12: false })}`) : text("尚无同步记录", "No sync recorded yet"));
     renderCollection();
+    updateNotionStatus();
   }
   function acceptResponse(value, token, expectedRoot) {
     if (!assertCurrent(token, expectedRoot)) return false;
@@ -756,7 +819,7 @@
     for (const group of filtered) byId("imageGrid").append(renderGroup(group));
     byId("emptyState").hidden = filtered.length !== 0;
     setText(byId("emptyState").querySelector("h3"), query ? text("没有匹配的图片", "No matching images") : text("你的图片，从这里开始", "Your images start here"));
-    setText(byId("emptyState").querySelector("p"), query ? text("换一个标题或尺寸试试。", "Try another title or size.") : text("保存图库位置，放入图片，再点「检查图片」。", "Save a library location, add images, then select Check images."));
+    setText(byId("emptyState").querySelector("p"), query ? text("换一个标题或尺寸试试。", "Try another title or size.") : text("保存图库位置，放入图片，再点「更新本地」。", "Save a library location, add images, then select Update local."));
   }
   function renderGroup(group) {
     const key = `${root}:${group.id}`;
@@ -942,9 +1005,9 @@
           }
           updateMetadataName();
           metadataBaseline = metadataValues();
-          const targets = [...(configuredPageId() ? ["notion"] : []), ...(state?.deviceRoot ? ["device"] : [])];
-          rememberMetadataJob({ ...savedSnapshot, annotationFingerprint: annotationFingerprint(value.item || metadataTarget), targets, completed: [], status: !snapshot.indexed ? "inbox" : targets.length ? "saved" : "local",
-            message: !snapshot.indexed ? text("已保存到 Inbox，确认入库后再同步；尚未发布这张图片。", "Saved to Inbox. Confirm adding it to the library before syncing; this image has not been published.") : targets.length ? text("已保存到本地，待同步。", "Saved locally; waiting to sync.") : text("已保存到本地；尚未配置外部同步位置。", "Saved locally. No external sync destination is configured.") });
+          const targets = configuredPageId() ? ["notion"] : [];
+          rememberMetadataJob({ ...savedSnapshot, uiMode: "notion", annotationFingerprint: annotationFingerprint(value.item || metadataTarget), targets, completed: [], status: !snapshot.indexed ? "inbox" : targets.length ? "saved" : "local",
+            message: !snapshot.indexed ? text("已保存到 Inbox，确认入库后再同步；尚未发布这张图片。", "Saved to Inbox. Confirm adding it to the library before syncing; this image has not been published.") : targets.length ? text("已更新本地，Notion 待同步。", "Local folder updated; Notion pending sync.") : text("已更新本地；尚未配置 Notion 目标。", "Local folder updated. No Notion destination is configured.") });
         }
       } catch (error) {
         setText(byId("metadataStatus"), error.message || text("保存未完成，填写内容已保留。", "Saving did not finish. Your entries are retained."));
@@ -960,15 +1023,17 @@
       requireMetadataScope(job, token, expectedRoot);
       const target = job.targets.find(value => !job.completed.includes(value));
       if (!target) {
-        rememberMetadataJob({ ...job, status: "completed", planId: "", message: text("已保存，并同步到全部已配置位置。", "Saved and synced to all configured destinations.") });
+        rememberMetadataJob({ ...job, status: "completed", planId: "", message: job.uiMode === "notion" ? text("已更新本地，并完成同步到 Notion。", "Local folder updated and sync to Notion completed.") : text("已保存，并同步到全部已配置位置。", "Saved and synced to all configured destinations.") });
         notice(metadataJob.message, false, true);
         return;
       }
       if (target === "notion" && state?.notionAvailable !== true && state?.notion?.canAttempt !== true && state?.notion?.available !== true) throw new Error(text("Notion 连接尚未就绪，可在连接恢复后同步已保存修改。", "Notion is not ready. Sync the saved changes when the connection is available."));
-      byId("syncSource").value = "console";
-      byId("syncTarget").value = job.targets.length > 1 ? "all" : target;
+      if (job.uiMode !== "notion") {
+        byId("syncSource").value = "console";
+        byId("syncTarget").value = job.targets.length > 1 ? "all" : target;
+      }
       rememberMetadataJob({ ...job, status: "syncing", planId: "", message: text(`已保存到本地，正在同步${target === "notion" ? "到 Notion" : "到设备文件夹"}…`, `Saved locally; syncing to ${target === "notion" ? "Notion" : "the device folder"}…`) });
-      await dispatchSync("console", target, token, expectedRoot, null, metadataJob);
+      await dispatchSync("console", target, token, expectedRoot, null, metadataJob, job.uiMode === "notion" ? "notion" : "legacy");
     } catch (error) {
       const current = metadataJob || job;
       const uncertain = Boolean(pendingOperation?.metadataJob);
@@ -1169,7 +1234,7 @@
       }
       const savedPlan = extractPlan(value) || extractPlan(value.state);
       if (savedPlan) acceptPlan(savedPlan);
-      notice(savedPlan?.candidates?.length ? text("已恢复上次的图片比较，可以继续选择。", "The previous comparison was restored. You can continue choosing.") : root ? text("就绪。放入图片后，点「检查图片」查看新增和重复候选。", "Ready. Add images, then select Check images to review new and duplicate candidates.") : text("先保存本地图库位置。", "Save a local library location first."), false);
+      notice(savedPlan?.candidates?.length ? text("已恢复上次的图片比较，可以继续选择。", "The previous comparison was restored. You can continue choosing.") : root ? text("就绪。放入图片后，点「更新本地」核对新增和替换候选。", "Ready. Add images, then select Update local to review new and replacement candidates.") : text("先保存本地图库位置。", "Save a local library location first."), false);
       const active = value.operation || value.state?.operation || state?.notion?.operation;
       let saved;
       try { saved = JSON.parse(localStorage.getItem(operationKey()) || "null"); } catch (_) { /* The server can also restore its operation. */ }
@@ -1178,8 +1243,10 @@
         if (pendingOperation.metadataJob) metadataJob = pendingOperation.metadataJob;
         const restoreSource = pendingOperation.uiSource || active?.source;
         const restoreTarget = pendingOperation.uiTarget || active?.target;
-        if (["local", "console", "notion"].includes(restoreSource)) byId("syncSource").value = restoreSource;
-        if (["console", "device", "notion", "all"].includes(restoreTarget)) byId("syncTarget").value = restoreTarget;
+        if (pendingOperation.uiMode !== "notion") {
+          if (["local", "console", "notion"].includes(restoreSource)) byId("syncSource").value = restoreSource;
+          if (["console", "device", "notion", "all"].includes(restoreTarget)) byId("syncTarget").value = restoreTarget;
+        }
         await pollOperation(active?.requestId === pendingOperation.requestId ? active : { requestId: pendingOperation.requestId, status: "pending" }, token, root);
       }
     });
@@ -1455,6 +1522,20 @@
     await pasteImageFiles(event, files);
   }
   async function syncImages() {
+    if (busy || pendingOperation || deletionUncertain() || !root || !requireSavedLocations()) return;
+    if (!configuredPageId() || !notionReady()) {
+      updateNotionStatus();
+      notice(!configuredPageId() ? text("请先保存 Notion 目标页面，再同步到 Notion。", "Save a Notion destination page before syncing to Notion.") : currentText(errors.notion_unavailable), true);
+      return;
+    }
+    await run(text("正在同步当前文件夹到 Notion…", "Syncing the current folder to Notion…"), async (token, expectedRoot) => {
+      await dispatchSync("console", "notion", token, expectedRoot, null, null, "notion");
+    });
+  }
+  async function advancedSyncImages() {
+    if (busy || pendingOperation || deletionUncertain() || !root || !advancedSyncAllowed()) return;
+    const issue = advancedSyncIssue();
+    if (issue) { notice(issue, true); return; }
     if (!requireSavedLocations()) return;
     const source = byId("syncSource").value, target = byId("syncTarget").value;
     if ((source === "notion" || target === "notion" || target === "all") && state?.notionAvailable !== true && state?.notion?.canAttempt !== true && state?.notion?.available !== true) { notice(errors.notion_unavailable, true); return; }
@@ -1469,7 +1550,7 @@
       await dispatchSync(source, actualTarget, token, expectedRoot, afterDevice);
     });
   }
-  async function dispatchSync(source, target, token, expectedRoot, after = null, savedMetadata = null) {
+  async function dispatchSync(source, target, token, expectedRoot, after = null, savedMetadata = null, uiMode = "legacy") {
     if (!assertCurrent(token, expectedRoot)) return;
     if (savedMetadata) requireMetadataScope(savedMetadata, token, expectedRoot);
     const requestId = savedMetadata?.deviceRequestId && target === "device" ? savedMetadata.deviceRequestId : crypto.randomUUID();
@@ -1479,8 +1560,8 @@
     }
     const isNotion = source === "notion" || target === "notion";
     if (isNotion) {
-      pendingOperation = { requestId, autoApply: !savedMetadata, after, ...(savedMetadata ? { metadataJob: savedMetadata } : {}), root: expectedRoot, source, target,
-        pageId: configuredPageId(), uiSource: byId("syncSource").value, uiTarget: byId("syncTarget").value };
+      pendingOperation = { requestId, autoApply: uiMode !== "notion" && !savedMetadata, after, ...(savedMetadata ? { metadataJob: savedMetadata } : {}), root: expectedRoot, source, target, uiMode, uiStatus: "running",
+        pageId: configuredPageId(), uiSource: uiMode === "notion" ? "console" : byId("syncSource").value, uiTarget: uiMode === "notion" ? "notion" : byId("syncTarget").value };
       try { localStorage.setItem(operationKey(), JSON.stringify(pendingOperation)); } catch (_) { /* The server persists its own operation. */ }
       notice(source === "notion" ? text("正在从 Notion 同步图片…", "Syncing images from Notion…") : text("正在同步到 Notion…", "Syncing to Notion…"));
     } else notice(text("正在检查设备文件夹的同步内容…", "Checking device folder sync content…"));
@@ -1500,7 +1581,7 @@
       await acceptMetadataDeviceResult(value, savedMetadata, token, expectedRoot);
       return;
     }
-    await finishSync(value, token, expectedRoot, true, after);
+    await finishSync(value, token, expectedRoot, uiMode !== "notion", after);
   }
   async function continueSync(instruction, token, expectedRoot) {
     if (instruction.target === "device" && instruction.deviceRoot !== undefined && instruction.deviceRoot !== str(state?.deviceRoot)) throw new Error(text("额外设备文件夹已改变，已暂停后续同步，请重新选择目标。", "The additional device folder changed. Further sync paused; choose the destination again."));
@@ -1543,7 +1624,7 @@
     const requestId = str(initial?.requestId || pendingOperation?.requestId);
     if (!requestId) throw new Error(text("同步未返回可核对的记录，请保留页面并重新读取状态。", "Sync did not return a verifiable record. Keep this page and reload the state."));
     if (pendingOperation?.requestId && pendingOperation.requestId !== requestId) throw new Error(text("返回的同步记录与本次请求不同，请继续核对原请求。", "The returned sync record does not match this request. Continue checking the original request."));
-    pendingOperation = { ...pendingOperation, requestId, autoApply: pendingOperation?.autoApply !== false,
+    pendingOperation = { ...pendingOperation, requestId, autoApply: pendingOperation?.uiMode !== "notion" && pendingOperation?.autoApply !== false,
       after: validInstruction(pendingOperation?.after) ? pendingOperation.after : null,
       root: pendingOperation?.root || initial.root, source: pendingOperation?.source || initial.source,
       target: pendingOperation?.target || initial.target, pageId: pendingOperation?.pageId || pageId(initial.pageId),
@@ -1552,6 +1633,8 @@
     let operation = initial;
     while (assertCurrent(token, expectedRoot)) {
       if (operation.root && operation.root !== expectedRoot) throw new Error(text("同步回执对应另一个图库，原请求已保留，请继续核对。", "The sync receipt belongs to another library. The original request is retained; continue checking."));
+      pendingOperation.uiStatus = operation.status;
+      if (notionScopeMatches(operation)) state = { ...state, operation, notion: { ...(state?.notion || {}), operation } };
       const savedMetadata = pendingOperation.metadataJob;
       if (savedMetadata) {
         requireMetadataScope(savedMetadata, token, expectedRoot);
@@ -1694,6 +1777,8 @@
   byId("configForm").addEventListener("submit", saveConfig);
   byId("scanImages").addEventListener("click", scanImages);
   byId("syncImages").addEventListener("click", syncImages);
+  byId("advancedSyncImages").addEventListener("click", advancedSyncImages);
+  for (const id of ["syncSource", "syncTarget"]) byId(id).addEventListener("change", updateControls);
   byId("checkOperation").addEventListener("click", resumeOperation);
   byId("restoreImages").addEventListener("click", restoreImages);
   byId("imageDeleteCommand")?.addEventListener("click", deleteImage);
