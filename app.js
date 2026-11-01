@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.1.42";
+const consoleUiVersion = "1.1.43";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -21746,6 +21746,7 @@ if (els.steamworkImageFrame) {
   window.addEventListener("message", receiveSteamworkImageMessage);
   window.addEventListener("resize", scheduleSteamworkImageContext);
   window.addEventListener("scroll", scheduleSteamworkImageContext, { passive: true });
+  document.querySelector(".steamwork-tips")?.addEventListener("toggle", scheduleSteamworkImageContext);
 }
 if (hasSteamwork && els.openSteamworkDashboard) {
   els.openSteamworkDashboard.addEventListener("click", () => openSteamworksWebLink(steamworksAppUrl, "steamworkDashboard"));

@@ -3872,7 +3872,6 @@ button.blender-hub-card:active {
 }
 
 .steamwork-tips {
-  order: 1;
   min-width: 0;
   max-width: 100%;
   display: grid;
