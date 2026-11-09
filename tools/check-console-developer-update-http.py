@@ -9,6 +9,7 @@ import socket
 import tempfile
 import threading
 from types import SimpleNamespace
+from unittest import mock
 import urllib.parse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -47,6 +48,24 @@ class SpyService:
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def retirement_fixture():
+    calls = mock.Mock()
+    calls.compare_versions.return_value = 1
+    return {
+        "IMAGE_MANAGER_WATCH": SimpleNamespace(busy=False, close=calls.close_watcher),
+        "compare_versions": calls.compare_versions,
+        "threading": SimpleNamespace(Timer=calls.timer),
+    }, calls
+
+
+def require_retirement_blocked(namespace, payload, message):
+    try:
+        namespace["retire_console_instance"](payload)
+    except ValueError:
+        return
+    raise AssertionError(message)
 
 
 def actual_handler(namespace):
@@ -102,10 +121,12 @@ def main():
         (private / "receipt.json").write_text('{"private":true}', encoding="utf-8")
         service = SpyService(private)
         shutdowns = []
+        retirement_state, retirement_calls = retirement_fixture()
         namespace = {
+            **retirement_state,
             "SimpleHTTPRequestHandler": SimpleHTTPRequestHandler,
             "Path": Path, "urllib": urllib, "ipaddress": ipaddress, "re": re, "json": json,
-            "threading": threading, "APP_DIR": app_dir, "MAX_JSON_REQUEST_BYTES": 1024 * 1024,
+            "APP_DIR": app_dir, "MAX_JSON_REQUEST_BYTES": 1024 * 1024,
             "DeveloperUpdateError": DeveloperUpdateError, "CONSOLE_DEVELOPER_UPDATE": service,
             "BLENDER_MUTATION_API_PATHS": frozenset(),
             "PHONE_DEVICE_STORE": SimpleNamespace(directory=app_dir / "phone-private"),
@@ -193,12 +214,9 @@ def main():
 
             service.busy = True
             rejected("POST", "/api/console/update/install", {}, status=409)
-            try:
-                namespace["retire_console_instance"]({})
-            except ValueError:
-                pass
-            else:
-                raise AssertionError("retirement interrupted an active source update")
+            require_retirement_blocked(namespace, {"expectedInstanceId": "fixture", "version": "1.0.79"},
+                                       "retirement interrupted an active source update")
+            require(not retirement_calls.mock_calls, "retirement touched the runtime during an active source update")
             namespace["shutdown_if_no_background_work"]()
             require(not shutdowns, "last-window close interrupted an active source update")
             service.busy = False

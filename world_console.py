@@ -2311,7 +2311,7 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
             target = Path(self.translate_path(self.path)).resolve()
             return (target.is_relative_to(PHONE_DEVICE_STORE.directory) or target.is_relative_to(WORKFLOW_DATA_DIR)
                     or target == IMAGE_MANAGER.config_path.resolve()
-                    or target.is_relative_to(IMAGE_MANAGER_NOTION.directory)
+                    or target.is_relative_to(IMAGE_MANAGER_NOTION.directory.resolve())
                     or target.is_relative_to(CONSOLE_DEVELOPER_UPDATE.state_dir)
                     or (globals().get("CONSOLE_REPOSITORY_PUBLISH") is not None
                         and target.is_relative_to(CONSOLE_REPOSITORY_PUBLISH.state_dir)))

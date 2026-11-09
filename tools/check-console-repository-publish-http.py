@@ -11,6 +11,7 @@ import sqlite3
 import tempfile
 import threading
 from types import SimpleNamespace
+from unittest import mock
 import urllib.parse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -139,10 +140,12 @@ def main():
         private.mkdir(parents=True)
         (private / "operation.json").write_text('{"private":true}', encoding="utf-8")
         service, shutdowns = Spy(private), []
+        retirement_state, retirement_calls = fixture.retirement_fixture()
         ns = {
+            **retirement_state,
             "SimpleHTTPRequestHandler": SimpleHTTPRequestHandler, "Path": Path,
             "urllib": urllib, "ipaddress": ipaddress, "re": re, "json": json,
-            "threading": threading, "APP_DIR": root, "MAX_JSON_REQUEST_BYTES": 1024 * 1024,
+            "APP_DIR": root, "MAX_JSON_REQUEST_BYTES": 1024 * 1024,
             "RepositoryPublishError": RepositoryPublishError,
             "DeveloperUpdateError": fixture.DeveloperUpdateError,
             "CONSOLE_REPOSITORY_PUBLISH": service,
@@ -255,15 +258,25 @@ def main():
                       "Private Git state was served")
             service.busy = True
             reject("POST", "/api/console/update/install", {}, code=409)
-            try:
-                ns["retire_console_instance"]({})
-            except ValueError:
-                pass
-            else:
-                raise AssertionError("Retirement interrupted batch Git work")
+            retirement = {"expectedInstanceId": "fixture", "version": "1.0.102"}
+            fixture.require_retirement_blocked(ns, retirement, "Retirement interrupted batch Git work")
+            check(not retirement_calls.mock_calls, "Retirement touched the runtime during batch Git work")
             ns["shutdown_if_no_background_work"]()
             check(not shutdowns, "Closing the window interrupted batch Git work")
             service.busy = False
+            image_watch = ns["IMAGE_MANAGER_WATCH"]
+            image_watch.busy = True
+            fixture.require_retirement_blocked(ns, retirement, "Retirement interrupted active image discovery")
+            check(not retirement_calls.mock_calls, "Retirement interrupted active image discovery")
+            image_watch.busy = False
+            status, body = request("POST", "/api/console/retire", retirement)
+            check(status == 200 and json.loads(body) == {"accepted": True, "version": ns["APP_VERSION"]},
+                  "Idle retirement failed")
+            check(retirement_calls.mock_calls == [
+                mock.call.compare_versions(retirement["version"], ns["APP_VERSION"]),
+                mock.call.close_watcher(), mock.call.timer(0.2, ns["shutdown_active_server"]), mock.call.timer().start(),
+            ] and retirement_calls.timer.return_value.daemon is True,
+                  "Idle retirement did not close the watcher before scheduling shutdown")
             ns["shutdown_if_no_background_work"]()
             check(shutdowns == [True], "Idle shutdown no longer works")
         finally:

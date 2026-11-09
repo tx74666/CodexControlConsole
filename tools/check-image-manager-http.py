@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import threading
@@ -445,7 +446,25 @@ class ImageHTTPChecks(unittest.TestCase):
         self.assertEqual(status, 409)
 
     def test_private_configuration_and_transfer_snapshots_are_never_static_files(self):
-        app = Path(self.temporary.name) / 'app'
+        self.assert_private_image_files_hidden(Path(self.temporary.name) / 'app')
+
+    @unittest.skipUnless(os.name == 'nt', 'Native Windows junction')
+    def test_private_image_files_are_hidden_through_a_cache_junction(self):
+        base = Path(self.temporary.name)
+        app = base / 'app'
+        app.mkdir()
+        cache = base / 'real-cache'
+        cache.mkdir()
+        junction = app / 'cache'
+        result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(junction), str(cache)],
+                                capture_output=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+        if result.returncode:
+            self.skipTest('This account cannot create an isolated cache junction.')
+        self.addCleanup(junction.rmdir)
+        self.assertNotEqual(junction, junction.resolve())
+        self.assert_private_image_files_hidden(app)
+
+    def assert_private_image_files_hidden(self, app):
         private = app / 'cache' / 'image-manager-notion-private'
         private.mkdir(parents=True)
         (private / 'original-fixture.png').write_bytes(b'private original')
@@ -457,7 +476,8 @@ class ImageHTTPChecks(unittest.TestCase):
                          '/cache/image-manager-notion-private/original-fixture.png',
                          '/cache/image-manager-notion-private/%6friginal-fixture.png'):
                 for method in ('GET', 'HEAD'):
-                    self.assertEqual(self.request(method, path)[0], 404)
+                    with self.subTest(method=method, path=path):
+                        self.assertEqual(self.request(method, path)[0], 404)
 
 
 if __name__ == '__main__':
