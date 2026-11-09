@@ -121,7 +121,8 @@
     else if (folderNeedsMerge && folderMergeProtected()) message = text("检测到文件夹变化，编辑完成后会自动更新列表。", "Folder changes detected. The list will update automatically after editing.");
     else if (folderWatch?.pending || folderWatch?.status === "deferred") {
       const reason = str(folderWatch.reason);
-      if (["review_pending", "active_review"].includes(reason)) message = text("文件夹检查稍后继续：请先处理当前图片比较。", "Folder checking will continue after the current image review.");
+      if (reason === "stale_review") message = text("待确认的图片已变化。点「刷新列表」可重新比较，并保留未变化图片的有效选择。", "Images in the review have changed. Choose Refresh list to compare them again and keep valid choices for unchanged images.");
+      else if (["review_pending", "active_review"].includes(reason)) message = text("文件夹检查稍后继续：请先处理当前图片比较。", "Folder checking will continue after the current image review.");
       else if (["naming_pending", "active_naming"].includes(reason)) message = text("文件夹检查稍后继续：请先完成名称整理。", "Folder checking will continue after naming is finished.");
       else if (reason === "active_deletion") message = text("文件夹检查稍后继续：请先核对删除结果。", "Folder checking will continue after the deletion result is checked.");
       else if (["notion_pending", "notion_busy", "notion_record_unavailable"].includes(reason)) message = text("文件夹检查稍后继续：请先核对原同步请求。", "Folder checking will continue after the original sync request is checked.");
@@ -733,11 +734,13 @@
     try { sessionStorage.setItem(decisionKey(), JSON.stringify([...decisions])); } catch (_) { /* The server retains the plan. */ }
   }
   function restoreDecisions() {
-    const allowed = new Set(plan.candidates.map(candidate => str(candidate.id)));
     try {
-      const saved = JSON.parse(sessionStorage.getItem(decisionKey()) || "null");
+      const previousId = plan.direction === "inbox" && str(plan.replacesPlanId);
+      const previous = previousId && sessionStorage.getItem(`console-image-decisions:${root}:${previousId}`);
+      const saved = JSON.parse(sessionStorage.getItem(decisionKey()) ?? (previous || "null"));
+      const allowed = new Map(plan.candidates.map(candidate => [str(candidate.id), candidate.actions]));
       if (Array.isArray(saved)) for (const entry of saved) {
-        if (Array.isArray(entry) && allowed.has(entry[0]) && actions.has(entry[1])) decisions.set(entry[0], entry[1]);
+        if (Array.isArray(entry) && actions.has(entry[1]) && allowed.get(entry[0])?.includes(entry[1])) decisions.set(entry[0], entry[1]);
       }
     } catch (_) { /* Invalid or unavailable optional storage does not change the plan. */ }
   }
@@ -800,12 +803,13 @@
     renderFolderStatus();
     if (!hadRevision && folderRevision(state)) queueFolderRefresh(true);
   }
-  function acceptResponse(value, token, expectedRoot) {
+  function acceptResponse(value, token, expectedRoot, { preserveReview = false } = {}) {
     if (!assertCurrent(token, expectedRoot)) return false;
     if (value.state) acceptState(value.state);
     else if (typeof value.root === "string") acceptState(value);
     const incomingPlan = extractPlan(value) || extractPlan(value.state);
-    if (incomingPlan) acceptPlan(incomingPlan);
+    const rechecked = preserveReview && incomingPlan?.direction === "inbox" && incomingPlan.replacesPlanId === planId(plan);
+    if (incomingPlan) acceptPlan(incomingPlan, { preserveCurrent: rechecked, preserveRematched: rechecked });
     return true;
   }
   const choiceMeaning = candidate => {
@@ -813,7 +817,7 @@
     return JSON.stringify([candidate.status, candidate.matchReason, candidate.matchCount, candidate.actions,
       identity(candidate.incoming || candidate.source), identity(candidate.existing || candidate.target), (candidate.matches || []).map(identity)]);
   };
-  function acceptPlan(value, { preserveCurrent = false } = {}) {
+  function acceptPlan(value, { preserveCurrent = false, preserveRematched = false } = {}) {
     if (value.root && value.root !== root) throw new Error(currentText(errors.root_changed));
     const previousId = planId(plan);
     const previousChoices = preserveCurrent ? new Map(decisions) : null;
@@ -832,8 +836,8 @@
     restoreDecisions();
     if (preserveCurrent) {
       for (const candidate of plan.candidates) if (meanings.has(str(candidate.id)) && meanings.get(str(candidate.id)) !== choiceMeaning(candidate)) decisions.delete(str(candidate.id));
-      for (const candidate of plan.candidates) if (!candidate.previousCandidateId && previousChoices.has(str(candidate.id)) && meanings.get(str(candidate.id)) === choiceMeaning(candidate)) decisions.set(str(candidate.id), previousChoices.get(str(candidate.id)));
-      for (const [group, selected] of selectedCandidates) if (plan.candidates.some(candidate => str(candidate.id) === selected && !candidate.previousCandidateId && meanings.get(selected) === choiceMeaning(candidate))) candidateSelections.set(`${root}:${planId(plan)}:${group}`, selected);
+      for (const candidate of plan.candidates) if ((preserveRematched || !candidate.previousCandidateId) && previousChoices.has(str(candidate.id)) && meanings.get(str(candidate.id)) === choiceMeaning(candidate)) decisions.set(str(candidate.id), previousChoices.get(str(candidate.id)));
+      for (const [group, selected] of selectedCandidates) if (plan.candidates.some(candidate => str(candidate.id) === selected && (preserveRematched || !candidate.previousCandidateId) && meanings.get(selected) === choiceMeaning(candidate))) candidateSelections.set(`${root}:${planId(plan)}:${group}`, selected);
     }
     rememberDecisions();
     renderPlan();
@@ -1478,7 +1482,7 @@
   async function scanImages() {
     await run(text("正在检查图库与 inbox…", "Checking the library and Inbox…"), async (token, expectedRoot) => {
       const value = await call("scan", { payload: { expectedRoot } });
-      if (!acceptResponse(value, token, expectedRoot)) return;
+      if (!acceptResponse(value, token, expectedRoot, { preserveReview: true })) return;
       const count = plan?.candidates?.length || 0;
       notice(count ? text(`检查完成，${count} 项图片待确认。`, `Check complete. ${count} images to review.`) : text("检查完成，没有待处理的图片。", "Check complete. No images need attention."), false, true);
       if (count) { setReviewExpanded(true); byId("reviewSection").scrollIntoView({ behavior: "smooth", block: "start" }); }

@@ -31,6 +31,7 @@ MAX_FILES = 3000
 DISCOVERY_MAX_ENTRIES = 20000
 DISCOVERY_MAX_DIRECTORIES = 1000
 DISCOVERY_BUDGET_SECONDS = 1.0
+INBOX_REVIEW_SCOPE = ('direction', 'root', 'rootIdentity', 'deviceRoot', 'deviceIdentity', 'namingEpoch', 'standardNaming')
 META = '.image-manager'
 STANDARD_TYPES = [
     {'code':code, 'label':label, 'sizes':[{'width':w, 'height':h} for w,h in sizes]}
@@ -1624,9 +1625,38 @@ class ImageManagerService:
             self._standard_plan_targets(plan,manifest)
         if device_metadata is not None:
             plan['deviceMetadata'] = device_metadata
+        pointer = _inside(root, META + '/latest-plan.json', private=True)
+        if direction == 'inbox':
+            previous_id = _json(pointer, {}).get('planId', '')
+            if re.fullmatch('[0-9a-f]{32}', str(previous_id)):
+                previous = _json(_inside(root, META + '/plans/' + previous_id + '.json', private=True), {})
+                if (previous.get('status') == 'review' and previous.get('id') == previous_id
+                        and all(previous.get(key) == plan[key] for key in INBOX_REVIEW_SCOPE)):
+                    previous_candidates = {row['source']: row for row in previous['candidates']}
+                    for candidate in candidates:
+                        before = previous_candidates.get(candidate['source'])
+                        if before is None:
+                            continue
+                        if self._candidate_choice_fingerprint(before) == self._candidate_choice_fingerprint(candidate):
+                            candidate['id'] = before['id']
+                            if before.get('previousCandidateId'):
+                                candidate['previousCandidateId'] = before['previousCandidateId']
+                        else:
+                            candidate['previousCandidateId'] = before['id']
+                    plan['replacesPlanId'] = previous_id
         _atomic_json(_inside(root, META + '/plans/' + plan_id + '.json', private=True), plan)
-        _atomic_json(_inside(root, META + '/latest-plan.json', private=True), {'planId': plan_id})
+        _atomic_json(pointer, {'planId': plan_id})
         return plan
+
+    @staticmethod
+    def _candidate_choice_fingerprint(candidate):
+        def identity(item):
+            if item is not None:
+                return {key: value for key, value in item.items() if key != 'mtimeNs'}
+        return ({key: value for key, value in candidate.items()
+                 if key not in {'id', 'previousCandidateId', 'incoming', 'existing', 'matches'}},
+                identity(candidate['incoming']), identity(candidate['existing']),
+                [identity(item) for item in candidate['matches']])
 
     def _standard_plan_targets(self,plan,manifest):
         pool=manifest['items']+[row['incoming'] for row in plan['candidates']]
@@ -1702,6 +1732,37 @@ class ImageManagerService:
                         return tokens, plan, 'active_deletion'
         return tokens, plan, None
 
+    def _discovery_review_changed(self, root, plan, inventory):
+        if (plan.get('direction') != 'inbox' or plan.get('root') != str(root)
+                or plan.get('rootIdentity') != _identity(root)):
+            return False
+        observed = {os.path.normcase(row['path']):row for row in inventory}
+        deadline = time.monotonic() + DISCOVERY_BUDGET_SECONDS
+        items = {item['path']:item for item in self._plan_items(plan) if item.get('space', 'root') == 'root'}
+        for relative, item in items.items():
+            if time.monotonic() > deadline:
+                return False
+            row = observed.get(os.path.normcase(relative))
+            if row and row['size'] == item['size'] and row['mtimeNs'] == item.get('mtimeNs'):
+                continue
+            path = _inside(root, relative)
+            try:
+                before = path.stat()
+            except FileNotFoundError:
+                if row is None:
+                    return True
+                continue
+            if (not row or before.st_size != row['size'] or str(before.st_mtime_ns) != row['mtimeNs']
+                    or str(before.st_dev) != row['device'] or str(before.st_ino) != row['inode']):
+                continue
+            if before.st_size != item['size']:
+                return True
+            if _sha(path) != item['sha256']:
+                after = path.stat()
+                if (after.st_size, after.st_mtime_ns, after.st_dev, after.st_ino) == (before.st_size, before.st_mtime_ns, before.st_dev, before.st_ino):
+                    return True
+        return False
+
     def safe_refresh_local(self, payload, *, cancelled=None):
         """Publish stable local discovery only; never move/apply an original."""
         if (not isinstance(payload, dict) or set(payload) != {'expectedRoot','inventoryToken','inventory'}
@@ -1736,6 +1797,8 @@ class ImageManagerService:
                         return reply('deferred', 'stopped')
                     versions, old_plan, blocked = self._discovery_records(root)
                     if blocked:
+                        if blocked == 'active_review' and self._discovery_review_changed(root, old_plan, payload['inventory']):
+                            return reply('deferred', 'stale_review')
                         return reply('deferred', blocked)
                     before_version = self._manifest_version(root)
                     original = self._manifest(root)
@@ -2034,6 +2097,21 @@ class ImageManagerService:
             raise ImageManagerError('预览后图片已改变，请重新检查。', status=409)
         return path
 
+    def _inbox_review_superseded(self, root, plan):
+        latest = _json(_inside(root, META + '/latest-plan.json', private=True), {}).get('planId')
+        seen = set()
+        while (isinstance(latest, str) and re.fullmatch('[0-9a-f]{32}', latest)
+               and latest != plan['id'] and latest not in seen):
+            seen.add(latest)
+            successor = _json(_inside(root, META + '/plans/' + latest + '.json', private=True), {})
+            if (successor.get('id') != latest
+                    or any(successor.get(key) != plan.get(key) for key in INBOX_REVIEW_SCOPE)):
+                return False
+            latest = successor.get('replacesPlanId')
+            if latest == plan['id']:
+                return True
+        return False
+
     def apply(self, payload):
         config, root, device = self._roots(payload.get('expectedRoot'))
         plan_id = payload.get('planId', '')
@@ -2075,6 +2153,8 @@ class ImageManagerService:
             return {**plan['receipt'], 'replayed': True, 'state': self.state()}
         if plan['status'] != 'review':
             raise ImageManagerError('此计划仍有待核对的恢复记录，请先检查。', status=409)
+        if plan.get('direction') == 'inbox' and self._inbox_review_superseded(root, plan):
+            raise ImageManagerError('图片比较已更新，请查看最新计划后再确认。', status=409)
         if plan.get('standardNaming') and plan.get('namingManifestVersion')!=self._manifest_version(root):
             raise ImageManagerError('用途或命名匹配已变化，请重新检查后选择。',status=409)
         if set(choices) != {value['id'] for value in plan['candidates']}:

@@ -1498,6 +1498,83 @@ class ImageDiscoveryChecks(unittest.TestCase):
         self.assertEqual(self.refresh()['status'],'noop')  # Explicit keep already refreshed the root index.
         self.assertEqual({item['path'] for item in self.service.state()['items']},{'Image.png','New.png'})
 
+    def test_inbox_recheck_reuses_only_unchanged_candidates_and_supersedes_the_old_plan(self):
+        kept = self.root/'inbox'/'Kept.png'
+        changed = self.root/'inbox'/'Changed.png'
+        kept.write_bytes(picture('red'))
+        changed.write_bytes(picture('blue'))
+        self.refresh()
+        initial = self.service.state()['plan']
+        old = {row['source']:row['id'] for row in initial['candidates']}
+        added = self.root/'inbox'/'Added.png'
+        added.write_bytes(picture('green'))
+        updated = self.service.scan({'expectedRoot':str(self.root)})
+        self.assertEqual(updated['replacesPlanId'], initial['id'])
+        current = {row['source']:row for row in updated['candidates']}
+        self.assertEqual(current['inbox/Kept.png']['id'], old['inbox/Kept.png'])
+        self.assertEqual(current['inbox/Changed.png']['id'], old['inbox/Changed.png'])
+        with self.assertRaises(ImageManagerError) as superseded:
+            self.service.apply({'expectedRoot':str(self.root),'planId':initial['id'],
+                'decisions':[{'id':identifier,'action':'add'} for identifier in old.values()]})
+        self.assertEqual(superseded.exception.status, 409)
+        self.assertEqual(kept.read_bytes(), picture('red'))
+        self.assertEqual(changed.read_bytes(), picture('blue'))
+        self.assertEqual(added.read_bytes(), picture('green'))
+
+        changed.write_bytes(picture('yellow'))
+        added.unlink()
+        refreshed = self.service.scan({'expectedRoot':str(self.root)})
+        self.assertEqual(refreshed['replacesPlanId'], updated['id'])
+        current = {row['source']:row for row in refreshed['candidates']}
+        self.assertEqual(set(current), {'inbox/Changed.png','inbox/Kept.png'})
+        self.assertEqual(current['inbox/Kept.png']['id'], old['inbox/Kept.png'])
+        self.assertNotEqual(current['inbox/Changed.png']['id'], old['inbox/Changed.png'])
+        self.assertEqual(current['inbox/Changed.png']['previousCandidateId'], old['inbox/Changed.png'])
+        self.assertEqual(changed.read_bytes(), picture('yellow'))
+        again = self.service.scan({'expectedRoot':str(self.root)})
+        unchanged = next(row for row in again['candidates'] if row['source'] == 'inbox/Changed.png')
+        self.assertEqual(unchanged['id'], current['inbox/Changed.png']['id'])
+        self.assertEqual(unchanged['previousCandidateId'], old['inbox/Changed.png'])
+        with patch.object(self.service, '_fresh', side_effect=AssertionError('linked old review cannot apply')):
+            with self.assertRaises(ImageManagerError) as linked:
+                self.service.apply({'expectedRoot':str(self.root),'planId':initial['id'],
+                    'decisions':[{'id':identifier,'action':'add'} for identifier in old.values()]})
+        self.assertEqual(linked.exception.status, 409)
+
+    def test_unrelated_device_review_does_not_supersede_an_inbox_review(self):
+        device = self.directory/'device'
+        device.mkdir()
+        self.service.configure({'root':str(self.root),'deviceRoot':str(device)})
+        (self.root/'Local.png').write_bytes(picture('red'))
+        (device/'Local.png').write_bytes(picture('blue'))
+        source = self.root/'inbox'/'Incoming.png'
+        source.write_bytes(picture('green'))
+        inbox = self.service.scan({'expectedRoot':str(self.root)})
+        other = self.service.sync_device({'expectedRoot':str(self.root),'direction':'to-device'})
+        self.assertEqual(self.service.state()['plan']['id'], other['id'])
+        result = self.service.apply({'expectedRoot':str(self.root),'planId':inbox['id'],
+            'decisions':[{'id':inbox['candidates'][0]['id'],'action':'keep'}]})
+        self.assertEqual(result['planId'], inbox['id'])
+        self.assertEqual(source.read_bytes(), picture('green'))
+
+    def test_discovery_flags_a_changed_or_missing_review_source_without_replacing_the_plan(self):
+        source = self.root/'inbox'/'Candidate.bmp'
+        red, blue = picture('red','BMP'), picture('blue','BMP')
+        self.assertEqual(len(red), len(blue))
+        source.write_bytes(red)
+        self.refresh()
+        before = self.private_bytes()
+        original_mtime = source.stat().st_mtime_ns
+        os.utime(source, ns=(original_mtime, original_mtime + 10_000_000))
+        self.assertEqual(self.refresh()['reason'], 'active_review')
+        source.write_bytes(blue)
+        os.utime(source, ns=(original_mtime, original_mtime + 20_000_000))
+        self.assertEqual(self.refresh()['reason'], 'stale_review')
+        self.assertEqual(source.read_bytes(), blue)
+        source.unlink()
+        self.assertEqual(self.refresh()['reason'], 'stale_review')
+        self.assertEqual(self.private_bytes(), before)
+
     def test_device_naming_and_prepared_delete_records_block_automatic_publication(self):
         (self.root/'Image.png').write_bytes(picture('red'))
         self.refresh()

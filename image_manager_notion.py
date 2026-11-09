@@ -56,6 +56,8 @@ SYNCED_RE = re.compile(r'<synced-block\s+url="([^"<>\r\n]+)"\s*>.*?</synced-bloc
 SOURCE_RE = re.compile(r'<(?:image|file)\b[^>]*\bsource="([^"<>]+)"[^>]*>', re.S)
 FILE_SOURCE_RE = re.compile(r'<file\b[^>]*\bsource="([^"<>]+)"[^>]*>', re.S)
 PAGE_IMAGE_RE = re.compile(r'<image\b[^>]*\bsource="([^"<>]+)"[^>]*?(?:/\s*>|>(.*?)</image>)', re.S)
+MEDIA_TAG_RE = re.compile(r'<(?:image|file|audio|video|pdf|embed|bookmark)\b', re.I)
+MARKDOWN_IMAGE_RE = re.compile(r'(?<!\\)!\[[^\]\r\n]*\]\(')
 
 
 def _page_region(page):
@@ -123,25 +125,91 @@ def _caption(value):
     return f"{value['groupTitle']} · {value['variantLabel']} · {value['width']}×{value['height']}"
 
 
-def _render_gallery(region, rows, files):
-    blocks = ['<synced-block url="' + html.escape(region['url'], quote=True) + '">', '## Image', '']
-    for offset in range(0, len(rows), 3):
-        group = rows[offset:offset + 3]
-        blocks.append('<columns>')
-        for index, row in enumerate(group):
-            ratio = (34 if index == 0 else 33) if len(group) == 3 else 50 if len(group) == 2 else 100
-            caption = html.escape(row['caption'])
-            # A catalogue label is text, never Markdown instructions or links.
-            caption = re.sub(r'([\\`*_\[\]{}])', r'\\\1', caption)
-            blocks.extend([f'<column ratio="{ratio}">', '<image source="' + html.escape(row['source'], quote=True) + '">',
-                           caption, '</image>', '</column>'])
-        blocks.extend(['</columns>', ''])
-    blocks.extend(['<toggle>', '同步记录', '', GALLERY_MARKER, ''])
-    for source, name in files:
-        label = '方案目录' if _catalog_identity(name) else name
-        blocks.extend(['<file source="' + html.escape(source, quote=True) + '">', html.escape(label), '</file>', ''])
-    blocks.extend(['</toggle>', '</synced-block>'])
-    return '\n'.join(blocks)
+def _escaped_caption(value):
+    # A catalogue label is text, never Markdown instructions or links.
+    return re.sub(r'([\\`*_\[\]{}])', r'\\\1', html.escape(value))
+
+
+def _read_caption(value):
+    return re.sub(r'\\([\\`*_{}\[\]()#+\-.!|>])', r'\1', html.unescape(value)).strip()
+
+
+def _gallery_updates(region, rows, source, *, catalogue):
+    text = region['text']
+    marker = re.search(r'(?m)^[ \t]*' + GALLERY_MARKER + r'[ \t]*$', text)
+    updates = []
+    captions = {row['source']:row['caption'] for row in rows}
+    for image in PAGE_IMAGE_RE.finditer(text):
+        expected = captions.get(html.unescape(image[1]))
+        body = image[2] or ''
+        if expected is None or _read_caption(body) == expected:
+            continue
+        caption = _escaped_caption(expected)
+        if body.strip():
+            updates.append({'old_str':body.strip(), 'new_str':caption})
+        else:
+            # Empty captions have no source-free text anchor.
+            original = image[0]
+            opening = original.split('>', 1)[0].rstrip('/ \t') + '>'
+            updates.append({'old_str':original, 'new_str':opening + '\n' + caption + '\n</image>'})
+    quoted_source = html.escape(source, quote=True)
+    if catalogue:
+        anchor = marker[0]
+        replacement = anchor + '\n\n<file source="' + quoted_source + '">\n方案目录\n</file>'
+    else:
+        toggles = list(re.finditer(r'(?m)^[ \t]*<toggle(?:[ \t][^>\r\n]*)?>', text[:marker.start()]))
+        if not toggles or '</toggle>' in text[toggles[-1].end():marker.start()]:
+            raise NotionSyncError('notion_gallery_invalid', '图片记录区未能核对，未更改页面。')
+        toggle = toggles[-1]
+        preceding = re.search(r'(?m)^[ \t]*(?:## Image|</(?:columns|image)>)[ \t]*(?:\r?\n[ \t]*)+\Z',
+                              text[:toggle.start()])
+        if not preceding:
+            raise NotionSyncError('notion_gallery_invalid', '图片插入位置未能核对，未更改页面。')
+        anchor = preceding[0] + toggle[0]
+        image = '<image source="' + quoted_source + '">\n' + _escaped_caption(rows[-1]['caption']) + '\n</image>'
+        replacement = preceding[0] + image + '\n\n' + toggle[0]
+    updates.append({'old_str':anchor, 'new_str':replacement})
+    return updates
+
+
+def _gallery_after_updates(entity, region, updates):
+    text = entity['text']
+    inside_start = region['start'] + region['text'].index('>') + 1
+    inside_end = region['end'] - len('</synced-block>')
+    edits = []
+    for update in updates:
+        if (not isinstance(update, dict) or set(update) != {'old_str', 'new_str'}
+                or not isinstance(update['old_str'], str) or not update['old_str'].strip()
+                or not isinstance(update['new_str'], str)):
+            raise NotionSyncError('notion_scope_invalid', '图片区修改缺少准确的核对范围。')
+        old, new = update['old_str'], update['new_str']
+        start = text.find(old)
+        end = start + len(old)
+        if start < inside_start or end > inside_end or text.find(old, start + 1) != -1:
+            raise NotionSyncError('notion_scope_invalid', '图片区修改范围不唯一或超出原图区。')
+        edits.append((start, end, new))
+    next_start = inside_end
+    for start, end, new in sorted(edits, reverse=True):
+        if end > next_start:
+            raise NotionSyncError('notion_scope_invalid', '图片区修改范围重叠。')
+        text = text[:start] + new + text[end:]
+        next_start = start
+    # Every anchor must stay unique if the service applies updates in order.
+    sequential = entity['text']
+    for update in updates:
+        old = update['old_str']
+        start = sequential.find(old)
+        if start < 0 or sequential.find(old, start + 1) != -1:
+            raise NotionSyncError('notion_scope_invalid', '图片区修改后续范围不唯一。')
+        sequential = sequential[:start] + update['new_str'] + sequential[start + len(old):]
+    if sequential != text:
+        raise NotionSyncError('notion_scope_invalid', '图片区修改范围受其他修改影响。')
+    updated = dict(entity, text=text)
+    new_region = _page_region(updated)
+    expected_end = region['end'] + len(text) - len(entity['text'])
+    if new_region['start'] != region['start'] or new_region['end'] != expected_end or new_region['url'] != region['url']:
+        raise NotionSyncError('notion_scope_invalid', '图片区修改不能改变原同步区块。')
+    return updated
 
 
 def _now():
@@ -500,13 +568,13 @@ class CodexNotionRPC:
         self.thread_id = None
         self.allowed_refs = set()
         self.prepared_ids, self.allowed_upload_sources = set(), set()
-        self.latest_region, self.target_type = None, None
+        self.latest_page, self.latest_region, self.target_type = None, None, None
 
     def authorize_upload(self, uploaded):
         source = _upload_source(uploaded)
         if _identifier(uploaded.get('id', uploaded.get('file_upload_id'))) not in self.prepared_ids:
             raise NotionSyncError('notion_scope_invalid', '只能附加本次已核对的上传原件。')
-        self.allowed_upload_sources.add(source)
+        self.allowed_upload_sources = {source}
         return source
 
     def __enter__(self):
@@ -628,18 +696,17 @@ class CodexNotionRPC:
             if (set(arguments) != {'page_id', 'command', 'content_updates'}
                     or arguments.get('page_id') != self.target_id or arguments.get('command') != 'update_content'
                     or self.target_type != 'page' or not self.latest_region
-                    or not isinstance(updates, list) or len(updates) != 1
-                    or not isinstance(updates[0], dict) or set(updates[0]) != {'old_str', 'new_str'}
-                    or updates[0].get('old_str') != self.latest_region['text']):
+                    or not isinstance(updates, list) or not 1 <= len(updates) <= MAX_BATCH + 1):
                 raise NotionSyncError('notion_scope_invalid', '只可更新已回读的同一页面图片区。')
-            new = _page_region({'id':self.target_id, 'text':updates[0]['new_str']})
-            old_refs = set(_stable_refs({'id':self.target_id, 'metadata':{'type':'page'}, 'text':self.latest_region['text']}))
-            new_refs = set(_stable_refs({'id':self.target_id, 'metadata':{'type':'page'}, 'text':new['text']},
-                                       pending=self.allowed_upload_sources))
-            sources = set(html.unescape(value) for value in SOURCE_RE.findall(new['text']))
-            if (new['text'] != updates[0]['new_str'] or new['url'] != self.latest_region['url']
-                    or not old_refs <= new_refs or not new_refs <= self.allowed_refs
-                    or not sources <= self.allowed_refs | self.allowed_upload_sources):
+            new = _managed_text(_gallery_after_updates(self.latest_page, self.latest_region, updates))
+            old = self.latest_region['text']
+            old_media = [(match[0].startswith('<image'), html.unescape(match[1])) for match in SOURCE_RE.finditer(old)]
+            new_media = [(match[0].startswith('<image'), html.unescape(match[1])) for match in SOURCE_RE.finditer(new)]
+            stable = [(image, source) for image, source in new_media if REF_RE.fullmatch(source)]
+            added = [source for _, source in new_media if not REF_RE.fullmatch(source)]
+            if (stable != old_media or len(added) > 1 or not set(added) <= self.allowed_upload_sources
+                    or len(MEDIA_TAG_RE.findall(new)) - len(new_media) != len(MEDIA_TAG_RE.findall(old)) - len(old_media)
+                    or len(MARKDOWN_IMAGE_RE.findall(new)) != len(MARKDOWN_IMAGE_RE.findall(old))):
                 raise NotionSyncError('notion_scope_invalid', '图片区不能删除原件、引入未知附件或改写区外内容。')
         result = _unwrap(self._call('mcpServer/tool/call', {'threadId': self.thread_id,
             'server': 'codex_apps', 'tool': RPC_TOOLS[action], 'arguments': arguments}))
@@ -652,6 +719,7 @@ class CodexNotionRPC:
                 raise NotionSyncError('notion_folder_incomplete', 'Notion 图库未能完整读取；没有写入。')
             self.target_type = result['metadata']['type']
             self.latest_region = _page_region(result) if self.target_type == 'page' else None
+            self.latest_page = result if self.latest_region else None
             self.allowed_refs.update(_stable_refs(result))
         if action == 'prepare':
             identifier = _identifier(result.get('file_upload_id'))
@@ -1264,36 +1332,39 @@ class ImageManagerNotion:
         region = _page_region(entity)
         source = rpc.authorize_upload(uploaded) if hasattr(rpc, 'authorize_upload') else _upload_source(uploaded)
         rows = self._page_rows(rpc, transport, entity, entries)
-        files = [(html.unescape(reference), _reference_name(html.unescape(reference)))
-                 for reference in FILE_SOURCE_RE.findall(region['text'])]
-        if receipt['direction'] == 'catalog':
-            files.append((source, receipt['filename']))
-        else:
+        catalogue = receipt['direction'] == 'catalog'
+        if not catalogue:
             row = dict(receipt['metadata'], source=source, sha256=receipt['sha256'],
                        width=receipt['width'], height=receipt['height'])
             row['caption'] = _caption(row)
             rows.append(row)
-        replacement = _render_gallery(region, rows, files)
+        updates = _gallery_updates(region, rows, source, catalogue=catalogue)
         latest = rpc.call('fetch', {'id':record['pageId']})
         if latest.get('metadata', {}).get('type') != 'page' or _page_region(latest)['text'] != region['text']:
             raise NotionSyncError('notion_gallery_changed', 'Notion 图片区刚有更改，未覆盖这些修改。')
         self._check_root(payload)
         rpc.call('page', {'page_id':record['pageId'], 'command':'update_content',
-            'content_updates':[{'old_str':region['text'], 'new_str':replacement}]})
+            'content_updates':updates})
         return rows
 
-    def _verify_page_rows(self, rpc, transport, entity, expected, *, uncertain=True):
+    def _verify_page_rows(self, rpc, transport, entity, expected, *, uncertain=True, new_refs=()):
         if expected is None:
             return
-        observed = {}
+        observed, by_caption = {}, {}
         for source, caption in PAGE_IMAGE_RE.findall(_page_region(entity)['text']):
             source = html.unescape(source)
-            caption = re.sub(r'\\([\\`*_{}\[\]()#+\-.!|>])', r'\1', html.unescape(caption)).strip()
+            caption = _read_caption(caption)
             observed.setdefault(_source_id(source), []).append((source, caption))
+            by_caption.setdefault(caption, []).append(source)
         total = 0
         for row in expected:
             match = next((source for source, caption in observed.get(_source_id(row['source']), [])
                           if caption == row['caption']), None)
+            if match is None and new_refs and not REF_RE.fullmatch(row['source']):
+                # A new upload can be returned with its native block ID instead of its upload ID.
+                candidates = by_caption.get(row['caption'], [])
+                if len(candidates) == 1 and candidates[0] in new_refs:
+                    match = candidates[0]
             if match is None:
                 raise NotionSyncError('notion_gallery_unverified', '页面图片与方案显示尚未核实；保留原请求，不重新发送。', unknown=uncertain)
             data = self._download(rpc, transport, match)
@@ -1713,8 +1784,8 @@ class ImageManagerNotion:
                 receipt['status'] = 'attached_unverified'
                 self._save(path, record, phase='verifying', message='正在回读核对原图。')
                 folder = rpc.call('fetch', {'id': record['pageId']})
-                self._verify_page_rows(rpc, transport, folder, page_rows)
                 additions = [ref for ref in self._refs(folder) if ref not in before]
+                self._verify_page_rows(rpc, transport, folder, page_rows, new_refs=additions)
                 matched = None
                 for reference in additions:
                     returned = self._download(rpc, transport, reference)

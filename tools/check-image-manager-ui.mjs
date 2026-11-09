@@ -128,6 +128,22 @@ function boot(initial, storage = makeStorage(), embedOptions = null, watchOption
   await keptChoice.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').emit('change');
   const keptReload = boot(initialState, keptChoice.storage); await flush();
   assert(keptReload.elements.candidateList.querySelectorAll('input').find(input => input.value === 'keep').checked, 'A saved manual choice overrides the replacement default');
+  const changedChoice = { ...candidate, id: 'changed-old', incoming: { ...candidate.incoming, path: 'inbox/other.png' } };
+  const beforeRecheck = { ...review, direction: 'inbox', candidates: [candidate, changedChoice] };
+  const recheck = boot({ ...initialState, plan: beforeRecheck }); await flush();
+  const pick = (fixture, id, value) => fixture.elements.candidateList.querySelectorAll('input').find(input => input.dataset.candidateId === id && input.value === value);
+  await pick(recheck, candidate.id, 'keep').emit('change');
+  await pick(recheck, changedChoice.id, 'replace').emit('change');
+  const recheckedPlan = { ...beforeRecheck, id: 'refreshed', planId: 'refreshed', replacesPlanId: beforeRecheck.id, candidates: [candidate,
+    { ...changedChoice, id: 'changed-new', previousCandidateId: changedChoice.id, incoming: { ...changedChoice.incoming, sha256: 'c'.repeat(64) } }] };
+  const recheckedState = { ...initialState, plan: recheckedPlan };
+  const lostScanResponse = boot(recheckedState, makeStorage(new Map(recheck.storage.existing))); await flush();
+  assert(pick(lostScanResponse, candidate.id, 'keep').checked, 'A lost refresh response can recover safe choices on reload');
+  recheck.replies.set('scan', { body: { ...recheckedPlan, state: recheckedState } });
+  await recheck.elements.scanImages.click();
+  assert(pick(recheck, candidate.id, 'keep').checked, 'Explicit refresh retains choices for unchanged candidates');
+  assert(!pick(recheck, 'changed-new', 'replace').checked && recheck.elements.reviewApply.disabled, 'Changed comparisons must be chosen again');
+  assert(!recheck.requests.some(request => ['apply', 'sync'].includes(request.action)), 'Refreshing a review only prepares a preview');
   for (const changed of [{ status: 'ambiguous', matches: [candidate.existing, image] },
       { previousCandidateId: 'previous-match' }, { incoming: { ...candidate.incoming, width: 65 } }]) {
     const unresolvedDefault = boot({ ...initialState, plan: { ...review, candidates: [{ ...candidate, ...changed }] } }); await flush();
@@ -1376,7 +1392,7 @@ function boot(initial, storage = makeStorage(), embedOptions = null, watchOption
   assert.doesNotMatch(unknownWatch.elements.folderStatus.textContent, /检测到|新文件|新增/);
   assert.equal(unknownWatch.requests.filter(request => request.action === 'state').length, 1, 'A deferred observation token does not count as an indexed revision');
   assert.equal(unknownWatch.requests.filter(request => request.options.method === 'POST').length, 0);
-  for (const [reason, message] of [['active_review','请先处理当前图片比较'],['active_naming','请先完成名称整理'],['active_deletion','请先核对删除结果']]) {
+  for (const [reason, message] of [['active_review','请先处理当前图片比较'],['stale_review','点「刷新列表」可重新比较'],['active_naming','请先完成名称整理'],['active_deletion','请先核对删除结果']]) {
     unknownWatch.replies.set('revision', watchReply('local-r1', { localWatch: { status:'deferred', pending:true, reason } })); await unknownWatch.advance(5000);
     assert(unknownWatch.elements.folderStatus.textContent.includes(message), `The real backend ${reason} reason has an actionable quiet notice`);
     assert.equal(unknownWatch.elements.operationStatus.textContent, originalMessage);

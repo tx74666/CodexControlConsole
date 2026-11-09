@@ -41,6 +41,7 @@ class FakeRemote:
         self.catalog_posts = 0
         self.fail_catalog_upload = False
         self.normalize_filenames = False
+        self.distinct_block_ids = False
         self.exit_error = None
         self.page_mode = page_mode
         self.page_writes = 0
@@ -86,26 +87,23 @@ class FakeRemote:
             if self.fail_page_before_write:
                 raise NotionSyncError('test_page_unknown', '页面写入回执未知。', unknown=True)
             assert arguments['page_id'] == PAGE and arguments['command'] == 'update_content'
-            update = arguments['content_updates'][0]
-            assert self.page_text.count(update['old_str']) == 1
             def save_source(match):
                 source = html.unescape(match[2])
-                if source.startswith('file-upload://'):
-                    identifier = notion_module._source_id(source)
-                    item = self.uploads[identifier]
-                    name, data = item['name'], item['data']
-                else:
-                    identifier = notion_module._source_id(source)
-                    name, data = _reference_name(source), self.originals[source]
+                if not source.startswith('file-upload://'):
+                    return match[0]
+                identifier = notion_module._source_id(source)
+                item = self.uploads[identifier]
+                name, data = item['name'], item['data']
                 if self.normalize_filenames:
                     name = name.replace(' ', '_')
-                # Notion copies an existing file into a new block. Its upload
-                # identity is stable even though the first block UUID changes.
-                reference = 'notion-file-block://' + str(uuid.uuid4()) + '/' + identifier + '?name=' + quote(name)
+                block_id = str(uuid.uuid4()) if self.distinct_block_ids else identifier
+                reference = 'notion-file-block://' + PAGE + '/' + block_id + '?name=' + quote(name)
                 self.originals[reference] = data
                 return match[1] + reference + match[3]
-            replacement = re.sub(r'(<(?:image|file)\s+source=")([^"<>]+)(")', save_source, update['new_str'])
-            self.page_text = self.page_text.replace(update['old_str'], replacement, 1)
+            for update in arguments['content_updates']:
+                assert self.page_text.count(update['old_str']) == 1
+                replacement = re.sub(r'(<(?:image|file)\s+source=")([^"<>]+)(")', save_source, update['new_str'])
+                self.page_text = self.page_text.replace(update['old_str'], replacement, 1)
             if self.fail_page_after_write:
                 raise NotionSyncError('test_page_unknown', '页面写入回执未知。', unknown=True)
             return {'ok': True}
@@ -209,6 +207,9 @@ class Checks(unittest.TestCase):
         self.assertTrue(self.remote.page_text.startswith('User notes before\n\n'))
         self.assertTrue(self.remote.page_text.endswith('\n\nUser notes after'))
         self.assertNotEqual(before, self.remote.page_text)
+        updates = [value['content_updates'] for action,value in self.remote.calls if action == 'page']
+        self.assertEqual([row[0]['old_str'] for row in updates],
+                         ['## Image\n\n<toggle>', notion_module.GALLERY_MARKER])
         writes = self.remote.page_writes
         result = self.sync(request='page-repeat')
         self.assertEqual(result['operation']['status'], 'completed')
@@ -217,7 +218,7 @@ class Checks(unittest.TestCase):
     def test_native_page_metadata_only_refreshes_caption_and_keeps_catalog_history(self):
         self.remote = FakeRemote(page_mode=True)
         item = self.service.state()['items'][0]
-        self.remote.add_image('Sample - 7x5.png', self.data, 'Sample · 方案1 · 7×5')
+        image = self.remote.add_image('Sample - 7x5.png', self.data, 'Sample · 方案1 · 7×5')
         self.remote.add_catalog({item['sha256']:_entry(item)})
         self.assertEqual(self.sync()['operation']['status'], 'completed')
         self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), (0,0,0))
@@ -228,9 +229,43 @@ class Checks(unittest.TestCase):
         self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), (0,1,1))
         self.assertIn('主游戏 · 图标 · 第二方案 · 7×5', self.remote.page_text)
         entity = self.remote.call('fetch', {'id':PAGE})
-        self.assertEqual(len(notion_module._image_refs(entity)), 1)
+        self.assertEqual(notion_module._image_refs(entity), [image])
         self.assertEqual(len([ref for ref in self.provider._refs(entity) if _catalog_identity(_reference_name(ref))]), 2)
         self.assertTrue(self.remote.page_text.endswith('\n\nUser notes after'))
+        updates = [value['content_updates'] for action,value in self.remote.calls if action == 'page']
+        self.assertEqual([row['old_str'] for row in updates[0]], ['Sample · 方案1 · 7×5', notion_module.GALLERY_MARKER])
+
+    def test_native_page_verifies_a_new_image_with_a_distinct_block_id(self):
+        self.remote = FakeRemote(page_mode=True)
+        self.remote.distinct_block_ids = True
+        operation = self.sync()['operation']
+        self.assertEqual(operation['status'], 'completed', operation)
+        self.assertEqual((self.remote.posts,self.remote.catalog_posts,self.remote.page_writes), (1,1,2))
+        item = operation['items'][0]
+        self.assertNotEqual(notion_module._source_id(item['reference']), item['uploadId'])
+        self.assertEqual(self.remote.originals[item['reference']], self.data)
+
+    def test_new_image_readback_requires_unique_caption_new_reference_and_matching_bytes(self):
+        remote = FakeRemote(page_mode=True)
+        caption = 'Current image'
+        image = remote.add_image('Different filename.png', self.data, caption)
+        expected = [{'source':'file-upload://'+str(uuid.uuid4()), 'caption':caption,
+                     'sha256':hashlib.sha256(self.data).hexdigest()}]
+
+        def verify(new_refs):
+            entity = remote.call('fetch', {'id':PAGE})
+            self.provider._verify_page_rows(remote, remote, entity, expected, new_refs=new_refs)
+
+        with self.assertRaises(NotionSyncError):
+            verify([])
+        verify([image])
+        remote.originals[image] = png('blue')
+        with self.assertRaises(NotionSyncError):
+            verify([image])
+        remote.originals[image] = self.data
+        duplicate = remote.add_image('Another name.png', self.data, caption)
+        with self.assertRaises(NotionSyncError):
+            verify([duplicate])
 
     def enable_standard_names(self, asset_type):
         entries = [{'path':item['path'],'sha256':item['sha256'],'assetType':asset_type}
@@ -378,6 +413,24 @@ class Checks(unittest.TestCase):
         self.assertEqual((self.remote.posts,self.remote.catalog_posts),(1,1))
         self.assertEqual((self.root/'inbox'/unknown.name).read_bytes(),blue)
 
+    def test_native_page_appends_images_without_rebuilding_columns(self):
+        remote = FakeRemote(page_mode=True)
+        columns = ('<columns>\n<column ratio="34">\nFirst\n</column>\n'
+                   '<column ratio="33">\nSecond\n</column>\n<column ratio="33">\nThird\n</column>\n</columns>')
+        remote.page_text = remote.page_text.replace('<toggle>', columns + '\n\n<toggle>')
+        entity = remote.call('fetch', {'id': PAGE})
+        for closing in ('</columns>', '</image>'):
+            with self.subTest(closing=closing):
+                region = notion_module._page_region(entity)
+                source = f'file-upload://{uuid.uuid4()}?name=Image.png&v=1'
+                rows = [{'source':source, 'caption':'New [draft] <preview>'}]
+                updates = notion_module._gallery_updates(region, rows, source, catalogue=False)
+                self.assertEqual(updates[0]['old_str'], closing + '\n\n<toggle>')
+                entity = notion_module._gallery_after_updates(entity, region, updates)
+                self.assertIn(columns, entity['text'])
+                self.assertIn('name=Image.png&amp;v=1', entity['text'])
+                self.assertIn('New \\[draft\\] &lt;preview&gt;', entity['text'])
+
     def test_native_page_unknown_before_or_after_write_never_reposts_same_request(self):
         for after in (False, True):
             with self.subTest(after=after):
@@ -427,7 +480,7 @@ class Checks(unittest.TestCase):
         self.assertEqual((pending['status'],pending['code']), ('unknown','verified_completion_unrecorded'))
         self.assertTrue(pending['recheckable'])
         observed = set(notion_module._image_refs(self.remote.call('fetch', {'id':PAGE})))
-        self.assertTrue(any(item.get('reference') not in observed for item in pending['items']))
+        self.assertTrue(all(item.get('reference') in observed for item in pending['items']))
         writes = (self.remote.posts,self.remote.catalog_posts,self.remote.page_writes)
         completed = self.sync(request='page-final-save')['operation']
         self.assertEqual(completed['status'], 'completed', completed)
@@ -467,22 +520,40 @@ class Checks(unittest.TestCase):
 
     def test_rpc_page_scope_requires_unique_region_same_page_and_observed_sources(self):
         remote = FakeRemote(page_mode=True)
+        image = remote.add_image('Visible.png', self.data)
         rpc = CodexNotionRPC('unused', self.root, PAGE)
         entity = remote.call('fetch', {'id':PAGE})
         with patch.object(rpc, '_call', return_value=entity):
             rpc.call('fetch', {'id':PAGE})
         old = notion_module._page_region(entity)['text']
-        valid = {'page_id':PAGE, 'command':'update_content', 'content_updates':[{'old_str':old,'new_str':old.replace('## Image','## Image gallery')}]}
+        caption = {'old_str':'Existing image','new_str':'Updated image caption'}
+        source = 'file-upload://' + str(uuid.uuid4())
+        addition = {'old_str':'</image>\n\n<toggle>',
+                    'new_str':'</image>\n\n<image source="'+source+'">\nNew image\n</image>\n\n<toggle>'}
+        valid = {'page_id':PAGE, 'command':'update_content', 'content_updates':[caption, addition]}
+        rpc.allowed_upload_sources.add(source)
         with patch.object(rpc, '_call', return_value={'ok':True}) as call:
             rpc.call('page', valid)
             self.assertEqual(call.call_count, 1)
             bad_updates = [dict(valid, page_id=OTHER), dict(valid,command='replace_content'),
-                dict(valid,content_updates=[{'old_str':old,'new_str':old+'\nOutside text'}]),
-                dict(valid,content_updates=[{'old_str':old,'new_str':old.replace('</toggle>', '<image source="notion-file-block://'+OTHER+'/'+OTHER+'?name=foreign.png">x</image>\n</toggle>')}])]
+                dict(valid,content_updates=[{'old_str':old,'new_str':old.replace('## Image','## Updated')}]),
+                dict(valid,content_updates=[{'old_str':'User notes after','new_str':'Outside text'}]),
+                dict(valid,content_updates=[{'old_str':'Existing image','new_str':'</synced-block>'}]),
+                dict(valid,content_updates=[{'old_str':image,'new_str':source}]),
+                dict(valid,content_updates=[{'old_str':'Existing image','new_str':'![Foreign](https://example.invalid/image.png)'}]),
+                dict(valid,content_updates=[{'old_str':'Existing image','new_str':addition['old_str']},addition]),
+                dict(valid,content_updates=[caption, dict(caption)]),
+                dict(valid,content_updates=[{'old_str':addition['old_str'],
+                     'new_str':addition['new_str'].replace(source, 'notion-file-block://'+OTHER+'/'+OTHER)}])]
             for arguments in bad_updates:
                 with self.assertRaises(NotionSyncError):
                     rpc.call('page', arguments)
             self.assertEqual(call.call_count, 1)
+        duplicated = dict(entity, text=entity['text']+'\nExisting image')
+        with patch.object(rpc, '_call', return_value=duplicated):
+            rpc.call('fetch', {'id':PAGE})
+        with self.assertRaises(NotionSyncError):
+            rpc.call('page', valid)
         for text in (remote.page_text.replace(notion_module.GALLERY_MARKER, 'missing'), remote.page_text+'\n'+old):
             with patch.object(rpc, '_call', return_value=dict(entity,text=text)):
                 with self.assertRaises(NotionSyncError):
@@ -514,11 +585,10 @@ class Checks(unittest.TestCase):
         self.assertNotIn(foreign, rpc.allowed_refs)
         with self.assertRaises(NotionSyncError):
             rpc.call('download', {'references':[foreign]})
-        region = notion_module._page_region(entity)
-        new = region['text'].replace('</toggle>', '<image source="'+foreign+'">\nFake image\n</image>\n</toggle>')
+        new = '<image source="'+foreign+'">\nFake image\n</image>\n</toggle>'
         with self.assertRaises(NotionSyncError):
             rpc.call('page', {'page_id':PAGE,'command':'update_content',
-                'content_updates':[{'old_str':region['text'],'new_str':new}]})
+                'content_updates':[{'old_str':'</toggle>','new_str':new}]})
         # Native media without captions and reordered attributes are still media.
         changed = dict(entity,text=entity['text'].replace('<image source="'+image+'">\nExisting image\n</image>',
             '<image color="gray" source="'+image+'" />'))
