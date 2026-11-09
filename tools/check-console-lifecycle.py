@@ -331,6 +331,7 @@ def check_main_module_startup_routes():
                     window = stack.enter_context(mock.patch.object(world_console, "open_console_window"))
                     documents = stack.enter_context(mock.patch.object(world_console, "DOCUMENT_LIBRARY"))
                     companion = stack.enter_context(mock.patch.object(world_console, "PHONE_COMPANION"))
+                    image_watch = stack.enter_context(mock.patch.object(world_console, "IMAGE_MANAGER_WATCH"))
                     workflow = stack.enter_context(mock.patch.object(world_console, "WORKFLOW_SERVICE"))
                     subscription = stack.enter_context(mock.patch.object(world_console, "SUBSCRIPTION_BROKER"))
                     relay = stack.enter_context(mock.patch.object(world_console, "CHAT_RELAY_BROKER"))
@@ -357,12 +358,15 @@ def check_main_module_startup_routes():
                         choose_port.assert_not_called()
                         server.assert_not_called()
                         thread.assert_not_called()
+                        require(not image_watch.mock_calls, "reusing the backend touched its image watcher")
                         workflow.start.assert_not_called()
                     else:
                         choose_port.assert_called_once_with(19898)
                         server.assert_called_once_with(("127.0.0.1", 19899), world_console.ConsoleHandler)
                         backend_thread.start.assert_called_once_with()
                         restore_thread.start.assert_called_once_with()
+                        require(image_watch.mock_calls == [mock.call.start(), mock.call.close()],
+                                "fresh startup did not start and close its image watcher once")
                         workflow.start.assert_called_once_with()
                         subscription.start.assert_called_once_with()
                         relay.start.assert_called_once_with()
@@ -388,6 +392,7 @@ def check_main_instance_reuse():
                 retire = stack.enter_context(mock.patch.object(world_console, "retire_older_instance"))
                 choose_port = stack.enter_context(mock.patch.object(world_console, "pick_port"))
                 server = stack.enter_context(mock.patch.object(world_console, "ConsoleHTTPServer"))
+                image_watch = stack.enter_context(mock.patch.object(world_console, "IMAGE_MANAGER_WATCH"))
                 window = stack.enter_context(mock.patch.object(world_console, "open_console_window"))
                 world_console.main()
                 gate.assert_called_once_with(world_console.USER_DATA_DIR, 19898)
@@ -396,6 +401,7 @@ def check_main_instance_reuse():
                 retire.assert_not_called()
                 choose_port.assert_not_called()
                 server.assert_not_called()
+                require(not image_watch.mock_calls, "the second launcher touched the existing image watcher")
                 if no_browser:
                     window.assert_not_called()
                 else:
@@ -423,6 +429,7 @@ def check_main_older_handoff():
             server = stack.enter_context(mock.patch.object(world_console, "ConsoleHTTPServer"))
             thread = stack.enter_context(mock.patch.object(world_console.threading, "Thread"))
             companion = stack.enter_context(mock.patch.object(world_console, "PHONE_COMPANION"))
+            image_watch = stack.enter_context(mock.patch.object(world_console, "IMAGE_MANAGER_WATCH"))
             workflow = stack.enter_context(mock.patch.object(world_console, "WORKFLOW_SERVICE"))
             subscription = stack.enter_context(mock.patch.object(world_console, "SUBSCRIPTION_BROKER"))
             stack.enter_context(mock.patch.object(world_console, "CHAT_RELAY_BROKER"))
@@ -441,6 +448,8 @@ def check_main_older_handoff():
             events = []
             retire.side_effect = (lambda *_: events.append("retired")) if supported else retire.side_effect
             backend_thread.start.side_effect = lambda: events.append("serving")
+            image_watch.start.side_effect = lambda: events.append("watching")
+            image_watch.close.side_effect = lambda: events.append("watcher closed")
             window.side_effect = lambda *_args, **_kwargs: events.append("window")
             try:
                 world_console.main()
@@ -453,8 +462,8 @@ def check_main_older_handoff():
             if supported:
                 server.assert_called_once_with(("127.0.0.1", 19899), world_console.ConsoleHandler)
                 window.assert_called_once_with("http://127.0.0.1:19899/music.html?resumeModule=music", replace=True)
-                require(events == ["retired", "serving", "window"],
-                        "handoff opened a window before the old server retired and the new server started")
+                require(events == ["retired", "serving", "watching", "window", "watcher closed"],
+                        "handoff did not order server retirement, image watching, window launch and shutdown")
                 server.return_value.server_close.assert_called_once_with()
                 sessions.stop.assert_called_once_with()
                 backend_thread.start.assert_called_once_with()
@@ -469,6 +478,7 @@ def check_main_older_handoff():
             else:
                 server.assert_not_called()
                 thread.assert_not_called()
+                require(not image_watch.mock_calls, "failed handoff touched the image watcher")
                 window.assert_not_called()
 
 
@@ -478,6 +488,7 @@ def check_retirement_guards():
     with (
         mock.patch.object(world_console, "APP_VERSION", "1.0.8"),
         mock.patch.object(world_console, "RUNTIME_INSTANCE_ID", "current-runtime-instance"),
+        mock.patch.object(world_console, "IMAGE_MANAGER_WATCH", busy=False) as image_watch,
         mock.patch.object(world_console.threading, "Timer") as timer,
         mock.patch.object(world_console, "shutdown_active_server") as shutdown,
     ):
@@ -493,12 +504,20 @@ def check_retirement_guards():
                 pass
             else:
                 raise AssertionError("wrong runtime or non-newer version scheduled retirement")
+        valid = {"expectedInstanceId": "current-runtime-instance", "version": "1.0.9"}
+        with mock.patch.object(image_watch, "busy", True):
+            try:
+                world_console.retire_console_instance(valid)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("a busy image watcher allowed retirement")
         timer.assert_not_called()
         shutdown.assert_not_called()
-        accepted = world_console.retire_console_instance(
-            {"expectedInstanceId": "current-runtime-instance", "version": "1.0.9"},
-        )
+        image_watch.close.assert_not_called()
+        accepted = world_console.retire_console_instance(valid)
         require(accepted.get("accepted") is True, "newer matching instance was not accepted")
+        image_watch.close.assert_called_once_with()
         timer.assert_called_once_with(0.2, shutdown)
         require(timer.return_value.daemon is True, "retirement timer could keep the old process alive")
         timer.return_value.start.assert_called_once_with()
