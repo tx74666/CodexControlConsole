@@ -1771,6 +1771,12 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
         if self._private_phone_path():
             self.send_error(404)
             return
+        if parsed.path == "/api/console/vision/status":
+            if not self.require_local_request() or not self.require_trusted_post_context():
+                return
+            from console_vision_status import vision_status
+            self.send_json(vision_status(enabled=os.environ.get("CONSOLE_VISION_DISCOVERY") == "1"))
+            return
         if (parsed.path == "/api/console/repository-publish"
                 or parsed.path.startswith("/api/console/repository-publish/")):
             if not self.require_local_request() or not self.require_trusted_post_context():
