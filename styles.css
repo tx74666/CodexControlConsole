@@ -2208,8 +2208,12 @@ h2 {
   gap: 8px;
 }
 
+.randomrealm-build-folders {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .steamwork-actions {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .randomrealm-release-actions .ghost-button {

@@ -81,7 +81,7 @@ function startDesktopConsoleControlPolicy() {
 startDesktopConsoleControlPolicy();
 
 const consoleWindowHeartbeatMs = 30000;
-const consoleUiVersion = "1.1.51";
+const consoleUiVersion = "1.1.52";
 let consoleWindowHeartbeatTimer = 0;
 let consoleWindowSessionClosed = false;
 let consoleVersionReloadPending = false;
@@ -657,6 +657,7 @@ const i18n = {
     steamworkPublishRoot: "ContentBuilder",
     steamworkGameContent: "\u53d1\u5e03",
     steamworkPublishTool: "SteamPipe GUI",
+    steamcmdUpload: "SteamCMD 上传",
     steamworkArtAssets: "\u5ba3\u4f20\u56fe",
     steamworkImageLoading: "正在读取图片…",
     steamworkImageUnavailable: "图片暂时无法读取，请刷新当前页面。",
@@ -992,6 +993,9 @@ const i18n = {
     randomRealmOpenReady: "就绪",
     randomRealmSteamworks: "Steamworks 后台",
     randomRealmPublishFolder: "发布文件夹",
+    randomRealmWindowsBuild: "Windows 构建目录",
+    randomRealmWebBuild: "Web 构建目录",
+    randomRealmAndroidBuild: "Android 构建目录",
     randomRealmProjectFolder: "Unity 工程",
     randomRealmMusicOrderSync: "同步歌曲次序到游戏",
     randomRealmMusicOrderSaving: "正在保存歌曲次序…",
@@ -1543,6 +1547,7 @@ const i18n = {
     steamworkPublishRoot: "ContentBuilder",
     steamworkGameContent: "Ship",
     steamworkPublishTool: "SteamPipe GUI",
+    steamcmdUpload: "SteamCMD Upload",
     steamworkArtAssets: "Promo Art",
     steamworkImageLoading: "Loading images…",
     steamworkImageUnavailable: "Images could not load. Refresh this page to try again.",
@@ -1878,6 +1883,9 @@ const i18n = {
     randomRealmOpenReady: "Ready",
     randomRealmSteamworks: "Steamworks",
     randomRealmPublishFolder: "Publish Folder",
+    randomRealmWindowsBuild: "Windows Build Folder",
+    randomRealmWebBuild: "Web Build Folder",
+    randomRealmAndroidBuild: "Android Build Folder",
     randomRealmProjectFolder: "Unity Project",
     randomRealmMusicOrderSync: "Sync music order to game",
     randomRealmMusicOrderSaving: "Saving music order…",
@@ -2277,6 +2285,7 @@ const els = {
   randomRealmReleaseStatusText: document.getElementById("randomRealmReleaseStatusText"),
   openSteamworks: document.getElementById("openSteamworks"),
   openSteamPublishFolder: document.getElementById("openSteamPublishFolder"),
+  randomRealmBuildFolders: document.querySelectorAll("[data-build-folder]"),
   openRandomRealmProject: document.getElementById("openRandomRealmProject"),
   syncRandomRealmMusicOrder: document.getElementById("syncRandomRealmMusicOrder"),
   randomRealmMusicOrderStatus: document.getElementById("randomRealmMusicOrderStatus"),
@@ -2286,6 +2295,7 @@ const els = {
   openSteamworkPublishFolder: document.getElementById("openSteamworkPublishFolder"),
   openSteamworkGameContent: document.getElementById("openSteamworkGameContent"),
   openSteamworkPublishTool: document.getElementById("openSteamworkPublishTool"),
+  openSteamcmdUpload: document.getElementById("openSteamcmdUpload"),
   openSteamworkPublishToolTip: document.getElementById("openSteamworkPublishToolTip"),
   openSteamworkBuildsTip: document.getElementById("openSteamworkBuildsTip"),
   locateSteamworkPublishTool: document.getElementById("locateSteamworkPublishTool"),
@@ -20360,10 +20370,12 @@ function randomRealmResourceButtons() {
   return [
     els.openSteamworks,
     els.openSteamPublishFolder,
+    ...els.randomRealmBuildFolders,
     els.openSteamworkDashboard,
     els.openSteamworkPublishFolder,
     els.openSteamworkGameContent,
     els.openSteamworkPublishTool,
+    els.openSteamcmdUpload,
     els.openSteamworkPublishToolTip,
     els.openSteamworkBuildsTip,
     els.locateSteamworkPublishTool,
@@ -21779,6 +21791,9 @@ if (hasSteamwork && els.openSteamworkGameContent) {
 if (hasSteamwork && els.openSteamworkPublishTool) {
   els.openSteamworkPublishTool.addEventListener("click", () => openRandomRealmResource("publishToolFolder", "steamworkPublishTool"));
 }
+if (hasSteamwork && els.openSteamcmdUpload) {
+  els.openSteamcmdUpload.addEventListener("click", () => openRandomRealmResource("steamcmdUpload", "steamcmdUpload"));
+}
 if (hasSteamwork && els.openSteamworkPublishToolTip) {
   els.openSteamworkPublishToolTip.addEventListener("click", () => openRandomRealmResource("publishToolFolder", "steamworkPublishTool"));
 }
@@ -21942,6 +21957,9 @@ if (els.openSteamworks) {
 }
 if (els.openSteamPublishFolder) {
   els.openSteamPublishFolder.addEventListener("click", () => openRandomRealmResource("publishFolder", "randomRealmPublishFolder"));
+}
+for (const button of els.randomRealmBuildFolders) {
+  button.addEventListener("click", () => openRandomRealmResource(button.dataset.buildFolder, button.dataset.i18n));
 }
 if (els.openRandomRealmPromo) {
   els.openRandomRealmPromo.addEventListener("click", () => openRandomRealmResource("promoFolder", "randomRealmPromoFolder"));

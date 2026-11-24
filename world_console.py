@@ -2820,6 +2820,10 @@ class ConsoleHandler(SimpleHTTPRequestHandler):
                 self.send_json(open_steamwork_asset(payload.get("path", "")))
                 return
             if parsed.path == "/api/randomrealm/open-resource":
+                if payload.get("id") == "steamcmdUpload" and (
+                    not self.require_local_request() or not self.require_trusted_post_context()
+                ):
+                    return
                 self.send_json(open_randomrealm_resource(payload.get("id", "")))
                 return
             if parsed.path == "/api/randomrealm/blender/objects":
@@ -4178,11 +4182,20 @@ def open_download_map_target(payload):
 
 
 def open_randomrealm_resource(resource_id):
+    if resource_id == "steamcmdUpload":
+        launcher = RANDOMREALM_PUBLISH_DIR / "Upload RandomRealm Playtest.cmd"
+        for path in (launcher, RANDOMREALM_PUBLISH_DIR / "builder" / "steamcmd.exe",
+                     RANDOMREALM_PUBLISH_DIR / "scripts" / "app_3983670_upload_only.vdf"):
+            if not path.is_file():
+                raise ValueError(f"SteamCMD Playtest upload is not configured: {path}")
+        return open_file_resource(launcher)
     resources = {
         "steamworks": ("url", STEAMWORKS_URL),
         "steamworksBuilds": ("url", STEAMWORKS_BUILDS_URL),
         "publishFolder": ("folder", RANDOMREALM_PUBLISH_DIR),
         "gameContentFolder": ("folder", STEAMWORK_GAMECONTENT_DIR),
+        "webBuildFolder": ("folder", RANDOMREALM_PROJECT_DIR / "Builds" / "Web"),
+        "androidBuildFolder": ("folder", RANDOMREALM_PROJECT_DIR / "Builds" / "Android"),
         "publishToolFolder": ("file", STEAMWORK_PUBLISH_TOOL_EXE),
         "projectFolder": ("folder", RANDOMREALM_PROJECT_DIR),
         "promoFolder": ("folder", RANDOMREALM_PROMO_DIR),
